@@ -3860,6 +3860,35 @@ describe("Scheduler", () => {
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       });
 
+      it("retitles the session it continues when the follow-up carries a sessionTitle", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", status: "completed", session_id: "sess-card" })
+        );
+        const titleCalls = async (sessionTitle?: string) => {
+          const stub = createMockSessionStub();
+          await createScheduler(createEnv(undefined, stub)).event(
+            normalizeWebhookEvent(
+              "auto-hook",
+              { mode: "iterate" },
+              { sessionKey: "card-42", sessionTitle }
+            )
+          );
+          return Promise.all(
+            vi
+              .mocked(stub.fetch)
+              .mock.calls.filter(
+                ([input]) => new URL(input.url).pathname === "/internal/update-title"
+              )
+              .map(([input]) => promptRequestBody(input))
+          );
+        };
+
+        expect(await titleCalls("#8161 Mentions in Comments")).toEqual([
+          { title: "[Auto] #8161 Mentions in Comments" },
+        ]);
+        expect(await titleCalls()).toEqual([]);
+      });
+
       it("resolves a retry of the delivery that started the session to its invocation", async () => {
         mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
         mockStore.getLatestContinuableRun.mockResolvedValue(

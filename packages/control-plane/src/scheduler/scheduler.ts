@@ -370,6 +370,10 @@ const AUTOMATION_CONTEXT_GUARDRAIL =
  * them when the event-specific context changes, then reassert the trust boundary
  * after that untrusted context.
  */
+function automationSessionTitle(name: string): string {
+  return `[Auto] ${name}`;
+}
+
 export function composeAutomationPrompt(contextBlock: string, instructions: string): string {
   return `${instructions}\n---\n\n${contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`;
 }
@@ -2022,7 +2026,7 @@ export class Scheduler {
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
-      title: `[Auto] ${sessionTitle ?? automation.name}`,
+      title: automationSessionTitle(sessionTitle ?? automation.name),
       harness: getValidHarnessOrDefault(automation.harness),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
@@ -2214,6 +2218,7 @@ export class Scheduler {
     const clientRequestId = requestId ?? `webhook:${await hashToken(event.triggerKey)}`;
     return {
       source: "webhook",
+      sessionTitle: event.sessionTitle && automationSessionTitle(event.sessionTitle),
       acceptDelivery: claim
         ? async (run) => {
             await store.acceptFollowUpReceipt(

@@ -158,7 +158,7 @@ To send several deliveries to one session, include a top-level `sessionKey` stri
 
 A session an automation starts is titled `[Auto]` and the automation's name. To tell sessions apart, include a top-level `sessionTitle` string, and the session is titled `[Auto]` and that instead, for example `[Auto] #8161 Mentions in Comments`.
 
-- It only names a session the delivery starts. A follow-up into an existing session leaves the title as it is.
+- A follow-up into an existing session that carries a `sessionTitle` renames the session, so the sender can rename it as the work changes. A follow-up without one leaves the title as it is, and so does one held while the session is still starting.
 - `sessionTitle` stays in the stored body but is removed from the context block. It is trimmed and must then be a non-empty string of at most 120 characters; anything else is rejected with `400`.
 
 ## Responses

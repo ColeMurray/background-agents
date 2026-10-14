@@ -18,6 +18,7 @@ import {
   enqueueSerializedSessionPrompt,
   enqueueSessionPrompt,
   isSessionPromptRequestQueued,
+  setSessionTitle,
   type SchedulerPromptRequest,
   type SessionPromptOutcome,
 } from "./session-prompt";
@@ -55,6 +56,7 @@ export interface SteeringActor {
 export interface ContinuationPolicy {
   source: "slack" | "webhook";
   logFields?: Record<string, unknown>;
+  sessionTitle?: string;
   acceptDelivery?(run: AutomationRunRow): Promise<void>;
   releaseDelivery?(): Promise<void>;
   resolveActor(): Promise<SteeringActor | null>;
@@ -318,6 +320,7 @@ async function continueRunSession(
         event: `scheduler.${policy.source}_steer`,
         ...fields,
       });
+      if (policy.sessionTitle) await retitle(deps, sessionId, policy.sessionTitle, ctx, fields);
       return { kind: "steered", invocationId: run.invocation_id };
     // The request ids sent here name a delivery (a webhook's idempotencyKey), so a
     // different prompt under the same id is that delivery again: a retry's context
@@ -340,6 +343,22 @@ async function continueRunSession(
         status: outcome.status,
         code: outcome.code,
       };
+  }
+}
+
+async function retitle(
+  deps: SessionContinuityDeps,
+  sessionId: string,
+  title: string,
+  ctx: CorrelationContext,
+  fields: Record<string, unknown>
+): Promise<void> {
+  const renamed = await setSessionTitle(deps.env, sessionId, title, ctx).catch(() => false);
+  if (!renamed) {
+    deps.log.warn("Failed to retitle the session for a follow-up", {
+      event: "scheduler.webhook_retitle_failed",
+      ...fields,
+    });
   }
 }
 

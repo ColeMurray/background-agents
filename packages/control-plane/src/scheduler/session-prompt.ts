@@ -64,6 +64,24 @@ export async function enqueueSerializedSessionPrompt(
   return { kind: "rejected", status: response.status, code };
 }
 
+export async function setSessionTitle(
+  env: Env,
+  sessionId: string,
+  title: string,
+  ctx: CorrelationContext
+): Promise<boolean> {
+  const response = await createSessionRuntimeClient(env, ctx).fetch(
+    sessionId,
+    SessionInternalPaths.updateTitle,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    }
+  );
+  return response.ok;
+}
+
 /** Whether the session queued a prompt under this clientRequestId; throws when it cannot say. */
 export async function isSessionPromptRequestQueued(
   env: Env,
