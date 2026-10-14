@@ -757,6 +757,46 @@ describe("RepoClassifier", () => {
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
     });
 
+    it("asks for confirmation when the LLM picks no repository with high confidence", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The question doesn't need a repository.",
+          alternatives: ["acme/web"],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("can you look into this?", {
+        channelId: "C123",
+        threadTs: "1700000000.000100",
+      });
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.confidence).toBe("high");
+      expect(result.alternatives).toEqual([{ kind: "repository", repo: TEST_REPOS[1] }]);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("asks for confirmation when the LLM picks no repository without alternatives", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "General question.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("what is a monad?");
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.alternatives).toBeUndefined();
+      expect(result.needsClarification).toBe(true);
+    });
+
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
       mockMessagesCreate.mockResolvedValue(
         llmResponse({

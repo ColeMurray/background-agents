@@ -434,8 +434,13 @@ export class RepoClassifier {
         // text; escape it at composition like the deterministic stages do.
         reasoning: escapeMrkdwnText(llmResult.reasoning),
         alternatives: alternatives.length > 0 ? alternatives : undefined,
+        // A repository-less session can't be retargeted once a thread is bound
+        // to it, and the model tends to read "no repository named" as "no
+        // repository needed", so the user always confirms that choice; the
+        // picker offers it as the first quick pick.
         needsClarification:
           !matchedTarget ||
+          matchedTarget.kind === "none" ||
           llmResult.confidence === "low" ||
           (llmResult.confidence === "medium" && alternatives.length > 0),
         source: "llm",
