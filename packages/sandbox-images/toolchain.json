@@ -71,5 +71,9 @@
   "novnc": {
     "version": "1.6.0",
     "sha256": "5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa"
+  },
+  "codex": {
+    "version": "0.160.0",
+    "sha256": "4fcc47ab57f52ff75363951a8761146cd10c8288bd86fed45487dbb204a16b71"
   }
 }
