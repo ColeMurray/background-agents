@@ -5,7 +5,6 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   getHarnessCapabilities,
-  getHarnessLabel,
   harnessSupportsProviderAuth,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
@@ -16,7 +15,6 @@ import type { SqlDatabase } from "../db/sql-database";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
 import {
   ProviderAccountSelectionPolicy,
-  ProviderAccountSelectionPolicyError,
   type ProviderAccountAdapterLookup,
 } from "../model-provider-accounts/selection-policy";
 
@@ -91,12 +89,9 @@ async function resolveProvider(
 
   const providerDefault = await stores.defaults.get(provider);
   if (!providerDefault) {
-    if (capabilities.selectionPolicy === "strict") {
-      throw new ProviderAccountSelectionPolicyError(
-        `${getHarnessLabel(input.harness)} requires an explicit ${provider === "openai" ? "OpenAI" : provider} API key selection or a connected ${provider === "openai" ? "OpenAI" : provider} account from Settings.`,
-        400
-      );
-    }
+    // A strict harness has no legacy scoped-OAuth path; with nothing selected it
+    // runs on the API key (platform key or user secret), as Anthropic does.
+    if (capabilities.selectionPolicy === "strict") return apiKey(provider, "api_key_fallback");
     return noSelectionFallback(provider);
   }
   if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account")) {

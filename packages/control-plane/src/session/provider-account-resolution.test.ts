@@ -62,10 +62,16 @@ function stores(
 }
 
 describe("Codex connected-account scope", () => {
-  it("requires an explicit key choice or a connected account, never legacy fallback", async () => {
-    await expect(
-      resolveProviderAccountSelections({ harness: "codex", unattended: false }, stores())
-    ).rejects.toThrow("explicit OpenAI API key selection");
+  it("falls back to the API key with no selection or default, never legacy OAuth", async () => {
+    const fallback = await resolveProviderAccountSelections(
+      { harness: "codex", unattended: false },
+      stores()
+    );
+    expect(fallback.find((item) => item.provider === "openai")).toEqual({
+      provider: "openai",
+      authMode: "api_key",
+      selectionSource: "api_key_fallback",
+    });
     const resolved = await resolveProviderAccountSelections(
       { harness: "codex", unattended: false, explicit: { openai: { mode: "api_key" } } },
       stores()
