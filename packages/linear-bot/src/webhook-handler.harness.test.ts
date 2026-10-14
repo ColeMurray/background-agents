@@ -237,6 +237,22 @@ describe("handleAgentSessionEvent harness selection", () => {
     );
   });
 
+  it("refuses a Codex-only configured effort inherited by OpenCode", async () => {
+    const { createBody, activities, paths } = await delegate({
+      config: {
+        harness: "opencode",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "max",
+      },
+    });
+
+    expect(createBody).toBeNull();
+    expect(paths.some((path) => path.startsWith("/sessions"))).toBe(false);
+    expect(activities).toContain(
+      'Reasoning effort "max" cannot run on openai/gpt-5.6-sol with the OpenCode harness.'
+    );
+  });
+
   it("checks compatibility after canonicalizing a stale deployment model", async () => {
     const { createBody } = await delegate({
       config: { harness: "claude" },

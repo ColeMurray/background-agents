@@ -1420,6 +1420,30 @@ describe("integration config", () => {
     );
   });
 
+  it("refuses a Codex-only configured effort inherited by OpenCode", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.6-sol",
+      harness: "opencode",
+      reasoningEffort: "max",
+    });
+    const env = createMockEnv();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 201 })));
+
+    expect(
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-opencode-max"
+      )
+    ).toEqual({ outcome: "skipped", skip_reason: "harness_model_incompatible" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+  });
+
   it.each([
     ...routedHandlers,
     {

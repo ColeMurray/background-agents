@@ -6,13 +6,13 @@ import type { TeamRepoMapping, StaticTargetConfig } from "./types";
 import {
   DEFAULT_HARNESS,
   getHarnessReasoningConfig,
+  HARNESS_IDS,
   isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import {
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
   normalizeModelId,
   type ValidModel,
 } from "@open-inspect/shared/models";
@@ -126,16 +126,18 @@ function resolveReasoningEffort(
     return input.userReasoningEffort;
   }
 
-  // Preserve a harness-specific mismatch for launch admission to refuse, while
-  // retaining the existing fallback for malformed or retired effort values.
+  // Preserve a recognized configured effort for launch admission to validate
+  // against the resolved harness; discard malformed or retired values.
+  const configuredEffort = input.configReasoningEffort;
   if (
     modelSource !== "user" &&
     modelSource !== "label" &&
-    input.configReasoningEffort &&
-    (isValidHarnessReasoningEffort(harness, model, input.configReasoningEffort) ||
-      isValidReasoningEffort(model, input.configReasoningEffort))
+    configuredEffort &&
+    HARNESS_IDS.some((candidate) =>
+      isValidHarnessReasoningEffort(candidate, model, configuredEffort)
+    )
   ) {
-    return input.configReasoningEffort;
+    return configuredEffort;
   }
 
   return getHarnessReasoningConfig(harness, model)?.default;

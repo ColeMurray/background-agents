@@ -6,7 +6,6 @@ import {
 import {
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
   normalizeModelId,
   normalizeValidModels,
   type ValidModel,
@@ -15,6 +14,7 @@ import {
   checkHarnessCompatibility,
   DEFAULT_HARNESS,
   getHarnessReasoningConfig,
+  HARNESS_IDS,
   isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
@@ -125,13 +125,16 @@ export function applyInlineModelOverrides(
     return { ok: true, selection: { model, reasoningEffort: options.reasoningEffort } };
   }
 
-  // A generic-valid but harness-invalid configured effort must reach launch
-  // admission for refusal; malformed values retain the existing null fallback.
+  // Keep recognized configured efforts for launch admission to validate against
+  // the resolved harness; malformed values retain the existing null fallback.
   const configuredEffort = defaults.reasoningEffort;
   const reasoningEffort =
     configuredEffort &&
-    (isValidHarnessReasoningEffort(harness, model, configuredEffort) ||
-      (!options.model && isValidReasoningEffort(model, configuredEffort)))
+    (options.model
+      ? isValidHarnessReasoningEffort(harness, model, configuredEffort)
+      : HARNESS_IDS.some((candidate) =>
+          isValidHarnessReasoningEffort(candidate, model, configuredEffort)
+        ))
       ? configuredEffort
       : null;
   return { ok: true, selection: { model, reasoningEffort } };
