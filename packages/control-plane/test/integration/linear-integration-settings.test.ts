@@ -108,11 +108,13 @@ describe("Linear integration settings access", () => {
     ])(
       "accepts Codex %s preferences but rejects incompatible models",
       async (_level, url, wrap) => {
-        expect((await put(url, wrap({ harness: "codex" }))).status).toBe(200);
-        expect(await resolvedHarness()).toBe("codex");
+        const unset = await put(url, wrap({ harness: "codex" }));
+        expect(unset.status).toBe(400);
+        expect(await unset.text()).toContain("Choose a default model Codex can run.");
         expect(
           (await put(url, wrap({ harness: "codex", model: "openai/gpt-6.1-sol" }))).status
         ).toBe(200);
+        expect(await resolvedHarness()).toBe("codex");
         const rejected = await put(url, wrap({ harness: "codex", model: "openai/gpt-5.4" }));
         expect(rejected.status).toBe(400);
         expect(await rejected.text()).toContain("cannot run on the Codex harness");
