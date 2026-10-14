@@ -20,7 +20,6 @@ import type { SessionAttachmentReference } from "@open-inspect/shared/types/sess
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
   DEFAULT_MODEL,
-  getDefaultReasoningEffort,
   getSubscriptionProviderForModel,
   type ModelCategory,
   type ReasoningEffort,
@@ -29,6 +28,7 @@ import {
 import type { ModelPreference } from "@/lib/model-selection";
 import {
   DEFAULT_HARNESS,
+  getHarnessReasoningConfig,
   getValidHarnessOrDefault,
   reconcileProviderSelectionsForHarness,
   type HarnessId,
@@ -174,7 +174,7 @@ export default function Home() {
   }, [accessContextReady, accessStorageKey, contextKey]);
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
-    reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
+    reasoningEffort: getHarnessReasoningConfig(DEFAULT_HARNESS, DEFAULT_MODEL)?.default,
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [harness, setHarness] = useState<HarnessId>(DEFAULT_HARNESS);
@@ -341,9 +341,12 @@ export default function Home() {
 
   const handleModelChange = useCallback(
     (model: ValidModel) => {
-      saveModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
+      saveModelPreferenceDraft({
+        model,
+        reasoningEffort: getHarnessReasoningConfig(harness, model)?.default,
+      });
     },
-    [saveModelPreferenceDraft]
+    [harness, saveModelPreferenceDraft]
   );
 
   const handleReasoningEffortChange = useCallback(

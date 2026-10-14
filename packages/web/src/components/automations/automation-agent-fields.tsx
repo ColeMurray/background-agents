@@ -1,11 +1,13 @@
 "use client";
 
+import { type ModelCategory } from "@open-inspect/shared/models";
 import {
-  getReasoningConfig,
-  isValidReasoningEffort,
-  type ModelCategory,
-} from "@open-inspect/shared/models";
-import { HARNESS_IDS, getHarnessLabel, isValidHarness } from "@open-inspect/shared/harnesses";
+  getHarnessLabel,
+  HARNESS_IDS,
+  getHarnessReasoningConfig,
+  isValidHarness,
+  isValidHarnessReasoningEffort,
+} from "@open-inspect/shared/harnesses";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -37,7 +39,7 @@ export function AutomationAgentFields({
   modelError = "",
   onChange,
 }: AutomationAgentFieldsProps) {
-  const reasoningConfig = getReasoningConfig(resolvedModel);
+  const reasoningConfig = getHarnessReasoningConfig(value.harness, resolvedModel);
   const modelGroups: ComboboxGroup[] = enabledModelOptions.map((group) => ({
     category: group.category,
     options: group.models.map((model) => ({
@@ -49,7 +51,8 @@ export function AutomationAgentFields({
 
   const changeModel = (model: string) => {
     const reasoningEffort =
-      value.reasoningEffort && isValidReasoningEffort(model, value.reasoningEffort)
+      value.reasoningEffort &&
+      isValidHarnessReasoningEffort(value.harness, model, value.reasoningEffort)
         ? value.reasoningEffort
         : "";
     onChange({ ...value, model, reasoningEffort });
@@ -71,7 +74,7 @@ export function AutomationAgentFields({
           }}
         >
           <SelectTrigger id="automation-harness" className="w-full" aria-label="Agent harness">
-            <SelectValue />
+            <SelectValue>{getHarnessLabel(value.harness)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {HARNESS_IDS.map((harness) => (

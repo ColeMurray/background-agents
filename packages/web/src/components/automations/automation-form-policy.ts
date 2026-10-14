@@ -12,7 +12,8 @@ import {
   validateAutomationTargetCounts,
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
-import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
+import { isValidHarnessReasoningEffort } from "@open-inspect/shared/harnesses";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import {
   getValidHarnessOrDefault,
   reconcileProviderSelectionsForHarness,
@@ -255,7 +256,7 @@ function buildSubmissionValues({
     model: resolvedModel,
     reasoningEffort:
       draft.agent.reasoningEffort &&
-      isValidReasoningEffort(resolvedModel, draft.agent.reasoningEffort)
+      isValidHarnessReasoningEffort(draft.agent.harness, resolvedModel, draft.agent.reasoningEffort)
         ? draft.agent.reasoningEffort
         : null,
     instructions: draft.instructions.trim(),
