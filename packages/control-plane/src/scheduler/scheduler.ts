@@ -195,6 +195,20 @@ const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SLACK_THREAD_CONTEXT_TIMEOUT_MS = 10_000;
 
 /**
+ * Most runs that other bots' messages may start for one automation within
+ * SLACK_BOT_TRIGGER_WINDOW_MS. A bot can answer a run's output with another
+ * top-level post, so an automation that accepts bot messages can otherwise
+ * trigger itself indefinitely.
+ *
+ * The count is read before the firing is inserted, so a burst of simultaneous
+ * bot messages can overshoot it. A loop cannot: each of its firings follows the
+ * previous run, which is already counted.
+ */
+export const SLACK_BOT_TRIGGER_LIMIT = 10;
+export const SLACK_BOT_TRIGGER_WINDOW_MS = 60 * 60 * 1000;
+export const SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON = "slack_bot_trigger_limit";
+
+/**
  * Repository label for user-facing surfaces (Slack), read from the run's
  * firing-time snapshot — the automation row's selection may have been edited
  * since this run started.
@@ -1272,6 +1286,13 @@ export class Scheduler {
     for (const automation of candidates) {
       const now = Date.now();
 
+      // Another bot's message reaches only automations that opted in to bot
+      // messages. Checked ahead of thread continuity, so a bot's reply cannot
+      // steer an excluded automation's session either.
+      if (event.source === "slack" && event.isBot && !acceptsSlackBotMessages(automation)) {
+        continue;
+      }
+
       if (event.source === "webhook" && event.sessionKey) {
         const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
         if (original) {
@@ -1335,6 +1356,17 @@ export class Scheduler {
           recordContinuation(outcome);
           continue;
         }
+      }
+
+      if (
+        event.source === "slack" &&
+        event.isBot &&
+        (await this.slackBotTriggerLimitReached(store, automation.id, now))
+      ) {
+        const invocationId = await this.recordSlackBotTriggerLimitSkip(store, automation, event);
+        if (invocationId) invocationIds.push(invocationId);
+        skipped++;
+        continue;
       }
 
       if (event.source === "slack" && !slackSettingsLoaded) {
@@ -1404,7 +1436,9 @@ export class Scheduler {
       }
     }
 
-    if (event.source === "slack" && concurrencySkipped) {
+    // The "already active" notice is an ephemeral message to the author, which a
+    // bot cannot receive.
+    if (event.source === "slack" && concurrencySkipped && !event.isBot) {
       await this.notifySlackConcurrencySkip(event);
     }
 
@@ -1583,6 +1617,58 @@ export class Scheduler {
   }
 
   /**
+   * Record a bot message refused by the hourly limit as a skipped firing, so it
+   * shows in the automation's history. A redelivery of a message that was
+   * already admitted resolves to that firing instead. Like an overlap skip, the
+   * row carries no trigger_key, so it never consumes the message's dedup slot.
+   */
+  private async recordSlackBotTriggerLimitSkip(
+    store: AutomationStore,
+    automation: AutomationRow,
+    event: SlackAutomationEvent
+  ): Promise<string | null> {
+    const ownerId = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
+    if (ownerId) return ownerId;
+
+    this.log.warn("Skipped bot-triggered slack run over the hourly limit", {
+      event: "scheduler.slack_bot_trigger_limited",
+      automation_id: automation.id,
+      trigger_key: event.triggerKey,
+      limit: SLACK_BOT_TRIGGER_LIMIT,
+    });
+    const now = Date.now();
+    const invocationId = generateId();
+    const { inserted } = await store.insertSkippedInvocation({
+      id: invocationId,
+      automation_id: automation.id,
+      source: "event",
+      scheduled_at: null,
+      trigger_key: null,
+      concurrency_key: event.concurrencyKey,
+      trigger_metadata: serializeSlackTriggerMetadata(event),
+      skip_reason: SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    });
+    return inserted ? invocationId : null;
+  }
+
+  /** Whether bot messages already started SLACK_BOT_TRIGGER_LIMIT runs in the window. */
+  private async slackBotTriggerLimitReached(
+    store: AutomationStore,
+    automationId: string,
+    now: number
+  ): Promise<boolean> {
+    const metadata = await store.listEventTriggerMetadataSince(
+      automationId,
+      now - SLACK_BOT_TRIGGER_WINDOW_MS
+    );
+    const botFirings = metadata.filter((raw) => parseSlackTriggerMetadata(raw)?.isBot).length;
+    return botFirings >= SLACK_BOT_TRIGGER_LIMIT;
+  }
+
+  /**
    * Tell the slack-bot to post a slack-triggered run's result into the triggering
    * message's thread and clear the `eyes` reaction, via its
    * `/callbacks/automation-complete` endpoint. Signs the body with the
@@ -1719,6 +1805,7 @@ export class Scheduler {
       return buildSlackContextBlock({
         channelLabel: slackChannelLabel(event.channelId, event.channelName),
         actorUserId: event.actorUserId,
+        isBot: event.isBot,
         permalink: event.permalink,
         text: event.text,
         threadContext,
@@ -2119,6 +2206,20 @@ export class Scheduler {
 }
 
 /**
+ * Whether a slack automation accepts messages posted by other bots. Unreadable
+ * trigger fields count as no; the condition check skips that automation anyway.
+ */
+function acceptsSlackBotMessages(automation: AutomationRow): boolean {
+  try {
+    return (
+      parseAutomationTriggerFields(automation).triggerConfig?.slack?.includeBotMessages === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Serialize a slack event's message coordinates for the invocation's
  * trigger_metadata — carried by both real firings and concurrency skips.
  */
@@ -2126,6 +2227,7 @@ function serializeSlackTriggerMetadata(event: SlackAutomationEvent): string {
   const metadata: SlackRunMetadata = {
     channel: event.channelId,
     messageTs: event.ts,
+    ...(event.isBot ? { isBot: true } : {}),
   };
   return JSON.stringify(metadata);
 }

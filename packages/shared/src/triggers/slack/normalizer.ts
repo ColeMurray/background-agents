@@ -12,8 +12,11 @@ export interface SlackMessageInput {
   channel: string;
   ts: string;
   thread_ts?: string;
+  /** Author id: the user, or the bot's `bot_id` for a bot message posted without one. */
   user: string;
   text: string;
+  /** True when another bot or integration posted the message. */
+  isBot?: boolean;
 }
 
 /** Bot-fetched channel metadata the shared normalizer cannot resolve itself. */
@@ -41,12 +44,14 @@ function botMentionPattern(botUserId: string): RegExp {
 export function buildSlackContextBlock(params: {
   channelLabel: string;
   actorUserId: string;
+  isBot?: boolean;
   permalink?: string;
   text: string;
   threadContext?: string;
 }): string {
+  const author = params.isBot ? "bot" : "user";
   const lines = [
-    `A message was posted in Slack channel ${params.channelLabel} by user ${params.actorUserId}.`,
+    `A message was posted in Slack channel ${params.channelLabel} by ${author} ${params.actorUserId}.`,
   ];
   if (params.permalink) lines.push(`Permalink: ${params.permalink}`);
   if (params.threadContext) lines.push("", params.threadContext);
@@ -90,10 +95,12 @@ export function normalizeSlackEvent(
     threadTs: input.thread_ts,
     ts: input.ts,
     actorUserId: input.user,
+    ...(input.isBot ? { isBot: true } : {}),
     text,
     contextBlock: buildSlackContextBlock({
       channelLabel,
       actorUserId: input.user,
+      isBot: input.isBot,
       permalink: channelMeta?.permalink,
       text,
     }),

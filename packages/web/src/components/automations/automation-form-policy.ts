@@ -46,6 +46,8 @@ export interface AutomationTriggerDraft {
   scheduleTz: string;
   eventType: string;
   conditions: TriggerCondition[];
+  /** Slack triggers only: let other bots' messages trigger the automation. */
+  includeBotMessages: boolean;
   sentryClientSecret: string;
 }
 
@@ -110,6 +112,7 @@ export function createAutomationFormDraft(
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
+      includeBotMessages: initialValues.triggerConfig?.slack?.includeBotMessages === true,
       sentryClientSecret: "",
     },
     agent: {
@@ -142,6 +145,7 @@ export function transitionAutomationTriggerType(
     type: nextType,
     eventType: eventTypeStillValid ? trigger.eventType : "",
     conditions: [],
+    includeBotMessages: false,
   };
 }
 
@@ -286,6 +290,9 @@ function buildSubmissionValues({
   }
 
   values.triggerConfig = { conditions: draft.trigger.conditions };
+  if (draft.trigger.type === "slack_event" && draft.trigger.includeBotMessages) {
+    values.triggerConfig.slack = { includeBotMessages: true };
+  }
   if (draft.trigger.eventType) values.eventType = draft.trigger.eventType;
   if (draft.trigger.type === "sentry" && mode === "create") {
     values.sentryClientSecret = draft.trigger.sentryClientSecret.trim();

@@ -14,9 +14,9 @@ import {
   type SlackChannelMeta,
 } from "@open-inspect/shared/triggers";
 import type { Env } from "./types";
-import { isChannelTriggerCandidate } from "./dm-utils";
+import { channelTriggerAuthor, isOwnBotPost } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";
-import { getBotUserId } from "./bot-identity";
+import { getBotId, getBotUserId } from "./bot-identity";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { z } from "zod";
@@ -36,8 +36,12 @@ const slackTriggerForwardResponseSchema = z.object({
  *
  * All filtering happens here so the Slack event ack path stays cheap:
  * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
- * 2. Structural candidacy + mention suppression (`isChannelTriggerCandidate`).
+ * 2. Structural candidacy + mention suppression (`channelTriggerAuthor`). Other
+ *    bots' messages pass, marked `isBot`; the control plane applies each
+ *    automation's bot-message setting.
  * 3. Watched-channel pre-filter (cached) — avoids forwarding every channel message.
+ *    A bot message then also needs the bot's own bot_id, to rule out its own posts
+ *    (fail closed).
  * 4. Normalize (+ best-effort channel name/permalink) and forward.
  */
 export async function handleChannelTrigger(
@@ -61,7 +65,8 @@ export async function handleChannelTrigger(
     return;
   }
 
-  if (!isChannelTriggerCandidate(event, botUserId)) {
+  const author = channelTriggerAuthor(event, botUserId);
+  if (!author) {
     return;
   }
 
@@ -71,14 +76,21 @@ export async function handleChannelTrigger(
     return;
   }
 
+  // A bot post is recognised as this bot's own by its bot_id, so one cannot be
+  // considered without it (fail closed, like the user id above).
+  if (author.isBot && isOwnBotPost(event.bot_id!, await getBotId(env, traceId))) {
+    return;
+  }
+
   const channelMeta = await fetchChannelMeta(env, channel, event.ts!);
   const normalized = normalizeSlackEvent(
     {
       channel,
       ts: event.ts!,
       thread_ts: event.thread_ts,
-      user: event.user!,
+      user: author.id,
       text: event.text!,
+      isBot: author.isBot,
     },
     botUserId,
     channelMeta

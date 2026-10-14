@@ -12,6 +12,7 @@ import {
 } from "@open-inspect/shared/triggers";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -296,6 +297,33 @@ export function AutomationTriggerConfigurationFields({
             <p className="mt-1 text-xs text-destructive">{slackChannelError}</p>
           )}
         </fieldset>
+      )}
+
+      {value.type === "slack_event" && (
+        <div>
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-foreground">
+                Ignore messages from bots
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Messages posted by other bots and integrations do not trigger this automation. This
+                app&apos;s own messages never do.
+              </span>
+            </span>
+            <Switch
+              aria-label="Ignore messages from bots"
+              checked={!value.includeBotMessages}
+              onCheckedChange={(checked) => update({ includeBotMessages: !checked })}
+            />
+          </label>
+          {value.includeBotMessages && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              Bot messages are untrusted input and can start autonomous work. Scope this automation
+              to channels where you trust every bot that posts.
+            </p>
+          )}
+        </div>
       )}
     </>
   );

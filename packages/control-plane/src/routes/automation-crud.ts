@@ -88,6 +88,7 @@ import {
   getEnvironmentSelection,
   getRepositorySelection,
   getTriggerEventTypeError,
+  getTriggerOptionsError,
   resolveEnvironmentSelection,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
@@ -226,6 +227,8 @@ async function handleCreateAutomation(
 
   const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
   if (eventTypeError) return error(eventTypeError, 400);
+  const triggerOptionsError = getTriggerOptionsError(triggerType, body.triggerConfig);
+  if (triggerOptionsError) return error(triggerOptionsError, 400);
 
   // Validate conditions
   if (body.triggerConfig) {
@@ -723,6 +726,8 @@ async function handleUpdateAutomation(
     body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
   const eventTypeError = getTriggerEventTypeError(existingTriggerType, effectiveEventType);
   if (eventTypeError) return error(eventTypeError, 400);
+  const triggerOptionsError = getTriggerOptionsError(existingTriggerType, body.triggerConfig);
+  if (triggerOptionsError) return error(triggerOptionsError, 400);
 
   let triggerConfigToValidate = body.triggerConfig;
   if (

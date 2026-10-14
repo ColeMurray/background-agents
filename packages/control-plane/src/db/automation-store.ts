@@ -1148,6 +1148,19 @@ export class AutomationStore {
       .run();
   }
 
+  /** Trigger metadata of an automation's unskipped event firings created at or after `since`. */
+  async listEventTriggerMetadataSince(automationId: string, since: number): Promise<string[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT trigger_metadata FROM automation_invocations
+         WHERE automation_id = ? AND source = 'event' AND skip_reason IS NULL
+           AND trigger_metadata IS NOT NULL AND created_at >= ?`
+      )
+      .bind(automationId, since)
+      .all<{ trigger_metadata: string }>();
+    return results.map((row) => row.trigger_metadata);
+  }
+
   async getActiveRunForAutomation(automationId: string): Promise<AutomationRunRow | null> {
     return this.db
       .prepare(

@@ -140,6 +140,15 @@ beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = vi.fn();
+  // Radix Switch measures itself via ResizeObserver, which jsdom lacks.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
 });
 
 async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string) {
@@ -1262,6 +1271,63 @@ describe("slack_event automation", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ triggerConfig: channelOnly });
+  });
+  it("ignores bot messages by default and omits the option on submit", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    expect(screen.getByRole("switch", { name: "Ignore messages from bots" })).toBeChecked();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig).not.toHaveProperty("slack");
+  });
+
+  it("submits includeBotMessages after the bot filter is switched off", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Ignore messages from bots" }));
+    expect(screen.getByText(/Bot messages are untrusted input/)).toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig).toEqual({
+      ...validConditions,
+      slack: { includeBotMessages: true },
+    });
+  });
+
+  it("keeps a stored opt-in when editing", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: { ...validConditions, slack: { includeBotMessages: true } },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("switch", { name: "Ignore messages from bots" })).not.toBeChecked();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig.slack).toEqual({ includeBotMessages: true });
   });
 });
 

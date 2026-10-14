@@ -123,9 +123,22 @@ export type ConditionConfigMap = {
   [K in ConditionType]: Omit<Extract<TriggerCondition, { type: K }>, "type">;
 };
 
+/** Options that apply only to `slack_event` triggers. */
+export const slackTriggerOptionsSchema = z.object({
+  /**
+   * Let messages posted by other bots and integrations trigger the automation.
+   * Off when absent: bot output is untrusted input, and allowing it is opt-in.
+   * The automation's own Slack bot is always excluded.
+   */
+  includeBotMessages: z.boolean().optional(),
+});
+
+export type SlackTriggerOptions = z.infer<typeof slackTriggerOptionsSchema>;
+
 /** Trigger settings stored as JSON in D1. */
 export const triggerConfigSchema = z.object({
   conditions: z.array(triggerConditionSchema),
+  slack: slackTriggerOptionsSchema.optional(),
 });
 
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;
@@ -226,7 +239,13 @@ export const slackAutomationEventSchema = z.object({
   threadTs: z.string().optional(),
   /** The triggering message's own ts. */
   ts: z.string().min(1),
+  /** Slack user id of the author; a bot's `bot_id` when the message carries no user. */
   actorUserId: z.string().min(1),
+  /**
+   * True when another bot or integration posted the message. Optional so events
+   * from a slack-bot that predates the field still parse; absent means a person.
+   */
+  isBot: z.boolean().optional(),
   /** Bot-mention token stripped and length-capped. */
   text: z.string(),
 });

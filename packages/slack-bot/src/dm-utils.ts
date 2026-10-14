@@ -51,28 +51,46 @@ function mentionsUser(text: string, userId: string): boolean {
   return new RegExp(`<@${userId}(?:\\|[^>]*)?>`).test(text);
 }
 
+/** Who posted a channel message that may trigger an automation. */
+export interface ChannelTriggerAuthor {
+  /** Slack user id, or the bot's `bot_id` when a bot posted without one. */
+  id: string;
+  /** True when another bot or integration posted the message. */
+  isBot: boolean;
+}
+
 /**
- * Returns true if a Slack channel message should be considered an automation
- * trigger candidate (an ambient message that may match a watched automation).
+ * Returns the author of a Slack channel message when it should be considered an
+ * automation trigger candidate (an ambient message that may match a watched
+ * automation), or null when it should be dropped.
  *
  * This is the structural pre-filter the bot applies before normalizing and
  * forwarding to the control plane. It drops:
- * - non-`message` events and any subtype other than `file_share` (edits, joins,
- *   bot posts, …). A message that carries an attachment arrives as `file_share`
- *   but is otherwise an ordinary message, and dropping it made the request that
- *   opens a thread invisible whenever it came with a file. Only its text
- *   triggers — the attachment is not forwarded to the session (matching
- *   automation thread replies).
+ * - non-`message` events and any subtype other than `file_share` and
+ *   `bot_message` (edits, joins, …). A message that carries an attachment
+ *   arrives as `file_share` but is otherwise an ordinary message, and dropping
+ *   it made the request that opens a thread invisible whenever it came with a
+ *   file. Only its text triggers — the attachment is not forwarded to the
+ *   session (matching automation thread replies).
  * - DM (`im`) and group-DM (`mpim`) channels — handled by the DM path
  * - messages from the bot itself
  * - messages that @mention the bot — those are explicit requests dispatched by
  *   the `app_mention` path; processing them here too would double-handle.
  *
+ * Messages from other bots and integrations pass, marked `isBot`: whether one
+ * may trigger is a per-automation setting the control plane applies. App bots
+ * post with a `user`; legacy integrations post a `bot_message` with only a
+ * `bot_id`, which then stands in as the author.
+ *
+ * A bot post the bot made itself without a `user` is recognised by its
+ * `bot_id`, which the caller checks for any `isBot` result (see
+ * `isOwnBotPost`).
+ *
  * `botUserId` must be the bot's own Slack user id (from `auth.test`); the caller
- * resolves it and fails closed when it cannot, so mention suppression is always
- * applied against a known id.
+ * resolves it and fails closed when it cannot, so mention suppression and
+ * self-exclusion are always applied against a known id.
  */
-export function isChannelTriggerCandidate(
+export function channelTriggerAuthor(
   event: {
     type: string;
     subtype?: string;
@@ -84,13 +102,24 @@ export function isChannelTriggerCandidate(
     bot_id?: string;
   },
   botUserId: string
-): boolean {
-  if (event.type !== "message") return false;
-  if (event.subtype && event.subtype !== "file_share") return false;
-  if (event.bot_id) return false;
-  if (event.channel_type !== "channel" && event.channel_type !== "group") return false;
-  if (!event.text || !event.channel || !event.ts || !event.user) return false;
-  if (event.user === botUserId) return false;
-  if (mentionsUser(event.text, botUserId)) return false;
-  return true;
+): ChannelTriggerAuthor | null {
+  if (event.type !== "message") return null;
+  const isBot = !!event.bot_id;
+  if (event.subtype === "bot_message" ? !isBot : event.subtype && event.subtype !== "file_share") {
+    return null;
+  }
+  if (event.channel_type !== "channel" && event.channel_type !== "group") return null;
+  if (!event.text || !event.channel || !event.ts) return null;
+  const id = event.user ?? event.bot_id;
+  if (!id || id === botUserId) return null;
+  if (mentionsUser(event.text, botUserId)) return null;
+  return { id, isBot };
+}
+
+/**
+ * True when a bot message must be treated as the bot's own: its `bot_id` is the
+ * bot's, or the bot's `bot_id` is unknown (fail closed).
+ */
+export function isOwnBotPost(eventBotId: string, botId: string | null): boolean {
+  return !botId || eventBotId === botId;
 }
