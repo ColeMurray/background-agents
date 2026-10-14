@@ -83,6 +83,54 @@ function setup(providerAdapter = adapter()) {
 }
 
 describe("ClaimedProviderCredentialExchange", () => {
+  it("releases a claim whose caller budget expired before grant submission", async () => {
+    const { exchange, providerAdapter, store, terminalFailure, complete } = setup();
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner",
+        now: () => NOW,
+        refreshDeadlineAt: NOW,
+        complete,
+      })
+    ).rejects.toMatchObject({ phase: "refresh", cause: { classification: "retry_safe" } });
+    expect(providerAdapter.refresh).not.toHaveBeenCalled();
+    expect(store.clearSafeFailure).toHaveBeenCalledOnce();
+    expect(terminalFailure).not.toHaveBeenCalled();
+  });
+
+  it("passes only the remaining budget to upstream and still persists if it expires after rotation", async () => {
+    const { exchange, providerAdapter, complete } = setup();
+    let now = NOW;
+    vi.mocked(providerAdapter.refresh).mockImplementation(async (_credential, _now, options) => {
+      expect(options).toEqual({ timeoutMs: 200 });
+      now += 300;
+      return {
+        credential: { refreshToken: "rotated" },
+        accessToken: "access",
+        accessTokenExpiresAt: 4000,
+      };
+    });
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner",
+        now: () => now,
+        refreshDeadlineAt: NOW + 200,
+        complete,
+      })
+    ).resolves.toMatchObject({ kind: "completed" });
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
   it("claims before parsing and refresh, then dispatches one fenced completion", async () => {
     const { calls, complete, exchange, providerAdapter } = setup();
     vi.mocked(providerAdapter.parseCredential).mockImplementation((value) => {

@@ -179,18 +179,25 @@ export async function exchangeOpenAIAuthorizationCode(
 /**
  * Refresh an OpenAI OAuth access token using a refresh token.
  */
-export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITokenResponse> {
-  const response = await fetchProvider(OPENAI_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+export async function refreshOpenAIToken(
+  refreshToken: string,
+  timeoutMs?: number
+): Promise<OpenAITokenResponse> {
+  const response = await fetchProvider(
+    OPENAI_TOKEN_URL,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: OPENAI_CLIENT_ID,
+      }).toString(),
     },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: OPENAI_CLIENT_ID,
-    }).toString(),
-  });
+    timeoutMs
+  );
 
   if (!response.ok) {
     const body = await readBoundedProviderBody(

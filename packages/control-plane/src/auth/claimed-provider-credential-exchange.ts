@@ -36,6 +36,7 @@ export interface ClaimedProviderCredentialExchangeRequest {
   adapter: ErasedProviderAccountAdapter;
   owner: string;
   now: () => number;
+  refreshDeadlineAt?: number;
   complete: (context: CompletionContext) => Promise<boolean>;
 }
 
@@ -87,7 +88,22 @@ export class ClaimedProviderCredentialExchange {
 
     let refreshed: ProviderRefreshResult<unknown>;
     try {
-      refreshed = await request.adapter.refresh(credential, request.now());
+      const timeoutMs =
+        request.refreshDeadlineAt === undefined
+          ? undefined
+          : request.refreshDeadlineAt - request.now();
+      if (timeoutMs !== undefined && timeoutMs <= 0) {
+        // No grant was submitted. Release, rather than terminally fencing, this claim.
+        throw new ProviderRefreshError(
+          "Provider access deadline exceeded before exchange",
+          "retry_safe"
+        );
+      }
+      refreshed = await request.adapter.refresh(
+        credential,
+        request.now(),
+        timeoutMs === undefined ? undefined : { timeoutMs }
+      );
     } catch (cause) {
       if (cause instanceof ProviderRefreshError && cause.classification === "retry_safe") {
         await this.clearAfterFailure(request, claim.generation);

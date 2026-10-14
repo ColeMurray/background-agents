@@ -153,6 +153,105 @@ function setup(
 }
 
 describe("ModelProviderAccountBroker", () => {
+  it("waits for a rejected-version rotation even for an ordinary OpenCode cache caller", async () => {
+    const payload = {
+      refreshToken: "refresh",
+      accessToken: "old",
+      accessTokenExpiresAt: NOW + 3_600_000,
+    };
+    const { broker, stores, refresh } = setup({
+      credentialStates: [
+        state({
+          payload,
+          exchangeState: "in_flight",
+          exchangeOwner: "codex",
+          exchangeStartedAt: NOW,
+          exchangeGeneration: 1,
+        }),
+        state({ credentialVersion: 2, payload: { ...payload, accessToken: "winner" } }),
+      ],
+    });
+    await expect(broker.getAccess("account-1", "openai")).resolves.toMatchObject({
+      accessToken: "winner",
+      credentialVersion: 2,
+    });
+    expect(stores.credentials.readCredentialState).toHaveBeenCalledTimes(2);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("rotates an unexpired rejected version and reports the committed version and expiry", async () => {
+    const { broker, refresh } = setup({
+      credentialStates: [
+        state({
+          payload: {
+            refreshToken: "refresh",
+            accessToken: "rejected",
+            accessTokenExpiresAt: NOW + 3_600_000,
+          },
+        }),
+      ],
+    });
+    await expect(
+      broker.getAccess("account-1", "openai", { rejectedCredentialVersion: 1 })
+    ).resolves.toMatchObject({
+      accessToken: "new-access",
+      credentialVersion: 2,
+      expiresAt: NOW + 3_600_000,
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a newer committed version without rotating it again", async () => {
+    const { broker, refresh } = setup({
+      credentialStates: [
+        state({
+          credentialVersion: 2,
+          payload: {
+            refreshToken: "refresh",
+            accessToken: "winner",
+            accessTokenExpiresAt: NOW + 3_600_000,
+          },
+        }),
+      ],
+    });
+    await expect(
+      broker.getAccess("account-1", "openai", { rejectedCredentialVersion: 1 })
+    ).resolves.toMatchObject({ accessToken: "winner", credentialVersion: 2 });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("denies a future rejected version instead of rotating an unrelated credential", async () => {
+    const { broker, refresh } = setup();
+    await expect(
+      broker.getAccess("account-1", "openai", { rejectedCredentialVersion: 2 })
+    ).rejects.toMatchObject({ code: "credential_invalid" });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("expires a caller wait without fencing another owner's live durable lease", async () => {
+    let now = NOW;
+    const { broker, stores, refresh } = setup({
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      credentialStates: [
+        state({
+          exchangeState: "in_flight",
+          exchangeOwner: "other",
+          exchangeStartedAt: NOW,
+          exchangeGeneration: 1,
+        }),
+      ],
+      useDefaultPolling: true,
+    });
+    await expect(
+      broker.getAccess("account-1", "openai", { deadlineAt: NOW + 150 })
+    ).rejects.toMatchObject({ code: "deadline_exceeded" });
+    expect(stores.atomicWriter.fenceExchangeAndRequireReconnect).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("reuses a valid cached access token", async () => {
     const { broker, stores, refresh } = setup({
       credentialStates: [
