@@ -1459,16 +1459,49 @@ export class AutomationStore {
     );
   }
 
-  /** The firing that admitted an event (skips never hold a trigger_key). */
+  /** The invocation that admitted an event or accepted its webhook follow-up. */
   async getInvocationIdByTriggerKey(
     automationId: string,
     triggerKey: string
   ): Promise<string | null> {
     const row = await this.db
-      .prepare(`SELECT id FROM automation_invocations WHERE automation_id = ? AND trigger_key = ?`)
-      .bind(automationId, triggerKey)
+      .prepare(
+        `SELECT id FROM automation_invocations WHERE automation_id = ? AND trigger_key = ?
+         UNION ALL
+         SELECT invocation_id AS id FROM automation_follow_up_receipts
+         WHERE automation_id = ? AND trigger_key = ?
+         LIMIT 1`
+      )
+      .bind(automationId, triggerKey, automationId, triggerKey)
       .first<{ id: string }>();
     return row?.id ?? null;
+  }
+
+  /** Persist a webhook follow-up's idempotency key on the invocation whose session took it. */
+  async recordFollowUpReceipt(
+    automationId: string,
+    triggerKey: string,
+    invocationId: string,
+    createdAt: number
+  ): Promise<string> {
+    await this.db
+      .prepare(
+        `INSERT INTO automation_follow_up_receipts
+           (automation_id, trigger_key, invocation_id, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (automation_id, trigger_key) DO NOTHING`
+      )
+      .bind(automationId, triggerKey, invocationId, createdAt)
+      .run();
+    const owner = await this.db
+      .prepare(
+        `SELECT invocation_id FROM automation_follow_up_receipts
+         WHERE automation_id = ? AND trigger_key = ?`
+      )
+      .bind(automationId, triggerKey)
+      .first<{ invocation_id: string }>();
+    if (!owner) throw new Error("Failed to record webhook follow-up receipt");
+    return owner.invocation_id;
   }
 
   /** Sibling-run aggregate for finalization decisions (one query, no stored status). */

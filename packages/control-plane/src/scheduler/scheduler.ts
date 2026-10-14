@@ -1258,6 +1258,10 @@ export class Scheduler {
     let slackSessionInstructions: string | undefined;
     let slackSettingsLoaded = false;
     const continuity = this.continuityDeps(store);
+    const webhookFollowUpTriggerKey =
+      event.source === "webhook" && event.sessionKey && event.triggerKey.startsWith("webhook:idem:")
+        ? event.triggerKey
+        : null;
     const recordContinuation = (
       outcome: Extract<ContinuationOutcome, { kind: "steered" | "skipped" }>
     ): void => {
@@ -1272,8 +1276,11 @@ export class Scheduler {
     for (const automation of candidates) {
       const now = Date.now();
 
-      if (event.source === "webhook" && event.sessionKey) {
-        const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
+      if (webhookFollowUpTriggerKey) {
+        const original = await store.getInvocationIdByTriggerKey(
+          automation.id,
+          webhookFollowUpTriggerKey
+        );
         if (original) {
           invocationIds.push(original);
           skipped++;
@@ -1328,10 +1335,22 @@ export class Scheduler {
           automation,
           event.concurrencyKey,
           now,
-          this.webhookContinuation(event, automation, store)
+          await this.webhookContinuation(event, automation, store)
         );
         if (outcome.kind === "refused") throw new SessionFollowUpRefusedError(outcome);
         if (outcome.kind !== "fall_through") {
+          if (webhookFollowUpTriggerKey && outcome.invocationId) {
+            const owner = await store.recordFollowUpReceipt(
+              automation.id,
+              webhookFollowUpTriggerKey,
+              outcome.invocationId,
+              now
+            );
+            if (owner !== outcome.invocationId) {
+              recordContinuation({ kind: "skipped", invocationId: owner });
+              continue;
+            }
+          }
           recordContinuation(outcome);
           continue;
         }
@@ -2084,13 +2103,17 @@ export class Scheduler {
    * next turn of the session, sent as the automation's executor (whom the run acts as).
    * No callback context, so the run's own status is untouched.
    */
-  private webhookContinuation(
+  private async webhookContinuation(
     event: WebhookAutomationEvent,
     automation: AutomationRow,
     store: AutomationStore
-  ): ContinuationPolicy {
+  ): Promise<ContinuationPolicy> {
+    const clientRequestId = `webhook:${await hashToken(event.triggerKey)}`;
     return {
       source: "webhook",
+      deduplicationRequestId: event.triggerKey.startsWith("webhook:idem:")
+        ? clientRequestId
+        : undefined,
       resolveActor: async () => {
         const owner = await store.resolveCanonicalOwner(automation);
         return owner.user_id
@@ -2110,7 +2133,7 @@ export class Scheduler {
           canonicalUserId: actor.userId,
           source: "automation",
           // Hashed so the id fits clientRequestIdSchema's 128-character limit.
-          clientRequestId: `webhook:${await hashToken(event.triggerKey)}`,
+          clientRequestId,
         },
         ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
       }),

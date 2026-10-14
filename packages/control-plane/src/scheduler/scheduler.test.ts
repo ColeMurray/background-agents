@@ -178,6 +178,7 @@ function createMockStore() {
     recordAuthorizationDenied: vi.fn().mockResolvedValue({ inserted: true, paused: true }),
     getInvocationById: vi.fn().mockResolvedValue(null),
     getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
+    recordFollowUpReceipt: vi.fn(async (_automationId, _triggerKey, invocationId) => invocationId),
     getInvocationRunAggregate: vi.fn().mockResolvedValue(aggregate()),
     tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
     getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),

@@ -55,6 +55,8 @@ export interface SteeringActor {
 export interface ContinuationPolicy {
   source: "slack" | "webhook";
   logFields?: Record<string, unknown>;
+  /** Stable session request ID used to recognize a retry after continuity expires. */
+  deduplicationRequestId?: string;
   resolveActor(): Promise<SteeringActor | null>;
   buildPrompt(
     run: AutomationRunRow,
@@ -117,9 +119,9 @@ export async function continueSession(
   policy: ContinuationPolicy
 ): Promise<ContinuationOutcome> {
   const run = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
-  if (!run || run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS) {
-    return { kind: "fall_through" };
-  }
+  if (!run) return { kind: "fall_through" };
+  if (run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS)
+    return deduplicateExpiredFollowUp(deps, run, policy);
   if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy);
 
   const held = await holdFollowUp(deps, run, policy);
@@ -130,6 +132,37 @@ export async function continueSession(
   return launched && !holdsFollowUps(launched)
     ? continueRunSession(deps, launched, policy)
     : { kind: "fall_through" };
+}
+
+/**
+ * An expired session no longer receives new work, but its durable prompt receipt still
+ * owns an idempotency key. Refuse to fork when the receipt cannot be checked: a retry is
+ * safer than duplicate work.
+ */
+async function deduplicateExpiredFollowUp(
+  deps: SessionContinuityDeps,
+  run: ContinuableRunRow,
+  policy: ContinuationPolicy
+): Promise<ContinuationOutcome> {
+  const requestId = policy.deduplicationRequestId;
+  if (!requestId || !run.session_id) return { kind: "fall_through" };
+
+  try {
+    const queued = await isSessionPromptRequestQueued(deps.env, run.session_id, requestId, {
+      trace_id: `automation:${run.automation_id}`,
+      request_id: requestId,
+    });
+    return queued ? { kind: "skipped", invocationId: run.invocation_id } : { kind: "fall_through" };
+  } catch (error) {
+    deps.log.warn("Failed to check an expired session for a follow-up retry", {
+      event: `scheduler.${policy.source}_expired_dedup_failed`,
+      automation_id: run.automation_id,
+      session_id: run.session_id,
+      ...policy.logFields,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return { kind: "refused", invocationId: run.invocation_id, status: null, code: null };
+  }
 }
 
 /**
