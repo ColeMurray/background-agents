@@ -274,31 +274,99 @@ describe("ModelProviderAccountBroker", () => {
     expect(stores.credentials.tryBeginExchange).not.toHaveBeenCalled();
   });
 
-  it("coalesces refreshes for the same account and credential version locally", async () => {
+  it("coalesces concurrent callers on one instance through the durable claim", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
+    const rotated = {
+      refreshToken: "next",
+      accessToken: "access",
+      accessTokenExpiresAt: NOW + 600_000,
+    };
     const refresh = vi.fn().mockImplementation(async () => {
       await gate;
       return {
-        credential: {
-          refreshToken: "next",
-          accessToken: "access",
-          accessTokenExpiresAt: NOW + 600_000,
-        },
+        credential: rotated,
         accessToken: "access",
         accessTokenExpiresAt: NOW + 600_000,
         externalAccountId: "external-1",
       };
     });
-    const { broker, stores } = setup({ refresh, credentialStates: [state(), state()] });
+    const tryBegin = vi
+      .fn()
+      .mockResolvedValueOnce({ acquired: true, generation: 1 })
+      .mockResolvedValue({ acquired: false });
+    const winner = state({
+      payload: rotated,
+      credentialVersion: 2,
+      accessTokenExpiresAt: NOW + 600_000,
+    });
+    const { broker } = setup({ refresh, tryBegin, credentialStates: [state(), state(), winner] });
 
     const first = broker.getAccess("account-1", "openai");
     const second = broker.getAccess("account-1", "openai");
-    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(tryBegin).toHaveBeenCalledTimes(2));
     release();
 
-    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-    expect(stores.credentials.tryBeginExchange).toHaveBeenCalledTimes(1);
+    await expect(Promise.all([first, second])).resolves.toMatchObject([
+      { accessToken: "access", credentialVersion: 2 },
+      { accessToken: "access", credentialVersion: 2 },
+    ]);
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("does not hand a joining caller the version it rejected", async () => {
+    const cached = {
+      payload: { refreshToken: "refresh", accessToken: "v1", accessTokenExpiresAt: NOW + 600_000 },
+      accessTokenExpiresAt: NOW + 600_000,
+    };
+    const inFlight = state({
+      ...cached,
+      exchangeState: "in_flight",
+      exchangeGeneration: 1,
+      exchangeOwner: "other-isolate",
+      exchangeStartedAt: NOW,
+    });
+    // The other isolate's exchange clears safely without replacing v1.
+    const clearedV1 = state({ ...cached, exchangeGeneration: 1 });
+    const refresh = vi.fn().mockResolvedValue({
+      credential: { refreshToken: "next", accessToken: "v2", accessTokenExpiresAt: NOW + 600_000 },
+      accessToken: "v2",
+      accessTokenExpiresAt: NOW + 600_000,
+      externalAccountId: "external-1",
+    });
+    const { broker } = setup({ refresh, credentialStates: [inFlight, inFlight, clearedV1] });
+
+    const ordinary = broker.getAccess("account-1", "openai");
+    const rejecting = broker.getAccess("account-1", "openai", { rejectedCredentialVersion: 1 });
+
+    await expect(ordinary).resolves.toMatchObject({ accessToken: "v1", credentialVersion: 1 });
+    await expect(rejecting).resolves.toMatchObject({ accessToken: "v2", credentialVersion: 2 });
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("issues no cached token after waiting on an exchange that fenced the account", async () => {
+    const cached = {
+      payload: { refreshToken: "refresh", accessToken: "v1", accessTokenExpiresAt: NOW + 600_000 },
+      accessTokenExpiresAt: NOW + 600_000,
+    };
+    const inFlight = state({
+      ...cached,
+      exchangeState: "in_flight",
+      exchangeGeneration: 1,
+      exchangeOwner: "other-isolate",
+      exchangeStartedAt: NOW,
+    });
+    // The owner failed terminally: the row is idle again at the same version.
+    const fencedIdle = state({ ...cached, exchangeGeneration: 1 });
+    const { broker, stores } = setup({ credentialStates: [inFlight, fencedIdle] });
+    vi.mocked(stores.accounts.getById)
+      .mockResolvedValueOnce(account())
+      .mockResolvedValue(account({ status: "reconnect_required" }));
+
+    await expect(broker.getAccess("account-1", "openai")).rejects.toMatchObject({
+      code: "reconnect_required",
+    });
+    expect(stores.accounts.touchLastUsed).not.toHaveBeenCalled();
   });
 
   it("polls when another process owns the durable claim and returns its token", async () => {

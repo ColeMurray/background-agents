@@ -110,11 +110,7 @@ export interface ModelProviderAccountAdapter<TCredential, TConnectInput> {
   parseConnectInput(input: unknown): TConnectInput;
   connect(input: TConnectInput): Promise<ProviderConnectionResult<TCredential>>;
   parseCredential(payload: unknown, schemaVersion: number): TCredential;
-  refresh(
-    credential: TCredential,
-    now?: number,
-    options?: { timeoutMs: number }
-  ): Promise<ProviderRefreshResult<TCredential>>;
+  refresh(credential: TCredential, now?: number): Promise<ProviderRefreshResult<TCredential>>;
   cachedAccess(credential: TCredential): CachedProviderAccess | null;
   validateReconnectInputIdentity(
     input: TConnectInput,

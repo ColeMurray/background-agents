@@ -89,11 +89,10 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
 
   async refresh(
     credential: OpenAIProviderCredential,
-    now = Date.now(),
-    options?: { timeoutMs: number }
+    now = Date.now()
   ): Promise<ProviderRefreshResult<OpenAIProviderCredential>> {
     try {
-      const tokens = await this.refreshToken(credential.refreshToken, options?.timeoutMs);
+      const tokens = await this.refreshToken(credential.refreshToken);
       if (!tokens.refresh_token) {
         throw new ProviderRefreshError(
           "OpenAI refresh did not return a replacement refresh token",

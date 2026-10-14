@@ -103,11 +103,12 @@ describe("ClaimedProviderCredentialExchange", () => {
     expect(terminalFailure).not.toHaveBeenCalled();
   });
 
-  it("passes only the remaining budget to upstream and still persists if it expires after rotation", async () => {
-    const { exchange, providerAdapter, complete } = setup();
+  it("runs a submitted grant under the provider timeout and persists it after the caller deadline", async () => {
+    const { exchange, providerAdapter, complete, terminalFailure } = setup();
     let now = NOW;
-    vi.mocked(providerAdapter.refresh).mockImplementation(async (_credential, _now, options) => {
-      expect(options).toEqual({ timeoutMs: 200 });
+    vi.mocked(providerAdapter.refresh).mockImplementation(async (...args: unknown[]) => {
+      // No caller budget reaches the provider call.
+      expect(args).toHaveLength(2);
       now += 300;
       return {
         credential: { refreshToken: "rotated" },
@@ -129,6 +130,7 @@ describe("ClaimedProviderCredentialExchange", () => {
       })
     ).resolves.toMatchObject({ kind: "completed" });
     expect(complete).toHaveBeenCalledOnce();
+    expect(terminalFailure).not.toHaveBeenCalled();
   });
 
   it("claims before parsing and refresh, then dispatches one fenced completion", async () => {

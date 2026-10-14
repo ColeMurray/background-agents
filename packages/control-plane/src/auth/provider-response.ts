@@ -12,16 +12,10 @@ export type ProviderResponseErrorFactory = (
   invalidFields?: readonly string[]
 ) => Error;
 
-export function fetchProvider(
-  url: string,
-  init: RequestInit,
-  timeoutMs = PROVIDER_TOKEN_REFRESH_TIMEOUT_MS
-): Promise<Response> {
+export function fetchProvider(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, {
     ...init,
-    signal: AbortSignal.timeout(
-      Math.max(1, Math.min(Math.floor(timeoutMs), PROVIDER_TOKEN_REFRESH_TIMEOUT_MS))
-    ),
+    signal: AbortSignal.timeout(PROVIDER_TOKEN_REFRESH_TIMEOUT_MS),
   });
 }
 
