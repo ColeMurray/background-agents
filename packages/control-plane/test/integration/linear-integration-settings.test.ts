@@ -122,6 +122,50 @@ describe("Linear integration settings access", () => {
       }
     );
 
+    it.each([
+      ["global", globalEndpoint, (s: object) => ({ defaults: s })],
+      ["repository", repoEndpoint, (s: object) => s],
+    ])("accepts Codex max reasoning for %s settings", async (_level, url, wrap) => {
+      const selection = { harness: "codex", model: "openai/gpt-5.6-sol" };
+      expect((await put(url, wrap({ ...selection, reasoningEffort: "max" }))).status).toBe(200);
+
+      const resolved = await serviceFetch(resolvedEndpoint, { service: "linear-bot" });
+      expect(await resolved.json()).toMatchObject({
+        config: { ...selection, reasoningEffort: "max" },
+      });
+    });
+
+    it.each([
+      ["global", globalEndpoint, (s: object) => ({ defaults: s })],
+      ["repository", repoEndpoint, (s: object) => s],
+    ])("rejects Codex none reasoning for %s settings", async (_level, url, wrap) => {
+      const selection = { harness: "codex", model: "openai/gpt-5.6-sol" };
+      const rejected = await put(url, wrap({ ...selection, reasoningEffort: "none" }));
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json<{ error: string }>()).toEqual({
+        error: 'Reasoning effort "none" cannot run on openai/gpt-5.6-sol with the Codex harness.',
+      });
+    });
+
+    it("resolves Codex reasoning inherited by a sparse repository override", async () => {
+      expect(
+        (
+          await put(globalEndpoint, {
+            defaults: { harness: "codex", model: "openai/gpt-5.6-sol" },
+          })
+        ).status
+      ).toBe(200);
+      expect(
+        (await put(repoEndpoint, { model: "openai/gpt-5.6-sol", reasoningEffort: "max" })).status
+      ).toBe(200);
+      let resolved = await serviceFetch(resolvedEndpoint, { service: "linear-bot" });
+      expect(await resolved.json()).toMatchObject({ config: { reasoningEffort: "max" } });
+
+      expect((await put(repoEndpoint, { reasoningEffort: "none" })).status).toBe(200);
+      resolved = await serviceFetch(resolvedEndpoint, { service: "linear-bot" });
+      expect(await resolved.json()).toMatchObject({ config: { reasoningEffort: "none" } });
+    });
+
     it("accepts a harness and model that only disagree across levels", async () => {
       expect(
         (

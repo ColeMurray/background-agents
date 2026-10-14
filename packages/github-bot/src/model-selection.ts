@@ -4,7 +4,6 @@ import {
   type ParseInlinePromptFlagsResult,
 } from "@open-inspect/shared/inline-prompt-flags";
 import {
-  getReasoningConfig,
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
@@ -15,6 +14,8 @@ import {
 import {
   checkHarnessCompatibility,
   DEFAULT_HARNESS,
+  getHarnessReasoningConfig,
+  isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
@@ -93,7 +94,8 @@ async function getEnabledModels(
 export function applyInlineModelOverrides(
   options: InlinePromptOptions,
   defaults: Omit<ModelSelection, "harness">,
-  enabledModels: readonly ValidModel[]
+  enabledModels: readonly ValidModel[],
+  harness: HarnessId
 ): { ok: true; selection: Omit<ModelSelection, "harness"> } | { ok: false; message: string } {
   let model = getValidModelOrDefault(defaults.model);
   if (options.model) {
@@ -110,8 +112,8 @@ export function applyInlineModelOverrides(
   }
 
   if (options.reasoningEffort) {
-    if (!isValidReasoningEffort(model, options.reasoningEffort)) {
-      const efforts = getReasoningConfig(model)?.efforts;
+    if (!isValidHarnessReasoningEffort(harness, model, options.reasoningEffort)) {
+      const efforts = getHarnessReasoningConfig(harness, model)?.efforts;
       const suffix = efforts?.length
         ? ` Supported values: ${efforts.map(inlineCode).join(", ")}.`
         : " This model does not support reasoning controls.";
@@ -123,9 +125,14 @@ export function applyInlineModelOverrides(
     return { ok: true, selection: { model, reasoningEffort: options.reasoningEffort } };
   }
 
+  // A generic-valid but harness-invalid configured effort must reach launch
+  // admission for refusal; malformed values retain the existing null fallback.
+  const configuredEffort = defaults.reasoningEffort;
   const reasoningEffort =
-    defaults.reasoningEffort && isValidReasoningEffort(model, defaults.reasoningEffort)
-      ? defaults.reasoningEffort
+    configuredEffort &&
+    (isValidHarnessReasoningEffort(harness, model, configuredEffort) ||
+      (!options.model && isValidReasoningEffort(model, configuredEffort)))
+      ? configuredEffort
       : null;
   return { ok: true, selection: { model, reasoningEffort } };
 }
@@ -161,7 +168,8 @@ export async function resolveModelSelection(
     enabledModels = fetched;
   }
 
-  const applied = applyInlineModelOverrides(flags?.options ?? {}, defaults, enabledModels);
+  const harness = defaults.harness ?? DEFAULT_HARNESS;
+  const applied = applyInlineModelOverrides(flags?.options ?? {}, defaults, enabledModels, harness);
   if (!applied.ok) {
     return {
       ok: false,
@@ -171,8 +179,12 @@ export async function resolveModelSelection(
   }
 
   const { selection } = applied;
-  const harness = defaults.harness ?? DEFAULT_HARNESS;
-  const compatibilityError = checkHarnessCompatibility(harness, selection.model);
+  const compatibilityError = checkHarnessCompatibility(
+    harness,
+    selection.model,
+    undefined,
+    selection.reasoningEffort
+  );
   if (compatibilityError) {
     return {
       ok: false,

@@ -59,6 +59,7 @@ async function delegate(options: {
   config: {
     harness?: HarnessId;
     model?: string | null;
+    reasoningEffort?: string | null;
     allowUserPreferenceOverride?: boolean;
     allowLabelModelOverride?: boolean;
   } | null;
@@ -202,6 +203,38 @@ describe("handleAgentSessionEvent harness selection", () => {
     expect(activities).toContain("agent: Claude Agent, model: anthropic/claude-sonnet-4-6");
     expect(activities).toContain("with **anthropic/claude-sonnet-4-6** (Claude Agent).");
     expect(activities).not.toContain("Claude Code");
+  });
+
+  it("launches Codex with its max reasoning effort", async () => {
+    const { createBody } = await delegate({
+      config: {
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "max",
+      },
+    });
+
+    expect(createBody).toMatchObject({
+      harness: "codex",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "max",
+    });
+  });
+
+  it("refuses Codex none reasoning before session creation", async () => {
+    const { createBody, activities, paths } = await delegate({
+      config: {
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "none",
+      },
+    });
+
+    expect(createBody).toBeNull();
+    expect(paths.some((path) => path.startsWith("/sessions"))).toBe(false);
+    expect(activities).toContain(
+      'Reasoning effort "none" cannot run on openai/gpt-5.6-sol with the Codex harness.'
+    );
   });
 
   it("checks compatibility after canonicalizing a stale deployment model", async () => {

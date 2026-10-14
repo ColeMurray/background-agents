@@ -3,9 +3,13 @@
  */
 
 import type { TeamRepoMapping, StaticTargetConfig } from "./types";
-import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
-  getDefaultReasoningEffort,
+  DEFAULT_HARNESS,
+  getHarnessReasoningConfig,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import {
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
@@ -100,34 +104,39 @@ export function resolveSessionAgentSettings(input: ResolveSessionAgentInput): {
   }
 
   const normalizedModel = getValidModelOrDefault(model);
+  const harness = input.configHarness ?? DEFAULT_HARNESS;
   return {
-    harness: input.configHarness ?? DEFAULT_HARNESS,
+    harness,
     model: normalizedModel,
-    reasoningEffort: resolveReasoningEffort(input, normalizedModel, modelSource),
+    reasoningEffort: resolveReasoningEffort(input, harness, normalizedModel, modelSource),
   };
 }
 
 function resolveReasoningEffort(
   input: ResolveSessionAgentInput,
+  harness: HarnessId,
   model: string,
   modelSource: "config" | "env" | "user" | "label"
 ): string | undefined {
   if (
     input.allowUserPreferenceOverride &&
     input.userReasoningEffort &&
-    isValidReasoningEffort(model, input.userReasoningEffort)
+    isValidHarnessReasoningEffort(harness, model, input.userReasoningEffort)
   ) {
     return input.userReasoningEffort;
   }
 
+  // Preserve a harness-specific mismatch for launch admission to refuse, while
+  // retaining the existing fallback for malformed or retired effort values.
   if (
     modelSource !== "user" &&
     modelSource !== "label" &&
     input.configReasoningEffort &&
-    isValidReasoningEffort(model, input.configReasoningEffort)
+    (isValidHarnessReasoningEffort(harness, model, input.configReasoningEffort) ||
+      isValidReasoningEffort(model, input.configReasoningEffort))
   ) {
     return input.configReasoningEffort;
   }
 
-  return getDefaultReasoningEffort(model);
+  return getHarnessReasoningConfig(harness, model)?.default;
 }

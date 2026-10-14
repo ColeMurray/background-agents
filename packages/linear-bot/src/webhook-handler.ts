@@ -559,7 +559,7 @@ async function handleNewSession(
     labelModel,
   });
 
-  const compatibilityError = checkHarnessCompatibility(harness, model);
+  const compatibilityError = checkHarnessCompatibility(harness, model, undefined, reasoningEffort);
   if (compatibilityError) {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",

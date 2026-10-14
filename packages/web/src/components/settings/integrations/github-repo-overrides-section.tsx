@@ -12,18 +12,17 @@ import {
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
 import {
-  MODEL_REASONING_CONFIG,
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
   type ModelCategory,
-  type ValidModel,
 } from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
   checkHarnessCompatibility,
   getHarnessCapabilities,
   getHarnessLabel,
+  getHarnessReasoningConfig,
+  isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
@@ -206,11 +205,10 @@ function RepoOverrideRow({
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
-
   // Filter by the effective harness, but validate only explicit settings at
   // this level. Cross-level incompatibilities are refused at launch.
   const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
+  const reasoningConfig = model ? getHarnessReasoningConfig(effectiveHarness, model) : undefined;
   const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
   const harnessNeedsModel =
     harness !== undefined && getHarnessCapabilities(harness).modelFamilies !== "any";
@@ -229,7 +227,7 @@ function RepoOverrideRow({
     setModel(value);
     setDirty(true);
 
-    if (effort && (!value || !isValidReasoningEffort(value, effort))) {
+    if (effort && (!value || !isValidHarnessReasoningEffort(effectiveHarness, value, effort))) {
       setEffort("");
     }
   };
@@ -238,6 +236,12 @@ function RepoOverrideRow({
     setHarness(next);
     if (shouldClearModelForHarness(next ?? defaultHarness ?? DEFAULT_HARNESS, model)) {
       setModel("");
+      setEffort("");
+    } else if (
+      model &&
+      effort &&
+      !isValidHarnessReasoningEffort(next ?? defaultHarness ?? DEFAULT_HARNESS, model, effort)
+    ) {
       setEffort("");
     }
     setDirty(true);

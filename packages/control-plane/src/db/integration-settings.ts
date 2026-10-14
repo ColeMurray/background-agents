@@ -26,11 +26,14 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import {
   checkHarnessCompatibility,
+  DEFAULT_HARNESS,
   getHarnessCapabilities,
   getHarnessLabel,
+  HARNESS_IDS,
+  isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
+import { isValidModel } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
 
@@ -390,12 +393,13 @@ export class IntegrationSettingsStore {
   ): IntegrationSettingsAtLevel<K, L> {
     if (integrationId === "github") {
       return this.validateAndNormalizeGitHubSettings(
-        settings as GitHubBotSettings
+        settings as GitHubBotSettings,
+        level
       ) as IntegrationSettingsAtLevel<K, L>;
     }
 
     if (integrationId === "linear") {
-      this.validateLinearSettings(settings as LinearBotSettings);
+      this.validateLinearSettings(settings as LinearBotSettings, level);
     }
 
     if (integrationId === "code-server") {
@@ -430,11 +434,14 @@ export class IntegrationSettingsStore {
    * like an automation on save. Sparse values merged from other levels can
    * still disagree; launchers refuse incompatible resolved pairs.
    */
-  private validateAgentSelection(settings: {
-    model?: string;
-    reasoningEffort?: string;
-    harness?: HarnessId;
-  }): void {
+  private validateAgentSelection(
+    settings: {
+      model?: string;
+      reasoningEffort?: string;
+      harness?: HarnessId;
+    },
+    level: SettingsLevel
+  ): void {
     if (settings.model !== undefined && !isValidModel(settings.model)) {
       throw new IntegrationSettingsValidationError(`Invalid model ID: ${settings.model}`);
     }
@@ -453,25 +460,37 @@ export class IntegrationSettingsStore {
 
     const harnessIncompatibility =
       settings.harness !== undefined && settings.model !== undefined
-        ? checkHarnessCompatibility(settings.harness, settings.model)
+        ? checkHarnessCompatibility(
+            settings.harness,
+            settings.model,
+            undefined,
+            settings.reasoningEffort
+          )
         : null;
     if (harnessIncompatibility) {
       throw new IntegrationSettingsValidationError(harnessIncompatibility.message);
     }
 
-    if (
-      settings.model !== undefined &&
-      settings.reasoningEffort !== undefined &&
-      !isValidReasoningEffort(settings.model, settings.reasoningEffort)
-    ) {
-      throw new IntegrationSettingsValidationError(
-        `Invalid reasoning effort "${settings.reasoningEffort}" for model "${settings.model}"`
-      );
+    const { model, reasoningEffort } = settings;
+    if (model !== undefined && reasoningEffort !== undefined && settings.harness === undefined) {
+      const possibleHarnesses = level === "global" ? [DEFAULT_HARNESS] : HARNESS_IDS;
+      if (
+        !possibleHarnesses.some((harness) =>
+          isValidHarnessReasoningEffort(harness, model, reasoningEffort)
+        )
+      ) {
+        throw new IntegrationSettingsValidationError(
+          `Invalid reasoning effort "${reasoningEffort}" for model "${model}"`
+        );
+      }
     }
   }
 
-  private validateAndNormalizeGitHubSettings(settings: GitHubBotSettings): GitHubBotSettings {
-    this.validateAgentSelection(settings);
+  private validateAndNormalizeGitHubSettings(
+    settings: GitHubBotSettings,
+    level: SettingsLevel
+  ): GitHubBotSettings {
+    this.validateAgentSelection(settings, level);
 
     if (
       settings.codeReviewInstructions !== undefined &&
@@ -560,8 +579,8 @@ export class IntegrationSettingsStore {
     return normalized;
   }
 
-  private validateLinearSettings(settings: LinearBotSettings): void {
-    this.validateAgentSelection(settings);
+  private validateLinearSettings(settings: LinearBotSettings, level: SettingsLevel): void {
+    this.validateAgentSelection(settings, level);
 
     if (
       settings.allowUserPreferenceOverride !== undefined &&
@@ -643,7 +662,7 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("agentNotificationsEnabled must be a boolean");
     }
 
-    this.validateAgentSelection(settings);
+    this.validateAgentSelection(settings, level);
 
     if (
       settings.mentionsPolicy !== undefined &&

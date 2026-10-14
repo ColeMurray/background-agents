@@ -15,19 +15,18 @@ import {
   type LinearGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import {
-  MODEL_REASONING_CONFIG,
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
   type ModelCategory,
-  type ValidModel,
 } from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
   checkHarnessCompatibility,
   getHarnessCapabilities,
   getHarnessLabel,
+  getHarnessReasoningConfig,
   getValidHarnessOrDefault,
+  isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -375,6 +374,12 @@ function GlobalSettingsSection({
               if (shouldClearModelForHarness(nextHarness, model)) {
                 setModel("");
                 setEffort("");
+              } else if (
+                model &&
+                effort &&
+                !isValidHarnessReasoningEffort(nextHarness, model, effort)
+              ) {
+                setEffort("");
               }
               setDirty(true);
               setError("");
@@ -384,6 +389,7 @@ function GlobalSettingsSection({
 
         <ModelReasoningDefaultsFields
           model={model}
+          harness={harness}
           reasoningEffort={effort}
           modelOptions={filterModelOptionsForHarness(harness, enabledModelOptions)}
           modelRequired={harnessNeedsModel}
@@ -674,8 +680,8 @@ function RepoOverrideRow({
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
   const effectiveHarness = harness ?? inheritedHarness;
+  const reasoningConfig = model ? getHarnessReasoningConfig(effectiveHarness, model) : undefined;
   // Only explicit settings at this level are validated. Cross-level
   // incompatibilities are refused at launch.
   const harnessNeedsModel =
@@ -697,6 +703,12 @@ function RepoOverrideRow({
     if (shouldClearModelForHarness(newHarness ?? inheritedHarness, model)) {
       setModel("");
       setEffort("");
+    } else if (
+      model &&
+      effort &&
+      !isValidHarnessReasoningEffort(newHarness ?? inheritedHarness, model, effort)
+    ) {
+      setEffort("");
     }
   };
 
@@ -705,7 +717,7 @@ function RepoOverrideRow({
     setModel(value);
     setDirty(true);
 
-    if (effort && (!value || !isValidReasoningEffort(value, effort))) {
+    if (effort && (!value || !isValidHarnessReasoningEffort(effectiveHarness, value, effort))) {
       setEffort("");
     }
   };

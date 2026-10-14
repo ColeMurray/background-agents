@@ -14,6 +14,7 @@ import {
   DEFAULT_HARNESS,
   getHarnessCapabilities,
   getHarnessLabel,
+  isValidHarnessReasoningEffort,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
@@ -127,6 +128,8 @@ export function GlobalSettingsSection({
     setHarness(value);
     if (shouldClearModelForHarness(value, model)) {
       setModel("");
+      setEffort("");
+    } else if (model && effort && !isValidHarnessReasoningEffort(value, model, effort)) {
       setEffort("");
     }
     setDirty(true);
@@ -243,6 +246,7 @@ export function GlobalSettingsSection({
 
       <ModelReasoningDefaultsFields
         model={model}
+        harness={harness}
         reasoningEffort={effort}
         modelOptions={visibleModelOptions}
         modelRequired={harnessNeedsModel}

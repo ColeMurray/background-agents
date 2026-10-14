@@ -1378,6 +1378,48 @@ describe("integration config", () => {
     expect(sessionCreateBody(getControlPlaneFetch(env4)).harness).toBe("claude");
   });
 
+  it("launches Codex with its max reasoning effort", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.6-sol",
+      harness: "codex",
+      reasoningEffort: "max",
+    });
+    const env = createMockEnv();
+
+    await handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-codex-max");
+
+    expect(sessionCreateBody(getControlPlaneFetch(env))).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      harness: "codex",
+      reasoningEffort: "max",
+    });
+  });
+
+  it("refuses Codex none reasoning before session creation", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.6-sol",
+      harness: "codex",
+      reasoningEffort: "none",
+    });
+    const env = createMockEnv();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 201 })));
+
+    expect(
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-codex-none"
+      )
+    ).toEqual({ outcome: "skipped", skip_reason: "harness_model_incompatible" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+  });
+
   it.each([
     ...routedHandlers,
     {

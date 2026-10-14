@@ -48,7 +48,10 @@ vi.mock("@/hooks/use-enabled-models", () => ({
       },
       {
         category: "OpenAI",
-        models: [{ id: "openai/gpt-5.4", name: "GPT 5.4" }],
+        models: [
+          { id: "openai/gpt-5.4", name: "GPT 5.4" },
+          { id: "openai/gpt-5.6-sol", name: "GPT 5.6 Sol" },
+        ],
       },
     ],
   }),
@@ -565,6 +568,27 @@ describe("GitHubIntegrationSettings", () => {
         }),
       })
     );
+  });
+
+  it("offers Codex reasoning efforts for global defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          harness: "codex",
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "max",
+        },
+      },
+    });
+
+    render(<GitHubIntegrationSettings />);
+
+    const reasoning = screen.getByRole("combobox", { name: "Default reasoning effort" });
+    expect(reasoning).toHaveTextContent("max");
+    await user.click(reasoning);
+    expect(screen.getByRole("option", { name: "max" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "none" })).not.toBeInTheDocument();
   });
 
   it.each([undefined, "anthropic/claude-sonnet-4-6", "openai/gpt-5.4"])(

@@ -1,10 +1,11 @@
 "use client";
 
+import type { ModelCategory } from "@open-inspect/shared/models";
 import {
-  getReasoningConfig,
-  isValidReasoningEffort,
-  type ModelCategory,
-} from "@open-inspect/shared/models";
+  getHarnessReasoningConfig,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import {
   Select,
   SelectContent,
@@ -20,18 +21,20 @@ const MODEL_DEFAULT_VALUE = "__model_default__";
 
 export function ModelReasoningDefaultsFields({
   model,
+  harness,
   reasoningEffort,
   modelOptions,
   modelRequired,
   onChange,
 }: {
   model: string;
+  harness: HarnessId;
   reasoningEffort: string;
   modelOptions: ModelCategory[];
   modelRequired: boolean;
   onChange: (model: string, reasoningEffort: string) => void;
 }) {
-  const reasoningConfig = getReasoningConfig(model);
+  const reasoningConfig = getHarnessReasoningConfig(harness, model);
 
   return (
     <div className="grid sm:grid-cols-2 gap-3 mb-4">
@@ -46,7 +49,7 @@ export function ModelReasoningDefaultsFields({
             }
             onChange(
               nextModel,
-              reasoningEffort && isValidReasoningEffort(nextModel, reasoningEffort)
+              reasoningEffort && isValidHarnessReasoningEffort(harness, nextModel, reasoningEffort)
                 ? reasoningEffort
                 : ""
             );

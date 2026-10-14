@@ -25,7 +25,10 @@ const { authorization, modelOptions, useSWRMock, mutateMock, toastSuccess, toast
       },
       {
         category: "OpenAI",
-        models: [{ id: "openai/gpt-6-sol", name: "GPT 6 Sol", description: "" }],
+        models: [
+          { id: "openai/gpt-6-sol", name: "GPT 6 Sol", description: "" },
+          { id: "openai/gpt-5.6-sol", name: "GPT 5.6 Sol", description: "" },
+        ],
       },
     ] satisfies ModelCategory[],
     useSWRMock: vi.fn(),
@@ -329,6 +332,27 @@ describe("LinearIntegrationSettings harness", () => {
     expect(body.settings.defaults).not.toHaveProperty("reasoningEffort");
   });
 
+  it("offers Codex reasoning efforts for global defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: {
+        defaults: {
+          harness: "codex",
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "max",
+        },
+      },
+    });
+
+    render(<LinearIntegrationSettings />);
+
+    const reasoning = screen.getByRole("combobox", { name: "Default reasoning effort" });
+    expect(reasoning).toHaveTextContent("max");
+    await user.click(reasoning);
+    expect(screen.getByRole("option", { name: "max" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "none" })).not.toBeInTheDocument();
+  });
+
   it("filters repository models by the inherited harness and saves an explicit override", async () => {
     const user = userEvent.setup();
     setupSWR({
@@ -550,6 +574,7 @@ describe("LinearIntegrationSettings harness", () => {
       "Use system default",
       "Claude Sonnet 4.6",
       "GPT 6 Sol",
+      "GPT 5.6 Sol",
     ]);
     await user.click(model);
     await user.click(await screen.findByRole("option", { name: "Use system default" }));
@@ -563,6 +588,7 @@ describe("LinearIntegrationSettings harness", () => {
       "Use global model",
       "Claude Sonnet 4.6",
       "GPT 6 Sol",
+      "GPT 5.6 Sol",
     ]);
     fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
     await user.click(within(row).getByRole("button", { name: "Save" }));
