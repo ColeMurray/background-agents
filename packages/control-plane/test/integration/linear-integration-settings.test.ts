@@ -99,8 +99,26 @@ describe("Linear integration settings access", () => {
         wrap({ harness: "claude", model: "anthropic/claude-sonnet-4-6" })
       );
       expect(accepted.status).toBe(200);
-      expect((await put(url, wrap({ harness: "codex" }))).status).toBe(400);
+      expect((await put(url, wrap({ harness: "unknown" }))).status).toBe(400);
     });
+
+    it.each([
+      ["global", globalEndpoint, (s: object) => ({ defaults: s })],
+      ["repository", repoEndpoint, (s: object) => s],
+    ])(
+      "accepts Codex %s preferences but rejects incompatible models",
+      async (_level, url, wrap) => {
+        expect((await put(url, wrap({ harness: "codex" }))).status).toBe(200);
+        expect(await resolvedHarness()).toBe("codex");
+        expect(
+          (await put(url, wrap({ harness: "codex", model: "openai/gpt-6.1-sol" }))).status
+        ).toBe(200);
+        const rejected = await put(url, wrap({ harness: "codex", model: "openai/gpt-5.4" }));
+        expect(rejected.status).toBe(400);
+        expect(await rejected.text()).toContain("cannot run on the Codex harness");
+        expect(await resolvedHarness()).toBe("codex");
+      }
+    );
 
     it("accepts a harness and model that only disagree across levels", async () => {
       expect(

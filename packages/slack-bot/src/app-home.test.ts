@@ -153,6 +153,7 @@ describe("buildAppHomeView", () => {
         "Workspace default (Claude Agent)",
         "OpenCode",
         "Claude Agent",
+        "Codex",
       ]);
       expect(harness?.initial_option?.value).toBe("__workspace__");
     });

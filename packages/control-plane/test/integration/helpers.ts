@@ -391,6 +391,7 @@ export async function seedMessage(
 export async function initNamedSession(
   sessionName: string,
   overrides?: {
+    harness?: "opencode" | "claude" | "codex";
     repoOwner?: string | null;
     repoName?: string | null;
     repoId?: number | null;
@@ -424,6 +425,7 @@ export async function initNamedSession(
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
+    harness: defaults.harness ?? "opencode",
     ownerTeamId: null,
     visibility: "workspace",
     title: defaults.title ?? null,
