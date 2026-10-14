@@ -246,7 +246,7 @@ async function handleWebhook(
   let forwardingFailure: { error: unknown } | undefined;
   if (event) {
     const normalizationPayload = actionResult.success ? actionResult.data : {};
-    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
+    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload, deliveryId);
     if (normalizedEvent !== null) {
       try {
         const url = "https://internal/internal/github-event";

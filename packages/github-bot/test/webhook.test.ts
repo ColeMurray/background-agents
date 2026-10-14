@@ -345,6 +345,40 @@ describe("POST /webhooks/github", () => {
     expect(env.GITHUB_KV.delete).not.toHaveBeenCalled();
   });
 
+  it("keys forwarded ready_for_review events by delivery id", async () => {
+    const body = JSON.stringify({
+      action: "ready_for_review",
+      pull_request: { number: 42, draft: false, head: { ref: "feature", sha: "abc123" } },
+      repository: { id: 99, name: "repo", private: false, owner: { login: "test" } },
+      sender: { id: 7, login: "alice", type: "User" },
+    });
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": await sign(SECRET, body),
+          "X-GitHub-Event": "pull_request",
+          "X-GitHub-Delivery": "delivery-ready-1",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    await flushWaitUntil(ctx);
+    const forwarded = vi
+      .mocked(env.CONTROL_PLANE.fetch)
+      .mock.calls.find(([url]) => url === "https://internal/internal/github-event");
+    expect(JSON.parse(String(forwarded?.[1]?.body)).triggerKey).toBe(
+      "pr:42:ready_for_review:abc123:delivery-ready-1"
+    );
+  });
+
   it("returns 401 for invalid signature", async () => {
     const body = '{"action":"created"}';
     const res = await app.fetch(
