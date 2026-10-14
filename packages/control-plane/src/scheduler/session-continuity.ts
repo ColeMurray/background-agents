@@ -207,7 +207,7 @@ async function settleHeldPrompts(
   deps: SessionContinuityDeps,
   run: AutomationRunRow
 ): Promise<boolean> {
-  if (run.status === "starting" || run.first_prompt_pending === 1) {
+  if (run.status === "starting" || run.first_prompt_pending === 1 || run.session_id === null) {
     const queued =
       run.status !== "starting" &&
       run.session_id !== null &&

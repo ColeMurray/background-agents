@@ -284,4 +284,30 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
     expect(content).toContain('"step": "A"');
     expect(await store.getHeldPrompts(run.id)).toEqual([]);
   });
+
+  it("drops held deliveries when the run fails before claiming a session", async () => {
+    await seedAutomation(Date.now());
+    const run = makeRunRow(AUTOMATION_ID, { id: "run-pre-claim-failure", status: "starting" });
+    await seedRun(run, { concurrencyKey: "webhook:session:card-42" });
+    const store = new AutomationStore(env.DB);
+    const { scheduler } = createScheduler();
+
+    expect(await scheduler.event(delivery("A"))).toMatchObject({ steered: 1 });
+    expect(await store.getHeldPrompts(run.id)).toHaveLength(1);
+
+    expect(
+      await store.updateRun(run.id, {
+        status: "failed",
+        failure_reason: "Provider authorization failed",
+        completed_at: Date.now(),
+      })
+    ).toBe(true);
+    await env.DB.prepare("UPDATE automation_run_held_prompts SET retry_at = ?")
+      .bind(Date.now() - 1)
+      .run();
+
+    await scheduler.tick();
+
+    expect(await store.getHeldPrompts(run.id)).toEqual([]);
+  });
 });
