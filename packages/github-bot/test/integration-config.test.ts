@@ -327,7 +327,7 @@ describe("resolveModelSelection harness", () => {
     expect(result.selection.harness).toBe("claude");
   });
 
-  it("falls back to the built-in harness with a warning on a mismatch", async () => {
+  it("refuses a mismatch instead of switching to the built-in harness", async () => {
     const log = createMockLogger();
     const result = await resolveModelSelection(
       env,
@@ -337,13 +337,14 @@ describe("resolveModelSelection harness", () => {
       undefined
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.selection.harness).toBe("opencode");
-    expect(log.warn).toHaveBeenCalledWith(
-      "config.harness_model_mismatch",
-      expect.objectContaining({ harness: "claude", model: "openai/gpt-5.4", fallback: "opencode" })
-    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "harness_model_incompatible",
+      message: expect.stringContaining(
+        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness.'
+      ),
+    });
+    expect(log.warn).not.toHaveBeenCalled();
   });
   it("keeps Claude after canonicalizing a stale deployment model", async () => {
     const log = createMockLogger();
@@ -362,34 +363,89 @@ describe("resolveModelSelection harness", () => {
   });
 
   it.each([
-    ["openai/gpt-5.4", "opencode", true],
-    ["claude-opus-4-6", "claude", false],
-  ])("resolves the harness against inline model override %s", async (model, harness, warned) => {
-    const log = createMockLogger();
-    const inlineEnv = createMockEnv(() =>
-      Promise.resolve(
-        Response.json({
-          enabledModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
-        })
-      )
-    );
-    const result = await resolveModelSelection(
-      inlineEnv,
-      log,
-      "trace-inline-harness",
-      { model: "anthropic/claude-sonnet-4-6", harness: "claude", reasoningEffort: "low" },
-      parseInlinePromptFlags(`!model:${model} Review this`)
-    );
-    expect(result).toMatchObject({
-      ok: true,
-      overridden: true,
-      selection: { harness, reasoningEffort: "low" },
-    });
-    if (warned)
-      expect(log.warn).toHaveBeenCalledWith(
-        "config.harness_model_mismatch",
-        expect.objectContaining({ model })
+    { model: "gpt-5.4", harness: "claude", compatible: false, canonical: "openai/gpt-5.4" },
+    {
+      model: "claude-opus-4-6",
+      harness: "claude",
+      compatible: true,
+      canonical: "anthropic/claude-opus-4-6",
+    },
+    { model: "gpt-5.4", harness: "opencode", compatible: true, canonical: "openai/gpt-5.4" },
+  ] as const)(
+    "checks $harness against inline model override $model",
+    async ({ model, harness, compatible, canonical }) => {
+      const log = createMockLogger();
+      const inlineEnv = createMockEnv(() =>
+        Promise.resolve(
+          Response.json({
+            enabledModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+          })
+        )
       );
-    else expect(log.warn).not.toHaveBeenCalled();
-  });
+      const result = await resolveModelSelection(
+        inlineEnv,
+        log,
+        "trace-inline-harness",
+        { model: "anthropic/claude-sonnet-4-6", harness, reasoningEffort: "low" },
+        parseInlinePromptFlags(`!model:${model} Review this`)
+      );
+      if (compatible) {
+        expect(result).toMatchObject({
+          ok: true,
+          overridden: true,
+          selection: { harness, model: canonical, reasoningEffort: "low" },
+        });
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          reason: "harness_model_incompatible",
+          message: expect.stringContaining(
+            `Model "${canonical}" cannot run on the Claude Agent harness.`
+          ),
+        });
+      }
+      expect(log.warn).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { source: "integration config", configModel: "gpt-6-sol" },
+    { source: "deployment default", configModel: null },
+    { source: "retired integration model", configModel: "openai/gpt-5.3-codex-spark" },
+  ])(
+    "checks the canonical model from $source without changing the configured harness",
+    async ({ configModel }) => {
+      const configuredEnv = createMockEnv(() =>
+        Promise.resolve(
+          Response.json({
+            config: {
+              model: configModel,
+              harness: "claude",
+              reasoningEffort: null,
+              autoReviewOnOpen: true,
+              enabledRepos: null,
+              allowedTriggerUsers: null,
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          })
+        )
+      );
+      configuredEnv.DEFAULT_MODEL = "gpt-6-sol";
+      const log = createMockLogger();
+      const config = await getGitHubConfig(configuredEnv, "acme/widgets", log);
+
+      expect(config.harness).toBe("claude");
+      expect(
+        await resolveModelSelection(configuredEnv, log, "trace-resolved-config", config, undefined)
+      ).toMatchObject({
+        ok: false,
+        reason: "harness_model_incompatible",
+        message: expect.stringContaining(
+          'Model "openai/gpt-6-sol" cannot run on the Claude Agent harness.'
+        ),
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+    }
+  );
 });

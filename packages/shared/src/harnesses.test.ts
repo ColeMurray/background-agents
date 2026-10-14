@@ -11,7 +11,6 @@ import {
   isValidHarness,
   selectedProviderAuthModes,
   reconcileProviderSelectionsForHarness,
-  resolveHarnessForModel,
 } from "./harnesses";
 import { VALID_MODELS } from "./models";
 
@@ -55,24 +54,6 @@ describe("harnessSupportsModel", () => {
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((model) => model.startsWith("anthropic/"))).toBe(true);
     expect(filterModelsForHarness("opencode", VALID_MODELS)).toEqual([...VALID_MODELS]);
-  });
-});
-
-describe("resolveHarnessForModel", () => {
-  it("keeps the configured harness when it can run the model", () => {
-    expect(resolveHarnessForModel("claude", "anthropic/claude-sonnet-4-6")).toBe("claude");
-    expect(resolveHarnessForModel("opencode", "openai/gpt-5.5")).toBe("opencode");
-  });
-
-  it("falls back to the built-in harness for a model the configured harness cannot run", () => {
-    expect(resolveHarnessForModel("claude", "openai/gpt-5.5")).toBe(DEFAULT_HARNESS);
-    expect(resolveHarnessForModel("claude", "xai/grok-4.6")).toBe(DEFAULT_HARNESS);
-  });
-
-  it("resolves an unconfigured harness to the built-in harness for every model", () => {
-    for (const model of VALID_MODELS) {
-      expect(resolveHarnessForModel(undefined, model)).toBe(DEFAULT_HARNESS);
-    }
   });
 });
 

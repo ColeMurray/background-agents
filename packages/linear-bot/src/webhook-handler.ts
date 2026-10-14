@@ -5,7 +5,7 @@
 
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
-import { getHarnessLabel } from "@open-inspect/shared/harnesses";
+import { checkHarnessCompatibility, getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import type { Env, AgentSessionWebhook, AgentSessionWebhookIssue } from "./types";
 import {
@@ -558,6 +558,15 @@ async function handleNewSession(
     userReasoningEffort,
     labelModel,
   });
+
+  const compatibilityError = checkHarnessCompatibility(harness, model);
+  if (compatibilityError) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: `No coding session was created. ${compatibilityError.message} Choose a compatible model label, user preference, or default model, or change the Linear integration harness, then delegate again.`,
+    });
+    return;
+  }
 
   // ─── Create session ───────────────────────────────────────────────────
 

@@ -13,8 +13,8 @@ import {
   type ValidModel,
 } from "@open-inspect/shared/models";
 import {
+  checkHarnessCompatibility,
   DEFAULT_HARNESS,
-  resolveHarnessForModel,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
@@ -32,7 +32,8 @@ export type ModelSelectionResult =
   | { ok: true; selection: ModelSelection; overridden: boolean }
   | {
       ok: false;
-      reason: "invalid_inline_flags" | "model_preferences_unavailable";
+      reason:
+        "invalid_inline_flags" | "model_preferences_unavailable" | "harness_model_incompatible";
       message: string;
     };
 
@@ -130,29 +131,9 @@ export function applyInlineModelOverrides(
 }
 
 /**
- * Resolve the harness for a canonical model, warning when the configured
- * harness cannot run it and the built-in default takes over. Cross-level
- * pairs (global harness + repo model) can disagree, as can an inline model
- * override — a trigger must never fail silently on a mismatch the saves
- * could not see.
- */
-function resolveHarness(configured: HarnessId, model: string, log: Logger): HarnessId {
-  const harness = resolveHarnessForModel(configured, model);
-  if (harness !== configured) {
-    log.warn("config.harness_model_mismatch", {
-      harness: configured,
-      model,
-      fallback: DEFAULT_HARNESS,
-    });
-  }
-  return harness;
-}
-
-/**
  * Resolve the model settings for a new session from the configured defaults
- * and any flags that lead the triggering comment. The model is canonicalized
- * once; the harness and the effort are resolved against that same model, and
- * all three travel together to session creation.
+ * and any flags that lead the triggering comment. Check the configured harness
+ * against the canonical model rather than switching harnesses at launch.
  */
 export async function resolveModelSelection(
   env: Env,
@@ -161,26 +142,14 @@ export async function resolveModelSelection(
   defaults: ModelSelection,
   flags: ParseInlinePromptFlagsResult | undefined
 ): Promise<ModelSelectionResult> {
-  if (!flags || (flags.ok && !hasInlinePromptOptions(flags.options))) {
-    const model = getValidModelOrDefault(defaults.model);
-    const reasoningEffort =
-      defaults.reasoningEffort && isValidReasoningEffort(model, defaults.reasoningEffort)
-        ? defaults.reasoningEffort
-        : null;
-    return {
-      ok: true,
-      selection: { model, harness: resolveHarness(defaults.harness, model, log), reasoningEffort },
-      overridden: false,
-    };
-  }
-  if (!flags.ok) {
+  if (flags && !flags.ok) {
     return { ok: false, reason: "invalid_inline_flags", message: invalidFlagsMessage(flags.error) };
   }
 
   // Only a model override needs the enabled list; a reasoning-only override
   // keeps the configured model.
   let enabledModels: ValidModel[] = [];
-  if (flags.options.model) {
+  if (flags?.options.model) {
     const fetched = await getEnabledModels(env, log, traceId);
     if (!fetched) {
       return {
@@ -192,7 +161,7 @@ export async function resolveModelSelection(
     enabledModels = fetched;
   }
 
-  const applied = applyInlineModelOverrides(flags.options, defaults, enabledModels);
+  const applied = applyInlineModelOverrides(flags?.options ?? {}, defaults, enabledModels);
   if (!applied.ok) {
     return {
       ok: false,
@@ -200,14 +169,20 @@ export async function resolveModelSelection(
       message: invalidFlagsMessage(applied.message),
     };
   }
-  const selection = applied.selection;
+
+  const { selection } = applied;
+  const harness = defaults.harness ?? DEFAULT_HARNESS;
+  const compatibilityError = checkHarnessCompatibility(harness, selection.model);
+  if (compatibilityError) {
+    return {
+      ok: false,
+      reason: "harness_model_incompatible",
+      message: `I couldn't start a session. ${compatibilityError.message} Choose a compatible model with \`!model\`, update the default model, or change the GitHub integration harness, then try again.`,
+    };
+  }
   return {
     ok: true,
-    selection: {
-      model: selection.model,
-      harness: resolveHarness(defaults.harness, selection.model, log),
-      reasoningEffort: selection.reasoningEffort,
-    },
-    overridden: true,
+    selection: { ...selection, harness },
+    overridden: flags ? hasInlinePromptOptions(flags.options) : false,
   };
 }

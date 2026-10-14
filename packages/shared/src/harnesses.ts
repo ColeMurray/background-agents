@@ -100,22 +100,6 @@ export function harnessSupportsProviderAuth(
   return modes !== undefined && modes.includes(mode);
 }
 
-/**
- * The harness a session launched by an integration runs `model` on: the
- * configured harness when it can run the model, else the built-in harness,
- * which runs every model. Integrations resolve the model at launch from
- * sources a saved harness cannot constrain (issue labels, user preferences,
- * deployment defaults), so the configured harness is a preference that never
- * strands a launch on a model it cannot run. Absent means the built-in harness.
- */
-export function resolveHarnessForModel(
-  configured: HarnessId | undefined,
-  model: string
-): HarnessId {
-  const harness = configured ?? DEFAULT_HARNESS;
-  return harnessSupportsModel(harness, model) ? harness : DEFAULT_HARNESS;
-}
-
 /** Models from a list that the harness can run. */
 export function filterModelsForHarness<T extends string>(
   harness: HarnessId,
@@ -174,8 +158,10 @@ export interface HarnessCompatibilityError {
 /**
  * The one compatibility rule: can `harness` run `model` under the session's
  * resolved provider-auth modes? Applied at session create, prompt admission,
- * queued-message dispatch, child spawn, automation save, and installation
- * default resolution. Returns null when compatible.
+ * queued-message dispatch, child spawn, automation save, integration launch
+ * and settings save, and installation default resolution. Returns null when
+ * compatible. Callers refuse incompatible selections rather than switching
+ * harnesses.
  */
 export function checkHarnessCompatibility(
   harness: HarnessId,

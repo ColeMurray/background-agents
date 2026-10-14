@@ -187,7 +187,7 @@ Some models appear more than once because they are reachable through more than o
 
 ## Defaults for integrations and automations
 
-Automations run on the harness chosen in the automation editor. GitHub, Linear, and Slack sessions run on the **Agent harness** chosen in each integration's settings (OpenCode by default). GitHub and Linear also accept a harness per repository, and a model that harness cannot run falls back to OpenCode. Slack users can pick their own harness in the app's **Home** tab, and Slack refuses a request whose model the harness cannot run. Each surface picks its model from these settings:
+Automations run on the harness chosen in the automation editor. GitHub, Linear, and Slack sessions run on the **Agent harness** chosen in each integration's settings (OpenCode by default). GitHub and Linear also accept a harness per repository, and Slack users can pick their own harness in the app's **Home** tab. All three preserve the selected harness: if it cannot run the resolved model, the bot replies with a compatibility explanation and creates no session instead of switching to OpenCode. Each surface picks its model from these settings:
 
 | Surface     | Where the default lives                                                                                                                                                                                                                                                                                           |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -197,6 +197,10 @@ Automations run on the harness chosen in the automation editor. GitHub, Linear, 
 | Automations | The automation editor picks a model and effort per automation. The list is limited to enabled models the automation's harness can run.                                                                                                                                                                            |
 
 All of these selectors show only models enabled in Settings › Models. Reasoning values must be ones the selected model supports.
+
+For GitHub and Linear, explicitly selecting a restricted harness such as **Claude Agent** requires a compatible default model at the same settings level (global or repository), not an inherited model. Omitted repository harness and model fields inherit individually. Save validation checks each explicit level, not the merged global/repository pair; cross-level mismatches are refused at launch.
+
+For a refused GitHub launch, retry a mention with a compatible `!model`, update the default model, or change the integration harness. For Linear, choose a compatible `model:*` label, user preference, or default model (subject to the label and preference override settings), or change the integration harness, then delegate again. See [GitHub](/integrations/github) and [Linear](/integrations/linear).
 
 ```text
 @OpenInspect !model anthropic/claude-sonnet-4-6 !reasoning max investigate the flaky test

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { applyInlineModelOverrides } from "../src/model-selection";
+import { applyInlineModelOverrides, resolveModelSelection } from "../src/model-selection";
+import type { Logger } from "../src/logger";
+import type { Env } from "../src/types";
 
 const defaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "low" };
 const enabledModels = [
@@ -86,6 +89,66 @@ describe("applyInlineModelOverrides", () => {
     expect(applyInlineModelOverrides({ model: "a`b" }, defaults, enabledModels)).toEqual({
       ok: false,
       message: "Unknown model `` a`b ``.",
+    });
+  });
+});
+
+describe("resolveModelSelection compatibility", () => {
+  const log: Logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  };
+
+  it.each(["Review this", "!reasoning:high Review this"])(
+    "checks the configured canonical model without fetching enabled models (%s)",
+    async (prompt) => {
+      const fetch = vi.fn();
+      const env = { CONTROL_PLANE: { fetch } } as unknown as Env;
+
+      expect(
+        await resolveModelSelection(
+          env,
+          log,
+          "trace-compatibility",
+          { model: "gpt-5.6-sol", harness: "claude", reasoningEffort: null },
+          parseInlinePromptFlags(prompt)
+        )
+      ).toMatchObject({
+        ok: false,
+        reason: "harness_model_incompatible",
+        message: expect.stringContaining(
+          'Model "openai/gpt-5.6-sol" cannot run on the Claude Agent harness.'
+        ),
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("allows a compatible inline override to repair incompatible defaults", async () => {
+    const env = {
+      SERVICE_AUTH_SECRET: "test-secret",
+      CONTROL_PLANE: { fetch: vi.fn(async () => Response.json({ enabledModels })) },
+    } as unknown as Env;
+
+    expect(
+      await resolveModelSelection(
+        env,
+        log,
+        "trace-compatible-override",
+        { model: "openai/gpt-5.6-sol", harness: "claude", reasoningEffort: "low" },
+        parseInlinePromptFlags("!model:claude-sonnet-4-6 Review this")
+      )
+    ).toEqual({
+      ok: true,
+      overridden: true,
+      selection: {
+        model: "anthropic/claude-sonnet-4-6",
+        harness: "claude",
+        reasoningEffort: "low",
+      },
     });
   });
 });
