@@ -63,7 +63,7 @@ function NewAutomationContent() {
   // credentials (webhook keys, Sentry client secret), which the server issues
   // or the user re-enters.
   const templateId = searchParams.get("template");
-  const template = source
+  const template = sourceId
     ? undefined
     : automationTemplates.find((candidate) => candidate.id === templateId);
   const initialValues: Partial<AutomationFormValues> = source

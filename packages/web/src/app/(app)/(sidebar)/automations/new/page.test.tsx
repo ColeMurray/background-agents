@@ -367,7 +367,7 @@ describe("NewAutomationPage duplicate", () => {
   });
 
   it("falls back to a blank form when the source cannot be loaded", () => {
-    search = "from=missing";
+    search = "from=missing&template=find-bugs";
     render(<NewAutomationPage />);
 
     expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t load/i);
