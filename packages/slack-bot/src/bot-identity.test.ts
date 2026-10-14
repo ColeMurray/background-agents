@@ -9,7 +9,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
   return { ...actual, authTest: mockAuthTest };
 });
 
-import { getBotUserId, clearBotUserIdCache } from "./bot-identity";
+import { getBotId, getBotUserId, clearBotUserIdCache } from "./bot-identity";
 
 function makeEnv(kv: { get: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn> }): Env {
   return {
@@ -68,5 +68,36 @@ describe("getBotUserId", () => {
   it("fails closed (null) when auth.test succeeds without a user_id", async () => {
     mockAuthTest.mockResolvedValue({ ok: true });
     expect(await getBotUserId(makeEnv(emptyKv()))).toBeNull();
+  });
+});
+
+describe("getBotId", () => {
+  beforeEach(() => {
+    clearBotUserIdCache();
+    vi.clearAllMocks();
+  });
+
+  it("resolves the bot id via auth.test and persists it to KV", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    const kv = emptyKv();
+
+    expect(await getBotId(makeEnv(kv))).toBe("BBOT123");
+    expect(kv.put).toHaveBeenCalledWith("slack:bot-id", "BBOT123");
+  });
+
+  it("serves the KV last-known-good id when auth.test fails", async () => {
+    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
+    const kv = {
+      get: vi.fn().mockResolvedValue("BCACHED"),
+      put: vi.fn().mockResolvedValue(undefined),
+    };
+
+    expect(await getBotId(makeEnv(kv))).toBe("BCACHED");
+    expect(kv.get).toHaveBeenCalledWith("slack:bot-id");
+  });
+
+  it("fails closed (null) when auth.test returns no bot_id and KV is empty", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123" });
+    expect(await getBotId(makeEnv(emptyKv()))).toBeNull();
   });
 });

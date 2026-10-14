@@ -16,7 +16,7 @@ import {
 import type { Env } from "./types";
 import { channelTriggerAuthor } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";
-import { getBotUserId } from "./bot-identity";
+import { getBotId, getBotUserId } from "./bot-identity";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { z } from "zod";
@@ -35,7 +35,8 @@ const slackTriggerForwardResponseSchema = z.object({
  * `/internal/slack-event` endpoint for automation matching.
  *
  * All filtering happens here so the Slack event ack path stays cheap:
- * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
+ * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it;
+ *    a bot post also needs the bot's own bot_id to rule out its own messages).
  * 2. Structural candidacy + mention suppression (`channelTriggerAuthor`). Other
  *    bots' messages pass, marked `isBot`; the control plane applies each
  *    automation's bot-message setting.
@@ -63,7 +64,15 @@ export async function handleChannelTrigger(
     return;
   }
 
-  const author = channelTriggerAuthor(event, botUserId);
+  // A bot post is recognised as this bot's own by its bot_id, so one cannot be
+  // considered without it (fail closed, like the user id above).
+  const botId = event.bot_id ? await getBotId(env, traceId) : undefined;
+  if (event.bot_id && !botId) {
+    log.warn("slack_trigger.skip", { trace_id: traceId, reason: "no_bot_id" });
+    return;
+  }
+
+  const author = channelTriggerAuthor(event, botUserId, botId ?? undefined);
   if (!author) {
     return;
   }

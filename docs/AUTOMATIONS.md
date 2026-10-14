@@ -348,6 +348,10 @@ bot, also add a **Slack User** include condition with its user ID, or with its b
 is a legacy integration that posts without a user. The Open-Inspect bot's own messages never trigger
 an automation.
 
+Only a bot message's `text` is read. An integration that posts its content only in attachments or
+blocks, with empty `text`, triggers nothing, and one that sets `text` to a short fallback is matched
+on that fallback alone.
+
 A bot can start a run but never continues one: continuing a thread's session needs a Slack user
 linked to an Open-Inspect account, so a bot's reply in a thread that already has a session is
 dropped.

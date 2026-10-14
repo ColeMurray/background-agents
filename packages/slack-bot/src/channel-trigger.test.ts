@@ -34,6 +34,7 @@ import { clearLocalCache } from "./classifier/repos";
 import { clearBotUserIdCache } from "./bot-identity";
 
 const BOT_USER_ID = "UBOT123";
+const BOT_ID = "BSELF";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -152,7 +153,7 @@ describe("channel-message automation triggers (POST /events)", () => {
     clearLocalCache();
     clearBotUserIdCache();
     mockVerifySlackSignature.mockResolvedValue(true);
-    mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID });
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID, bot_id: BOT_ID });
     mockGetChannelInfo.mockResolvedValue({ ok: true, channel: { id: "C123", name: "ops" } });
     mockGetPermalink.mockResolvedValue({
       ok: true,
@@ -299,7 +300,41 @@ describe("channel-message automation triggers (POST /events)", () => {
       const ctx = makeCtx();
 
       await app.fetch(
-        channelMessageRequest({ user: BOT_USER_ID, bot_id: "BSELF", text: "Done: opened a PR" }),
+        channelMessageRequest({ user: BOT_USER_ID, bot_id: BOT_ID, text: "Done: opened a PR" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+
+    it("never forwards the bot's own post that carries only its bot_id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({
+          subtype: "bot_message",
+          user: undefined,
+          bot_id: BOT_ID,
+          text: "Done: opened a PR",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+
+    it("drops bot messages when the bot's own bot_id cannot be resolved", async () => {
+      mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID });
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ user: "UALERTS", bot_id: "BALERTS", text: "Cost anomaly" }),
         env,
         ctx
       );

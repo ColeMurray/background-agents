@@ -82,9 +82,10 @@ export interface ChannelTriggerAuthor {
  * post with a `user`; legacy integrations post a `bot_message` with only a
  * `bot_id`, which then stands in as the author.
  *
- * `botUserId` must be the bot's own Slack user id (from `auth.test`); the caller
- * resolves it and fails closed when it cannot, so mention suppression and
- * self-exclusion are always applied against a known id.
+ * `botUserId` must be the bot's own Slack user id and `botId` its own `bot_id`
+ * (both from `auth.test`); the caller resolves them and fails closed when it
+ * cannot, so mention suppression and self-exclusion are always applied against
+ * known ids. `botId` is needed only for a message that carries a `bot_id`.
  */
 export function channelTriggerAuthor(
   event: {
@@ -97,10 +98,12 @@ export function channelTriggerAuthor(
     user?: string;
     bot_id?: string;
   },
-  botUserId: string
+  botUserId: string,
+  botId?: string
 ): ChannelTriggerAuthor | null {
   if (event.type !== "message") return null;
   const isBot = !!event.bot_id;
+  if (isBot && (!botId || event.bot_id === botId)) return null;
   if (event.subtype === "bot_message" ? !isBot : event.subtype && event.subtype !== "file_share") {
     return null;
   }
