@@ -12,6 +12,7 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import { HttpError, resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import { createTestRequestHandler } from "../router.test-support";
+import { ModelPreferencesStore } from "../db/model-preferences";
 import { automationRoutes } from "./automations";
 import {
   mocks,
@@ -149,6 +150,45 @@ describe("automation create route", () => {
       scheduleTz: "UTC",
       instructions: "Run tests",
     };
+
+    it("saves native max and effective OpenAI pins without rollout configuration", async () => {
+      const preferences = vi
+        .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")
+        .mockResolvedValue(["openai/gpt-5.6-sol"]);
+      const handle = createTestRequestHandler([automationRoutes]);
+      const request = automationRequest((request, env, tasks) => handle(request, env, tasks));
+      mockProviderAccountStore.getById.mockResolvedValue(null);
+      try {
+        const response = await request("POST", "/automations", {
+          body: {
+            ...validBody,
+            harness: "codex",
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "max",
+            providerSelections: {
+              openai: { mode: "api_key" },
+              anthropic: { mode: "provider_account", accountId: "a".repeat(32) },
+            },
+          },
+        });
+        expect(response.status).toBe(201);
+        expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            harness: "codex",
+            model: "openai/gpt-5.6-sol",
+            reasoning_effort: "max",
+          })
+        );
+        expect(mockProviderAccountStore.getById).not.toHaveBeenCalled();
+        expect(mockProviderAuthStore.bindInserts).toHaveBeenCalledWith(
+          expect.any(String),
+          { openai: { mode: "api_key" } },
+          expect.any(Number)
+        );
+      } finally {
+        preferences.mockRestore();
+      }
+    });
 
     it("denies repository targets before SCM lookup or persistence", async () => {
       const res = await callRoute("POST", "/automations", {

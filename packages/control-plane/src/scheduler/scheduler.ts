@@ -76,6 +76,7 @@ import { generateId, hashToken } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
+import { validateHarnessExecution } from "../harness-admission";
 import type { SqlDatabase } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
@@ -605,13 +606,15 @@ export class Scheduler {
       { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown } = { providerAuth: [] };
     if (launchCandidates.length > 0) {
       try {
-        providerAuthSnapshot = {
-          providerAuth: await resolveAutomationProviderAuth(
-            this.db,
-            automation.id,
-            getValidHarnessOrDefault(automation.harness)
-          ),
-        };
+        const harness = getValidHarnessOrDefault(automation.harness);
+        const providerAuth = await resolveAutomationProviderAuth(this.db, automation.id, harness);
+        await validateHarnessExecution(
+          this.db,
+          this.env,
+          { harness, model: automation.model, reasoningEffort: automation.reasoning_effort },
+          Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+        );
+        providerAuthSnapshot = { providerAuth };
       } catch (error) {
         providerAuthSnapshot = { error };
       }

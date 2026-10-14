@@ -59,6 +59,33 @@ describe("Scheduler (integration)", () => {
     );
   });
 
+  it("fails a persisted Codex automation before launch without configured OpenAI auth", async () => {
+    const automation = makeAutomation({
+      id: "codex-auth-missing",
+      harness: "codex",
+      model: "openai/gpt-6.1-sol",
+    });
+    await new AutomationStore(env.DB).create(automation);
+    await expect(createScheduler().trigger(automation.id, "user-1")).rejects.toThrow(
+      "Failed to trigger automation"
+    );
+    expect(await fetchRuns(automation.id)).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        session_id: null,
+        failure_reason:
+          "Codex requires an explicit OpenAI API key selection or a connected OpenAI account from Settings.",
+      }),
+    ]);
+    expect(
+      (
+        await env.DB.prepare("SELECT id FROM sessions WHERE automation_id=?")
+          .bind(automation.id)
+          .all()
+      ).results
+    ).toEqual([]);
+  });
+
   describe("automation provider auth resolution", () => {
     const accountIds = {
       openai: "00000000000000000000000000000001",

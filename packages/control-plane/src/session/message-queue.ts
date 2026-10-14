@@ -1,5 +1,8 @@
 import {
-  checkHarnessCompatibility,
+  checkHarnessPromptCompatibility,
+  resolveHarnessModel,
+  getHarnessCapabilities,
+  getHarnessReasoningConfig,
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { generateId, hashToken } from "../auth/crypto";
@@ -15,7 +18,6 @@ import { githubAutofixOriginSchema } from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
-  getValidModelOrDefault,
   isValidModel,
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
@@ -179,8 +181,14 @@ export class SessionMessageQueue {
     command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
   ): Promise<EnqueueAutofixResponse> {
     const session = this.repository.getSession();
-    const recoveryHold = this.getSandboxPromptBlockReason() !== null;
     const userId = `github:${command.author.id}`;
+    const harness = getValidHarnessOrDefault(session?.harness);
+    const selectionError =
+      getHarnessCapabilities(harness).selectionPolicy === "strict"
+        ? await this.getProviderAuthenticationError(session?.model ?? DEFAULT_MODEL)
+        : null;
+    const currentSession = this.repository.getSession();
+    const recoveryHold = this.getSandboxPromptBlockReason() !== null || selectionError !== null;
     const now = Date.now();
     const admission = this.messageRepository.admitAutofixMessage({
       message: {
@@ -207,7 +215,10 @@ export class SessionMessageQueue {
       originContext: JSON.stringify(command.origin),
       attemptLimit: command.attemptLimit,
       windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
-      sessionClosed: !session || session.status === "archived" || session.status === "cancelled",
+      sessionClosed:
+        !currentSession ||
+        currentSession.status === "archived" ||
+        currentSession.status === "cancelled",
     });
     const logFields = {
       feedback_key: command.feedbackKey,
@@ -420,12 +431,16 @@ export class SessionMessageQueue {
     }
     const now = Date.now();
     const session = this.repository.getSession();
-    const resolvedModel = getValidModelOrDefault(message.model || session?.model);
+    const resolvedModel = resolveHarnessModel(
+      getValidHarnessOrDefault(session?.harness),
+      message.model || session?.model
+    );
     // The same rule as admission, applied at dispatch: the harness is fixed
     // at create, so nothing may reach the sandbox on a model it cannot run.
-    const harnessIncompatibility = checkHarnessCompatibility(
+    const harnessIncompatibility = checkHarnessPromptCompatibility(
       getValidHarnessOrDefault(session?.harness),
-      resolvedModel
+      resolvedModel,
+      message.reasoning_effort ?? session?.reasoning_effort
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
@@ -526,9 +541,16 @@ export class SessionMessageQueue {
     const requestedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??
+      getHarnessReasoningConfig(getValidHarnessOrDefault(session?.harness), resolvedModel)
+        ?.default ??
       getDefaultReasoningEffort(resolvedModel);
     const resolvedEffort =
-      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log) ?? undefined;
+      validateReasoningEffort(
+        resolvedModel,
+        requestedEffort ?? undefined,
+        this.log,
+        getValidHarnessOrDefault(session?.harness)
+      ) ?? undefined;
 
     const command: SandboxCommand = {
       type: "prompt",
@@ -766,6 +788,15 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+    const session = this.repository.getSession();
+    const harness = getValidHarnessOrDefault(session?.harness);
+    const strictSelection = getHarnessCapabilities(harness).selectionPolicy === "strict";
+    if (strictSelection) {
+      const modelError = await this.getProviderAuthenticationError(
+        data.model || session?.model || DEFAULT_MODEL
+      );
+      if (modelError) throw new HarnessModelIncompatibleError(modelError);
+    }
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
@@ -821,12 +852,9 @@ export class SessionMessageQueue {
 
     let messageModel: string | null = null;
     if (data.model) {
-      if (isValidModel(data.model)) {
-        // An override the session's harness cannot run is a user-visible
-        // rejection, never a silent fallback to a model it can run.
-        const harness = getValidHarnessOrDefault(this.repository.getSession()?.harness);
-        const incompatibility = checkHarnessCompatibility(harness, data.model);
-        if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
+      if (strictSelection || isValidModel(data.model)) {
+        // Preserve strict overrides so compatibility rejects them below,
+        // rather than silently substituting the session's model.
         messageModel = data.model;
       } else {
         this.log.warn("Invalid message model, ignoring override", { model: data.model });
@@ -835,10 +863,17 @@ export class SessionMessageQueue {
 
     const effectiveModelForEffort =
       messageModel || this.repository.getSession()?.model || DEFAULT_MODEL;
+    const incompatibility = checkHarnessPromptCompatibility(
+      getValidHarnessOrDefault(this.repository.getSession()?.harness),
+      effectiveModelForEffort,
+      data.reasoningEffort ?? this.repository.getSession()?.reasoning_effort
+    );
+    if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
     const messageReasoningEffort = validateReasoningEffort(
       effectiveModelForEffort,
       data.reasoningEffort,
-      this.log
+      this.log,
+      getValidHarnessOrDefault(this.repository.getSession()?.harness)
     );
     try {
       this.messageRepository.createMessageWithAttachments(

@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
+import { ModelPreferencesStore } from "../db/model-preferences";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
@@ -130,6 +131,24 @@ describe("automation lifecycle routes", () => {
   });
 
   describe("POST /automations/:id/resume", () => {
+    it("resumes Codex without querying execution policy", async () => {
+      const preferences = vi
+        .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")
+        .mockRejectedValue(new Error("execution policy unavailable"));
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        enabled: 0,
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+      });
+      try {
+        expect((await callRoute("POST", "/automations/auto-1/resume")).status).toBe(200);
+        expect(mockStore.bindResume).toHaveBeenCalledOnce();
+        expect(preferences).not.toHaveBeenCalled();
+      } finally {
+        preferences.mockRestore();
+      }
+    });
     it("resumes automation and recomputes next_run_at", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, enabled: 0 });
 
@@ -159,6 +178,23 @@ describe("automation lifecycle routes", () => {
   });
 
   describe("POST /automations/:id/trigger", () => {
+    it("delegates Codex trigger validation to the scheduler", async () => {
+      const preferences = vi
+        .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")
+        .mockRejectedValue(new Error("execution policy unavailable"));
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+      });
+      try {
+        expect((await callRoute("POST", "/automations/auto-1/trigger")).status).toBe(201);
+        expect(mockSchedulerTrigger).toHaveBeenCalledOnce();
+        expect(preferences).not.toHaveBeenCalled();
+      } finally {
+        preferences.mockRestore();
+      }
+    });
     it.each([
       ["own", "user-1", 201],
       ["own", "another-user", 403],

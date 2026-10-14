@@ -182,7 +182,7 @@ function buildQueue(
     startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
-    getParticipantById: vi.fn(() => createParticipant()),
+    getParticipantById: vi.fn((_id: string) => createParticipant()),
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
     updateParticipantIdentity: vi.fn(),
@@ -255,7 +255,9 @@ function buildQueue(
     completeDelivery: vi.fn(),
   };
   const projectTerminalMessage = vi.fn(async () => {});
-  const getProviderAuthenticationError = vi.fn(async (_model: string) => null as string | null);
+  const getProviderAuthenticationError = vi.fn(
+    async (_model: string, _canonicalUserId?: string | null) => null as string | null
+  );
 
   const alarmScheduler = createEarliestAlarmScheduler(
     { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
@@ -333,6 +335,22 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it("rechecks native deployment admission before both insertion and dispatch", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "codex", model: "openai/gpt-6.1-sol" })
+    );
+    h.getProviderAuthenticationError.mockResolvedValue("This model has been disabled.");
+    await expect(
+      h.queue.enqueuePromptFromApi({ content: "next", authorId: "user-1", source: "agent" })
+    ).rejects.toThrow("disabled");
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    await h.queue.processMessageQueue();
+    expect(h.getProviderAuthenticationError).toHaveBeenCalledTimes(2);
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+  });
+
   it("rejects new websocket and API prompts during a failed safety hold", async () => {
     const h = buildQueue(
       () => false,
