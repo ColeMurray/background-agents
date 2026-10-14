@@ -432,16 +432,19 @@ export class SessionMessageQueue {
     }
     const now = Date.now();
     const session = this.repository.getSession();
-    const resolvedModel = resolveHarnessModel(
-      getValidHarnessOrDefault(session?.harness),
-      message.model || session?.model
+    const harness = getValidHarnessOrDefault(session?.harness);
+    const resolvedModel = resolveHarnessModel(harness, message.model || session?.model);
+    const inheritedReasoningEffort = inheritReasoningEffort(
+      harness,
+      resolvedModel,
+      session?.reasoning_effort
     );
     // The same rule as admission, applied at dispatch: the harness is fixed
     // at create, so nothing may reach the sandbox on a model it cannot run.
     const harnessIncompatibility = checkHarnessPromptCompatibility(
-      getValidHarnessOrDefault(session?.harness),
+      harness,
       resolvedModel,
-      message.reasoning_effort ?? session?.reasoning_effort
+      message.reasoning_effort ?? inheritedReasoningEffort
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
@@ -541,21 +544,12 @@ export class SessionMessageQueue {
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const requestedEffort =
       message.reasoning_effort ??
-      inheritReasoningEffort(
-        getValidHarnessOrDefault(session?.harness),
-        resolvedModel,
-        session?.reasoning_effort
-      ) ??
-      getHarnessReasoningConfig(getValidHarnessOrDefault(session?.harness), resolvedModel)
-        ?.default ??
+      inheritedReasoningEffort ??
+      getHarnessReasoningConfig(harness, resolvedModel)?.default ??
       getDefaultReasoningEffort(resolvedModel);
     const resolvedEffort =
-      validateReasoningEffort(
-        resolvedModel,
-        requestedEffort ?? undefined,
-        this.log,
-        getValidHarnessOrDefault(session?.harness)
-      ) ?? undefined;
+      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log, harness) ??
+      undefined;
 
     const command: SandboxCommand = {
       type: "prompt",

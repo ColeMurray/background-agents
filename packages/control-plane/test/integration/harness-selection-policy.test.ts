@@ -9,9 +9,19 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { cleanD1Tables } from "./cleanup";
 import { resolveSessionProviderAuth } from "../../src/session/provider-account-resolution";
-import { initNamedSession, queryDO, serviceFetch } from "./helpers";
+import {
+  closeWebSocket,
+  collectMessages,
+  initNamedSession,
+  openSandboxWs,
+  queryDO,
+  seedSandboxAuth,
+  serviceFetch,
+} from "./helpers";
 
 const BROWSER_USER_ID = "11111111111111111111111111111111";
+const SANDBOX_ID = "harness-selection-sandbox";
+const SANDBOX_TOKEN = "harness-selection-sandbox-token";
 
 function codexAutomation(id: string): AutomationRow {
   return {
@@ -196,14 +206,36 @@ describe("harness policy with real D1 and Durable Object storage", () => {
       });
     }
 
-    it("accepts a model override whose model cannot run the session's inherited effort", async () => {
+    it("dispatches a model override with the override model's default effort", async () => {
       await setEnabledModels([DEFAULT_MODEL, "openai/gpt-5.6-sol", "openai/gpt-5.5"]);
-      const { stub } = await codexSession("prompt-override");
-      const response = await prompt(stub, { content: "Use 5.5", model: "openai/gpt-5.5" });
-      expect(response.status).toBe(200);
-      expect(await queryDO(stub, "SELECT model, reasoning_effort FROM messages")).toEqual([
-        { model: "openai/gpt-5.5", reasoning_effort: null },
-      ]);
+      const { stub, sessionName } = await codexSession("prompt-override");
+      await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+      const { ws } = await openSandboxWs(sessionName, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(ws).not.toBeNull();
+      ws!.accept();
+
+      try {
+        const dispatched = collectMessages(ws!, {
+          until: (message) => message.type === "prompt",
+        });
+        const response = await prompt(stub, { content: "Use 5.5", model: "openai/gpt-5.5" });
+        expect(response.status).toBe(200);
+        expect(await dispatched).toContainEqual(
+          expect.objectContaining({
+            type: "prompt",
+            model: "openai/gpt-5.5",
+            reasoningEffort: "medium",
+          })
+        );
+        expect(await queryDO(stub, "SELECT model, reasoning_effort, status FROM messages")).toEqual(
+          [{ model: "openai/gpt-5.5", reasoning_effort: null, status: "processing" }]
+        );
+      } finally {
+        await closeWebSocket(ws!, { bestEffort: true });
+      }
     });
 
     it("returns the original message for an identical retry after the model is disabled", async () => {
