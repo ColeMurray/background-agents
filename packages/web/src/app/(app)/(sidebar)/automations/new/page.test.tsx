@@ -18,6 +18,8 @@ afterEach(cleanup);
 let search = "";
 let enabledModelsValue: string[] = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
 let canCreate = true;
+let sourceAutomation: Record<string, unknown> | null = null;
+let sourceLoading = false;
 const replace = vi.fn();
 const push = vi.fn();
 
@@ -43,6 +45,14 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
     hasPermission: (permission: string) =>
       canCreate && (permission === "automations.create" || permission === "sessions.create"),
     loading: false,
+  }),
+}));
+
+vi.mock("@/hooks/use-automations", () => ({
+  useAutomation: (id: string | undefined) => ({
+    automation: id ? sourceAutomation : null,
+    loading: id ? sourceLoading : false,
+    mutate: vi.fn(),
   }),
 }));
 
@@ -107,6 +117,8 @@ beforeEach(() => {
   search = "";
   enabledModelsValue = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
   canCreate = true;
+  sourceAutomation = null;
+  sourceLoading = false;
   replace.mockReset();
   push.mockReset();
   vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
@@ -297,5 +309,69 @@ describe("NewAutomationPage template pre-fill", () => {
     // Falls back to the enabled default model rather than the unenabled suggestion.
     expect(screen.getByText("claude sonnet 4.6")).toBeInTheDocument();
     expect(screen.queryByText("claude opus 4.8")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewAutomationPage duplicate", () => {
+  const source = {
+    id: "auto-1",
+    name: "Nightly review",
+    instructions: "Review yesterday's commits",
+    harness: "opencode",
+    triggerType: "schedule",
+    scheduleCron: "30 6 * * 1",
+    scheduleTz: "UTC",
+    model: "openai/gpt-5.5",
+    reasoningEffort: null,
+    eventType: null,
+    triggerConfig: null,
+    repositories: [],
+    environmentIds: [],
+    providerSelections: {},
+  };
+
+  it("pre-fills the form from the source automation with a copy name", () => {
+    sourceAutomation = source;
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Review yesterday's commits")).toBeInTheDocument();
+    expect(screen.getByText("gpt 5.5")).toBeInTheDocument();
+    expect(screen.getByText(/duplicating/i)).toBeInTheDocument();
+  });
+
+  it("keeps the source automation's owning team rather than the entry scope", () => {
+    sourceAutomation = { ...source, ownerTeamId: "team-2" };
+    search = "from=auto-1&teamId=team-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Design");
+  });
+
+  it("prefers the source automation over a template", () => {
+    sourceAutomation = source;
+    search = "from=auto-1&template=find-bugs";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+    expect(screen.queryByText(/prefilled from/i)).not.toBeInTheDocument();
+  });
+
+  it("waits for the source before mounting the form", () => {
+    sourceLoading = true;
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to a blank form when the source cannot be loaded", () => {
+    search = "from=missing";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t load/i);
+    const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
+    expect(nameInput.value).toBe("");
   });
 });

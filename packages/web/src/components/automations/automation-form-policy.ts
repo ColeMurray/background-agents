@@ -10,6 +10,7 @@ import {
 } from "@open-inspect/shared/triggers";
 import {
   validateAutomationTargetCounts,
+  type Automation,
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
@@ -116,6 +117,26 @@ export function createAutomationFormDraft(
       model: initialValues.model ?? DEFAULT_MODEL,
       reasoningEffort: initialValues.reasoningEffort ?? "",
     },
+  };
+}
+
+/** Form values for an existing automation, used to edit or duplicate it. */
+export function automationToFormValues(automation: Automation): Partial<AutomationFormValues> {
+  return {
+    teamId: automation.ownerTeamId ?? null,
+    name: automation.name,
+    repositories: automation.repositories,
+    environmentIds: automation.environmentIds,
+    harness: automation.harness,
+    model: automation.model,
+    reasoningEffort: automation.reasoningEffort,
+    scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
+    scheduleTz: automation.scheduleTz,
+    instructions: automation.instructions,
+    triggerType: automation.triggerType,
+    eventType: automation.eventType ?? undefined,
+    triggerConfig: automation.triggerConfig ?? undefined,
+    providerSelections: automation.providerSelections,
   };
 }
 
