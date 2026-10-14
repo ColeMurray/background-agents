@@ -74,3 +74,6 @@ CLAUDE_HARNESS_FILE_PATH = "/tmp/oi-claude-harness.json"
 # layout has a single authority. JSON: {"repositories": [{owner, name, branch,
 # path}]}. Mirrored as a string literal in plugins/inspect-plugin.js.
 REPO_MANIFEST_FILE_PATH = "/tmp/oi-repo-manifest.json"
+
+# Supervisor-to-bridge decisions only; no credentials.
+CODEX_HARNESS_FILE_PATH = "/tmp/codex-harness.json"
