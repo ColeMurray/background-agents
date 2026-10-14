@@ -34,6 +34,19 @@ describe("normalizeSlackEvent", () => {
     expect(event!.contextBlock).toContain("ops");
   });
 
+  it("leaves isBot unset and names a user author for a person's message", () => {
+    const event = normalizeSlackEvent(baseInput, "UBOT");
+    expect(event!.isBot).toBeUndefined();
+    expect(event!.contextBlock).toContain("by user U999.");
+  });
+
+  it("marks a bot-authored message and names the bot in the context block", () => {
+    const event = normalizeSlackEvent({ ...baseInput, user: "B042", isBot: true }, "UBOT");
+    expect(event!.isBot).toBe(true);
+    expect(event!.actorUserId).toBe("B042");
+    expect(event!.contextBlock).toContain("by bot B042.");
+  });
+
   it("uses thread_ts for the concurrency key on a thread reply", () => {
     const event = normalizeSlackEvent({ ...baseInput, thread_ts: "1699999999.000001" }, "UBOT");
     expect(event!.threadTs).toBe("1699999999.000001");

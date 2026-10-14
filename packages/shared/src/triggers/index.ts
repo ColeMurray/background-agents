@@ -12,6 +12,7 @@ export type {
   SentryAutomationEvent,
   WebhookAutomationEvent,
   SlackAutomationEvent,
+  SlackTriggerOptions,
   TriggerSourceDefinition,
   AutomationTriggerType,
   ConditionConfigMap,
@@ -32,6 +33,7 @@ export {
   webhookAutomationEventSchema,
   webhookSessionKeySchema,
   slackAutomationEventSchema,
+  slackTriggerOptionsSchema,
   triggerConfigSchema,
 } from "./types";
 

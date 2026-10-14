@@ -1269,6 +1269,13 @@ export class Scheduler {
     for (const automation of candidates) {
       const now = Date.now();
 
+      // Another bot's message reaches only automations that opted in to bot
+      // messages. Checked ahead of thread continuity, so a bot's reply cannot
+      // steer an excluded automation's session either.
+      if (event.source === "slack" && event.isBot && !acceptsSlackBotMessages(automation)) {
+        continue;
+      }
+
       if (event.source === "webhook" && event.sessionKey) {
         const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
         if (original) {
@@ -1401,7 +1408,9 @@ export class Scheduler {
       }
     }
 
-    if (event.source === "slack" && concurrencySkipped) {
+    // The "already active" notice is an ephemeral message to the author, which a
+    // bot cannot receive.
+    if (event.source === "slack" && concurrencySkipped && !event.isBot) {
       await this.notifySlackConcurrencySkip(event);
     }
 
@@ -1716,6 +1725,7 @@ export class Scheduler {
       return buildSlackContextBlock({
         channelLabel: slackChannelLabel(event.channelId, event.channelName),
         actorUserId: event.actorUserId,
+        isBot: event.isBot,
         permalink: event.permalink,
         text: event.text,
         threadContext,
@@ -2112,6 +2122,20 @@ export class Scheduler {
         ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
       }),
     };
+  }
+}
+
+/**
+ * Whether a slack automation accepts messages posted by other bots. Unreadable
+ * trigger fields count as no; the condition check skips that automation anyway.
+ */
+function acceptsSlackBotMessages(automation: AutomationRow): boolean {
+  try {
+    return (
+      parseAutomationTriggerFields(automation).triggerConfig?.slack?.includeBotMessages === true
+    );
+  } catch {
+    return false;
   }
 }
 

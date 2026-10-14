@@ -251,4 +251,96 @@ describe("channel-message automation triggers (POST /events)", () => {
     );
     expect(forwarded).toHaveLength(0);
   });
+  describe("bot-authored messages", () => {
+    function forwardedFrom(env: Env) {
+      return forwardedSlackEvents(
+        env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+      );
+    }
+
+    it("forwards another app bot's message marked isBot, authored by its user id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ user: "UALERTS", bot_id: "BALERTS", text: "Cost anomaly" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const forwarded = forwardedFrom(env);
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0]).toMatchObject({ actorUserId: "UALERTS", isBot: true });
+      expect(String(forwarded[0].contextBlock)).toContain("by bot UALERTS.");
+    });
+
+    it("forwards a legacy bot_message without a user, authored by its bot_id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({
+          subtype: "bot_message",
+          user: undefined,
+          bot_id: "BHOOK",
+          text: "Build failed",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)[0]).toMatchObject({ actorUserId: "BHOOK", isBot: true });
+    });
+
+    it("never forwards the bot's own posts", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ user: BOT_USER_ID, bot_id: "BSELF", text: "Done: opened a PR" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+
+    it("leaves isBot unset for a person's message", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(channelMessageRequest({}), env, ctx);
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)[0]).not.toHaveProperty("isBot");
+    });
+
+    it("does not hand a bot's DM to the interactive DM flow", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ channel_type: "im", channel: "D123", bot_id: "BALERTS" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const fetchMock = env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>;
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("drops a bot_message subtype that carries no bot_id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(channelMessageRequest({ subtype: "bot_message" }), env, ctx);
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+  });
 });

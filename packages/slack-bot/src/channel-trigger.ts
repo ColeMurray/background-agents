@@ -14,7 +14,7 @@ import {
   type SlackChannelMeta,
 } from "@open-inspect/shared/triggers";
 import type { Env } from "./types";
-import { isChannelTriggerCandidate } from "./dm-utils";
+import { channelTriggerAuthor } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";
 import { getBotUserId } from "./bot-identity";
 import { signedControlPlaneFetch } from "./internal-auth";
@@ -36,7 +36,9 @@ const slackTriggerForwardResponseSchema = z.object({
  *
  * All filtering happens here so the Slack event ack path stays cheap:
  * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
- * 2. Structural candidacy + mention suppression (`isChannelTriggerCandidate`).
+ * 2. Structural candidacy + mention suppression (`channelTriggerAuthor`). Other
+ *    bots' messages pass, marked `isBot`; the control plane applies each
+ *    automation's bot-message setting.
  * 3. Watched-channel pre-filter (cached) — avoids forwarding every channel message.
  * 4. Normalize (+ best-effort channel name/permalink) and forward.
  */
@@ -61,7 +63,8 @@ export async function handleChannelTrigger(
     return;
   }
 
-  if (!isChannelTriggerCandidate(event, botUserId)) {
+  const author = channelTriggerAuthor(event, botUserId);
+  if (!author) {
     return;
   }
 
@@ -77,8 +80,9 @@ export async function handleChannelTrigger(
       channel,
       ts: event.ts!,
       thread_ts: event.thread_ts,
-      user: event.user!,
+      user: author.id,
       text: event.text!,
+      isBot: author.isBot,
     },
     botUserId,
     channelMeta

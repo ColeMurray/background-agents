@@ -444,6 +444,10 @@ Then, in the web app, create a **Slack Message** automation and add a **Slack Ch
 condition to filter by content. See
 [Slack Message Triggers](../AUTOMATIONS.md#slack-message-triggers) for the full field reference.
 
+Messages from other bots and integrations are ignored unless the automation turns off **Ignore
+messages from bots** (see [Bot messages](../AUTOMATIONS.md#bot-messages)). No extra Slack scope is
+needed: bot posts arrive on the same `message.channels` and `message.groups` subscriptions.
+
 ### Run feedback
 
 - A triggering message gets a 👀 reaction while its run is in flight.
