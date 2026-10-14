@@ -108,6 +108,7 @@ describe("previewMarkdownDocument", () => {
 
   it("refuses patches that do not hold one complete document", () => {
     const partial = patch(MODIFIED_PATHS, ["@@ -40,3 +40,3 @@", " a", "-b", "+c", " d"]);
+    const truncated = patch(MODIFIED_PATHS, ["@@ -1,3 +1,3 @@", " # Title", "-old", "+new"]);
     const twoHunks = patch(MODIFIED_PATHS, [
       "@@ -1,1 +1,1 @@",
       "-a",
@@ -124,7 +125,7 @@ describe("previewMarkdownDocument", () => {
         ["@@ -1 +1 @@", "-a", "+b"]
       );
 
-    for (const input of ["", partial, twoHunks, binary, twoFiles]) {
+    for (const input of ["", partial, truncated, twoHunks, binary, twoFiles]) {
       expect(previewMarkdownDocument(input)).toEqual({ status: "unavailable" });
     }
   });

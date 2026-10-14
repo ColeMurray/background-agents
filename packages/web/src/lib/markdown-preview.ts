@@ -30,7 +30,14 @@ export function previewMarkdownDocument(patch: string): MarkdownPreviewDocument 
 
   const [hunk, ...otherHunks] = file.hunks;
   if (!hunk) return { status: file.type === "new" ? "empty" : "unavailable" };
-  if (otherHunks.length > 0 || hunk.additionStart > 1) return { status: "unavailable" };
+  if (
+    otherHunks.length > 0 ||
+    hunk.additionStart > 1 ||
+    file.additionLines.length !== hunk.additionCount ||
+    file.deletionLines.length !== hunk.deletionCount
+  ) {
+    return { status: "unavailable" };
+  }
 
   const content = file.additionLines.join("");
   return content ? { status: "document", content } : { status: "empty" };
