@@ -102,6 +102,21 @@ describe("BoatRestClient", () => {
     });
   });
 
+  it("accepts Boat's minimal terminal cancelled representation", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        type: "sandbox.info",
+        sandbox: { id: sandbox.id, state: "cancelled", error: "no machine assigned" },
+      })
+    );
+    await expect(new BoatRestClient(config).getSandbox(sandbox.id)).resolves.toEqual({
+      id: sandbox.id,
+      state: "cancelled",
+      error: "no machine assigned",
+    });
+  });
+
   it("resumes without replacing environment variables and stops without force", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({ ok: true, type: "sandbox.resuming", id: sandbox.id, status: "resuming" }, 202)

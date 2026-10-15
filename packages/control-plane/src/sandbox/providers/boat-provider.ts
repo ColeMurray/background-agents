@@ -533,6 +533,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         const retryable =
           (error instanceof BoatApiError &&
             (error.status >= 500 ||
+              error.code === "boat_starting" ||
               error.code === "sandbox_starting" ||
               error.code === "sandbox_resuming")) ||
           SandboxProviderError.isTransientNetworkError(error);

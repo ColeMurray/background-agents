@@ -17,6 +17,24 @@ const TIMEOUT_FILE_MS = 30_000;
 
 export const BOAT_SANDBOX_TYPES = ["small", "default", "large", "xlarge"] as const;
 export type BoatSandboxType = (typeof BOAT_SANDBOX_TYPES)[number];
+const BOAT_SANDBOX_STATES = [
+  "init",
+  "provisioning",
+  "provisioned",
+  "cloning",
+  "ready",
+  "idle",
+  "running",
+  "archiving",
+  "archived",
+  "error",
+  "cancelled",
+  // Legacy CLI/live spellings retained for deployments created before the
+  // current public OpenAPI standardized archiving/archived.
+  "stopping",
+  "stopped",
+  "resuming",
+] as const;
 
 export interface BoatRestConfig {
   apiKey: string;
@@ -25,20 +43,39 @@ export interface BoatRestConfig {
   baseSnapshot?: string;
 }
 
-const boatSandboxSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  state: z.string(),
-  type: z.enum(BOAT_SANDBOX_TYPES).optional(),
-  vcpu: z.number().int().optional(),
-  memoryGB: z.number().optional(),
-  createdAt: z.string().nullable().optional(),
-  updatedAt: z.string().nullable().optional(),
-  archiveAfter: z.string().nullable().optional(),
-  snapshotAvailable: z.boolean(),
-  snapshotCompletedAt: z.string().nullable().optional(),
-  lastSnapshotStatus: z.string().nullable().optional(),
-});
+const boatSandboxSchema = z
+  .object({
+    id: z.string(),
+    name: z.string().optional(),
+    state: z.enum(BOAT_SANDBOX_STATES),
+    error: z.string().nullable().optional(),
+    type: z.enum(BOAT_SANDBOX_TYPES).optional(),
+    vcpu: z.number().int().optional(),
+    memoryGB: z.number().optional(),
+    createdAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+    archiveAfter: z.string().nullable().optional(),
+    snapshotAvailable: z.boolean().optional(),
+    snapshotCompletedAt: z.string().nullable().optional(),
+    lastSnapshotStatus: z.string().nullable().optional(),
+  })
+  .superRefine((sandbox, context) => {
+    if (sandbox.state === "cancelled") return;
+    if (sandbox.name === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "name is required",
+        path: ["name"],
+      });
+    }
+    if (sandbox.snapshotAvailable === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "snapshotAvailable is required",
+        path: ["snapshotAvailable"],
+      });
+    }
+  });
 
 export type BoatSandbox = z.infer<typeof boatSandboxSchema>;
 

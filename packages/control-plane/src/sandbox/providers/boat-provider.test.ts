@@ -315,7 +315,11 @@ describe("BoatSandboxProvider", () => {
 
   it("fails closed when Boat's archived data passed its retention window", async () => {
     const client = mockClient({
-      getSandbox: vi.fn(async () => ({ ...ready, state: "archived", snapshotAvailable: false })),
+      getSandbox: vi.fn(async () => ({
+        ...ready,
+        state: "archived" as const,
+        snapshotAvailable: false,
+      })),
       resumeSandbox: vi.fn(async () => {
         throw new BoatConflictError("expired", "snapshot_data_expired");
       }),
@@ -349,7 +353,9 @@ describe("BoatSandboxProvider", () => {
   });
 
   it("does not replace retained state in an error state", async () => {
-    const client = mockClient({ getSandbox: vi.fn(async () => ({ ...ready, state: "error" })) });
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({ ...ready, state: "error" as const })),
+    });
     const result = await provider(client).resumeSandbox({
       providerObjectId: created.id,
       sessionId: "session-1",
@@ -361,7 +367,7 @@ describe("BoatSandboxProvider", () => {
 
   it("treats a provider-cancelled start as transient capacity failure", async () => {
     const client = mockClient({
-      getSandbox: vi.fn(async () => ({ ...ready, state: "cancelled" })),
+      getSandbox: vi.fn(async () => ({ ...ready, state: "cancelled" as const })),
     });
     await expect(provider(client).createSandbox(baseConfig)).rejects.toMatchObject({
       errorType: "transient",
