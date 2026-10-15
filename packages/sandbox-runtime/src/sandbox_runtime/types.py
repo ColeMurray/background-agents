@@ -78,6 +78,7 @@ class SessionConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     mcp_servers: list[McpServerConfig] | None = None
+    opencode_plugins: list[str] | None = None
     # Ordered member list for multi-repo sessions; absent for scalar sessions
     # (the runtime synthesizes a one-entry list from repo_owner/repo_name).
     repositories: list[SessionRepositoryConfig] | None = None

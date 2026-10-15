@@ -244,6 +244,7 @@ function reduceServerMessage(
       return updateSessionState({ ...state, sandboxError: null, boot: null }, (prev) => ({
         ...prev,
         sandboxStatus: "warming",
+        opencodePlugins: null,
       }));
 
     case "sandbox_spawning":
@@ -251,6 +252,7 @@ function reduceServerMessage(
       return updateSessionState({ ...state, sandboxError: null, boot: null }, (prev) => ({
         ...prev,
         sandboxStatus: "spawning",
+        opencodePlugins: null,
         ...CLEARED_SANDBOX_RUNTIME_STATE,
       }));
 
@@ -275,6 +277,7 @@ function reduceServerMessage(
         (prev) => ({
           ...prev,
           sandboxStatus: message.status,
+          ...(startsAttempt && { opencodePlugins: null }),
           ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
           ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
         })
@@ -370,10 +373,20 @@ export function sessionSocketReducer(
 
     case "events_appended": {
       let boot = state.boot;
+      let sessionState = state.sessionState;
       for (const event of action.events) {
         if (event.type === "boot_progress") boot = applyBootProgress(boot, event);
+        if (event.type === "opencode_plugins" && sessionState) {
+          const previous = sessionState.opencodePlugins;
+          const isNewer =
+            !previous ||
+            (previous.bootSeq !== undefined && event.bootSeq !== undefined
+              ? event.bootSeq > previous.bootSeq
+              : event.timestamp > previous.timestamp);
+          if (isNewer) sessionState = { ...sessionState, opencodePlugins: event };
+        }
       }
-      return { ...state, events: [...state.events, ...action.events], boot };
+      return { ...state, events: [...state.events, ...action.events], boot, sessionState };
     }
 
     case "history_requested":

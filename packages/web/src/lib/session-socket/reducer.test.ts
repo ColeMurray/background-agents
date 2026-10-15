@@ -1091,3 +1091,81 @@ describe("sessionSocketReducer", () => {
     });
   });
 });
+
+const pluginReport = {
+  type: "opencode_plugins" as const,
+  sandboxId: "sandbox-1",
+  timestamp: 1,
+  bootSeq: 12,
+  plugins: [{ spec: "audit@1.0.0", status: "loaded" as const }],
+};
+
+it("hydrates plugin state on reconnect independently of the latest 500 timeline events", () => {
+  const timeline = {
+    events: Array.from({ length: 500 }, (_, i) => ({
+      eventId: `event-${i + 2}`,
+      timelineSequence: i + 2,
+      event: {
+        type: "token" as const,
+        content: "x",
+        messageId: "plugin-message",
+        sandboxId: "sandbox-1",
+        timestamp: i + 2,
+      },
+    })),
+    hasMore: true,
+    cursor: { timestamp: 2, id: "event-2", sequence: 2 },
+  };
+  const snapshot = createSnapshot({
+    session: createSessionState({ opencodePlugins: pluginReport }),
+    timeline,
+  });
+  const initial = createSessionSocketState(snapshot);
+  expect(initial.sessionState?.opencodePlugins).toEqual(pluginReport);
+  const reconnected = sessionSocketReducer(initial, {
+    type: "server_message",
+    message: createSubscribedMessage({ ...snapshot }),
+  });
+  expect(reconnected.sessionState?.opencodePlugins).toEqual(pluginReport);
+  expect(reconnected.events.some((event) => event.type === "opencode_plugins")).toBe(false);
+});
+
+it("resets plugin state for replacement sandboxes and never restores it from older history", () => {
+  let state = createSessionSocketState(
+    createSnapshot({ session: createSessionState({ opencodePlugins: pluginReport }) })
+  );
+  state = sessionSocketReducer(state, {
+    type: "server_message",
+    message: { type: "sandbox_spawning" },
+  });
+  expect(state.sessionState?.opencodePlugins).toBeNull();
+  state = sessionSocketReducer(state, {
+    type: "server_message",
+    message: {
+      type: "history_page",
+      items: [{ eventId: "old", timelineSequence: 1, event: pluginReport }],
+      hasMore: false,
+      cursor: null,
+    },
+  });
+  expect(state.sessionState?.opencodePlugins).toBeNull();
+  const next = {
+    ...pluginReport,
+    sandboxId: "replacement",
+    bootSeq: 1,
+    timestamp: 3,
+    plugins: [{ spec: "other@1.0.0", status: "pending" as const }],
+  };
+  state = sessionSocketReducer(state, { type: "events_appended", events: [next] });
+  expect(state.sessionState?.opencodePlugins).toEqual(next);
+  state = sessionSocketReducer(state, {
+    type: "events_appended",
+    events: [{ ...next, bootSeq: 0, timestamp: 4 }],
+  });
+  expect(state.sessionState?.opencodePlugins).toEqual(next);
+  state = sessionSocketReducer(state, {
+    type: "server_message",
+    message: { type: "sandbox_status", status: "spawning" },
+  });
+  expect(state.sessionState?.opencodePlugins).toBeNull();
+});

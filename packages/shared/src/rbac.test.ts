@@ -62,7 +62,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(46);
+    expect(PERMISSION_IDS).toHaveLength(48);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -142,6 +142,16 @@ describe("RBAC registry", () => {
     expect(permissionsForBuiltInRole("member")).not.toContain("sessions.export");
     expect(permissionsForBuiltInRole("viewer")).not.toContain("sessions.export");
     expect(isCustomRolePermission("sessions.export")).toBe(true);
+  });
+
+  it("reserves plugin management for administrators and permits catalog reads", () => {
+    for (const role of BUILT_IN_ROLE_KEYS) {
+      const permissions = permissionsForBuiltInRole(role);
+      expect(permissions).toContain("opencode_plugins.read");
+      expect(permissions.includes("opencode_plugins.manage")).toBe(
+        role === "owner" || role === "administrator"
+      );
+    }
   });
 
   it("makes Member a superset of Viewer", () => {

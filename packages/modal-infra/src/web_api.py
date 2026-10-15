@@ -135,6 +135,7 @@ class CreateSandboxRequest(_RepositoryContextModel):
     branch: str | None = None
     base_sha: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None
+    opencode_plugins: list[str] | None = None
     repositories: list[InteractiveRepositoryRequest] | None = None
     working_branch_name: str | None = None
     user_env_vars: dict[str, str] | None = None
@@ -164,6 +165,7 @@ class RestoreSessionConfigRequest(_RepositoryContextModel):
     provider: str | None = None
     model: str | None = None
     mcp_servers: list[dict[str, Any]] | None = None
+    opencode_plugins: list[str] | None = None
     repositories: list[RestoreRepositoryRequest] | None = None
     working_branch_name: str | None = None
 

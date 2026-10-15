@@ -54,6 +54,7 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 // eslint-disable-next-line no-restricted-imports
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
+import { OpencodePluginStore } from "../db/opencode-plugins";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
@@ -1194,6 +1195,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     },
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,
+    opencodePluginLookup: new OpencodePluginStore(db),
     slackAgentNotifyLookup,
     recordWarning: deps.recordWarning,
     resumeQueuedWork: deps.resumeQueuedWork,

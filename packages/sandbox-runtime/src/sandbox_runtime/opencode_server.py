@@ -16,6 +16,12 @@ from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
 from .memories import memory_path
+from .opencode_plugins import (
+    PLUGIN_INITIALIZATION_TIMEOUT_SECONDS,
+    PLUGIN_INSTALL_BUDGET_SECONDS,
+    install_plugin,
+    plugin_cache_dir,
+)
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
 
@@ -49,6 +55,7 @@ class OpenCodeServer:
         shutdown_event: asyncio.Event,
         log: Any,
         record_boot_warning: Callable[..., None],
+        record_plugin_status: Callable[[list[dict[str, str]]], None] | None = None,
     ) -> None:
         self.shutdown_event = shutdown_event
         self.log = log
@@ -58,6 +65,10 @@ class OpenCodeServer:
         self.provider = config.provider
         self.model = config.model
         self.mcp_servers = config.mcp_servers
+        self.plugins = tuple(dict.fromkeys(config.plugins))
+        self.record_plugin_status = record_plugin_status
+        self._plugin_status: dict[str, str] = {}
+        self._plugin_event_task: asyncio.Task[None] | None = None
         self._mcp_packages = McpPackageInstaller(log)
         self._opencode_process: asyncio.subprocess.Process | None = None
 
@@ -387,10 +398,103 @@ class OpenCodeServer:
                 config[name] = entry
         return config
 
+    def _report_plugins(self) -> None:
+        if self.record_plugin_status:
+            self.record_plugin_status(
+                [{"spec": spec, "status": status} for spec, status in self._plugin_status.items()]
+            )
+
+    def _skip_plugin(self, spec: str, reason: str) -> None:
+        if self._plugin_status.get(spec) == "skipped":
+            return
+        self._plugin_status[spec] = "skipped"
+        self.record_boot_warning(scope="plugins", message=f"Plugin {spec} skipped: {reason}")
+        self._report_plugins()
+
+    async def _prepare_plugins(self) -> list[str]:
+        self._plugin_status = dict.fromkeys(self.plugins, "pending")
+        self._report_plugins()
+        started_at = time.monotonic()
+        installed = []
+        for spec in self.plugins:
+            remaining_seconds = PLUGIN_INSTALL_BUDGET_SECONDS - (time.monotonic() - started_at)
+            if remaining_seconds <= 0:
+                self._skip_plugin(spec, "installation time budget exhausted")
+                continue
+            try:
+                await asyncio.wait_for(
+                    install_plugin(spec, plugin_cache_dir()), timeout=remaining_seconds
+                )
+                installed.append(spec)
+            except TimeoutError:
+                self._skip_plugin(spec, "installation timed out")
+            except Exception:
+                # npm and plugin errors can contain credentials; expose only the spec.
+                self._skip_plugin(spec, "installation failed")
+        return installed
+
+    async def _observe_plugin_errors(self, connected: asyncio.Event) -> None:
+        async with (
+            httpx.AsyncClient() as client,
+            client.stream(
+                "GET", f"http://localhost:{OPENCODE_PORT}/global/event", timeout=None
+            ) as response,
+        ):
+            response.raise_for_status()
+            connected.set()
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    payload = json.loads(line[5:]).get("payload", {})
+                    if payload.get("type") != "session.error":
+                        continue
+                    message = (
+                        payload.get("properties", {})
+                        .get("error", {})
+                        .get("data", {})
+                        .get("message", "")
+                    )
+                except (ValueError, AttributeError):
+                    continue
+                if not isinstance(message, str):
+                    continue
+                for spec in self._plugin_status:
+                    # OpenCode's install/import/compatibility errors include the
+                    # original npm spec; do not expose their arbitrary error text.
+                    if any(
+                        message.startswith(prefix + spec + ":")
+                        or message.startswith(prefix + spec + " skipped:")
+                        for prefix in (
+                            "Failed to load plugin ",
+                            "Plugin ",
+                            "Failed to install plugin ",
+                        )
+                    ):
+                        self._skip_plugin(spec, "failed to load")
+
+    async def _initialize_plugins(self) -> None:
+        async with asyncio.timeout(PLUGIN_INITIALIZATION_TIMEOUT_SECONDS):
+            connected = asyncio.Event()
+            self._plugin_event_task = asyncio.create_task(self._observe_plugin_errors(connected))
+            await connected.wait()
+            # This route initializes the plugin registry without sending a model request.
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"http://localhost:{OPENCODE_PORT}/config/providers",
+                    timeout=PLUGIN_INITIALIZATION_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+        for spec, status in self._plugin_status.items():
+            if status == "pending":
+                self._plugin_status[spec] = "loaded"
+        self._report_plugins()
+
     async def start(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         """Start OpenCode server with configuration."""
         self._setup_managed_oauth()
         self.log.info("opencode.start")
+        self._report_plugins()
 
         # Build OpenCode config from session settings
         opencode_config: dict[str, Any] = {
@@ -414,6 +518,10 @@ class OpenCodeServer:
                 }
             },
         }
+
+        plugins = await self._prepare_plugins() if self.plugins else []
+        if plugins:
+            opencode_config["plugin"] = plugins
 
         memory_file = memory_path(resolve_opencode_global_config_dir())
         if memory_file.is_file() and memory_file.stat().st_size:
@@ -490,7 +598,23 @@ class OpenCodeServer:
         asyncio.create_task(self._forward_opencode_logs())
 
         # Wait for health check
-        await self._wait_for_health()
+        try:
+            await self._wait_for_health()
+            if plugins:
+                await self._initialize_plugins()
+        except Exception:
+            if not plugins or self.shutdown_event.is_set():
+                raise
+            # A plugin that hangs or crashes the process cannot be isolated in-process.
+            # Retry once with the entire managed selection omitted.
+            await self.stop()
+            for spec in plugins:
+                self._skip_plugin(
+                    spec, "OpenCode initialization failed; restarting without managed plugins"
+                )
+            self.plugins = ()
+            await self.start(repositories, workdir)
+            return
         self.log.info("opencode.ready")
 
     async def _forward_opencode_logs(self) -> None:
@@ -502,6 +626,20 @@ class OpenCodeServer:
             on_error=lambda error: self.log.warn("opencode.log_forward_error", exc=error),
         ):
             print(f"[opencode] {line}")
+            # The pinned loader reports operational and factory errors with the
+            # original spec in its path field. Turn these into durable warnings.
+            if any(
+                marker in line
+                for marker in (
+                    "failed to load plugin",
+                    "Failed to load plugin",
+                    "Plugin export is not",
+                    "Plugin requires opencode",
+                )
+            ):
+                for spec in self._plugin_status:
+                    if f"path={spec} " in line or f'path="{spec}"' in line:
+                        self._skip_plugin(spec, "failed to load")
 
     async def _wait_for_health(self) -> None:
         """Poll health endpoint until server is ready."""
@@ -531,6 +669,11 @@ class OpenCodeServer:
         raise RuntimeError("OpenCode server failed to become healthy")
 
     async def stop(self) -> None:
+        if self._plugin_event_task:
+            self._plugin_event_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, httpx.HTTPError):
+                await self._plugin_event_task
+            self._plugin_event_task = None
         if self._opencode_process and self._opencode_process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 self._opencode_process.terminate()

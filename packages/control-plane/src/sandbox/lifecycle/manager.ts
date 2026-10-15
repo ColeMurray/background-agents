@@ -57,6 +57,8 @@ import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
+import { parseRuntimeVersionNumber } from "../../image-builds/model";
+import { MIN_OPENCODE_PLUGINS_RUNTIME_GENERATION } from "../runtime-manifest";
 import type { ImageBuildLookup } from "./image-selection";
 import {
   SandboxLaunchContext,
@@ -485,6 +487,7 @@ export class SandboxLifecycleManager
       config: {
         model: config.model,
         mcpServerLookup: config.mcpServerLookup,
+        opencodePluginLookup: config.opencodePluginLookup,
         slackAgentNotifyLookup: config.slackAgentNotifyLookup,
       },
       imageBuildLookup,
@@ -810,9 +813,18 @@ export class SandboxLifecycleManager
       const agent = this.launchContext.resolveAgent(session);
       const { repositories, fields: repositoryFields } =
         this.launchContext.resolveRepositories(session);
+      const opencodePlugins = await this.launchContext.loadOpencodePlugins(
+        agent.harness,
+        repositories
+      );
       const imageScope = resolveImageBuildScope(session, repositories);
       const selectedImage = imageScope
-        ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent.harness)
+        ? await this.launchContext.lookupImageBuildForSpawn(
+            imageScope,
+            repositories,
+            agent.harness,
+            opencodePlugins?.length ? MIN_OPENCODE_PLUGINS_RUNTIME_GENERATION : undefined
+          )
         : null;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
@@ -844,6 +856,7 @@ export class SandboxLifecycleManager
         vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
+        opencodePlugins,
         sandboxSettings,
         ...repositoryFields,
       };
@@ -1130,6 +1143,24 @@ export class SandboxLifecycleManager
         return;
       }
 
+      const agent = this.launchContext.resolveAgent(session);
+      const { repositories, fields: repositoryFields } =
+        this.launchContext.resolveRepositories(session);
+      const opencodePlugins = await this.launchContext.loadOpencodePlugins(
+        agent.harness,
+        repositories
+      );
+      if (
+        opencodePlugins?.length &&
+        (parseRuntimeVersionNumber(snapshotRuntimeVersion) ?? 0) <
+          MIN_OPENCODE_PLUGINS_RUNTIME_GENERATION
+      ) {
+        this.shutdown.holdFailedRecovery(
+          "The saved sandbox runtime does not support workspace OpenCode plugins. Disable the matching plugins or recover the snapshot with an upgraded runtime."
+        );
+        return;
+      }
+
       const priorSandbox = this.storage.getSandbox();
       const priorSandboxId = priorSandbox?.modal_sandbox_id ?? null;
       // A fenced allocation must be retired before its durable identity is replaced.
@@ -1153,10 +1184,6 @@ export class SandboxLifecycleManager
       await this.stopPriorProviderSandbox();
 
       const userEnvVars = await this.launchContext.getUserEnvVars();
-      const agent = this.launchContext.resolveAgent(session);
-
-      const { repositories, fields: repositoryFields } =
-        this.launchContext.resolveRepositories(session);
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled =
@@ -1181,6 +1208,7 @@ export class SandboxLifecycleManager
         vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
+        opencodePlugins,
         sandboxSettings,
         ...repositoryFields,
       };

@@ -70,6 +70,7 @@ class BootAttach:
             self._boot_ready.set()
         self.boot_relay = BootEventRelay(Path(BOOT_EVENTS_FILE_PATH), log)
         self._boot_relay_task: asyncio.Task[None] | None = None
+        self._plugin_relay_task: asyncio.Task[None] | None = None
         self._held_boot_lines: list[dict[str, Any]] = []
         self._signing_initialized = False
         self.failure: BaseException | None = None
@@ -94,19 +95,23 @@ class BootAttach:
             self._signing_initialized = True
 
     async def on_connect(self) -> None:
-        """Resend readiness or the latest phase once per connection."""
+        """Resend readiness/phase and the latest plugin snapshot per connection."""
         if self.booting:
             # Never buffer phases: older phases would be stale on reconnect.
             await self.event_forwarder.send(self.boot_relay.latest_phase_event(), buffered=False)
         else:
             await self._send_event(self._build_ready_event())
+        plugins = self.boot_relay.latest_plugin_event()
+        if plugins is not None:
+            await self.event_forwarder.send(plugins, buffered=False)
 
     async def stop(self) -> None:
         """Stop attach work before the bridge cancels prompts and closes the harness."""
-        if self._boot_relay_task is not None and not self._boot_relay_task.done():
-            self._boot_relay_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._boot_relay_task
+        for task in (self._boot_relay_task, self._plugin_relay_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
 
     async def wait_until_ready(self, message_id: str, deadline: float) -> None:
         """Wait inside the prompt's existing deadline, without granting a new budget."""
@@ -156,6 +161,8 @@ class BootAttach:
                 await self._relay_boot_events_once()
                 if self.boot_relay.harness_completed:
                     await self._buffer_held_boot_events()
+                    if self.boot_relay.latest_plugins is not None:
+                        self._plugin_relay_task = asyncio.create_task(self._relay_plugin_events())
                     return
                 await asyncio.sleep(BOOT_EVENTS_POLL_SECONDS)
         except asyncio.CancelledError:
@@ -176,6 +183,17 @@ class BootAttach:
             self.failure = error
             await self.end_run("harness_attach_failed")
 
+    async def _relay_plugin_events(self) -> None:
+        """Keep the supervisor event channel live for post-ready plugin failures."""
+        try:
+            while not self.shutdown_event.is_set():
+                await self._relay_boot_events_once()
+                await asyncio.sleep(BOOT_EVENTS_POLL_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.log.warn("bridge.plugin_events_relay_failed", exc=error)
+
     async def _relay_boot_events_once(self) -> None:
         """Retry held warnings first, advancing the cursor only past delivered lines.
 
@@ -192,7 +210,8 @@ class BootAttach:
                 if event["type"] == "warning":
                     if not await self.event_forwarder.send(event, buffered=False):
                         self._held_boot_lines.append(line)
-                elif self.booting:
+                elif event["type"] == "opencode_plugins" or self.booting:
+                    # Snapshots are retained by the relay and replayed on reconnect.
                     await self.event_forwarder.send(event, buffered=False)
             if not self._held_boot_lines:
                 relayed_through = line["seq"]

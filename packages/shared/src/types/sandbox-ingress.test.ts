@@ -14,3 +14,39 @@ describe("sandbox artifact ingress", () => {
     expect(sandboxEventSchema.safeParse({ ...event, artifactType: "file" }).success).toBe(true);
   });
 });
+
+describe("OpenCode plugin outcomes", () => {
+  it("admits ordered plugin outcomes and non-fatal plugin warnings", () => {
+    expect(
+      sandboxIngressEventSchema.safeParse({
+        type: "opencode_plugins",
+        sandboxId: "s1",
+        timestamp: 1,
+        bootSeq: 2,
+        plugins: [
+          { spec: "audit@1.0.0", status: "loaded" },
+          { spec: "broken@1.0.0", status: "skipped" },
+        ],
+      }).success
+    ).toBe(true);
+    expect(
+      sandboxIngressEventSchema.safeParse({
+        type: "warning",
+        sandboxId: "s1",
+        timestamp: 1,
+        scope: "plugins",
+        message: "Plugin broken@1.0.0 skipped: failed to load",
+      }).success
+    ).toBe(true);
+  });
+  it("rejects unsupported plugin outcome values", () => {
+    expect(
+      sandboxIngressEventSchema.safeParse({
+        type: "opencode_plugins",
+        sandboxId: "s1",
+        timestamp: 1,
+        plugins: [{ spec: "audit@1.0.0", status: "success" }],
+      }).success
+    ).toBe(false);
+  });
+});

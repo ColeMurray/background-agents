@@ -451,6 +451,7 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcpServers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      opencodePlugins: ["@company/audit@1.2.3"],
       scmIdentity: scmCloneIdentity("github"),
     });
 
@@ -468,6 +469,7 @@ describe("ModalClient", () => {
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4-5",
       mcp_servers: [{ id: "mcp-1", name: "Tool", type: "local", enabled: true }],
+      opencode_plugins: ["@company/audit@1.2.3"],
       bridge_early_connect: true,
     });
   });

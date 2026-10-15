@@ -125,6 +125,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "integrations.manage",
   "mcp_servers.manage",
   "models.preferences.manage",
+  "opencode_plugins.manage",
   "provider_accounts.manage",
   "repositories.images.manage",
   "repositories.secrets.manage",

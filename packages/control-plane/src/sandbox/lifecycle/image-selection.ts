@@ -85,7 +85,8 @@ export type ImageBuildSelectionResult =
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
   sessionRepositories: FingerprintRepositoryInput[],
-  harness: HarnessId = DEFAULT_HARNESS
+  harness: HarnessId = DEFAULT_HARNESS,
+  requiredRuntimeGeneration = 0
 ): Promise<ImageBuildSelectionResult> {
   if (!image) {
     return { outcome: "miss", reason: "no_ready_image" };
@@ -97,7 +98,10 @@ export async function evaluateImageBuildForSpawn(
   }
 
   const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness);
+  const minimumRuntimeVersion = Math.max(
+    minCompatibleRuntimeVersionFor(harness),
+    requiredRuntimeGeneration
+  );
   if (
     runtimeVersion === null ||
     runtimeVersion < minimumRuntimeVersion ||

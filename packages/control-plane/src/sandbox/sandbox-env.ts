@@ -46,6 +46,7 @@ export interface SessionConfigPayload {
   model: string;
   /** Omitted from the serialized payload when undefined. */
   mcp_servers?: McpServerConfig[];
+  opencode_plugins?: string[];
   /** Omitted from the serialized payload when undefined. */
   branch?: string | null;
   /** Ordered member list; only present for multi-repo sessions. */
@@ -68,6 +69,7 @@ export interface SessionConfigInput {
   provider: string;
   model: string;
   mcpServers?: McpServerConfig[];
+  opencodePlugins?: string[];
   branch?: string | null;
   repositories?: SessionRepositoryInfo[];
 }
@@ -89,6 +91,7 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
     provider: input.provider,
     model: input.model,
     mcp_servers: input.mcpServers,
+    opencode_plugins: input.opencodePlugins,
     bridge_early_connect: true,
   };
   if (input.branch !== undefined) {

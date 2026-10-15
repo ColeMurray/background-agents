@@ -7,3 +7,11 @@ def test_runtime_manifest_generation_matches_version() -> None:
     assert CACHE_BUSTER == RUNTIME_VERSION
     assert RUNTIME_MANIFEST["minimumCompatibleGeneration"] <= RUNTIME_MANIFEST["generation"]
     assert RUNTIME_MANIFEST["minimumRebuildGeneration"] <= RUNTIME_MANIFEST["generation"]
+
+
+def test_plugin_runtime_floor_is_rebuilt_and_supported() -> None:
+    assert RUNTIME_MANIFEST["minimumOpencodePluginsGeneration"] <= RUNTIME_MANIFEST["generation"]
+    assert (
+        RUNTIME_MANIFEST["minimumRebuildGeneration"]
+        >= RUNTIME_MANIFEST["minimumOpencodePluginsGeneration"]
+    )

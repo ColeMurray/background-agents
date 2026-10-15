@@ -191,6 +191,7 @@ export interface CreateSandboxRequest {
   vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
+  opencodePlugins?: string[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
   signal?: AbortSignal;
@@ -232,6 +233,7 @@ export interface RestoreSandboxRequest {
   vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
+  opencodePlugins?: string[];
   sandboxSettings?: SandboxSettings;
   repositories?: SessionRepositoryInfo[];
   signal?: AbortSignal;
@@ -526,6 +528,7 @@ export class ModalClient {
           vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
+          opencode_plugins: request.opencodePlugins || null,
           sandbox_settings: request.sandboxSettings ?? null,
           sandbox_backend: request.sandboxBackend,
           retire_sandbox_id: request.retireSandboxId,

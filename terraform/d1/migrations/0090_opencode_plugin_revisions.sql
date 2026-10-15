@@ -1,0 +1,1 @@
+ALTER TABLE opencode_plugins ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;

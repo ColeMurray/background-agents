@@ -63,6 +63,7 @@ def build_harness_process(
                 shutdown_event,
                 log,
                 warnings.record,
+                warnings.plugins,
             )
         case HarnessId.CLAUDE:
             return ClaudeStager(

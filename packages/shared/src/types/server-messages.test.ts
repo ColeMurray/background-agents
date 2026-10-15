@@ -88,6 +88,24 @@ const snapshotState = {
 };
 
 describe("session view contracts", () => {
+  it("hydrates plugin reports without requiring a timeline event", () => {
+    const report = {
+      type: "opencode_plugins",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
+      bootSeq: 12,
+      plugins: [{ spec: "audit@1.0.0", status: "loaded" }],
+    };
+    const parsed = serverMessageSchema.parse({
+      type: "subscribed",
+      participantId: "participant-1",
+      session: { ...snapshotState, opencodePlugins: report },
+      artifacts: [],
+      promptQueue: [],
+      timeline: { events: [], hasMore: true, cursor: null },
+    });
+    expect(parsed).toMatchObject({ session: { opencodePlugins: report } });
+  });
   it.each(["owner-1", null])("preserves snapshot ownerUserId (%s)", (ownerUserId) => {
     const parsed = sessionSnapshotSchema.parse({
       session: { ...snapshotState, ownerUserId },

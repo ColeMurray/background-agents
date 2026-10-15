@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
+import { MIN_OPENCODE_PLUGINS_RUNTIME_GENERATION } from "../runtime-manifest";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 
 const SESSION_REPOSITORIES = [
@@ -40,4 +41,27 @@ describe("evaluateImageBuildForSpawn", () => {
       });
     }
   );
+});
+
+it("rejects a pre-plugin image only when the selection requires plugins", async () => {
+  const old = await readyImage({ runtime_version: "v76-child-output-discovery" });
+  expect(await evaluateImageBuildForSpawn(old, SESSION_REPOSITORIES, "opencode")).toMatchObject({
+    outcome: "selected",
+  });
+  expect(
+    await evaluateImageBuildForSpawn(
+      old,
+      SESSION_REPOSITORIES,
+      "opencode",
+      MIN_OPENCODE_PLUGINS_RUNTIME_GENERATION
+    )
+  ).toMatchObject({ outcome: "miss", reason: "runtime_below_floor" });
+  expect(
+    await evaluateImageBuildForSpawn(
+      await readyImage(),
+      SESSION_REPOSITORIES,
+      "opencode",
+      MIN_OPENCODE_PLUGINS_RUNTIME_GENERATION
+    )
+  ).toMatchObject({ outcome: "selected" });
 });

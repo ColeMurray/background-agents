@@ -205,6 +205,7 @@ export const sandboxRowSchema = z.object({
   active_socket_id: z.string().nullable(),
   /** JSON `SandboxBootPhase` the runtime last reported while booting; NULL once ready. */
   boot_phase: z.string().nullable(),
+  opencode_plugins: z.string().nullable().default(null),
   /** Sequence number of that report, so a resend after a reconnect is recognised. */
   boot_seq: z.number().nullable(),
   /**

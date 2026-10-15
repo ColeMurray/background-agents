@@ -206,6 +206,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     ttyd_token: null,
     active_socket_id: null,
     boot_phase: null,
+    opencode_plugins: null,
     boot_seq: null,
     fenced: 0,
     startup_rejected: 0,

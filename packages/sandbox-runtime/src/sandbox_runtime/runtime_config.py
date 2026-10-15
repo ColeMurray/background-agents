@@ -76,6 +76,7 @@ class OpenCodeConfig:
     mcp_servers: tuple[Mapping[str, Any], ...]
     has_repository: bool
     workspace_path: Path
+    plugins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,7 @@ class RuntimeConfig:
             provider=str(self.session_config.get("provider") or "anthropic"),
             model=str(self.session_config.get("model") or "claude-sonnet-4-6"),
             mcp_servers=self._mcp_servers(),
+            plugins=tuple(self.session_config.get("opencode_plugins") or ()),
             has_repository=self.has_repository,
             workspace_path=self.workspace_path,
         )

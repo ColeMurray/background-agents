@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
   boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
+  opencode_plugins TEXT,                            -- Latest plugin report for this sandbox generation
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
   startup_rejected INTEGER NOT NULL DEFAULT 0,        -- rejected startup retains a cleanup obligation
@@ -758,6 +759,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Persist latest sandbox plugin report independently of event history",
+    run: "ALTER TABLE sandbox ADD COLUMN opencode_plugins TEXT",
   },
 ];
 

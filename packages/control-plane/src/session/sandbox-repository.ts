@@ -1,4 +1,8 @@
-import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import type {
+  GitSyncStatus,
+  SandboxBootPhase,
+  OpencodePluginReport,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
@@ -270,6 +274,29 @@ export class SandboxRepository {
     return (result.rowsWritten ?? 0) > 0;
   }
 
+  /** Only the current, unfenced sandbox can advance its persisted plugin report. */
+  recordOpencodePlugins(report: OpencodePluginReport): boolean {
+    const rows = this.sql
+      .exec(
+        `UPDATE sandbox SET opencode_plugins = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id = ? AND fenced = 0
+         AND status NOT IN ('stopped', 'stale')
+         AND (opencode_plugins IS NULL OR
+           CASE WHEN json_extract(opencode_plugins, '$.bootSeq') IS NOT NULL AND ? IS NOT NULL
+             THEN json_extract(opencode_plugins, '$.bootSeq') < ?
+             ELSE json_extract(opencode_plugins, '$.timestamp') < ? END)
+       RETURNING id`,
+        JSON.stringify(report),
+        report.sandboxId,
+        report.bootSeq ?? null,
+        report.bootSeq ?? null,
+        report.timestamp
+      )
+      .toArray();
+    return rows.length > 0;
+  }
+
   /**
    * Revoke this generation's credentials and socket authority for good. A
    * fenced runtime's next sandbox-authenticated call or reconnect is refused,
@@ -311,6 +338,7 @@ export class SandboxRepository {
          ttyd_token = NULL,
          runtime_version = NULL,
          active_socket_id = '',
+         opencode_plugins = NULL,
          boot_phase = NULL,
          boot_seq = NULL,
          fenced = 0, startup_rejected = 0
@@ -366,6 +394,7 @@ export class SandboxRepository {
          status = ?,
          created_at = ?,
          last_heartbeat = NULL,
+         opencode_plugins = NULL,
          boot_phase = NULL,
          boot_seq = NULL,
          fenced = 0, startup_rejected = 0

@@ -3,6 +3,7 @@ import {
   sessionSnapshotSchema,
   type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
+import { opencodePluginReportSchema } from "@open-inspect/shared/types/sandbox-events";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import type { Logger } from "../logger";
@@ -100,6 +101,9 @@ export class SessionSnapshotReader {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
+      opencodePlugins: sandbox?.opencode_plugins
+        ? opencodePluginReportSchema.parse(JSON.parse(sandbox.opencode_plugins))
+        : null,
       sandboxPreservation: this.deps.getShutdown?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,

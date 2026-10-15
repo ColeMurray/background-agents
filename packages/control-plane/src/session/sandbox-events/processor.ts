@@ -135,6 +135,9 @@ export class SessionSandboxEventProcessor {
       case "boot_progress":
         this.runtime.handleBootProgress(event, context);
         return;
+      case "opencode_plugins":
+        this.runtime.handleOpencodePlugins(event, context);
+        return;
       case "git_sync":
         this.runtime.handleGitSync(event, context);
         return;

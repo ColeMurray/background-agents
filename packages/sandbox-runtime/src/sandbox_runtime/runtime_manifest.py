@@ -12,6 +12,7 @@ class RuntimeManifest(TypedDict):
     minimumCompatibleGeneration: int
     minimumPreservationGeneration: int
     minimumRebuildGeneration: int
+    minimumOpencodePluginsGeneration: int
     # Per-harness floors for prebuilt-image selection: a harness whose runtime
     # support arrived later than the global floor names its own generation.
     harnessMinimumGeneration: dict[str, int]

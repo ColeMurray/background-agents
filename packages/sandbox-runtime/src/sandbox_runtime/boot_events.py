@@ -162,6 +162,9 @@ class BootEventLog:
         entry.update(_repo_fields(repo))
         return self._append(entry, required=True)
 
+    def plugins(self, plugins: list[dict[str, str]]) -> None:
+        self._append({"kind": "opencode_plugins", "plugins": plugins}, required=False)
+
     def record(self, scope: str, message: str, repo: RepoEntry | None = None) -> None:
         """Append a non-fatal warning; the bridge relays it as a ``warning`` event."""
         self.log.warn(

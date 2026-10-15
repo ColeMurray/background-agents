@@ -233,6 +233,10 @@
     "./generated-files": {
       "import": "./dist/generated-files.js",
       "types": "./dist/generated-files.d.ts"
+    },
+    "./types/opencode-plugins": {
+      "import": "./dist/types/opencode-plugins.js",
+      "types": "./dist/types/opencode-plugins.d.ts"
     }
   },
   "scripts": {

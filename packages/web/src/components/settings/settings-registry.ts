@@ -271,6 +271,19 @@ export const SETTINGS_GROUPS = [
         ),
       },
       {
+        id: "opencode-plugins",
+        label: "OpenCode plugins",
+        description: "Configure workspace and repository plugins",
+        keywords: "npm hooks observability audit lifecycle",
+        icon: TerminalIcon,
+        visibility: anyOf("opencode_plugins.read"),
+        panel: lazyPanel(() =>
+          import("./opencode-plugins-settings").then(
+            ({ OpencodePluginsSettings }) => OpencodePluginsSettings
+          )
+        ),
+      },
+      {
         id: "data-controls",
         label: "Data Controls",
         description: "Review and restore archived sessions",

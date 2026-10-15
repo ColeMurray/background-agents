@@ -44,6 +44,9 @@ export interface SandboxLaunchConfig {
   /** Default model when the session has no override. */
   model: string;
   mcpServerLookup?: McpServerLookup;
+  opencodePluginLookup?: {
+    forSession(repositories: readonly { repoOwner: string; repoName: string }[]): Promise<string[]>;
+  };
   slackAgentNotifyLookup?: SlackAgentNotifyLookup;
 }
 
@@ -142,12 +145,18 @@ export class SandboxLaunchContext {
   async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
     repositories: SessionRepositoryInfo[],
-    harness: HarnessId
+    harness: HarnessId,
+    requiredRuntimeGeneration?: number
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
       const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
+      const result = await evaluateImageBuildForSpawn(
+        image,
+        repositories,
+        harness,
+        requiredRuntimeGeneration
+      );
       if (result.outcome === "selected") {
         this.getLogger().info("Using prebuilt image", {
           event: "image_build.spawn_selected",
@@ -231,6 +240,15 @@ export class SandboxLaunchContext {
       });
       return undefined;
     }
+  }
+
+  async loadOpencodePlugins(
+    harness: HarnessId,
+    repositories: SessionRepositoryInfo[]
+  ): Promise<string[] | undefined> {
+    if (harness !== "opencode" || !this.config.opencodePluginLookup) return undefined;
+    // Do not silently change executable configuration when the catalog cannot be read.
+    return this.config.opencodePluginLookup.forSession(repositories);
   }
 
   resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings {

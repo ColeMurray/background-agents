@@ -290,3 +290,88 @@ async def test_attach_failure_records_outcome_and_ends_run(
         attach._record_fatal_error.assert_not_called()
     if failure_stage == "signing":
         assert harness.closed
+
+
+@pytest.mark.parametrize("early_connect", [True, False])
+async def test_latest_plugin_outcome_is_replayed_after_disconnected_boot(
+    coordinator, early_connect
+):
+    attach = coordinator(early_connect=early_connect)
+    plugins = [{"spec": "audit@1.0.0", "status": "loaded"}]
+    attach.boot_relay.path.write_text(
+        json.dumps({"seq": 1, "kind": "opencode_plugins", "plugins": plugins, "at": 10}) + "\n"
+    )
+    await attach._relay_boot_events_once()  # No socket: the cursor still advances.
+    assert attach.boot_relay.relayed_through == 1
+    attach.event_forwarder.send = AsyncMock(return_value=True)
+    await attach.on_connect()
+    attach.event_forwarder.send.assert_any_await(
+        {"type": "opencode_plugins", "plugins": plugins, "bootSeq": 1, "timestamp": 10},
+        buffered=False,
+    )
+
+
+async def test_post_ready_plugin_failure_delivers_warning_and_latest_outcome(coordinator):
+    attach = coordinator()
+    complete_boot(attach)
+    with attach.boot_relay.path.open("a") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "seq": 2,
+                    "kind": "opencode_plugins",
+                    "plugins": [{"spec": "audit@1.0.0", "status": "loaded"}],
+                }
+            )
+            + "\n"
+        )
+    await attach.start()
+    try:
+        await asyncio.wait_for(attach._boot_relay_task, timeout=1)
+        assert not attach.booting
+        assert attach._plugin_relay_task is not None
+        attach.event_forwarder.send = AsyncMock(return_value=True)
+        with attach.boot_relay.path.open("a") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "seq": 3,
+                        "kind": "warning",
+                        "scope": "plugins",
+                        "message": "Plugin audit@1.0.0 skipped: failed to load",
+                    }
+                )
+                + "\n"
+            )
+            handle.write(
+                json.dumps(
+                    {
+                        "seq": 4,
+                        "kind": "opencode_plugins",
+                        "plugins": [{"spec": "audit@1.0.0", "status": "skipped"}],
+                    }
+                )
+                + "\n"
+            )
+        async with asyncio.timeout(1):
+            while attach.boot_relay.relayed_through < 4:
+                await asyncio.sleep(0.01)
+        attach.event_forwarder.send.assert_any_await(
+            {
+                "type": "warning",
+                "scope": "plugins",
+                "message": "Plugin audit@1.0.0 skipped: failed to load",
+            },
+            buffered=False,
+        )
+        attach.event_forwarder.send.assert_any_await(
+            {
+                "type": "opencode_plugins",
+                "bootSeq": 4,
+                "plugins": [{"spec": "audit@1.0.0", "status": "skipped"}],
+            },
+            buffered=False,
+        )
+    finally:
+        await attach.stop()
+    assert attach._plugin_relay_task.done()

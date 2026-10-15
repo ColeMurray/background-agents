@@ -833,6 +833,7 @@ async def test_create_sandbox_threads_repositories_into_session_config(monkeypat
             "repo_name": "frontend",
             "repositories": members,
             "working_branch_name": "open-inspect/sess-1",
+            "opencode_plugins": ["@company/audit@1.2.3"],
             "control_plane_url": "https://control-plane.example",
             "sandbox_auth_token": "sandbox-token",
         }
@@ -842,6 +843,7 @@ async def test_create_sandbox_threads_repositories_into_session_config(monkeypat
     session_config = captured["config"].session_config
     assert [dict(r) for r in session_config.repositories] == members
     assert session_config.working_branch_name == "open-inspect/sess-1"
+    assert session_config.opencode_plugins == ["@company/audit@1.2.3"]
 
 
 @pytest.mark.asyncio

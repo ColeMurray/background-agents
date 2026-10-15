@@ -148,6 +148,7 @@ export interface CreateSandboxConfig {
   agentSlackNotifyEnabled?: boolean;
   /** MCP servers to inject into the agent session */
   mcpServers?: McpServerConfig[];
+  opencodePlugins?: string[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
   /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
@@ -243,6 +244,7 @@ export interface RestoreConfig {
   branch?: string | null;
   /** MCP servers to inject into the sandbox */
   mcpServers?: McpServerConfig[];
+  opencodePlugins?: string[];
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */

@@ -21,6 +21,7 @@ import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
+import { opencodePluginRoutes } from "./opencode-plugins";
 import { mcpServerRoutes } from "./mcp-servers";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
@@ -90,6 +91,7 @@ export const catalog: readonly RouteModule[] = [
 
   // MCP servers
   mcpServerRoutes,
+  opencodePluginRoutes,
 
   // Analytics
   analyticsRoutes,

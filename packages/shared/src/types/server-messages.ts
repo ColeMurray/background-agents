@@ -2,7 +2,11 @@ import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
-import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
+import {
+  sandboxBootPhaseSchema,
+  sandboxEventSchema,
+  opencodePluginReportSchema,
+} from "./sandbox-events";
 import {
   sandboxStatusSchema,
   sessionCapabilitiesSchema,
@@ -34,6 +38,8 @@ const sessionStateSchema = z.object({
   branchName: z.string().nullable(),
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
+  /** Latest report for the current sandbox, independent of timeline pagination. */
+  opencodePlugins: opencodePluginReportSchema.nullable().optional(),
   sandboxPreservation: sandboxShutdownSchema.nullable().optional(),
   messageCount: z.number(),
   createdAt: z.number(),

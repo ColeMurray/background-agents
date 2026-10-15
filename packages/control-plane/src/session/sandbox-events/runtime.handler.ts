@@ -125,6 +125,15 @@ export class SandboxRuntimeEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
   }
 
+  handleOpencodePlugins(
+    event: Extract<SandboxEvent, { type: "opencode_plugins" }>,
+    context: SandboxEventContext
+  ): void {
+    if (!this.sandboxRepository.recordOpencodePlugins(event)) return;
+    persistSandboxEvent(this.eventRepository, event, context);
+    this.messenger.broadcast({ type: "sandbox_event", event });
+  }
+
   handleGitSync(
     event: Extract<SandboxEvent, { type: "git_sync" }>,
     context: SandboxEventContext

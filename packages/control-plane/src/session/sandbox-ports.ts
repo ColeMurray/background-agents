@@ -1,4 +1,8 @@
-import type { GitSyncStatus, SandboxBootPhase } from "@open-inspect/shared/types/sandbox-events";
+import type {
+  GitSyncStatus,
+  SandboxBootPhase,
+  OpencodePluginReport,
+} from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SandboxRow } from "./types";
 
@@ -17,6 +21,7 @@ export interface SandboxSocketStore extends SandboxStateReader {
 export interface SandboxRuntimeFacts {
   updateSandboxHeartbeat(timestamp: number): void;
   recordReportedSandboxRuntimeVersion(runtimeVersion: string | null): void;
+  recordOpencodePlugins(report: OpencodePluginReport): boolean;
   recordBootProgress(phase: SandboxBootPhase, bootSeq: number): boolean;
   updateSandboxGitSyncStatus(status: GitSyncStatus): void;
 }

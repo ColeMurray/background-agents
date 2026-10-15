@@ -216,3 +216,21 @@ class TestEventMapping:
 
         assert relay.latest_phase_event()["bootSeq"] == 1
         assert relay.latest_phase_event()["phase"] == "sync"
+
+
+def test_plugin_snapshot_survives_bridge_restart_and_resets_for_new_boot(tmp_path):
+    relay, path = _relay(tmp_path)
+    plugins = [{"spec": "audit@1.0.0", "status": "skipped"}]
+    _write(path, {"seq": 1, "kind": "opencode_plugins", "plugins": plugins})
+    relay.read_new_lines()
+    relay.mark_relayed(1)
+    restarted = BootEventRelay(path, MagicMock())
+    assert restarted.read_new_lines() == []
+    assert restarted.latest_plugin_event() == {
+        "type": "opencode_plugins",
+        "plugins": plugins,
+        "bootSeq": 1,
+    }
+    path.write_text("")
+    restarted.read_new_lines()
+    assert restarted.latest_plugin_event() is None
