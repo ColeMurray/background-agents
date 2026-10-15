@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/select";
 
 interface AddRepositoryOverrideProps {
-  repositories: EnrichedRepository[];
+  repositories: readonly Pick<EnrichedRepository, "fullName">[];
   value: string;
   onValueChange: (value: string) => void;
   onAdd: () => void;
