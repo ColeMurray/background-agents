@@ -7,6 +7,11 @@ export interface SandboxStateReader {
   getSandbox(): SandboxRow | null;
 }
 
+/** Read-side access to encrypted sandbox tunnel metadata. */
+export interface SandboxTunnelUrlReader extends SandboxStateReader {
+  getSandboxTunnelUrls(): Promise<string | null>;
+}
+
 /** Socket identity and liveness belong to transport, not lifecycle transitions. */
 export interface SandboxSocketStore extends SandboxStateReader {
   setActiveSocketId(socketId: string): void;

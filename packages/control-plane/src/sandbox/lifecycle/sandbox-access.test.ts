@@ -199,8 +199,8 @@ describe("SandboxAccess", () => {
       f.storage.updateSandboxAccess.mockRejectedValueOnce(error);
       await expect(store(f.access)).rejects.toBe(error);
 
-      expect(f.logger.info.mock.calls).toEqual([[message, { url: URL }]]);
-      expect(nextLogger.info.mock.calls).toEqual([[message, { url: URL }]]);
+      expect(f.logger.info.mock.calls).toEqual([[message]]);
+      expect(nextLogger.info.mock.calls).toEqual([[message]]);
       expect(f.getLogger).toHaveBeenCalledTimes(2);
       expect(f.logger.warn).not.toHaveBeenCalled();
       expect(nextLogger.warn).not.toHaveBeenCalled();

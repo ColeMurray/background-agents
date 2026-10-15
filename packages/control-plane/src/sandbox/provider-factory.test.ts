@@ -94,4 +94,71 @@ describe("createSandboxProviderFromEnv", () => {
       })
     ).not.toThrow();
   });
+
+  it("requires Boat credentials and a verified base snapshot", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(createEnv({ BOAT_API_KEY: "boat-key" }), "boat")
+    ).toThrow("BOAT_API_KEY, BOAT_BASE_SNAPSHOT, and BOAT_SANDBOX_ACCESS_SECRET");
+
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: "stable-access-secret-at-least-32-chars",
+        }),
+        "boat"
+      )
+    ).not.toThrow();
+  });
+
+  it("accepts xlarge and rejects unknown Boat machine types", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: "stable-access-secret-at-least-32-chars",
+          BOAT_SANDBOX_TYPE: "xlarge",
+        }),
+        "boat"
+      )
+    ).not.toThrow();
+
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: "stable-access-secret-at-least-32-chars",
+          BOAT_SANDBOX_TYPE: "enormous",
+        }),
+        "boat"
+      )
+    ).toThrow("BOAT_SANDBOX_TYPE must be small, default, large, or xlarge");
+  });
+
+  it("rejects a short Boat sandbox access secret", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: "short",
+        }),
+        "boat"
+      )
+    ).toThrow("at least 32 non-whitespace characters");
+
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: " ".repeat(32),
+        }),
+        "boat"
+      )
+    ).toThrow("at least 32 non-whitespace characters");
+  });
 });

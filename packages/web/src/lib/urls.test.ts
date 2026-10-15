@@ -14,6 +14,12 @@ describe("buildAuthenticatedUrl", () => {
     );
   });
 
+  it("preserves Boat's private host token while adding terminal authentication", () => {
+    expect(
+      buildAuthenticatedUrl("https://sandbox-7680.on.boat.dev?_token=boat-private", "terminal-jwt")
+    ).toBe("https://sandbox-7680.on.boat.dev/?_token=boat-private&token=terminal-jwt");
+  });
+
   it("rejects missing tokens and unsafe urls", () => {
     expect(buildAuthenticatedUrl("https://terminal.example.com", undefined)).toBeNull();
     expect(buildAuthenticatedUrl("http://terminal.example.com", "secret")).toBeNull();
@@ -70,6 +76,12 @@ describe("buildVncUrl", () => {
   it("strips a password query parameter from the base URL", () => {
     expect(buildVncUrl("https://desktop.example/?password=leaked", "secret")).toBe(
       "https://desktop.example/vnc.html?autoconnect=true&resize=scale#password=secret"
+    );
+  });
+
+  it("preserves Boat's private host token in the noVNC URL", () => {
+    expect(buildVncUrl("https://sandbox-6080.on.boat.dev?_token=boat-private", "vnc-secret")).toBe(
+      "https://sandbox-6080.on.boat.dev/vnc.html?_token=boat-private&autoconnect=true&resize=scale#password=vnc-secret"
     );
   });
 });

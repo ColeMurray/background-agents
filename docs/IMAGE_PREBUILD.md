@@ -40,6 +40,10 @@ as a Modal image, Vercel snapshot, OpenComputer checkpoint, or E2B/Daytona snaps
 `modal-vm`, the artifact is a Modal image built on the VM backend. Images built under `modal` are
 not used by `modal-vm` sessions.
 
+Boat is deliberately excluded from repository/environment prebuilds. It uses one verified shared
+runtime named snapshot; account-level named templates are not an appropriate unbounded repository
+artifact store. See [Boat Sandbox Provider](BOAT_SANDBOX_PROVIDER.md).
+
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
 controls stay visible and say so, and nothing starts a build. Read every "triggers a build"

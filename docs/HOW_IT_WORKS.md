@@ -224,11 +224,17 @@ Open-Inspect supports these sandbox backends:
 - **OpenComputer**: template-based sandboxes with checkpoint-backed prebuilt-image builds via the
   OpenComputer REST API
 - **E2B**: template-based sandboxes with persistent pause/resume via direct E2B REST API calls
+- **Boat**: named-template VMs with automatic filesystem capture and same-ID stop/resume via direct
+  Boat REST API calls
 
-Prebuilt-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can
-be restored on those same providers for session resumes; Daytona and E2B use persistent sandboxes
-instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity or stale
-heartbeat, then resumes that same sandbox later.
+Repository/environment prebuilt-image builds are supported on Modal, Vercel, OpenComputer, E2B, and
+Daytona. Boat uses a Terraform-managed shared runtime template but not per-repository images because
+its named templates are account-level artifacts rather than an unbounded repository image store.
+Modal, Vercel, and OpenComputer restore independent artifacts; Daytona, E2B, and Boat retain and
+resume the same provider sandbox. Boat keeps an archived sandbox's automatic snapshot for 14 days;
+Open-Inspect fails closed if that data expires. Its workspace data lives under
+`/home/user/openinspect/workspace`, and the launcher recreates the runtime's `/workspace` symlink
+after every provider reboot.
 
 ### Clients
 

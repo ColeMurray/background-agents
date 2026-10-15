@@ -67,11 +67,11 @@ describe("session snapshot synchronization", () => {
       `UPDATE sandbox
        SET status = 'ready', code_server_url = ?, code_server_password = ?,
            vnc_url = ?, vnc_password = ?, ttyd_url = ?, ttyd_token = ?`,
-      "https://code.example.test",
+      await encryptToken("https://code.example.test", env.REPO_SECRETS_ENCRYPTION_KEY!),
       await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
-      "https://desktop.example.test",
+      await encryptToken("https://desktop.example.test", env.REPO_SECRETS_ENCRYPTION_KEY!),
       await encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
-      "https://terminal.example.test",
+      await encryptToken("https://terminal.example.test", env.REPO_SECRETS_ENCRYPTION_KEY!),
       await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY!)
     );
 
@@ -82,8 +82,8 @@ describe("session snapshot synchronization", () => {
 
     expect(snapshot.session).toMatchObject({
       id: name,
-      codeServerUrl: "https://code.example.test",
-      vncUrl: "https://desktop.example.test",
+      codeServerUrl: null,
+      vncUrl: null,
     });
     expect(snapshot.session).not.toHaveProperty("codeServerPassword");
     expect(snapshot.session).not.toHaveProperty("vncPassword");

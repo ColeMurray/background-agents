@@ -44,6 +44,7 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
 // deletion migration" step writes them to an auto.tfvars.json file), and
 // project_root is a path inside the checkout.
 const NOT_FROM_ENVIRONMENT = new Set([
+  "boat_previous_base_snapshot",
   "control_plane_migration_tag",
   "control_plane_migration_old_tag",
   "control_plane_new_sqlite_classes",
@@ -69,4 +70,27 @@ test("Every production Terraform variable reaches plan and apply", async () => {
     }
   });
   assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
+});
+
+test("Boat deployment inputs reach Terraform plan and apply", () => {
+  const assignments = [
+    "TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}",
+    "TF_VAR_boat_build_api_key: ${{ secrets.BOAT_BUILD_API_KEY }}",
+    "TF_VAR_boat_sandbox_access_secret: ${{ secrets.BOAT_SANDBOX_ACCESS_SECRET }}",
+  ];
+  for (const assignment of assignments) assertInPlanAndApply(assignment, assignment);
+  const applyStart = workflow.indexOf("\n  apply:\n");
+  const jobs = {
+    plan: workflow.slice(workflow.indexOf("\n  plan:\n"), applyStart),
+    apply: workflow.slice(applyStart),
+  };
+  assert.match(workflow, /packages\/boat-infra\/\*\*/);
+  assert.match(jobs.apply, /Protect current Boat snapshot during rollout/);
+  assert.match(jobs.plan, /Protect current Boat snapshot during plan/);
+  for (const job of Object.values(jobs)) {
+    assert.match(job, /terraform output -json/);
+    assert.match(job, /\.boat_base_snapshot\.value \/\/ empty/);
+    assert.doesNotMatch(job, /terraform output -raw boat_base_snapshot/);
+  }
+  assert.match(jobs.apply, /timeout-minutes: 90/);
 });

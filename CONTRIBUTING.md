@@ -53,6 +53,7 @@ npm test
 | `packages/sandbox-runtime` | Shared in-sandbox agent runtime      |
 | `packages/modal-infra`     | Modal sandbox infrastructure         |
 | `packages/daytona-infra`   | Daytona snapshot infrastructure      |
+| `packages/boat-infra`      | Boat named-template infrastructure   |
 | `packages/shared`          | Shared types and utilities           |
 
 ## Making Changes

@@ -1,6 +1,8 @@
-# Activate modal-infra venv if it exists (provides ruff for Python linting)
+# Activate a provider-infra venv if it exists (provides ruff for Python linting)
 if [ -f packages/modal-infra/.venv/bin/activate ]; then
   . packages/modal-infra/.venv/bin/activate
+elif [ -f packages/boat-infra/.venv/bin/activate ]; then
+  . packages/boat-infra/.venv/bin/activate
 fi
 
 npx lint-staged

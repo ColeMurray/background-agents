@@ -65,6 +65,23 @@ export async function decryptStoredAccessValue(
   }
 }
 
+/** Decrypt new access values while accepting URL/JSON rows written before URL encryption. */
+export async function decryptStoredAccessValueOrPlaintext(
+  value: string | null,
+  encryptionKey: string,
+  log: Pick<Logger, "warn">
+): Promise<string | null> {
+  if (
+    !value ||
+    value.startsWith("https://") ||
+    value.startsWith("http://") ||
+    value.startsWith("{")
+  ) {
+    return value;
+  }
+  return decryptStoredAccessValue(value, encryptionKey, log);
+}
+
 /** The configured sandbox backend plus the Modal coordinates its dashboard link needs. */
 export interface SandboxDashboardSettings {
   sandboxProvider: string | undefined;

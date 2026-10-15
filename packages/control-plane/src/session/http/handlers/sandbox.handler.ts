@@ -27,7 +27,7 @@ import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxStateReader } from "../../sandbox-ports";
+import type { SandboxTunnelUrlReader } from "../../sandbox-ports";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 import type { SandboxRow, SessionRow } from "../../types";
 import { parseTunnelUrls } from "../../tunnel-urls";
@@ -58,7 +58,7 @@ export class SandboxHandler {
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly sessionCoreRepository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxStateReader,
+    private readonly sandboxRepository: SandboxTunnelUrlReader,
     private readonly sandboxEventProcessor: SessionSandboxEventProcessor,
     private readonly messenger: SessionMessenger,
     private readonly refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>,
@@ -372,8 +372,26 @@ export class SandboxHandler {
     }
 
     let urls: Record<string, string> = {};
-    if (sandbox.tunnel_urls) {
-      const parsed = parseTunnelUrls(sandbox.tunnel_urls);
+    let storedTunnelUrls: string | null;
+    try {
+      storedTunnelUrls = await this.sandboxRepository.getSandboxTunnelUrls();
+    } catch (error) {
+      log.warn("Invalid stored tunnel_urls", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
+    }
+    const current = this.sandboxRepository.getSandbox();
+    if (
+      !current ||
+      current.id !== sandbox.id ||
+      current.modal_object_id !== sandbox.modal_object_id ||
+      current.tunnel_urls !== sandbox.tunnel_urls
+    ) {
+      return Response.json({ error: "Sandbox access changed; retry" }, { status: 409 });
+    }
+    if (storedTunnelUrls) {
+      const parsed = parseTunnelUrls(storedTunnelUrls);
       if (!parsed) {
         log.warn("Invalid stored tunnel_urls");
         return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
