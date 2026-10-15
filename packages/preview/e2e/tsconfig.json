@@ -1,0 +1,16 @@
+{
+  // The browser suite drives the launcher as a subprocess and reads its ready line; only that
+  // dependency-free contract (src/ready.ts) crosses in from the launcher's sources.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "../playwright.config.ts", "../src/ready.ts"]
+}

@@ -29,6 +29,7 @@ events back through the same WebSocket chain.
 
 ```
 @open-inspect/shared  ←  control-plane, web, slack-bot, github-bot, linear-bot
+@open-inspect/control-plane  ←  preview
 ```
 
 **Build `@open-inspect/shared` first** whenever you change shared types. Other packages import from
@@ -45,6 +46,7 @@ it at build time.
 | `slack-bot`     | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
 | `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
 | `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
+| `preview`       | TypeScript / Node + Playwright     | Authenticated local preview of web + control plane (dev)    |
 | `modal-infra`   | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
 
 ## Common Commands
@@ -78,6 +80,15 @@ cd packages/modal-infra && ruff check --fix && ruff format
 ```
 
 ## Testing
+
+For frontend verification without OAuth or production credentials, use the
+[authenticated local preview](docs/verification/authenticated-preview.md):
+`npm run preview -- --browser agent-browser`. Keep its foreground process alive through your
+terminal's persistent session handle, use its named browser context, and stop that owned process
+when finished. Any browser, including a person's own or another agent-browser session, signs in with
+the per-persona sign-in links it prints. `npm run test:preview` runs the preview's contract tests
+and its real-stack browser regressions. Do not invent a login bypass, copy production cookies, or
+mock first-party APIs.
 
 All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
 
