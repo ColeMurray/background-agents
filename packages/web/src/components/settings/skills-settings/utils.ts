@@ -5,6 +5,8 @@ import type {
 } from "@open-inspect/shared/types/skills";
 import type { Repo } from "@/hooks/use-repos";
 
+export const INITIAL_IMPORT_ASSIGNMENTS: SkillAssignmentInput[] = [{ type: "global" }];
+
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Request failed";
 }

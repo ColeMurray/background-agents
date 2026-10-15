@@ -58,8 +58,9 @@ export function SkillImportReview({ preview }: { preview: SkillImportPreviewResp
 
       {!preview.nameAvailable && (
         <p className="rounded bg-destructive/10 p-3 text-xs text-destructive">
-          A skill named <span className="font-mono">{preview.name}</span> already exists. Names are
-          permanent and stay taken after deletion — choose a different canonical name.
+          The name <span className="font-mono">{preview.name}</span> is unavailable. Existing names
+          (including deleted skills), runtime-reserved names, and duplicate collection names cannot
+          be imported. Choose another name or skip this skill.
         </p>
       )}
 

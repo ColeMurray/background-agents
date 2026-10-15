@@ -25,6 +25,10 @@ type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
 /** Per-method phrases for failure messages, e.g. `{ POST: "approve memory" }`. */
 type ProxyActions = Partial<Record<ProxyMethod, string>>;
 
+interface SettingsProxyOptions {
+  timeoutMs?: number;
+}
+
 /** JSON mutation budget kept below portable web-function request limits. */
 export const SETTINGS_PROXY_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -38,7 +42,8 @@ async function relaySettingsResource(
   request: NextRequest,
   buildPath: () => string | Promise<string>,
   action: string,
-  method: ProxyMethod
+  method: ProxyMethod,
+  options?: SettingsProxyOptions
 ): Promise<NextResponse> {
   try {
     // The revision ID is an opaque CAS token; forwarding it unchanged keeps
@@ -66,7 +71,10 @@ async function relaySettingsResource(
       }
       if (ifMatch) init.headers = { "If-Match": ifMatch };
     }
-    const response = await controlPlaneUserFetch(await buildPath(), init);
+    const path = await buildPath();
+    const response = options
+      ? await controlPlaneUserFetch(path, init, options)
+      : await controlPlaneUserFetch(path, init);
     return relayJsonResponse(response);
   } catch (error) {
     console.error(`Failed to ${action}:`, error);
@@ -85,7 +93,8 @@ async function relaySettingsResource(
 export function settingsProxy<P>(
   buildPath: (params: P, request: NextRequest) => string,
   label: string,
-  actions: ProxyActions = {}
+  actions: ProxyActions = {},
+  options?: SettingsProxyOptions
 ): ProxyHandlers<P> {
   const handler =
     (method: ProxyMethod): RouteHandler<P> =>
@@ -94,7 +103,8 @@ export function settingsProxy<P>(
         request,
         async () => buildPath(await context.params, request),
         actions[method] ?? `${METHOD_VERBS[method]} ${label}`,
-        method
+        method,
+        options
       );
 
   return {

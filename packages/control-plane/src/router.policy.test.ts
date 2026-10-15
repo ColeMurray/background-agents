@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(233);
+    expect(routes).toHaveLength(235);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(177);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(233);
+    expect(new Set(paths).size).toBe(179);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(235);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -575,6 +575,8 @@ describe("route policy table", () => {
     ["GET", "/sessions/session-1/skills"],
     ["POST", "/skills"],
     ["POST", "/skills/import"],
+    ["POST", "/skills/import/bulk/preview"],
+    ["POST", "/skills/import/bulk"],
     ["POST", "/skills/skill-1/reimport"],
     ["GET", "/skill-profiles"],
   ])("owns the human-user restriction for %s %s", (method, path) => {

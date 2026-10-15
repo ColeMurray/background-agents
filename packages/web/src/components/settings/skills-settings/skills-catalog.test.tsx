@@ -10,17 +10,25 @@ import { SkillsCatalog } from "./skills-catalog";
 
 expect.extend(matchers);
 
-const { useSkillCatalogPageMock, useSkillMock } = vi.hoisted(() => ({
-  useSkillCatalogPageMock: vi.fn(),
-  useSkillMock: vi.fn(),
-}));
+const { revalidateSkillCatalogPageMock, useSkillCatalogPageMock, useSkillMock } = vi.hoisted(
+  () => ({
+    revalidateSkillCatalogPageMock: vi.fn(),
+    useSkillCatalogPageMock: vi.fn(),
+    useSkillMock: vi.fn(),
+  })
+);
 
 vi.mock("@/hooks/use-managed-skills", () => ({
   deleteSkill: vi.fn(),
-  revalidateSkillCatalogPage: vi.fn(),
+  revalidateSkillCatalogPage: revalidateSkillCatalogPageMock,
   setSkillEnabled: vi.fn(),
   useSkill: useSkillMock,
   useSkillCatalogPage: useSkillCatalogPageMock,
+}));
+vi.mock("./skill-import", () => ({
+  SkillImport: ({ onImported }: { onImported: (id: string | null) => void }) => (
+    <button onClick={() => onImported(null)}>Complete collection import</button>
+  ),
 }));
 
 function skill(id: string, name: string): SkillSummary {
@@ -70,6 +78,7 @@ beforeEach(() => {
     error: undefined,
     mutate: vi.fn(),
   });
+  revalidateSkillCatalogPageMock.mockReset();
 });
 
 afterEach(cleanup);
@@ -116,6 +125,18 @@ describe("SkillsCatalog", () => {
 
     expect(screen.getByText("· Created by User One")).toBeInTheDocument();
     expect(screen.getByText("· Created by user-2")).toBeInTheDocument();
+  });
+
+  it("returns to the refreshed catalog after a collection import", async () => {
+    const user = userEvent.setup();
+    render(<SkillsCatalog canManage />);
+
+    await user.click(screen.getByRole("button", { name: "Import from repository" }));
+    await user.click(screen.getByRole("button", { name: "Complete collection import" }));
+
+    expect(screen.getByText("first-skill")).toBeInTheDocument();
+    expect(revalidateSkillCatalogPageMock).toHaveBeenCalledWith(null);
+    expect(useSkillMock).toHaveBeenLastCalledWith(null);
   });
 
   it("opens a complete read-only detail surface for users without manage permission", async () => {

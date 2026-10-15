@@ -7,7 +7,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ browserApiFetch: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: mocks.browserApiFetch }));
 
-import { useSkillResolutionPreview } from "./use-managed-skills";
+import {
+  bulkImportSkills,
+  previewBulkSkillImport,
+  useSkillResolutionPreview,
+} from "./use-managed-skills";
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return (
@@ -69,5 +73,112 @@ describe("useSkillResolutionPreview", () => {
       { repoOwner: "open-inspect", repoName: "first", selection: { mode: "all" } },
       { repoOwner: "open-inspect", repoName: "second", selection: { mode: "all" } },
     ]);
+  });
+});
+
+describe("bulk skill import requests", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("validates and returns a bulk preview", async () => {
+    const source = {
+      provider: "github" as const,
+      repoOwner: "acme",
+      repoName: "skills",
+      requestedRef: null,
+      resolvedRef: "main",
+      commitSha: "a".repeat(40),
+      subdirectory: "catalog/deploy",
+      sourceSha256: "b".repeat(64),
+    };
+    mocks.browserApiFetch.mockResolvedValue(
+      Response.json({
+        skills: [
+          {
+            name: "deploy",
+            source,
+            description: "Deploy service",
+            body: "Deploy it",
+            license: null,
+            compatibility: null,
+            metadata: {},
+            revisionSha256: "c".repeat(64),
+            totalBytes: 9,
+            files: [
+              {
+                path: "SKILL.md",
+                content: "Deploy it",
+                sizeBytes: 9,
+                executable: false,
+              },
+            ],
+            warnings: [],
+            nameAvailable: true,
+          },
+        ],
+        totalFiles: 1,
+        totalBytes: 9,
+      })
+    );
+    const input = {
+      source: {
+        repository: { repoOwner: "acme", repoName: "skills" },
+        ref: null,
+        subdirectory: "catalog",
+      },
+    };
+
+    await expect(previewBulkSkillImport(input)).resolves.toMatchObject({ totalFiles: 1 });
+    expect(mocks.browserApiFetch).toHaveBeenCalledWith("/api/skills/import/bulk/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  });
+
+  it("rejects malformed bulk import responses", async () => {
+    mocks.browserApiFetch.mockResolvedValue(Response.json({ skills: [{ id: "incomplete" }] }));
+
+    await expect(
+      bulkImportSkills({
+        assignments: [],
+        source: {
+          repository: { repoOwner: "acme", repoName: "skills" },
+          ref: null,
+          subdirectory: null,
+        },
+        expectedCommitSha: "a".repeat(40),
+        skills: [
+          {
+            subdirectory: "deploy",
+            name: "deploy",
+            expectedSourceSha256: "b".repeat(64),
+            expectedRevisionSha256: "c".repeat(64),
+          },
+        ],
+      })
+    ).rejects.toThrow();
+  });
+
+  it("accepts compact bulk import identities", async () => {
+    const response = {
+      skills: [{ id: "skill-1", name: "deploy", currentRevisionId: "revision-1" }],
+    };
+    mocks.browserApiFetch.mockResolvedValue(Response.json(response));
+
+    await expect(
+      bulkImportSkills({
+        assignments: [],
+        source: { repository: { repoOwner: "acme", repoName: "skills" }, subdirectory: null },
+        expectedCommitSha: "a".repeat(40),
+        skills: [
+          {
+            subdirectory: "deploy",
+            name: "deploy",
+            expectedSourceSha256: "b".repeat(64),
+            expectedRevisionSha256: "c".repeat(64),
+          },
+        ],
+      })
+    ).resolves.toEqual(response.skills);
   });
 });

@@ -52,6 +52,27 @@ describe("settingsProxy", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
+  it("uses a route-specific control-plane timeout when configured", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+    const { GET: GET_SLOW } = settingsProxy(
+      () => "/slow-settings",
+      "slow settings",
+      {},
+      {
+        timeoutMs: 120_000,
+      }
+    );
+
+    const response = await GET_SLOW(new NextRequest("http://localhost/api/slow-settings"), {
+      params: Promise.resolve(undefined),
+    });
+
+    expect(response.status).toBe(200);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/slow-settings", undefined, {
+      timeoutMs: 120_000,
+    });
+  });
+
   it("forwards If-Match and non-success responses without interpretation", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Revision conflict" }, { status: 412 })

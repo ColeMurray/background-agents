@@ -42,6 +42,7 @@ describe("controlPlaneUserFetch", () => {
   afterEach(() => {
     process.env = originalEnv;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("combines the browser session with a fresh web signature", async () => {
@@ -81,6 +82,17 @@ describe("controlPlaneUserFetch", () => {
       actor: "",
     });
     expect(verification.ok).toBe(true);
+  });
+
+  it("threads collection timeouts through signing and transport", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await controlPlaneUserFetch(
+      "/skills/import/bulk/preview",
+      { method: "POST", body: "{}" },
+      { timeoutMs: 120_000 }
+    );
+    expect(timeout).toHaveBeenCalledWith(120_000);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("merges Headers options without dropping caller values", async () => {

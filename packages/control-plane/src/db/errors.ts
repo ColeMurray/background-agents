@@ -7,10 +7,17 @@
 
 const SQLITE_CONSTRAINT_UNIQUE = 2067;
 const SQLITE_CONSTRAINT_PRIMARYKEY = 1555;
+const SQLITE_CONSTRAINT_FOREIGNKEY = 787;
 
 export function isUniqueConstraintError(err: unknown): boolean {
   const code = (err as { errcode?: unknown } | null)?.errcode;
   if (code === SQLITE_CONSTRAINT_UNIQUE || code === SQLITE_CONSTRAINT_PRIMARYKEY) return true;
   const msg = err instanceof Error ? err.message : String(err);
   return msg.toLowerCase().includes("unique constraint failed");
+}
+
+export function isForeignKeyConstraintError(err: unknown): boolean {
+  if ((err as { errcode?: unknown } | null)?.errcode === SQLITE_CONSTRAINT_FOREIGNKEY) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.toLowerCase().includes("foreign key constraint failed");
 }

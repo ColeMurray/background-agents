@@ -132,6 +132,8 @@ describe("managed skill browser authentication", () => {
     ["GET", "/skills/skill_1", "user-or-service"],
     ["POST", "/skills", "user"],
     ["POST", "/skills/import", "user"],
+    ["POST", "/skills/import/bulk/preview", "user"],
+    ["POST", "/skills/import/bulk", "user"],
     ["GET", "/skill-profiles", "user"],
     ["PATCH", "/skill-profiles/profile_1", "user"],
     ["GET", "/sessions/session_1/skills", "user"],
