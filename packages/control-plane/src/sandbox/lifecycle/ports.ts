@@ -44,7 +44,12 @@ export class ShutdownRecoveryRejectedError extends Error {
 
 /** Accepts an authenticated runtime observation; false means no transition. */
 export interface SandboxReadiness {
-  onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean;
+  onRuntimeReady(
+    timestamp: number,
+    harness?: string,
+    protocolVersion?: 1,
+    conversationId?: string | null
+  ): boolean;
 }
 
 /**

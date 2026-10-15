@@ -519,6 +519,7 @@ export function createUnmanagedShutdown() {
       kind: "normal",
     })),
     holdFailedRetainedBoot: vi.fn(() => false),
+    holdFailedContinuationBoot: vi.fn(() => false),
     holdFailedRecovery: vi.fn(),
     runtimeReady: vi.fn(),
     generationReady: vi.fn(),

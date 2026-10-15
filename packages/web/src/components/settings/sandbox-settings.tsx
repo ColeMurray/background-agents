@@ -571,6 +571,22 @@ export function SandboxSettingsEditor({
         </div>
       </div>
 
+      <label className="flex items-start gap-3 text-sm text-foreground">
+        <input
+          type="checkbox"
+          checked={values.autoContinueOnExpiry}
+          onChange={(event) => updateField("autoContinueOnExpiry", event.target.checked)}
+        />
+        <span>
+          Automatically continue after sandbox expiry
+          <span className="block text-xs text-muted-foreground">
+            Allow one automatic handoff per session when work has made recent progress. Requires a
+            confirmed save and the same restored conversation. Execution and cost limits still
+            apply.
+          </span>
+        </span>
+      </label>
+
       {configurableTimeout ? (
         <div>
           <label

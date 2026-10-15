@@ -1042,6 +1042,8 @@ class AgentBridge:
             log=self.log,
         )
         if result is not None:
+            if result.get("executionStopped") and self.agent_session_id:
+                result["agentSessionId"] = self.agent_session_id
             await self._send_event(result)
 
     async def _handle_snapshot(self) -> None:

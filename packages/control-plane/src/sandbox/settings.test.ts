@@ -347,3 +347,21 @@ describe("normalizeSandboxSettings", () => {
     });
   });
 });
+
+describe("automatic expiry continuation opt-in", () => {
+  it("defaults to manual recovery and preserves explicit boolean choices", () => {
+    expect(normalizeSandboxSettings({})).not.toHaveProperty("autoContinueOnExpiry");
+    expect(normalizeSandboxSettings({ autoContinueOnExpiry: true })).toEqual({
+      autoContinueOnExpiry: true,
+    });
+    expect(normalizeSandboxSettings({ autoContinueOnExpiry: false })).toEqual({
+      autoContinueOnExpiry: false,
+    });
+  });
+  it("rejects non-boolean opt-ins and omits invalid persisted values", () => {
+    expect(() => normalizeSandboxSettings({ autoContinueOnExpiry: "true" })).toThrow(
+      "must be a boolean"
+    );
+    expect(parsePersistedSandboxSettings('{"autoContinueOnExpiry":"true"}')).toEqual({});
+  });
+});

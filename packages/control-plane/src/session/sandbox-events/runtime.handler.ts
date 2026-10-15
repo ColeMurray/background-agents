@@ -87,7 +87,12 @@ export class SandboxRuntimeEventHandler {
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
     if (
-      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
+      !this.lifecycle.onRuntimeReady(
+        context.now,
+        event.harness,
+        event.preservationProtocolVersion,
+        event.opencodeSessionId
+      )
     ) {
       return;
     }

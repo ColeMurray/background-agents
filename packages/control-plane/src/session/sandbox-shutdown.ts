@@ -6,6 +6,7 @@ import {
   type SandboxShutdownState,
   type ShutdownRecoveryAction,
 } from "@open-inspect/shared/types/sandbox-shutdown";
+import type { ExpiryContinuation } from "./expiry-continuation";
 import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { Logger } from "../logger";
 import type { SandboxLifetime, SandboxProvider } from "../sandbox/provider";
@@ -70,6 +71,7 @@ interface ShutdownDependencies {
   session: SessionCoreRepository;
   messages: MessageRepository;
   failures: MessageFailureService;
+  continuation?: ExpiryContinuation;
   messenger: SessionMessenger;
   /** Records the timeline warning that a released checkpoint commits with its release. */
   events: Pick<EventRepository, "createEventIfAbsent">;
@@ -192,6 +194,11 @@ export class SandboxShutdownCoordinator {
         lifecyclePolicy,
         receipt: previous?.receipt,
         restoreInvoked: restoring ? false : undefined,
+        automaticHandoffs: previous?.automaticHandoffs,
+        continuation:
+          previous?.continuation && this.pendingContinuationMessageId()
+            ? { ...previous.continuation, contextVerified: undefined }
+            : undefined,
       };
       this.deps.store.write(next);
     });
@@ -333,10 +340,28 @@ export class SandboxShutdownCoordinator {
     this.publish({ ...state, providerObjectId });
   }
 
-  runtimeReady(version?: 1): void {
-    const state = this.deps.store.read();
+  runtimeReady(version?: 1, conversationId?: string | null): void {
+    const state = this.normalizeInterruptedRestore();
     if (!state || !this.current(state)) return;
-    const next = { ...state, runtimeReady: true, protocolVersion: version };
+    let next = { ...state, runtimeReady: true, protocolVersion: version };
+    if (
+      state.continuation?.enqueued &&
+      this.pendingContinuationMessageId() !== null &&
+      (state.phase === "restoring" || state.phase === "running")
+    ) {
+      if (
+        !state.continuation.conversationId ||
+        conversationId !== state.continuation.conversationId
+      ) {
+        this.fail(
+          next,
+          "unknown",
+          "The saved conversation could not be recovered; automatic continuation was stopped."
+        );
+        return;
+      }
+      next = { ...next, continuation: { ...state.continuation, contextVerified: true } };
+    }
     this.publish(next);
     if (state.lifecyclePolicy === "legacy") {
       this.notifyLifecycleChange();
@@ -394,9 +419,19 @@ export class SandboxShutdownCoordinator {
       });
       return "held";
     }
+    if (state.continuation?.enqueued && !state.continuation.contextVerified) return "held";
     return state.lifetimeKind !== "unknown" && state.generationReady && !state.checkpointInFlight
       ? "ready"
       : "held";
+  }
+
+  /** The handoff finishes the interrupted task before later user prompts. */
+  pendingContinuationMessageId(): string | null {
+    const continuation = this.deps.store.read()?.continuation;
+    return continuation?.enqueued &&
+      this.deps.messages.getMessageStatus(continuation.messageId) === "pending"
+      ? continuation.messageId
+      : null;
   }
 
   isHolding(): boolean {
@@ -463,6 +498,21 @@ export class SandboxShutdownCoordinator {
       return false;
     if (this.current(state) && this.matches(state, generation))
       this.deps.store.write({ ...state, providerObjectId: source });
+    this.holdFailedRecovery(error, generation);
+    return true;
+  }
+
+  /** Settle only the automatic message; later user work waits for explicit recovery. */
+  holdFailedContinuationBoot(error: string, generation: SandboxGeneration): boolean {
+    const state = this.deps.store.read();
+    if (
+      !state?.receipt ||
+      !state.continuation?.enqueued ||
+      !this.current(state) ||
+      !this.matches(state, generation) ||
+      this.deps.messages.getMessageStatus(state.continuation.messageId) !== "pending"
+    )
+      return false;
     this.holdFailedRecovery(error, generation);
     return true;
   }
@@ -748,6 +798,7 @@ export class SandboxShutdownCoordinator {
       drainAtMs: null,
       generationReady: false,
       lifecyclePolicy: state.lifecyclePolicy,
+      automaticHandoffs: state.automaticHandoffs,
     };
     this.deps.session.transaction(() => {
       if (!this.deps.sandbox.discardSandboxState(state.generation))
@@ -966,12 +1017,30 @@ export class SandboxShutdownCoordinator {
       captureByMs: Math.min(stopByMs + CAPTURE_MS, end - RETIRE_MS - MARGIN_MS),
       retireByMs: end - MARGIN_MS,
       continuationPaused: emergency || state?.continuationPaused,
+      continuation: undefined,
     };
+    if (state?.continuation?.enqueued)
+      this.cancelPendingContinuation(
+        state,
+        "The sandbox was interrupted before automatic continuation could start."
+      );
     const failure = this.deps.session.transaction(() => {
       const message = this.deps.messages.getProcessingMessage();
       if (message) {
         next.messageId = message.id;
         next.continuationPaused = true;
+        if (!emergency && reason === "sandbox_lifetime_expiring") {
+          try {
+            next.continuation = this.deps.continuation?.plan(
+              next,
+              message.id,
+              now,
+              row.last_heartbeat
+            );
+          } catch (error) {
+            this.deps.log?.warn("Automatic expiry continuation could not be planned", { error });
+          }
+        }
       }
       this.deps.store.write(next);
       if (emergency) this.deps.sandbox.updateSandboxStatus("stale");
@@ -1017,7 +1086,14 @@ export class SandboxShutdownCoordinator {
       });
       return;
     }
-    this.publish({ ...state, phase: "prepared" }); // Durable evidence before the critical-event ACK.
+    this.publish({
+      ...state,
+      phase: "prepared",
+      continuation:
+        state.continuation && event.agentSessionId
+          ? { ...state.continuation, conversationId: event.agentSessionId }
+          : undefined,
+    }); // Durable evidence before the critical-event ACK.
     this.kickAdvance();
   }
 
@@ -1046,7 +1122,7 @@ export class SandboxShutdownCoordinator {
       detail,
     });
     this.fenceRuntime();
-    await this.capture({ ...state, continuationPaused: true });
+    await this.capture({ ...state, continuationPaused: true, continuation: undefined });
   }
 
   /** A capture without runtime cooperation first cuts the runtime off from new work. */
@@ -1391,7 +1467,14 @@ export class SandboxShutdownCoordinator {
   }
 
   private normalizeInterruptedRestore(): ShutdownRecord | null {
-    const state = this.deps.store.read();
+    let state = this.deps.store.read();
+    if (state?.continuation?.enqueued) {
+      const status = this.deps.messages.getMessageStatus(state.continuation.messageId);
+      if (status !== "pending" && status !== "processing") {
+        state = { ...state, continuation: undefined };
+        this.publish(state);
+      }
+    }
     if (
       (state?.phase !== "restoring" && state?.phase !== "running") ||
       !state.restoreInvoked ||
@@ -1407,6 +1490,7 @@ export class SandboxShutdownCoordinator {
       error:
         "Saved sandbox restore was interrupted after provider invocation; its outcome is unknown.",
     };
+    if (state.continuation) return this.fail(unknown, "unknown", unknown.error!);
     this.publish(unknown);
     return unknown;
   }
@@ -1557,11 +1641,34 @@ export class SandboxShutdownCoordinator {
   }
 
   private finish(state: ShutdownRecord): void {
-    this.deps.sandbox.updateSandboxStatus("stopped");
+    if (this.deps.store.read()?.phase === "saved") return;
+    let saved: ShutdownRecord = { ...state, phase: "saved", sourceRetired: true };
+    try {
+      this.deps.session.transaction(() => {
+        if (saved.continuation && !saved.continuation.enqueued) {
+          saved = this.deps.continuation?.enqueue(saved, this.now()) ?? saved;
+        }
+        this.deps.sandbox.updateSandboxStatus("stopped");
+        this.deps.store.write(saved);
+      });
+    } catch (error) {
+      this.deps.log?.warn("Automatic expiry continuation could not be enqueued", { error });
+      saved = {
+        ...state,
+        phase: "saved",
+        sourceRetired: true,
+        continuation: undefined,
+        continuationPaused: true,
+      };
+      this.deps.session.transaction(() => {
+        this.deps.sandbox.updateSandboxStatus("stopped");
+        this.deps.store.write(saved);
+      });
+    }
     this.deps.retireAccess();
-    this.publish({ ...state, phase: "saved", sourceRetired: true });
+    this.announce(saved);
     this.broadcast({ type: "sandbox_status", status: "stopped" });
-    this.notifyLifecycleChange();
+    this.notifyLifecycleChange(saved.continuation?.enqueued === true);
   }
 
   private fail(
@@ -1571,12 +1678,29 @@ export class SandboxShutdownCoordinator {
     captureFailure = false
   ): ShutdownRecord {
     const failed: ShutdownRecord = { ...state, phase, error, captureFailure };
+    if (state.continuation) {
+      this.cancelPendingContinuation(state, error);
+      failed.continuation = undefined;
+      failed.continuationPaused = true;
+    }
     this.publish(failed);
+    if (state.continuation?.enqueued) this.notifyLifecycleChange(true);
     this.broadcast({
       type: "sandbox_warning",
       message: `${phase === "failed" ? "Sandbox save failed" : "Sandbox save could not be confirmed"}: ${error}`,
     });
     return failed;
+  }
+
+  private cancelPendingContinuation(state: ShutdownRecord, error: string): void {
+    if (!state.continuation?.enqueued) return;
+    const failure = this.deps.failures.record(
+      state.continuation.messageId,
+      error,
+      this.now(),
+      "pending"
+    );
+    if (failure) this.deps.failures.deliver(failure);
   }
 
   /** Confirmed provider stop of one source, bounded by the caller's deadline. */
@@ -1638,10 +1762,14 @@ export class SandboxShutdownCoordinator {
     return state.continuationPaused ?? state.messageId !== undefined;
   }
 
-  private notifyLifecycleChange(): void {
-    this.deps.background.submit(() => this.deps.onLifecycleChange(), {
-      name: "sandbox.lifecycle_change",
-    });
+  private notifyLifecycleChange(reconcileStatus = false): void {
+    this.deps.background.submit(
+      async () => {
+        if (reconcileStatus) await this.deps.reconcileStatusFromMessages();
+        await this.deps.onLifecycleChange();
+      },
+      { name: "sandbox.lifecycle_change" }
+    );
   }
 
   private kickAdvance(): void {

@@ -593,3 +593,38 @@ for the complete list.
 | Ping/pong WebSocket health         | Send ping, verify pong                |
 | Typing triggers sandbox warm       | Send typing, verify warming event     |
 | Presence sync on connect           | Connect 2 clients, verify presence    |
+
+### Automatic continuation at sandbox expiry
+
+Sandbox settings include `autoContinueOnExpiry` (boolean, default `false`). Enable **Automatically
+continue after sandbox expiry** in Sandbox settings at global, repository, or environment scope.
+Settings are captured when a session is created. A repository/environment can explicitly set `false`
+to override an inherited opt-in.
+
+An opted-in session can perform **one automatic handoff during its entire lifetime**, including
+across coordinator restarts and manual sandbox recovery. The handoff uses that session's configured
+sandbox lifetime for the replacement. Execution watchdogs, provider lifetime limits, session cost
+limits, cancellation, and automation run limits still apply; this setting does not grant unlimited
+execution or spending.
+
+Only a prompt still within its execution budget, with a fresh sandbox heartbeat and execution
+progress recorded within the normal inactivity window, qualifies. Heartbeats alone do not qualify.
+This is a conservative activity check, not a proof of useful work; a legitimate long silent command
+may require manual recovery. Prompts with a validated automation run callback require manual
+recovery: their failure settles the scheduler-owned run, so they cannot continue outside its
+admission and overlap accounting. Automation follow-ups without a run-owning callback remain
+eligible. Unverifiable callback contexts also require manual recovery.
+
+The interrupted prompt remains **failed**, with its normal failure event and callback. After
+confirmed runtime shutdown, conversation-ID persistence, workspace preservation, and source
+retirement, a separate short continuation message is queued ahead of later user requests. It asks
+the agent to continue the unfinished task in the saved conversation, checking interrupted commands
+before proceeding. It does not replay the original prompt, copy attachments, or repeat the original
+bot completion callback.
+
+The restored runtime must report the same saved vendor conversation ID before any queued work can
+dispatch. If preservation, source retirement, conversation recovery, or restoration cannot be
+confirmed, automatic continuation stops and existing manual recovery remains available. A pending
+automatic message is failed if restoration/context verification fails; the original failed prompt
+and later queued user requests remain intact. Older runtimes that do not report a persisted
+conversation in shutdown preparation require manual recovery.
