@@ -14,6 +14,7 @@ import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dis
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
+  EGRESS?: Fetcher;
   SESSION: DurableObjectNamespace;
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
@@ -32,6 +33,7 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
 export function createCloudflareEnv(bindings: WorkerBindings): Env {
   const {
     DB,
+    EGRESS,
     SESSION,
     REPOS_CACHE,
     MEDIA_BUCKET,
@@ -43,6 +45,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     ...config
   } = bindings;
   const platform: Platform = {
+    EGRESS,
     DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),

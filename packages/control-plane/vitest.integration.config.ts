@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 import { webcrypto } from "node:crypto";
 import { createRequire } from "node:module";
+import openaiUsage from "./test/fixtures/provider-usage/openai.json";
 
 const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 
@@ -51,6 +52,15 @@ export default defineConfig({
           compatibilityFlags: ["nodejs_compat"],
           async outboundService(request: Request) {
             const url = new URL(request.url);
+            if (url.href === "https://chatgpt.com/backend-api/wham/usage") {
+              if (
+                request.headers.get("Authorization") !== "Bearer integration-openai-access-token" ||
+                request.headers.get("ChatGPT-Account-Id") !== "acct-integration"
+              ) {
+                return new Response("Invalid usage credentials", { status: 401 });
+              }
+              return Response.json(openaiUsage);
+            }
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
             }

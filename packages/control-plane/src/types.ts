@@ -111,6 +111,8 @@ export interface EnvConfig {
  * (`cloudflare/platform.ts` on Workers).
  */
 export interface Platform {
+  /** Optional outbound transport for subscription endpoints (e.g. a Workers VPC binding). */
+  EGRESS?: FetchClient;
   /** The global store. Request paths take it injected and instrumented (`ctx.db`), never from here. */
   DB: SqlDatabase;
   /** Delivery to session runtimes, addressed by session id. */

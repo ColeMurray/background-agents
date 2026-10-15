@@ -1,5 +1,7 @@
 "use client";
 
+import { ProviderAccountUsagePanel } from "./provider-account-usage";
+
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -546,6 +548,7 @@ export function ProviderAccountsSettings() {
                           </div>
                         )}
                       </div>
+                      <ProviderAccountUsagePanel account={account} />
                       {account.status !== "active" && (
                         <p
                           className={`mt-3 rounded-md px-3 py-2 text-xs ${

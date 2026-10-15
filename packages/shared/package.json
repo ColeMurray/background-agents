@@ -150,6 +150,10 @@
       "import": "./dist/types/provider-accounts.js",
       "types": "./dist/types/provider-accounts.d.ts"
     },
+    "./types/provider-account-usage": {
+      "import": "./dist/types/provider-account-usage.js",
+      "types": "./dist/types/provider-account-usage.d.ts"
+    },
     "./types/websocket": {
       "import": "./dist/types/websocket.js",
       "types": "./dist/types/websocket.d.ts"

@@ -5,6 +5,7 @@ vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET as listAccounts } from "./route";
+import { GET as readUsage } from "./[id]/usage/route";
 import { PATCH as renameAccount } from "./[id]/route";
 import { PUT as setDefault } from "../model-provider-account-defaults/[provider]/route";
 import { POST as startDeviceAuthorization } from "./device-authorizations/[provider]/route";
@@ -18,6 +19,23 @@ import {
 import { POST as completeAuthorizationCode } from "./authorization-codes/[provider]/[transactionId]/complete/route";
 
 describe("provider account BFF routes", () => {
+  it("proxies the account-specific usage read and rejects invalid IDs", async () => {
+    const id = "a".repeat(32);
+    await readUsage(new NextRequest(`http://localhost/api/model-provider-accounts/${id}/usage`), {
+      params: Promise.resolve({ id }),
+    });
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      `/model-provider-accounts/${id}/usage`,
+      undefined
+    );
+    vi.mocked(controlPlaneUserFetch).mockClear();
+    const response = await readUsage(
+      new NextRequest("http://localhost/api/model-provider-accounts/bad/usage"),
+      { params: Promise.resolve({ id: "../bad" }) }
+    );
+    expect(response.status).toBe(400);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(controlPlaneUserFetch).mockImplementation(async () =>
