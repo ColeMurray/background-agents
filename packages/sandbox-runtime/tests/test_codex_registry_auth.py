@@ -5,6 +5,7 @@ import pytest
 from sandbox_runtime import harness as registry
 from sandbox_runtime.codex_stager import CodexHarnessHandoff
 from sandbox_runtime.harness.base import HarnessId, PromptLimits
+from sandbox_runtime.harness.codex.pricing import load_codex_pricing
 
 
 @pytest.mark.parametrize(
@@ -35,5 +36,6 @@ async def test_codex_registry_accepts_control_plane_managed_marker(
     try:
         assert h.config.oauth_managed is managed
         assert (h._credentials is not None) is managed
+        assert h._pricing_loader is load_codex_pricing
     finally:
         await h.close()

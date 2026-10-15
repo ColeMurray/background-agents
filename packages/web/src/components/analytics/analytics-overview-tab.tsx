@@ -105,12 +105,12 @@ export function AnalyticsOverviewTab({
           />
         </AnalyticsPanel>
         <AnalyticsPanel
-          title="Spend by model"
+          title="Cost by model"
           description="With cost per session"
           actions={tabLink("cost")}
         >
           <AnalyticsRankedBars
-            label="Spend by model"
+            label="Cost by model"
             rows={[...models]
               .sort((a, b) => b.cost - a.cost)
               .slice(0, TOP_COUNT)

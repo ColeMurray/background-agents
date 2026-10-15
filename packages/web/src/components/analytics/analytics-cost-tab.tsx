@@ -6,19 +6,19 @@ import { AnalyticsCostTable } from "./cost-table";
 import { AnalyticsRunsTable } from "./runs-table";
 import { AnalyticsTokenTotals } from "./token-totals";
 
-/** What the sessions in scope cost, and where the spend goes. */
+/** API-equivalent model usage costs for the sessions in scope. */
 export function AnalyticsCostTab({ dashboard }: { dashboard: AnalyticsDashboardResponse }) {
   return (
     <div className="space-y-4">
       <AnalyticsKpiStrip items={getCostKpis(dashboard)} />
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <AnalyticsPanel title="By model" bodyClassName="pt-2">
           <AnalyticsCostTable dashboard={dashboard} dimension="model" />
         </AnalyticsPanel>
         <div className="space-y-4">
           <AnalyticsPanel
             title="By provider"
-            description="Sessions billed to a subscription report $0"
+            description="API-equivalent model usage, including subscription-funded sessions"
             bodyClassName="pt-2"
           >
             <AnalyticsCostTable dashboard={dashboard} dimension="provider" />

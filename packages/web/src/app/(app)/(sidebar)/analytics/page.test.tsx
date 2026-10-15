@@ -89,6 +89,7 @@ describe("AnalyticsPage", () => {
       "$1.50"
     );
     expect(screen.getByRole("region", { name: "Top repositories" })).toHaveTextContent("web");
+    expect(screen.getByRole("region", { name: "Cost by model" })).toBeInTheDocument();
     expect(screen.getAllByTestId("trend-chart")[0]).toHaveAttribute("data-points", "8");
   });
 
@@ -99,7 +100,22 @@ describe("AnalyticsPage", () => {
     expect(screen.getByRole("tab", { name: "Cost" })).toHaveAttribute("data-state", "active");
     expect(screen.getByRole("radio", { name: "7d" })).toHaveAttribute("data-state", "on");
     expect(screen.getByRole("radio", { name: "Agents" })).toHaveAttribute("data-state", "on");
-    expect(screen.getByRole("region", { name: "By provider" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "By provider" })).toHaveTextContent(
+      "API-equivalent model usage, including subscription-funded sessions"
+    );
+  });
+
+  it("explains that model usage cost is not billed spend, including for subscriptions", async () => {
+    const user = userEvent.setup();
+    renderAt("");
+
+    await user.click(screen.getByRole("button", { name: "About this data" }));
+
+    expect(
+      screen.getByText(
+        "Cost is API-equivalent model usage, including subscription-funded sessions, not actual billed spend."
+      )
+    ).toBeInTheDocument();
   });
 
   it("writes filter changes to the URL, keeps the open tab, and leaves defaults out", async () => {

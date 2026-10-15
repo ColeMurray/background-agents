@@ -60,10 +60,10 @@ async def test_failed_generation_reauth_keeps_fence_and_does_not_ack():
     bridge.ws.close.assert_awaited_once()
 
 
-async def test_terminal_carries_zero_cost_even_when_step_delivery_is_lost():
+async def test_terminal_carries_known_cost_even_when_step_delivery_is_lost():
     harness = ScriptedHarness()
     harness.run_prompt = AsyncMock(
-        return_value=TurnOutcome.failed("native disconnected", message_cost_usd=0)
+        return_value=TurnOutcome.failed("native disconnected", message_cost_usd=0.0004)
     )
     bridge = _bridge(harness)
     bridge._prepare_turn = AsyncMock(return_value=(harness, []))
@@ -71,8 +71,34 @@ async def test_terminal_carries_zero_cost_even_when_step_delivery_is_lost():
     terminal = await bridge._handle_prompt({"messageId": "msg", "content": "work"})
     assert "costAvailability" not in terminal
     assert "costBasis" not in terminal
-    assert terminal["messageCostUsd"] == 0
+    assert terminal["messageCostUsd"] == 0.0004
     assert terminal["success"] is False
+
+
+async def test_cancelled_stream_preserves_latest_step_cost_even_when_delivery_is_lost():
+    async def stream(message_id, content):
+        for cost in (0.0004, 0.0008):
+            yield {
+                "type": "step_finish",
+                "messageId": message_id,
+                "stepId": "codex:thread:turn",
+                "cost": cost,
+                "messageCostUsd": cost,
+            }
+        # An unpriced update must not erase the last known priced portion.
+        yield {"type": "step_finish", "messageId": message_id, "cost": None}
+        raise asyncio.CancelledError
+
+    harness = ScriptedHarness(stream)
+    bridge = _bridge(harness)
+    bridge._prepare_turn = AsyncMock(return_value=(harness, []))
+    bridge._persist_rotated_session_id = AsyncMock()
+    bridge._send_event = AsyncMock(return_value=False)
+    terminal = await bridge._handle_prompt({"messageId": "msg", "content": "work"})
+    assert bridge._send_event.await_count == 3
+    assert terminal["messageCostUsd"] == 0.0008
+    assert terminal["success"] is False
+    assert terminal["error"] == "Task was cancelled"
 
 
 async def test_superseded_reauthentication_cannot_ack_or_restore_an_old_generation():

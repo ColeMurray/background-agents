@@ -25,12 +25,12 @@ describe("getHeadlineKpiGroups", () => {
     expect(values.join(" ")).not.toContain("99");
   });
 
-  it("summarizes sessions, spend and completion with a daily trend", () => {
+  it("summarizes sessions, model cost and completion with a daily trend", () => {
     const [sessions] = getHeadlineKpiGroups(analyticsDashboard());
     expect(sessions.items.map((item) => [item.label, item.value])).toEqual([
       ["Sessions", "12"],
       ["Active users", "3"],
-      ["Spend", "$12.50"],
+      ["Model cost", "$12.50"],
       ["Completion rate", "70%"],
     ]);
     expect(sessions.items[0].trend).toHaveLength(8);
@@ -104,7 +104,11 @@ describe("getCostKpis", () => {
 
   it("reports the subscription share and token totals", () => {
     const items = getCostKpis(analyticsDashboard());
-    expect(items.find((item) => item.label === "Billed to subscriptions")?.value).toBe("33%");
+    expect(items.find((item) => item.label === "Subscription-funded")).toMatchObject({
+      value: "33%",
+      detail: "Of sessions",
+    });
+    expect(items.find((item) => item.label === "Model cost")?.value).toBe("$12.50");
     expect(items.find((item) => item.label === "Tokens")?.value).toBe("19.1K");
   });
 });

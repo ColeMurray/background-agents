@@ -321,6 +321,11 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
 
             return OpenAIAccessToken(token, account_id, 1, 9999999999999)
 
+    rates = {"input": 2, "output": 10, "cache_read": 0.5}
+    pricing_loader = AsyncMock(
+        return_value={model: {"cost": rates} for model in ("gpt-6.1-sol", "gpt-5.6-sol")}
+    )
+
     def build():
         return CodexHarness(
             config=CodexHarnessConfig(workspace, native_home, "gpt-6.1-sol", subscription),
@@ -329,6 +334,7 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
             credential_client=Broker() if subscription else None,
             client_factory=native_factory,
             environ={"PATH": os.environ["PATH"], "OPENAI_API_KEY": token},
+            pricing_loader=pricing_loader,
         )
 
     events = []
@@ -347,11 +353,13 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
             HarnessPrompt("m1", "Remember sapphire. Reply once."), emit
         )
         assert result.success, result
-        assert result.message_cost_usd == 0
+        assert result.message_cost_usd == pytest.approx(0.0004)
+        assert pricing_loader.await_count == 1
         thread_id = harness.session_id
         result = await harness.run_prompt(HarnessPrompt("m2", "Recall the previous marker."), emit)
         assert result.success, result
-        assert result.message_cost_usd == 0
+        assert result.message_cost_usd == pytest.approx(0.0004)
+        assert pricing_loader.await_count == 2
         if not subscription:
             assert harness._client.auth_logins == 1
     finally:
@@ -367,16 +375,34 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
             emit,
         )
         assert result.success, result
-        assert result.message_cost_usd == 0
+        assert result.message_cost_usd == pytest.approx(0.0004)
+        assert pricing_loader.await_count == 3
+        pricing_loader.assert_awaited_with(
+            {"PATH": os.environ["PATH"], "OPENAI_API_KEY": token}, resumed.log
+        )
         if not subscription:
             assert resumed._client.auth_logins == 1
     finally:
         await resumed.close()
     assert len(requests) == 3
     steps = [event for event in events if event["type"] == "step_finish"]
-    assert steps and any("tokens" in event for event in steps)
-    assert all(event["cost"] == event["messageCostUsd"] == 0 for event in steps)
-    assert all("pricingVersion" not in event and "costBasis" not in event for event in steps)
+    assert {event["messageId"] for event in steps} == {"m1", "m2", "m3"}
+    for event in steps:
+        # All 20 output tokens are priced, including the 5 reasoning tokens.
+        assert event["cost"] == event["messageCostUsd"] == pytest.approx(0.0004)
+        assert event["tokens"] == {
+            "input": 100,
+            "output": 15,
+            "reasoning": 5,
+            "cache": {"read": 0, "write": 0},
+            "total": 120,
+        }
+        assert event["pricing"] == {
+            "source": "models.dev",
+            "model": "openai/gpt-5.6-sol" if event["messageId"] == "m3" else "openai/gpt-6.1-sol",
+            "rates": rates,
+        }
+    assert not any(event["type"] == "warning" for event in events)
     assert all(request["auth"] == f"Bearer {token}" for request in requests)
     assert "sapphire" in json.dumps(requests[-1]["body"])
     assert requests[-1]["body"]["model"] == "gpt-5.6-sol"

@@ -50,7 +50,7 @@ export function getHeadlineKpiGroups(dashboard: AnalyticsDashboardResponse): Ana
               : "No attributed users",
         },
         {
-          label: "Spend",
+          label: "Model cost",
           value: formatAnalyticsCost(summary.totalCost),
           detail: `${formatAnalyticsCost(summary.avgCost)} per session`,
         },
@@ -93,7 +93,7 @@ export function getCostKpis(dashboard: AnalyticsDashboardResponse): AnalyticsKpi
   const cacheHitRatio = getCacheHitRatio(summary);
   const items: AnalyticsKpiItem[] = [
     {
-      label: "Spend",
+      label: "Model cost",
       value: formatAnalyticsCost(summary.totalCost),
       detail: `${formatAnalyticsCost(summary.avgCost)} per session`,
     },
@@ -104,9 +104,9 @@ export function getCostKpis(dashboard: AnalyticsDashboardResponse): AnalyticsKpi
       ratio: cacheHitRatio,
     },
     {
-      label: "Billed to subscriptions",
+      label: "Subscription-funded",
       value: formatAnalyticsRatio(getSubscriptionShare(dashboard.breakdowns.provider.entries)),
-      detail: "Of sessions; they report $0",
+      detail: "Of sessions",
     },
     {
       label: "Tokens",
@@ -119,7 +119,7 @@ export function getCostKpis(dashboard: AnalyticsDashboardResponse): AnalyticsKpi
     items.push({
       label: "Private sessions",
       value: formatAnalyticsCost(summary.privateSessionsCostUsd),
-      detail: "Not included in spend",
+      detail: "Not included in model cost",
     });
   }
   return items;

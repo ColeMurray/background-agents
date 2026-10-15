@@ -291,6 +291,7 @@ describe("applyMigrations", () => {
           expect.arrayContaining([
             expect.objectContaining({ name: "id", type: "TEXT", pk: 1 }),
             expect.objectContaining({ name: "input_tokens", type: "INTEGER", notnull: 0 }),
+            expect.objectContaining({ name: "pricing_json", type: "TEXT", notnull: 0 }),
             expect.objectContaining({ name: "is_subtask", type: "INTEGER", notnull: 1 }),
             expect.objectContaining({ name: "created_at", type: "INTEGER", notnull: 1 }),
           ])
@@ -305,6 +306,32 @@ describe("applyMigrations", () => {
     } finally {
       fresh.close();
       migrated.close();
+    }
+  });
+
+  it("adds nullable pricing to existing usage without inventing snapshots and survives restart", () => {
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      initSchema(sql);
+      db.exec("ALTER TABLE step_usage DROP COLUMN pricing_json");
+      db.exec("DELETE FROM _schema_migrations WHERE id = 57");
+      db.exec("INSERT INTO step_usage (id, step_cost_usd, created_at) VALUES ('old', 0.25, 1)");
+
+      initSchema(sql);
+      expect(db.prepare("SELECT id, step_cost_usd, pricing_json FROM step_usage").get()).toEqual({
+        id: "old",
+        step_cost_usd: 0.25,
+        pricing_json: null,
+      });
+      const pricingJson = JSON.stringify({ source: "models.dev", model: "gpt-6.1-sol", rates: {} });
+      db.prepare("UPDATE step_usage SET pricing_json = ?").run(pricingJson);
+      initSchema(sql);
+      expect(db.prepare("SELECT pricing_json FROM step_usage").get()).toEqual({
+        pricing_json: pricingJson,
+      });
+    } finally {
+      db.close();
     }
   });
 

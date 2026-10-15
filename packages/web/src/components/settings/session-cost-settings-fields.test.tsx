@@ -17,6 +17,11 @@ describe("useSessionCostSettings", () => {
     );
 
     expect(screen.getByText(/blank to inherit the broader setting/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Cost is API-equivalent model usage, including subscription-funded sessions, not actual billed spend\./
+      )
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Cost limit (USD)")).toHaveAttribute("placeholder", "Inherit");
   });
 
