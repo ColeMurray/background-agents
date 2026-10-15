@@ -48,15 +48,34 @@ See [Modal Sandbox resources](https://modal.com/docs/guide/sandbox-resources).
 
 ## Snapshots and recovery
 
-VM session snapshots are **destructive**: quiesce Docker, capture the filesystem, then confirm VM
-termination. Later work restores into a new VM. Standard Modal snapshots remain non-destructive. A
-failed or ambiguous capture/retirement must not be reported as a successful checkpoint.
+VM session snapshots are **destructive**: prepare Docker, capture the filesystem with Modal's native
+snapshot API, then confirm VM termination. A running daemon is stopped cleanly; an already-crashed
+daemon follows the crash-consistent path below. Later work restores into a new VM. Standard Modal
+snapshots remain non-destructive. A failed or ambiguous capture/retirement must not be reported as a
+successful checkpoint.
 
 VMs therefore keep running between turns. They are saved and stopped on inactivity, lifetime expiry,
 a lost heartbeat, a runtime failure or archive; a VM that stops heartbeating is captured without its
 runtime. Cancelling a session stops its VM without saving. While a save has failed or its result is
 unknown, new prompts are held and the session offers to retry the save, restore the last saved
 state, or discard the VM and start fresh.
+
+An unexpected Docker daemon exit does not end an interactive session. The runtime attempts up to
+five crash restarts per session with bounded exponential backoff. If the restart budget is
+exhausted, Docker remains unavailable but the VM, harness, and workspace stay alive and saveable. A
+failed snapshot preparation gets an immediate Docker replacement without consuming that budget; if
+the replacement fails, it follows the same budgeted restart policy instead of ending the session.
+
+A save during restart backoff or after Docker becomes unavailable captures crash-consistent Docker
+state without waiting for a restart. Preparation reaps the old daemon's process group and prevents
+any later restart, so capture never races a new daemon writing to its data root. Docker and
+containerd recover that state on restore as after a power loss. Image builds remain strict: an
+unexpected daemon exit fails the build, and publishing a prepared image requires a clean daemon
+stop.
+
+The crash-consistent path does not verify that separately grouped containerd shims or container
+workloads have stopped. Process-group cleanup is not a VM-wide write barrier; preparation guarantees
+that the supervised daemon cannot restart, not that every Docker workload is quiescent.
 
 Filesystem capture is not process/RAM continuity or an application-consistent database backup.
 Containers must use appropriate persistence and restart policies. Live Docker pause/resume is not
