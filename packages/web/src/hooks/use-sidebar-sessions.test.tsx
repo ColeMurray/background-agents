@@ -10,6 +10,7 @@ import type {
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { useSidebarSessions } from "./use-sidebar-sessions";
+import { item, page, snapshot } from "@/test/session-inbox-fixtures";
 import { reconcileSessionReadState } from "@/lib/session-read-state";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { updateSessionScope } from "@/lib/session-scope";
@@ -41,26 +42,6 @@ vi.mock("@/lib/session-read-state", async (importOriginal) => {
   };
 });
 
-function item(id: string) {
-  return {
-    rootSession: {
-      id,
-      title: id,
-      repoOwner: null,
-      repoName: null,
-      baseBranch: null,
-      status: "active" as const,
-      parentSessionId: null,
-      spawnSource: "user" as const,
-      environmentId: null,
-      createdAt: 1,
-      updatedAt: 2,
-      readState: { latestMessageId: null, version: 0, unread: false as const },
-    },
-    descendantSessions: [],
-  };
-}
-
 function unreadItem(id: string): SessionInboxItem {
   const base = item(id);
   return {
@@ -68,26 +49,6 @@ function unreadItem(id: string): SessionInboxItem {
     rootSession: {
       ...base.rootSession,
       readState: { latestMessageId: "msg-1", version: 1, unread: true },
-    },
-  };
-}
-
-function page(ids: string[], nextCursor: string | null = null): SessionInboxPage {
-  const items = ids.map(item);
-  return nextCursor === null
-    ? { items, hasMore: false, nextCursor: null }
-    : { items, hasMore: true, nextCursor };
-}
-
-function snapshot(
-  overrides: Partial<SessionInboxSnapshot["categories"]> = {}
-): SessionInboxSnapshot {
-  return {
-    categories: {
-      needs_attention: page(["attention"]),
-      in_progress: page(["running"]),
-      finished: page(["finished"]),
-      ...overrides,
     },
   };
 }
