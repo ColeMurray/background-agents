@@ -43,7 +43,8 @@ Boat API key so resumed sandboxes retain their access credentials.
 
 Use scoped, expiring service keys. The runtime key needs:
 
-- `sandbox.create`, `sandbox.read`, `sandbox.stop`, `sandbox.resume`, and `sandbox.delete`
+- `sandbox.create`, `sandbox.read`, `sandbox.update`, `sandbox.stop`, `sandbox.resume`, and
+  `sandbox.delete`
 - `exec`, `file.write`, `host`, and `snapshot.read`
 
 The build key additionally needs `snapshot.write`. It is consumed only by Terraform/local template
