@@ -636,6 +636,36 @@ class TestSteering:
         assert next_outcome.message_cost_usd == pytest.approx(0.1)
 
     @pytest.mark.asyncio
+    async def test_a_result_that_lands_while_a_steer_is_being_sent_waits_for_it(
+        self, tmp_path: Path
+    ) -> None:
+        gate = asyncio.Event()
+        steering: list[asyncio.Task[bool]] = []
+        h: Harness
+
+        async def steer() -> None:
+            prompt = HarnessPrompt(message_id="m2", text="late")
+            steering.append(asyncio.create_task(h.harness.steer(prompt)))
+            await asyncio.sleep(0)
+
+        async def release() -> None:
+            gate.set()
+            await asyncio.sleep(0)
+
+        h = Harness(
+            tmp_path,
+            turns=[[_echo("hi"), steer, _result(0.1), release, _echo("late"), _result(0.3)]],
+            client_kwargs={"query_gate": gate},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        gate.set()
+
+        assert await asyncio.wait_for(steering[0], 1)
+        assert outcome.message_cost_usd == pytest.approx(0.3)
+
+    @pytest.mark.asyncio
     async def test_steering_is_refused_without_a_turn_or_before_the_cli_echoes_its_prompt(
         self, tmp_path: Path
     ) -> None:

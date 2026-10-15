@@ -68,6 +68,7 @@ class FakeSdkClient:
     fail_disconnect: bool = False
     fail_connect: bool = False
     stderr_on_connect: str | None = None
+    query_gate: asyncio.Event | None = None
 
     async def connect(self) -> None:
         if self.stderr_on_connect:
@@ -87,6 +88,8 @@ class FakeSdkClient:
 
     async def query(self, prompt: Any, session_id: str = "default") -> None:
         messages = [message async for message in prompt]
+        if self.query_gate is not None and self.queries:
+            await self.query_gate.wait()
         self.queries.append(messages)
 
     async def interrupt(self) -> None:

@@ -962,9 +962,12 @@ class AgentBridge:
             and not self.shutdown_preparation.fenced
             and not cmd.get("attachments")
         ):
-            accepted = await harness.steer(
-                HarnessPrompt(message_id=message_id, text=str(cmd.get("content") or ""))
-            )
+            try:
+                accepted = await harness.steer(
+                    HarnessPrompt(message_id=message_id, text=str(cmd.get("content") or ""))
+                )
+            except Exception as error:
+                self.log.warn("bridge.steer_failed", message_id=message_id, exc=error)
         self.log.info("bridge.steer", message_id=message_id, accepted=accepted)
         await self._send_event(
             {"type": "steer_result", "messageId": message_id, "accepted": accepted}

@@ -535,8 +535,13 @@ class ClaudeHarness:
         client = self._client
         if not self._turn_open or self._interrupted or self._echoed == 0 or client is None:
             return False
-        await client.query(self._user_messages(prompt))
+        # Counted before the await, so a result arriving meanwhile keeps the turn open for it.
         self._steered += 1
+        try:
+            await client.query(self._user_messages(prompt))
+        except BaseException:
+            self._steered -= 1
+            raise
         return True
 
     async def _interrupt_within_budget(self) -> bool:

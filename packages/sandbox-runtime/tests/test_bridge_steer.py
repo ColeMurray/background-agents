@@ -10,12 +10,15 @@ from sandbox_runtime.harness import HarnessPrompt
 
 
 class SteerableHarness:
-    def __init__(self, accept: bool) -> None:
+    def __init__(self, accept: bool, fail: bool = False) -> None:
         self.accept = accept
+        self.fail = fail
         self.prompts: list[HarnessPrompt] = []
 
     async def steer(self, prompt: HarnessPrompt) -> bool:
         self.prompts.append(prompt)
+        if self.fail:
+            raise RuntimeError("transport closed")
         return self.accept
 
 
@@ -70,6 +73,18 @@ class TestHandleSteer:
         self, bridge: AgentBridge, sent: list[dict[str, Any]]
     ) -> None:
         bridge.boot_attach.harness = SteerableHarness(accept=False)  # type: ignore[assignment]
+        task = _running(bridge)
+
+        await bridge._handle_command(STEER)
+
+        assert sent == [{"type": "steer_result", "messageId": "m2", "accepted": False}]
+        task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_a_steer_that_fails_is_reported_as_refused(
+        self, bridge: AgentBridge, sent: list[dict[str, Any]]
+    ) -> None:
+        bridge.boot_attach.harness = SteerableHarness(accept=True, fail=True)  # type: ignore[assignment]
         task = _running(bridge)
 
         await bridge._handle_command(STEER)
