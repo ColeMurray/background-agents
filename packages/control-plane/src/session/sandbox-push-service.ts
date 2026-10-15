@@ -83,6 +83,13 @@ export class SandboxPushService {
       pushSpec.repoName,
       pushSpec.targetBranch
     );
+    // Terminal events carry no request id, so same-key pushes cannot be distinguished.
+    if (this.pendingPushResolvers.has(resolverKey)) {
+      return {
+        success: false,
+        error: `Push already in flight for ${pushSpec.repoOwner}/${pushSpec.repoName} on branch ${pushSpec.targetBranch}; retry once it completes`,
+      };
+    }
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const pushPromise = new Promise<void>((resolve, reject) => {
