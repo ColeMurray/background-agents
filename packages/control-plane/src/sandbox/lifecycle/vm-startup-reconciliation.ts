@@ -39,16 +39,17 @@ export interface VmStartupReconciliationStorage {
   getSandbox(): SandboxRow | null;
   updateSandboxModalObjectId(modalObjectId: string | null): void;
   /** Repository rechecks generation, fence, status and expected reference after encryption. */
-  completeProviderResume(
+  commitProviderAccess(
     generation: SandboxGeneration,
     access: {
-      providerObjectId: string;
-      codeServer: { url: string; password: string } | null;
-      vnc: { url: string; password: string } | null;
-      ttyd: { url: string | null; token: string } | null;
-      tunnelUrls: Record<string, string> | null;
+      providerObjectId: string | null;
+      codeServer?: { url: string; password: string } | null;
+      vnc?: { url: string; password: string } | null;
+      ttyd?: { url: string | null; token: string } | null;
+      tunnelUrls?: Record<string, string> | null;
     },
-    expectedProviderObjectId?: string
+    expectedProviderObjectId?: string,
+    allowFailedSelfHeal?: boolean
   ): Promise<boolean>;
 }
 
@@ -350,7 +351,7 @@ export class VmStartupReconciliation {
           auth.generation.createdAt === generation.createdAt
             ? await access.mintTtydToken(auth.token, auth.sessionId, generation.sandboxId!)
             : null;
-        const committed = await storage.completeProviderResume(
+        const committed = await storage.commitProviderAccess(
           generation,
           {
             providerObjectId: result.providerObjectId,
