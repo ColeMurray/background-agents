@@ -7,6 +7,7 @@ import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 import { isSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { publishSessionTitle } from "@/lib/session-title-events";
 
 type SessionCacheMutator = ReturnType<typeof useSWRConfig>["mutate"];
 
@@ -107,6 +108,7 @@ export function useSessionRename({
       }
       // The next authoritative title wins even if its HTTP response is still pending.
       if (owner.optimisticTitle !== undefined) {
+        publishSessionTitle(sessionId, authoritativeTitle);
         publishOptimisticTitle(owner, undefined);
       }
     }
@@ -161,6 +163,10 @@ export function useSessionRename({
         () => {
           owner.pendingRequests -= 1;
           if (owner.latestRequestId === requestId) {
+            // Authority may already have superseded this response's title.
+            if (owner.optimisticTitle !== undefined) {
+              publishSessionTitle(sessionId, title);
+            }
             if (owner.authoritativeSubscribers === 0 || owner.authoritativeTitle === title) {
               publishOptimisticTitle(owner, undefined);
             }
@@ -191,6 +197,7 @@ export function useSessionRename({
               ? undefined
               : (owner.confirmedTitle ?? undefined)
           );
+          publishSessionTitle(sessionId, owner.confirmedTitle ?? null);
           revalidateSessionCaches(mutate);
           if (
             owner.authoritativeSubscribers === 0 ||

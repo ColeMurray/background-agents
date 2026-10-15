@@ -35,6 +35,7 @@ import {
   type SessionReadStateReconciledDetail,
 } from "@/lib/session-read-state";
 import { subscribeSessionScopeChanges } from "@/lib/session-scope";
+import { subscribeSessionTitleChanges } from "@/lib/session-title-events";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
 const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
@@ -379,6 +380,20 @@ export function useSidebarSessions() {
       updateFinishedRetained(update);
     },
     [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+  );
+
+  useEffect(
+    () =>
+      subscribeSessionTitleChanges((sessionId, title) => {
+        const updateTitle = (session: SessionItem) =>
+          session.id === sessionId ? { ...session, title } : session;
+        updateAllRetainedItems((item) => ({
+          ...item,
+          rootSession: updateTitle(item.rootSession),
+          descendantSessions: item.descendantSessions.map(updateTitle),
+        }));
+      }),
+    [updateAllRetainedItems]
   );
 
   // Every session open acknowledges its terminal message, read or not, so
