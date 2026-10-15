@@ -1,6 +1,7 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { MarkdownPre, MermaidMarkdownContext } from "./mermaid-code-block";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -82,6 +83,8 @@ function preserveFileLineReferences() {
 
 interface SafeMarkdownProps {
   content: string;
+  /** Enable diagrams only for assistant timeline messages. */
+  renderMermaid?: boolean;
   className?: string;
   baseUrl?: string;
   imageMode?: "omit" | "placeholder";
@@ -163,6 +166,7 @@ function ExternalOnlyMarkdownLink({ href, children, ...props }: ComponentPropsWi
 
 export function SafeMarkdown({
   content,
+  renderMermaid = false,
   className = "",
   baseUrl,
   imageMode = DEFAULT_IMAGE_MODE,
@@ -172,119 +176,114 @@ export function SafeMarkdown({
     <div
       className={`prose prose-sm dark:prose-invert min-w-0 max-w-none break-words [overflow-wrap:anywhere] ${className}`}
     >
-      <ReactMarkdown
-        remarkPlugins={
-          linkMode === "repositoryFiles" ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]
-        }
-        rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
-        components={{
-          a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
-            if (linkMode === "externalOnly") {
+      <MermaidMarkdownContext.Provider value={{ enabled: renderMermaid, content }}>
+        <ReactMarkdown
+          remarkPlugins={
+            linkMode === "repositoryFiles" ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]
+          }
+          rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
+          components={{
+            a: ({ href, children, ...props }: ComponentPropsWithoutRef<"a">) => {
+              if (linkMode === "externalOnly") {
+                return (
+                  <ExternalOnlyMarkdownLink href={href} {...props}>
+                    {children}
+                  </ExternalOnlyMarkdownLink>
+                );
+              }
+              const resolvedHref = resolveMarkdownUrl(href, baseUrl);
+              if (!resolvedHref) return <span>{children}</span>;
+              if (linkMode === "repositoryFiles" && isRepositoryFileHref(href)) {
+                return (
+                  <RepositoryFileMarkdownLink href={href} {...props}>
+                    {children}
+                  </RepositoryFileMarkdownLink>
+                );
+              }
               return (
-                <ExternalOnlyMarkdownLink href={href} {...props}>
+                <MarkdownLink href={resolvedHref} {...props}>
                   {children}
-                </ExternalOnlyMarkdownLink>
+                </MarkdownLink>
               );
-            }
-            const resolvedHref = resolveMarkdownUrl(href, baseUrl);
-            if (!resolvedHref) return <span>{children}</span>;
-            if (linkMode === "repositoryFiles" && isRepositoryFileHref(href)) {
-              return (
-                <RepositoryFileMarkdownLink href={href} {...props}>
-                  {children}
-                </RepositoryFileMarkdownLink>
+            },
+            img: ({ src, alt }: ComponentPropsWithoutRef<"img">) => {
+              const resolvedSrc = resolveMarkdownUrl(
+                typeof src === "string" ? src : undefined,
+                baseUrl
               );
-            }
-            return (
-              <MarkdownLink href={resolvedHref} {...props}>
-                {children}
-              </MarkdownLink>
-            );
-          },
-          img: ({ src, alt }: ComponentPropsWithoutRef<"img">) => {
-            const resolvedSrc = resolveMarkdownUrl(
-              typeof src === "string" ? src : undefined,
-              baseUrl
-            );
-            if (imageMode !== "placeholder") return null;
-            return <span>{resolvedSrc ? `${alt?.trim() || "Image"}: ${resolvedSrc}` : alt}</span>;
-          },
-          // Code blocks with styling
-          pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre
-              className="not-prose max-w-full overflow-x-auto text-sm leading-relaxed rounded"
-              {...props}
-            >
-              {children}
-            </pre>
-          ),
-          code: ({ className, children, ...props }: ComponentPropsWithoutRef<"code">) => {
-            // Code blocks: pass through hljs/language classes for syntax highlighting
-            if (className) {
+              if (imageMode !== "placeholder") return null;
+              return <span>{resolvedSrc ? `${alt?.trim() || "Image"}: ${resolvedSrc}` : alt}</span>;
+            },
+            // Code blocks with styling
+            pre: MarkdownPre,
+            code: ({ className, children, ...props }: ComponentPropsWithoutRef<"code">) => {
+              // Code blocks: pass through hljs/language classes for syntax highlighting
+              if (className) {
+                return (
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                );
+              }
+              // Inline code: explicit styling with background, border, and monospace
               return (
-                <code className={className} {...props}>
+                <code
+                  className="font-mono bg-muted border border-border rounded px-1.5 py-0.5 text-[0.85em]"
+                  {...props}
+                >
                   {children}
                 </code>
               );
-            }
-            // Inline code: explicit styling with background, border, and monospace
-            return (
-              <code
-                className="font-mono bg-muted border border-border rounded px-1.5 py-0.5 text-[0.85em]"
+            },
+            // Paragraphs
+            p: ({ children, ...props }: ComponentPropsWithoutRef<"p">) => (
+              <p className="mb-2 last:mb-0" {...props}>
+                {children}
+              </p>
+            ),
+            // Lists
+            ul: ({ children, ...props }: ComponentPropsWithoutRef<"ul">) => (
+              <ul className="list-disc pl-4 mb-2" {...props}>
+                {children}
+              </ul>
+            ),
+            ol: ({ children, ...props }: ComponentPropsWithoutRef<"ol">) => (
+              <ol className="list-decimal pl-4 mb-2" {...props}>
+                {children}
+              </ol>
+            ),
+            // Blockquotes
+            blockquote: ({ children, ...props }: ComponentPropsWithoutRef<"blockquote">) => (
+              <blockquote
+                className="border-l-4 border-border pl-4 italic text-muted-foreground"
                 {...props}
               >
                 {children}
-              </code>
-            );
-          },
-          // Paragraphs
-          p: ({ children, ...props }: ComponentPropsWithoutRef<"p">) => (
-            <p className="mb-2 last:mb-0" {...props}>
-              {children}
-            </p>
-          ),
-          // Lists
-          ul: ({ children, ...props }: ComponentPropsWithoutRef<"ul">) => (
-            <ul className="list-disc pl-4 mb-2" {...props}>
-              {children}
-            </ul>
-          ),
-          ol: ({ children, ...props }: ComponentPropsWithoutRef<"ol">) => (
-            <ol className="list-decimal pl-4 mb-2" {...props}>
-              {children}
-            </ol>
-          ),
-          // Blockquotes
-          blockquote: ({ children, ...props }: ComponentPropsWithoutRef<"blockquote">) => (
-            <blockquote
-              className="border-l-4 border-border pl-4 italic text-muted-foreground"
-              {...props}
-            >
-              {children}
-            </blockquote>
-          ),
-          // Tables
-          table: ({ children, ...props }: ComponentPropsWithoutRef<"table">) => (
-            <div className="max-w-full overflow-x-auto">
-              <table className="min-w-full border-collapse text-sm" {...props}>
+              </blockquote>
+            ),
+            // Tables
+            table: ({ children, ...props }: ComponentPropsWithoutRef<"table">) => (
+              <div className="max-w-full overflow-x-auto">
+                <table className="min-w-full border-collapse text-sm" {...props}>
+                  {children}
+                </table>
+              </div>
+            ),
+            th: ({ children, ...props }: ComponentPropsWithoutRef<"th">) => (
+              <th className="border border-border px-3 py-1 bg-card font-medium" {...props}>
                 {children}
-              </table>
-            </div>
-          ),
-          th: ({ children, ...props }: ComponentPropsWithoutRef<"th">) => (
-            <th className="border border-border px-3 py-1 bg-card font-medium" {...props}>
-              {children}
-            </th>
-          ),
-          td: ({ children, ...props }: ComponentPropsWithoutRef<"td">) => (
-            <td className="border border-border px-3 py-1" {...props}>
-              {children}
-            </td>
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+              </th>
+            ),
+            td: ({ children, ...props }: ComponentPropsWithoutRef<"td">) => (
+              <td className="border border-border px-3 py-1" {...props}>
+                {children}
+              </td>
+            ),
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </MermaidMarkdownContext.Provider>
     </div>
   );
 }
