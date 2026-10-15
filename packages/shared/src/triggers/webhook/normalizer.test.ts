@@ -46,6 +46,18 @@ describe("normalizeWebhookEvent", () => {
     expect(event.contextBlock).toContain("value");
   });
 
+  it("carries steer and strips it from the context but not the body", () => {
+    const event = normalizeWebhookEvent(
+      "auto-1",
+      { steer: true, data: "value" },
+      { sessionKey: "card-42", steer: true }
+    );
+    expect(event.steer).toBe(true);
+    expect(event.body).toEqual({ steer: true, data: "value" });
+    expect(event.contextBlock).not.toContain("steer");
+    expect(normalizeWebhookEvent("auto-1", { data: "value" })).not.toHaveProperty("steer");
+  });
+
   it("strips idempotencyKey from body in context but keeps it in body", () => {
     const event = normalizeWebhookEvent(
       "auto-1",

@@ -5,11 +5,12 @@
 import type { JsonPathFilter, WebhookAutomationEvent } from "../types";
 import { buildWebhookContextBlock } from "./context";
 
-const DELIVERY_FIELDS: ReadonlySet<string> = new Set(["idempotencyKey", "sessionKey"]);
+const DELIVERY_FIELDS: ReadonlySet<string> = new Set(["idempotencyKey", "sessionKey", "steer"]);
 
 export interface WebhookDeliveryOptions {
   idempotencyKey?: string;
   sessionKey?: string;
+  steer?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,7 +29,7 @@ function omitDeliveryFields(body: unknown): unknown {
 export function normalizeWebhookEvent(
   automationId: string,
   body: unknown,
-  { idempotencyKey, sessionKey }: WebhookDeliveryOptions = {}
+  { idempotencyKey, sessionKey, steer }: WebhookDeliveryOptions = {}
 ): WebhookAutomationEvent {
   const deliveryId = idempotencyKey || generateDeliveryId();
   const triggerKey = idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`;
@@ -40,6 +41,7 @@ export function normalizeWebhookEvent(
     triggerKey,
     concurrencyKey: sessionKey ? `webhook:session:${sessionKey}` : triggerKey,
     sessionKey,
+    ...(steer ? { steer } : {}),
     body,
     contextBlock: buildWebhookContextBlock(omitDeliveryFields(body)),
     meta: { deliveryId, receivedAt: Date.now() },
