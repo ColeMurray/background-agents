@@ -11,6 +11,9 @@ chart or diagram, a manual file, or output from another tool.
 
 For the full browser-open + capture + upload workflow, use `visual-verification` instead.
 
+When the image also belongs in a GitHub PR description, use `github-pr-media` with the original
+local file after creating the PR. A session artifact ID is not a GitHub attachment.
+
 ## Key Fact
 
 `upload-media` is a **bash command** installed on PATH. Run it with your Bash tool. It is not an MCP

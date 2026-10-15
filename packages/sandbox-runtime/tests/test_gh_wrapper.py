@@ -202,6 +202,39 @@ def test_allows_other_pr_subcommands(tmp_path: Path) -> None:
     assert "ARGS=pr list" in result.stdout
 
 
+@pytest.mark.parametrize("token_variable", ["GH_TOKEN", "GITHUB_TOKEN"])
+def test_allows_pr_media_attachments_without_changing_arguments(
+    tmp_path: Path, token_variable: str
+) -> None:
+    """Issue #860: media can be appended after tracked PR creation, with user auth preserved."""
+    wrapper = _build_wrapper(tmp_path, token_cmd_body=PRINTS_NOTHING)
+    real_gh = tmp_path / "real-gh"
+    real_gh.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "print(json.dumps({'args': sys.argv[1:], 'token': os.environ.get('GH_TOKEN') "
+        "or os.environ.get('GITHUB_TOKEN')}))\n"
+    )
+    args = [
+        "--repo",
+        "octo/repo",
+        "pr",
+        "edit",
+        "https://github.com/octo/repo/pull/23",
+        "--attach",
+        "/tmp/before state.png#Before the fix",
+        "--attach",
+        "/tmp/demo recording.mp4",
+    ]
+    result = _run(wrapper, {"VCS_HOST": "github.com", token_variable: "gho_user"}, args)
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    output = json.loads(result.stdout)
+    assert output["args"] == args
+    assert output["token"] == "gho_user"
+
+
 def test_runtime_installs_canonical_wrapper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

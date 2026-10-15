@@ -13,6 +13,9 @@ through flows, dragging, typing, navigation, loading states, transitions, or ani
 Use `agent-browser record` as the primary recorder. Record directly to an `.mp4` path so
 `agent-browser` encodes the recording as a silent MP4 that can be uploaded with `upload-media`.
 
+When the recording also belongs in a GitHub PR description, use `github-pr-media` with the original
+MP4 after creating the PR. A session upload does not attach the video to GitHub.
+
 ## Required Workflow
 
 1. Open the target page with `agent-browser open`.

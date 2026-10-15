@@ -22,6 +22,7 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const RESERVED_SKILL_NAMES = new Set([
   "agent-browser",
+  "github-pr-media",
   "record-video",
   "upload-screenshot",
   "visual-verification",

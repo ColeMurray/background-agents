@@ -23,6 +23,16 @@ const content = {
 describe("managed skills persistence and resolution", () => {
   beforeEach(cleanD1Tables);
 
+  it("reports the bundled github-pr-media name as unavailable", async () => {
+    await expect(new SkillStore(env.DB).nameAvailable("github-pr-media")).resolves.toBe(false);
+  });
+
+  it("rejects creation of a managed github-pr-media skill", async () => {
+    await expect(
+      new SkillStore(env.DB).create({ name: "github-pr-media", content, assignments: [] }, "user_1")
+    ).rejects.toThrow(SkillConflictError);
+  });
+
   it("creates immutable content, resolves assignments, and filters with an owned profile", async () => {
     const skills = new SkillStore(env.DB);
     const skill = await skills.create(

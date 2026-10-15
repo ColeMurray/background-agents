@@ -164,6 +164,10 @@ exit "$interaction_exit_code"
 
 ## Reporting Template
 
+When visual evidence belongs in a GitHub PR description, use `github-pr-media` to attach the
+original local screenshots or recordings after creating the PR. Session artifacts alone do not
+appear there.
+
 Include the following in the final response:
 
 - What UI change or state was verified

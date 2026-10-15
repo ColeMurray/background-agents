@@ -819,13 +819,15 @@ def build_tools(client: ControlPlaneToolClient) -> list[ToolDefinition]:
         tools.append(
             ToolDefinition(
                 "create-pull-request",
-                "Create a pull request for the committed changes. DO NOT use 'gh' CLI - use this tool "
+                "Create a pull request for the committed changes. DO NOT use 'gh pr create' - use this tool "
                 "instead. It handles git push and PR creation automatically with pre-configured "
                 "authentication. You MUST provide a descriptive title and body that explain what changes "
                 "were made. Call this after committing your changes. Calling it again from the same "
                 "branch updates that branch's open pull request with your latest commits. To open a "
                 "separate, additional pull request (including stacked PRs), create a new branch with "
-                "'git checkout -b', commit, and call this tool again.",
+                "'git checkout -b', commit, and call this tool again. "
+                "To attach local screenshots or videos to the description afterward, use the "
+                "github-pr-media skill and 'gh pr edit --attach' with the returned PR URL.",
                 {
                     "type": "object",
                     "properties": {
