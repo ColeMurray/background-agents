@@ -319,7 +319,7 @@ async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, mo
             "sandbox_runtime.harness.ClaudeHarnessHandoff.read",
             return_value=ClaudeHarnessHandoff(tmp_path, config_dir, False),
         ),
-        patch("sandbox_runtime.harness.ClaudeHarness") as claude,
+        patch("sandbox_runtime.harness.claude.ClaudeHarness") as claude,
     ):
         build_agent_harness(
             HarnessId.CLAUDE,

@@ -1,6 +1,9 @@
 """Native dynamic tools adapt the vendor-neutral registry and results."""
 
 import builtins
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
@@ -8,6 +11,25 @@ import pytest
 
 from sandbox_runtime.harness.codex.tools import CodexTools
 from sandbox_runtime.harness.tools import ControlPlaneToolClient, ToolServerConfig, build_tools
+
+
+def test_tool_imports_do_not_load_vendor_sdks():
+    probe = (
+        "import sys;"
+        "sys.path.insert(0, sys.argv[1]);"
+        "import sandbox_runtime.harness.codex.tools;"
+        "import sandbox_runtime.harness.tools;"
+        "bad = [name for name in sys.modules "
+        "if name.split('.')[0] in {'claude_agent_sdk', 'mcp'}];"
+        "assert not bad, bad"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(Path(__file__).resolve().parents[1] / "src")],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 async def test_native_tool_uses_existing_authenticated_handler(tmp_path, monkeypatch):
