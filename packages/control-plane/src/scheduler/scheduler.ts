@@ -48,8 +48,6 @@ import {
   type AutomationRunRow,
   type AutomationInvocationRow,
   type InvocationOverlapScope,
-  type AutomationRepositoryInsert,
-  type AutomationEnvironmentRow,
 } from "../db/automation-store";
 import {
   AutomationModelProviderAuthStore,
@@ -89,7 +87,17 @@ import { MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS } from "../image-builds/tim
 import { resolveManagedSkills } from "../session/skill-resolution";
 import { resolvedPin } from "../session/pinned";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
-import { resolveAutomationRepositories } from "../automation/repository";
+import {
+  loadInvocationTargets,
+  resolveInvocationTargets,
+  type InvocationTargetInput,
+} from "../automation/invocation-targets";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import {
+  resolveWebhookRepository,
+  WebhookRepositoryResolutionError,
+} from "../automation/webhook-repository";
+import { createSourceControlProviderFromEnv } from "../source-control";
 import {
   resolveAutomationSessionTarget,
   type AutomationSessionTarget,
@@ -316,12 +324,10 @@ interface StartInvocationParams {
   concurrencyKey?: string | null;
   /** Source-specific JSON stored on the invocation (slack message coordinates). */
   triggerMetadata?: string | null;
-  /** Pre-fetched repository selection (the tick passes its batched fetch). */
-  repositories?: AutomationRepositoryInsert[];
+  /** One stored selection or prevalidated target snapshot for this firing. */
+  targets?: InvocationTargetInput;
   /** GitHub event identity that repository resolution must preserve. */
   eventRepositoryId?: number;
-  /** Pre-fetched environment selection (the tick passes its batched fetch). */
-  environments?: AutomationEnvironmentRow[];
   /** Complete prompt to use directly, or as the fallback for a lazy override. */
   instructionsOverride?: string;
   /**
@@ -510,10 +516,7 @@ export class Scheduler {
       return this.recordOverlapSkip(store, params, { advanceSchedule: true });
     }
 
-    const [selection, environmentSelection] = await Promise.all([
-      params.repositories ?? store.getRepositoriesForAutomation(automation.id),
-      params.environments ?? store.getEnvironmentsForAutomation(automation.id),
-    ]);
+    const targets = await loadInvocationTargets(store, automation.id, params.targets);
     // One snapshot of the owning team classifies denials and pins the grants version.
     const team =
       automation.owner_team_id === null
@@ -522,23 +525,14 @@ export class Scheduler {
     const authorization: AutomationExecutionAuthorizationRequest = {
       automationId: automation.id,
       executionUserId: executionPrincipal.platformUserId,
-      requiresRepositoryUse: selection.length > 0,
-      requiresEnvironmentUse: environmentSelection.length > 0,
+      requiresRepositoryUse: targets.repositories.length > 0,
+      requiresEnvironmentUse: targets.environments.length > 0,
     };
     if (!(await isAutomationExecutionAuthorized(this.db, authorization))) {
       return { outcome: "unauthorized", reason: executionDenialReason(team) };
     }
-    const resolutions = await resolveAutomationRepositories(this.env, selection);
-    for (const resolution of resolutions) {
-      if (
-        params.eventRepositoryId !== undefined &&
-        resolution.repository !== null &&
-        resolution.repository.repoId !== params.eventRepositoryId
-      ) {
-        resolution.repository = null;
-        resolution.error = "Repository identity changed during event resolution";
-      }
-    }
+    const { repositories: resolutions, environments: environmentSelection } =
+      await resolveInvocationTargets(this.env, targets, params.eventRepositoryId);
 
     const invocationId = params.invocationId ?? generateId();
     const scheduledAt = params.scheduledAt ?? now;
@@ -577,10 +571,10 @@ export class Scheduler {
         status: resolution.error ? "failed" : "starting",
         failure_reason: resolution.error,
         completed_at: resolution.error ? now : null,
-        repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
-        repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
-        repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
-        base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
+        repo_owner: resolution.repository.repoOwner,
+        repo_name: resolution.repository.repoName,
+        repo_id: resolution.repository.repoId,
+        base_branch: resolution.repository.baseBranch,
       })),
       ...environmentSelection.map((environment): AutomationRunRow => ({
         ...childBase(),
@@ -958,8 +952,7 @@ export class Scheduler {
           source: "schedule",
           scheduledAt: automation.next_run_at!,
           advanceToNextRunAt: nextRunAt,
-          repositories,
-          environments,
+          targets: { kind: "stored", selection: { repositories, environments } },
         });
 
         switch (result.outcome) {
@@ -1205,7 +1198,7 @@ export class Scheduler {
         (automation, repositories) =>
           this.startInvocation(store, {
             automation,
-            repositories,
+            targets: { kind: "stored", selection: { repositories, environments: [] } },
             source: "event",
             triggerKey: event.triggerKey,
             concurrencyKey: event.concurrencyKey,
@@ -1318,17 +1311,16 @@ export class Scheduler {
         }
       };
 
-      if (webhookFollowUpTriggerKey) {
-        const original = await store.getInvocationIdByTriggerKey(
-          automation.id,
-          webhookFollowUpTriggerKey
-        );
+      if (event.source === "webhook") {
+        const original = await store.getInvocationIdByTriggerKey(automation.id, event.triggerKey);
         if (original) {
           invocationIds.push(original);
           skipped++;
           continue;
         }
+      }
 
+      if (webhookFollowUpTriggerKey) {
         const claimId = generateId();
         const invocationId = generateId();
         const claim = await store.claimFollowUpReceipt({
@@ -1417,20 +1409,56 @@ export class Scheduler {
         continue;
       }
 
+      let webhookRepository: RepositoryRef | undefined;
+      let contextBlock = event.contextBlock;
+      if (event.source === "webhook" && config.repositoryFromPayload) {
+        try {
+          if (
+            (await store.getRepositoriesForAutomation(automation.id)).length ||
+            (await store.getEnvironmentsForAutomation(automation.id)).length
+          ) {
+            throw new WebhookRepositoryResolutionError(
+              "Payload repository resolution cannot be combined with fixed targets"
+            );
+          }
+          webhookRepository = await resolveWebhookRepository(
+            config.repositoryFromPayload,
+            event.body,
+            createSourceControlProviderFromEnv(this.env)
+          );
+          const target = webhookRepository;
+          contextBlock = `Resolved repository: ${target.repoOwner}/${target.repoName}\nResolved branch: ${target.baseBranch}\n\n${event.contextBlock}`;
+        } catch (error) {
+          await releaseWebhookClaim();
+          if (error instanceof WebhookRepositoryResolutionError) throw error;
+          throw new WebhookRepositoryResolutionError(
+            "Repository resolution is unavailable; retry the webhook delivery",
+            503
+          );
+        }
+      }
+
       if (event.source === "webhook" && event.sessionKey) {
-        const outcome = await continueSession(
-          continuity,
-          automation,
-          event.concurrencyKey,
-          now,
-          await this.webhookContinuation(
-            event,
+        let outcome: ContinuationOutcome;
+        try {
+          outcome = await continueSession(
+            continuity,
             automation,
-            store,
-            webhookClaim,
-            webhookFollowUpRequestId
-          )
-        );
+            event.concurrencyKey,
+            now,
+            await this.webhookContinuation(
+              { ...event, contextBlock },
+              automation,
+              store,
+              webhookClaim,
+              webhookFollowUpRequestId,
+              webhookRepository
+            )
+          );
+        } catch (error) {
+          await releaseWebhookClaim();
+          throw error;
+        }
         if (outcome.kind === "refused") throw new SessionFollowUpRefusedError(outcome);
         if (outcome.kind !== "fall_through") {
           recordContinuation(outcome);
@@ -1453,10 +1481,19 @@ export class Scheduler {
         automation.instructions,
         slackSessionInstructions
       );
-      const instructionsOverride = composeAutomationPrompt(event.contextBlock, instructions);
+      const instructionsOverride = composeAutomationPrompt(contextBlock, instructions);
       const result = await this.startInvocation(store, {
         automation,
         source: "event",
+        targets: webhookRepository
+          ? {
+              kind: "resolved",
+              snapshot: {
+                repositories: [{ repository: webhookRepository, error: null }],
+                environments: [],
+              },
+            }
+          : undefined,
         invocationId: webhookClaim?.invocationId,
         webhookFollowUpClaimId: webhookClaim?.claimId,
         triggerKey: event.triggerKey,
@@ -1482,6 +1519,16 @@ export class Scheduler {
         } else if (result.outcome !== "started") {
           await releaseWebhookClaim();
         }
+      }
+      if (
+        webhookRepository &&
+        (result.outcome === "unauthorized" ||
+          (result.outcome === "started" && allRunsUnauthorized(result.runs)))
+      ) {
+        throw new WebhookRepositoryResolutionError(
+          "Automation executor or team is not authorized for the resolved repository",
+          403
+        );
       }
       const invocationId = firingInvocationId(result);
       if (invocationId) invocationIds.push(invocationId);
@@ -1550,6 +1597,15 @@ export class Scheduler {
     const automation = await store.getById(automationId);
     if (!automation) {
       throw new Error("Automation not found");
+    }
+
+    if (
+      automation.trigger_type === "webhook" &&
+      parseAutomationTriggerFields(automation).triggerConfig?.repositoryFromPayload
+    ) {
+      throw new WebhookRepositoryResolutionError(
+        "This automation requires a webhook payload to resolve its repository"
+      );
     }
 
     const result = await this.startInvocation(store, {
@@ -2205,7 +2261,8 @@ export class Scheduler {
     automation: AutomationRow,
     store: AutomationStore,
     claim: WebhookFollowUpClaim | null,
-    requestId: string | null
+    requestId: string | null,
+    target?: RepositoryRef
   ): Promise<ContinuationPolicy> {
     const clientRequestId = requestId ?? `webhook:${await hashToken(event.triggerKey)}`;
     return {
@@ -2236,17 +2293,31 @@ export class Scheduler {
             )
           : null;
       },
-      buildPrompt: async (_run, actor) => ({
-        body: {
-          content: `${event.contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`,
-          authorId: actor.authorId,
-          canonicalUserId: actor.userId,
-          source: "automation",
-          // Hashed so the id fits clientRequestIdSchema's 128-character limit.
-          clientRequestId,
-        },
-        ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
-      }),
+      buildPrompt: async (run, actor) => {
+        if (
+          target &&
+          (run.repo_id !== target.repoId ||
+            run.repo_owner !== target.repoOwner ||
+            run.repo_name !== target.repoName ||
+            run.base_branch !== target.baseBranch)
+        ) {
+          throw new WebhookRepositoryResolutionError(
+            "sessionKey belongs to a different repository or branch; use a new sessionKey",
+            409
+          );
+        }
+        return {
+          body: {
+            content: `${event.contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`,
+            authorId: actor.authorId,
+            canonicalUserId: actor.userId,
+            source: "automation",
+            // Hashed so the id fits clientRequestIdSchema's 128-character limit.
+            clientRequestId,
+          },
+          ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
+        };
+      },
     };
   }
 }

@@ -2,6 +2,7 @@
  * Automation pause, resume, and manual trigger routes.
  */
 
+import { WebhookRepositoryResolutionError } from "../automation/webhook-repository";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import { AutomationStore } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
@@ -136,6 +137,9 @@ async function handleTriggerAutomation(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
+    if (triggerError instanceof WebhookRepositoryResolutionError) {
+      return error(triggerError.message, triggerError.status);
+    }
     if (triggerError instanceof AutomationTriggerBlockedError) {
       return triggerError.reason === "team_grants_changed"
         ? json(

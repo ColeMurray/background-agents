@@ -690,6 +690,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         defaultBranch: repo.defaultBranch,
       };
     } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
       throw SourceControlProviderError.fromFetchError(
         `Failed to check repository access: ${error instanceof Error ? error.message : String(error)}`,
         error,

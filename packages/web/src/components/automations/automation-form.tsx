@@ -200,15 +200,30 @@ export function AutomationForm({
         />
       </div>
 
-      <AutomationTargetPicker
-        targets={targets}
-        repos={repos}
-        environments={environments}
-        loadingRepos={loadingRepos}
-        loadingEnvironments={loadingEnvironments}
-        multiTargetAllowed={multiRepoAllowed}
-        repositoryRequired={repositoryRequired}
-      />
+      {trigger.type === "webhook" && trigger.repositoryFromPayload ? (
+        <div>
+          <span className="block text-sm font-medium text-foreground mb-1.5">
+            Repository Configuration
+          </span>
+          <Button type="button" variant="outline" disabled>
+            Resolved from webhook payload
+          </Button>
+          <FieldDescription>
+            The repository and branch come from the webhook payload. Change this target
+            configuration through the automation API.
+          </FieldDescription>
+        </div>
+      ) : (
+        <AutomationTargetPicker
+          targets={targets}
+          repos={repos}
+          environments={environments}
+          loadingRepos={loadingRepos}
+          loadingEnvironments={loadingEnvironments}
+          multiTargetAllowed={multiRepoAllowed}
+          repositoryRequired={repositoryRequired}
+        />
+      )}
 
       <AutomationAgentFields
         value={agent}

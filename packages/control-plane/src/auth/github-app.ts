@@ -14,6 +14,7 @@ import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import { CACHE_STORE_MIN_TTL_MS, type CacheStore } from "@open-inspect/shared/cache-store";
 import { sha256Hex } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
+import { SourceControlProviderError } from "../source-control/errors";
 import {
   repositoryCredentialScope,
   type CredentialScope,
@@ -660,13 +661,23 @@ export async function getInstallationRepository(
     forceRefresh = true;
   }
 
-  if (response.status === 404 || response.status === 403) {
-    return null;
-  }
+  if (response.status === 404) return null;
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to fetch repository: ${response.status} ${error}`);
+    const rateLimited =
+      response.status === 403 &&
+      (response.headers.get("x-ratelimit-remaining") === "0" ||
+        response.headers.get("retry-after") !== null ||
+        /rate limit|abuse detection/i.test(error));
+    if (response.status === 403 && !rateLimited) return null;
+    throw new SourceControlProviderError(
+      `Failed to fetch repository: ${response.status} ${error}`,
+      rateLimited || SourceControlProviderError.isTransientStatus(response.status)
+        ? "transient"
+        : "permanent",
+      response.status
+    );
   }
 
   const raw = await response.json();

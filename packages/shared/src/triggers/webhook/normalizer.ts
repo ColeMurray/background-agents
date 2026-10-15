@@ -55,7 +55,8 @@ export function resolveJsonPath(path: string, obj: unknown): unknown {
   const keys = path.slice(2).split(".");
   let current: unknown = obj;
   for (const key of keys) {
-    if (current == null || typeof current !== "object") return undefined;
+    if (current == null || typeof current !== "object" || !Object.hasOwn(current, key))
+      return undefined;
     current = (current as Record<string, unknown>)[key];
   }
   return current;

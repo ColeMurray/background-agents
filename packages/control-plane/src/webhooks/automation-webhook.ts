@@ -28,6 +28,7 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
+import { WebhookRepositoryResolutionError } from "../automation/webhook-repository";
 import { Scheduler, SessionFollowUpRefusedError } from "../scheduler/scheduler";
 
 /** Maximum webhook payload size (64KB). */
@@ -151,6 +152,9 @@ async function handleAutomationWebhook(
     result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
   } catch (e) {
     if (e instanceof SessionFollowUpRefusedError) return followUpRefusedResponse(e);
+    if (e instanceof WebhookRepositoryResolutionError) {
+      return json({ error: e.message, code: "WEBHOOK_REPOSITORY_RESOLUTION_FAILED" }, e.status);
+    }
     throw e;
   }
   const { invocationIds, ...counts } = result;
