@@ -18,6 +18,7 @@ candidate_name = MODULE["candidate_name"]
 cleanup_snapshots = MODULE["cleanup_snapshots"]
 load_client = MODULE["load_client"]
 wait_for_command = MODULE["wait_for_command"]
+wait_for_sandbox = MODULE["wait_for_sandbox"]
 
 
 class FakeClient:
@@ -154,6 +155,20 @@ def test_detached_verifier_failure_has_verification_context():
         )
 
 
+def test_snapshot_restore_waits_for_hydration(monkeypatch):
+    client = FakeClient()
+    client.get_sandbox = Mock(
+        side_effect=[
+            SandboxInfo("bx_verifier", "ready", hydrated=False),
+            SandboxInfo("bx_verifier", "ready", hydrated=True),
+        ]
+    )
+    monkeypatch.setattr(MODULE["time"], "sleep", lambda _seconds: None)
+    result = wait_for_sandbox(client, "bx_verifier", require_hydrated=True)
+    assert result.hydrated is True
+    assert client.get_sandbox.call_count == 2
+
+
 def test_failed_new_candidate_is_removed_and_temporary_sandboxes_are_cleaned(bundle):
     client = FakeClient()
     with pytest.raises(RuntimeError, match="websocket failed"):
@@ -211,7 +226,9 @@ def test_cleanup_without_an_explicit_previous_snapshot_keeps_the_newest_rollback
 
 def test_launcher_guards_preparation_and_marks_resumed_boots():
     launcher = (Path(__file__).parents[1] / "runtime-launcher.sh").read_text()
-    assert launcher.index("flock -n 9") < launcher.index("sudo rm -rf /app")
+    assert launcher.index("flock -n 9") < launcher.index("mountpoint -q /app")
+    assert "mount --bind /home/user/openinspect/app /app" in launcher
+    assert "sudo rm -rf /app" in launcher
     assert "runtime.pid" in launcher
     assert "runtime-started" in launcher
     assert "export RESTORED_FROM_SNAPSHOT=true" in launcher

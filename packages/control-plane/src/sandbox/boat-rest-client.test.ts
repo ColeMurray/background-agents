@@ -133,16 +133,27 @@ describe("BoatRestClient", () => {
         {
           ok: true,
           type: "sandbox.stopping",
-          id: "stop_123",
+          id: sandbox.id,
           status: "archiving",
-          sandbox: { ...sandbox, state: "archiving" },
+          sandbox: {
+            ...sandbox,
+            state: "archiving",
+            stop: {
+              id: "stop_123",
+              status: "pending",
+              requestedAt: "2030-01-01T00:00:00Z",
+              lastAttemptAt: null,
+              error: null,
+              endedAt: null,
+            },
+          },
         },
         202
       )
     );
     await expect(client.stopSandbox(sandbox.id)).resolves.toMatchObject({
       id: "stop_123",
-      status: "archiving",
+      status: "pending",
     });
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ force: false });
   });

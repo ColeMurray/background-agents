@@ -8,6 +8,7 @@ import {
 import { SandboxProviderError, type CreateSandboxConfig } from "../provider";
 import {
   BoatSandboxProvider,
+  isBoatRuntimeReady,
   resolveBoatSandboxType,
   validateBoatEnvironment,
 } from "./boat-provider";
@@ -102,6 +103,12 @@ function provider(client = mockClient()): BoatSandboxProvider {
 
 describe("BoatSandboxProvider", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("waits for Boat snapshot hydration after the machine becomes ready", () => {
+    expect(isBoatRuntimeReady({ ...ready, hydrated: false })).toBe(false);
+    expect(isBoatRuntimeReady({ ...ready, hydrated: true })).toBe(true);
+    expect(isBoatRuntimeReady(ready)).toBe(true);
+  });
 
   it("creates from the verified template, launches the fixed runtime, and returns access", async () => {
     const client = mockClient();

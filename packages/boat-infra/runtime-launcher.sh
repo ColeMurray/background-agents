@@ -10,8 +10,17 @@ exec 9>"$state/runtime.lock"
 flock -n 9 || exit 0
 printf '%s\n' "$$" > "$state/runtime.pid"
 
-sudo rm -rf /app
-sudo ln -s /home/user/openinspect/app /app
+if [[ "$(readlink /app 2>/dev/null || true)" != /home/user/openinspect/app ]]; then
+  if mountpoint -q /app; then
+    # Boat can restore /app as a provider-owned mount. It cannot be removed,
+    # but a bind mount safely presents the persisted Open-Inspect payload at
+    # the path expected by the shared runtime for this boot.
+    sudo mount --bind /home/user/openinspect/app /app
+  else
+    sudo rm -rf /app
+    sudo ln -s /home/user/openinspect/app /app
+  fi
+fi
 
 hydrated=false
 stable_reads=0
@@ -24,6 +33,7 @@ while (( SECONDS < hydration_deadline_seconds )); do
     && -e /usr/local/bin/code-server \
     && -e /usr/local/bin/ttyd \
     && -e /usr/local/bin/google-chrome \
+    && -e /opt/openinspect/codex/bin/codex \
     && -e /usr/bin/Xvfb \
     && -e /usr/bin/fluxbox \
     && -e /usr/bin/x11vnc \
@@ -55,6 +65,7 @@ if [[ "$hydrated" != true ]]; then
     /usr/local/bin/code-server \
     /usr/local/bin/ttyd \
     /usr/local/bin/google-chrome \
+    /opt/openinspect/codex/bin/codex \
     /usr/bin/Xvfb \
     /usr/bin/fluxbox \
     /usr/bin/x11vnc \
@@ -85,6 +96,7 @@ sudo chmod a+rx \
   /usr/bin/Xvfb \
   /usr/bin/fluxbox \
   /usr/bin/x11vnc
+sudo ln -sf /opt/openinspect/codex/bin/codex /usr/local/bin/codex
 sudo rm -rf /workspace
 sudo ln -s "$workspace" /workspace
 

@@ -9,6 +9,7 @@ import {
   type BoatRestClient,
   type BoatSandbox,
   type BoatSandboxType,
+  type BoatStopOperation,
 } from "../boat-rest-client";
 import {
   buildSandboxEnvVars,
@@ -192,11 +193,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         ),
       });
       providerObjectId = created.id;
-      const ready = await this.waitForState(
-        created.id,
-        (sandbox) => READY_STATES.has(sandbox.state),
-        BOAT_STARTUP_POLL_MS
-      );
+      const ready = await this.waitForState(created.id, isBoatRuntimeReady, BOAT_STARTUP_POLL_MS);
       const access = await this.prepareAccess(
         ready.id,
         config.sandboxId,
@@ -266,7 +263,7 @@ export class BoatSandboxProvider implements SandboxProvider {
 
       const ready = await this.waitForState(
         config.providerObjectId,
-        (current) => READY_STATES.has(current.state),
+        isBoatRuntimeReady,
         BOAT_STARTUP_POLL_MS
       );
       const portPlan = resolveBoatPortPlan(
@@ -328,7 +325,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         }
         throw error;
       }
-      let stop: { id: string; status: string } | undefined;
+      let stop: BoatStopOperation | null | undefined;
       if (!STOPPED_STATES.has(current.state)) {
         try {
           stop = await this.client.stopSandbox(config.providerObjectId, signal);
@@ -700,4 +697,9 @@ function resolveBoatPortPlan(
     );
   }
   return plan;
+}
+
+/** Boat reports ready before background snapshot hydration necessarily finishes. */
+export function isBoatRuntimeReady(sandbox: BoatSandbox): boolean {
+  return READY_STATES.has(sandbox.state) && sandbox.hydrated !== false;
 }

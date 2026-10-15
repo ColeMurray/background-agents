@@ -43,12 +43,24 @@ export interface BoatRestConfig {
   baseSnapshot?: string;
 }
 
+const boatStopOperationSchema = z.object({
+  id: z.string(),
+  status: z.enum(["pending", "failing", "completed", "superseded"]),
+  requestedAt: z.string().nullable(),
+  lastAttemptAt: z.string().nullable(),
+  error: z.string().nullable(),
+  endedAt: z.string().nullable(),
+});
+
+export type BoatStopOperation = z.infer<typeof boatStopOperationSchema>;
+
 const boatSandboxSchema = z
   .object({
     id: z.string(),
     name: z.string().optional(),
     state: z.enum(BOAT_SANDBOX_STATES),
     error: z.string().nullable().optional(),
+    hydrated: z.boolean().optional(),
     type: z.enum(BOAT_SANDBOX_TYPES).optional(),
     vcpu: z.number().int().optional(),
     memoryGB: z.number().optional(),
@@ -58,6 +70,7 @@ const boatSandboxSchema = z
     snapshotAvailable: z.boolean().optional(),
     snapshotCompletedAt: z.string().nullable().optional(),
     lastSnapshotStatus: z.string().nullable().optional(),
+    stop: boatStopOperationSchema.nullable().optional(),
   })
   .superRefine((sandbox, context) => {
     if (sandbox.state === "cancelled") return;
@@ -91,17 +104,6 @@ const boatActionResponseSchema = z.object({
   status: z.string(),
   sandbox: boatSandboxSchema.nullable().optional(),
 });
-
-const boatStopOperationSchema = z.object({
-  id: z.string(),
-  status: z.enum(["pending", "failing", "completed", "superseded"]),
-  requestedAt: z.string().nullable(),
-  lastAttemptAt: z.string().nullable(),
-  error: z.string().nullable(),
-  endedAt: z.string().nullable(),
-});
-
-export type BoatStopOperation = z.infer<typeof boatStopOperationSchema>;
 
 const boatStopOperationResponseSchema = z.object({
   id: z.string(),
@@ -284,7 +286,7 @@ export class BoatRestClient {
     });
   }
 
-  async stopSandbox(id: string, signal?: AbortSignal): Promise<{ id: string; status: string }> {
+  async stopSandbox(id: string, signal?: AbortSignal): Promise<BoatStopOperation | null> {
     const response = await this.requestJson(boatActionResponseSchema, {
       method: "POST",
       path: `/sandboxes/${encodeURIComponent(id)}/stop`,
@@ -292,7 +294,7 @@ export class BoatRestClient {
       body: { force: false },
       signal,
     });
-    return { id: response.id, status: response.status };
+    return response.sandbox?.stop ?? null;
   }
 
   async getStop(id: string, stopId: string, signal?: AbortSignal): Promise<BoatStopOperation> {

@@ -81,6 +81,7 @@ class SandboxInfo:
     id: str
     state: str
     snapshot_available: bool = False
+    hydrated: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,7 @@ class SdkBoatBuildClient:
             id=response.sandbox.id,
             state=response.sandbox.state,
             snapshot_available=response.sandbox.snapshot_available,
+            hydrated=getattr(response.sandbox, "hydrated", None),
         )
 
     def get_sandbox(self, sandbox_id: str) -> SandboxInfo:
@@ -204,6 +206,7 @@ class SdkBoatBuildClient:
             id=response.sandbox.id,
             state=response.sandbox.state,
             snapshot_available=response.sandbox.snapshot_available,
+            hydrated=getattr(response.sandbox, "hydrated", None),
         )
 
     def upload_file(self, sandbox_id: str, path: str, content: bytes) -> None:
@@ -374,11 +377,15 @@ class SdkBoatBuildClient:
         )
 
 
-def wait_for_sandbox(client: BoatBuildClient, sandbox_id: str) -> SandboxInfo:
+def wait_for_sandbox(
+    client: BoatBuildClient, sandbox_id: str, *, require_hydrated: bool = False
+) -> SandboxInfo:
     deadline = time.monotonic() + START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         sandbox = client.get_sandbox(sandbox_id)
-        if sandbox.state in {"ready", "idle"}:
+        if sandbox.state in {"ready", "idle"} and (
+            not require_hydrated or sandbox.hydrated is not False
+        ):
             return sandbox
         if sandbox.state == "error":
             raise RuntimeError("Boat build sandbox entered the error state")
@@ -543,7 +550,7 @@ def build_template(
             snapshot=candidate,
         )
         verifier_id = verifier.id
-        wait_for_sandbox(client, verifier.id)
+        wait_for_sandbox(client, verifier.id, require_hydrated=True)
         wait_for_command(
             client,
             verifier.id,
