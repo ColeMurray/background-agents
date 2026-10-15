@@ -328,10 +328,10 @@ describe("team session buckets", () => {
           : { items: [item("first")], hasMore: true, nextCursor: "page-2" }
       );
     });
-    // Deduping keeps the cached first page unless its own key is revalidated.
+    // Production deduping would otherwise reuse the head request made moments ago.
     const { result } = renderHook(() => useTeamSessionBucket("team_one", "needs_attention"), {
       wrapper: ({ children }: { children: ReactNode }) => (
-        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 60_000 }}>
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 2_000 }}>
           {children}
         </SWRConfig>
       ),
@@ -346,5 +346,8 @@ describe("team session buckets", () => {
 
     await waitFor(() => expect(result.current.items).toEqual([]));
     expect(result.current.page).toBe(1);
+    const paths = vi.mocked(browserApiFetch).mock.calls.map(([path]) => path);
+    const headPath = "/api/teams/team_one/sessions?bucket=needs_attention";
+    expect(paths.slice(paths.indexOf("/api/sessions/inbox/read-state"))).toContain(headPath);
   });
 });

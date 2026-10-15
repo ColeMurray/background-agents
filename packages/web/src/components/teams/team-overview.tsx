@@ -51,13 +51,21 @@ export function useTeamSessionBucket(teamId: string, bucket: "needs_attention" |
     },
     { refreshInterval: TEAM_SESSIONS_REFRESH_MS, keepPreviousData: false }
   );
-  // A bulk read can empty later pages, so restart from the first page and
-  // revalidate that page's key: a cached first page would otherwise be reused.
+  // A bulk read can empty later pages, so restart from the first page. Every
+  // cached page of this bucket may still hold read rows, so clear them, then
+  // drop their dedupe markers and revalidate; a request that started before
+  // the clear is discarded, whichever page is mounted when this runs.
   useEffect(
     () =>
-      subscribeSessionInboxMarkedRead(() => {
+      subscribeSessionInboxMarkedRead(async () => {
         setPagination({ identity, cursors: [] });
-        return userId ? mutate([firstPageKey, userId]) : undefined;
+        const isBucketPage = (cacheKey: unknown) =>
+          Array.isArray(cacheKey) &&
+          cacheKey[1] === userId &&
+          typeof cacheKey[0] === "string" &&
+          (cacheKey[0] === firstPageKey || cacheKey[0].startsWith(`${firstPageKey}&`));
+        await mutate(isBucketPage, undefined, { revalidate: false });
+        await mutate(isBucketPage);
       }),
     [firstPageKey, identity, mutate, userId]
   );

@@ -648,10 +648,19 @@ describe("useSidebarSessions", () => {
     const parent = unreadItem("parent");
     const child = { ...unreadItem("child").rootSession, parentSessionId: "parent" };
     const readChild = { ...item("read-child").rootSession, parentSessionId: "parent" };
+    // An already-read root whose two descendants are unread.
+    const readRoot = item("read-root");
+    const unreadDescendants = ["first", "second"].map((id) => ({
+      ...unreadItem(id).rootSession,
+      parentSessionId: "read-root",
+    }));
     const fetcher = vi.fn(async () =>
       snapshot({
         needs_attention: {
-          items: [{ ...parent, descendantSessions: [child, readChild] }],
+          items: [
+            { ...parent, descendantSessions: [child, readChild] },
+            { ...readRoot, descendantSessions: unreadDescendants },
+          ],
           hasMore: false,
           nextCursor: null,
         },
@@ -660,8 +669,8 @@ describe("useSidebarSessions", () => {
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(result.current.needsAttention).toHaveLength(1);
-    expect(result.current.attentionUnreadCount).toBe(2);
+    expect(result.current.needsAttention).toHaveLength(2);
+    expect(result.current.attentionUnreadCount).toBe(4);
   });
 
   it("marks the filtered inbox read, then drops retained pages and refetches the head", async () => {
