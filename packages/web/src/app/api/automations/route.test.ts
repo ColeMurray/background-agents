@@ -87,6 +87,15 @@ describe("automations API route (POST)", () => {
     expect(controlPlaneBody()).toEqual({ ...validBody, teamId });
   });
 
+  it.each([0, 3])("forwards maxRetries=%s", async (maxRetries) => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ automation: {} }));
+    await POST(postRequest({ ...validBody, maxRetries }));
+    expect(
+      JSON.parse(String(vi.mocked(controlPlaneUserFetch).mock.calls[0][1]?.body))
+    ).toHaveProperty("maxRetries", maxRetries);
+  });
+
   it("returns 401 when the user session is missing", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue(null);
 

@@ -626,12 +626,12 @@ export class SessionMessageQueue {
   cancelExecution(): void {
     const now = Date.now();
     for (const message of this.messageRepository.listPendingMessagesWithCreatedAt()) {
-      this.failMessage(message, "Execution was cancelled before it started", now, "pending");
+      this.failMessage(message, "Execution was cancelled before it started", now, "pending", true);
     }
 
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (processingMessage) {
-      this.failMessage(processingMessage, "Execution was cancelled", now, "processing");
+      this.failMessage(processingMessage, "Execution was cancelled", now, "processing", true);
     }
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
@@ -681,9 +681,16 @@ export class SessionMessageQueue {
     message: { id: string; created_at: number },
     error: string,
     completedAt: number,
-    expectedStatus: "pending" | "processing"
+    expectedStatus: "pending" | "processing",
+    cancelled?: boolean
   ): boolean {
-    const failure = this.messageFailures.record(message.id, error, completedAt, expectedStatus);
+    const failure = this.messageFailures.record(
+      message.id,
+      error,
+      completedAt,
+      expectedStatus,
+      cancelled
+    );
     if (!failure) return false;
     this.messageFailures.deliver(failure);
     return true;

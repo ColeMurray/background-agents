@@ -1411,6 +1411,16 @@ describe("agent harness", () => {
     return { onSubmit, submit: () => fireEvent.submit(container.querySelector("form")!) };
   };
 
+  it("loads and submits the configured retry budget", () => {
+    const { onSubmit, submit } = renderForm({ maxRetries: 2 }, "edit");
+    expect(screen.getByRole("spinbutton", { name: "Maximum retries" })).toHaveValue(2);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Maximum retries" }), {
+      target: { value: "3" },
+    });
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ maxRetries: 3 }));
+  });
+
   it("offers Codex alongside the existing harnesses", () => {
     enabledModelsValue = ["openai/gpt-5.6-sol"];
     renderForm({ harness: "codex", model: "openai/gpt-5.6-sol" }, "edit");

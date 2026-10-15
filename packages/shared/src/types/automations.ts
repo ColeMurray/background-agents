@@ -17,7 +17,7 @@ import { isCanonicalUserId } from "../user-id";
 
 /** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
 export type AutomationRunStatus =
-  "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized";
+  "starting" | "running" | "retrying" | "completed" | "failed" | "skipped" | "unauthorized";
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 
@@ -29,6 +29,7 @@ export type AutomationInvocationSource = "schedule" | "manual" | "event";
 export const automationInvocationStatusSchema = z.enum([
   "starting",
   "running",
+  "retrying",
   "completed",
   "failed",
   "partial_failed",
@@ -115,6 +116,12 @@ export const automationRepositoryInputSchema = repositoryInputSchema;
 export type AutomationRepositoryInput = RepositoryInput;
 export const automationRepositoriesInputSchema = repositoriesInputSchema;
 
+export const MAX_AUTOMATION_RETRIES = 5;
+
+/** Initial backoff for retryable automation failures; later attempts double it. */
+export const AUTOMATION_RETRY_DELAY_MS = 2 * 60 * 1000;
+const maxRetriesSchema = z.number().int().min(0).max(MAX_AUTOMATION_RETRIES);
+
 const automationSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -128,6 +135,7 @@ const automationSchema = z.object({
   enabled: z.boolean(),
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
+  maxRetries: maxRetriesSchema.optional(),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   ownerTeamId: z.string().nullable(),
@@ -199,6 +207,7 @@ export const sentryClientSecretSchema = z.string().refine((secret) => secret.tri
 });
 
 export const createAutomationRequestSchema = z.object({
+  maxRetries: maxRetriesSchema.optional(),
   teamId: z
     .string()
     .regex(/^team_[A-Za-z0-9_-]+$/)
@@ -226,6 +235,7 @@ export const createAutomationRequestSchema = z.object({
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
 
 export const updateAutomationRequestSchema = z.object({
+  maxRetries: maxRetriesSchema.optional(),
   name: z.string().optional(),
   instructions: z.string().optional(),
   scheduleCron: z.string().optional(),
@@ -245,6 +255,10 @@ export const updateAutomationRequestSchema = z.object({
 export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
 
 export interface AutomationRun {
+  /** Attempt number, including the original run. Omitted by older servers. */
+  attempt?: number;
+  retryAt?: number | null;
+  supersededAt?: number | null;
   id: string;
   automationId: string;
   /** The firing this run belongs to. */

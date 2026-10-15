@@ -128,6 +128,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
             initialValues={{
               teamId: automation.ownerTeamId ?? null,
               name: automation.name,
+              maxRetries: automation.maxRetries ?? 0,
               repositories: automation.repositories,
               environmentIds: automation.environmentIds,
               harness: automation.harness,

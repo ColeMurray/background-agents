@@ -9,6 +9,7 @@ const UPDATE_FIELDS = [
   "scheduleCron",
   "scheduleTz",
   "model",
+  "maxRetries",
   "reasoningEffort",
   "harness",
   "eventType",

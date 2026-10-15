@@ -7,12 +7,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { AutomationExecutionUnauthorizedError } from "../automation/authorization-guard";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
 import type { Logger } from "../logger";
+import type * as AutomationRetries from "../db/automation-retries";
 import type * as AuthCrypto from "../auth/crypto";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
 import { normalizeWebhookEvent, type SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -20,6 +22,13 @@ import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
+
+vi.mock("../db/automation-retries", async (importOriginal) => ({
+  ...(await importOriginal<typeof AutomationRetries>()),
+  listDueRetries: vi.fn().mockResolvedValue([]),
+  withdrawIneligibleRetries: vi.fn().mockResolvedValue(undefined),
+  claimRetry: vi.fn().mockResolvedValue(null),
+}));
 
 const mockSelectSessionMemory = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -121,12 +130,8 @@ vi.mock("../session/skill-resolution", () => ({
 }));
 
 const { resolveManagedSkills } = await import("../session/skill-resolution");
-const {
-  AutomationExecutionUnauthorizedError,
-  EXECUTION_DEADLINE_GRACE_MS,
-  Scheduler,
-  SessionFollowUpRefusedError,
-} = await import("./scheduler");
+const { EXECUTION_DEADLINE_GRACE_MS, Scheduler, SessionFollowUpRefusedError } =
+  await import("./scheduler");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -177,6 +182,8 @@ function createMockStore() {
     }),
     insertSkippedInvocation: vi.fn().mockResolvedValue({ inserted: true }),
     recordAuthorizationDenied: vi.fn().mockResolvedValue({ inserted: true, paused: true }),
+    claimRetryCompletionPublication: vi.fn().mockResolvedValue(true),
+    setRetryContext: vi.fn().mockResolvedValue(undefined),
     getInvocationById: vi.fn().mockResolvedValue(null),
     getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
     claimFollowUpReceipt: vi.fn().mockResolvedValue({ kind: "claimed" }),
@@ -2628,6 +2635,7 @@ describe("Scheduler", () => {
       expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
         status: "failed",
         failure_reason: "Sandbox crashed",
+        retryable: 1,
         completed_at: expect.any(Number),
       });
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-1");
@@ -2930,6 +2938,35 @@ describe("Scheduler", () => {
         expect(threadIndex).toBeLessThan(userIndex);
         expect(content).toContain("please deploy the api");
         expect(content).toContain(sampleSlackPermalink);
+      });
+
+      it("keeps fetched Slack history when retries are disabled and the optional context store fails", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          { ...sampleSlackAutomation, max_retries: 0 },
+        ]);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
+        mockStore.setRetryContext.mockRejectedValueOnce(new Error("D1 unavailable"));
+        const { env, stub, slackFetch } = threadContextEnv();
+        await createScheduler(env).event(makeSlackEvent());
+        expect(threadContextCalls(slackFetch)).toHaveLength(1);
+        expect(String((await getPromptBody(vi.mocked(stub.fetch))).content)).toContain(
+          "<thread_context>"
+        );
+        expect(mockStore.setRetryContext).not.toHaveBeenCalled();
+      });
+
+      it("launches admitted children with the persisted fallback when saving expanded context fails", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          { ...sampleSlackAutomation, max_retries: 1 },
+        ]);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
+        mockStore.setRetryContext.mockRejectedValueOnce(new Error("D1 unavailable"));
+        const { env, stub } = threadContextEnv();
+        expect(await createScheduler(env).event(makeSlackEvent())).toMatchObject({ triggered: 1 });
+        const saved = mockStore.insertInvocationGuarded.mock.calls[0][0].invocation;
+        const content = (await getPromptBody(vi.mocked(stub.fetch))).content;
+        expect(content).toBe(JSON.parse(saved.retry_context).instructions);
+        expect(mockStore.claimRunSession).toHaveBeenCalledTimes(1);
       });
 
       it("reuses one context result across several matching automations", async () => {
@@ -4037,6 +4074,22 @@ describe("Scheduler", () => {
             source: "automation",
             clientRequestId: expect.stringMatching(/^webhook:[0-9a-f]{64}$/),
           });
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        });
+
+        it("bounds attempts when holding disagrees with the run snapshot", async () => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 1 })
+          );
+          let holds = 0;
+          mockStore.holdPromptForLaunchingRun.mockImplementation(async () => {
+            if (++holds > 3) throw new Error("unbounded continuity retry");
+            return "not_holding";
+          });
+          await expect(
+            createScheduler(createEnv()).event(webhookEvent({ mode: "iterate" }))
+          ).rejects.toMatchObject({ code: "continuity_unstable" });
+          expect(holds).toBe(3);
           expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
         });
 

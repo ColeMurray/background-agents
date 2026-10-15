@@ -1553,6 +1553,24 @@ describe("CallbackNotificationService", () => {
       });
     });
 
+    it("forwards explicit cancellation independently of its display text", async () => {
+      const completeAutomationRun = vi.fn(async () => undefined);
+      const h = createTestHarness({ completeAutomationRun });
+      vi.mocked(h.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify({
+          source: "automation",
+          automationId: "auto-1",
+          runId: "run-1",
+          automationName: "Daily sync",
+        }),
+        source: "automation",
+      });
+      await h.service.notifyComplete("msg-1", false, "User withdrew this execution", true);
+      expect(completeAutomationRun).toHaveBeenCalledWith(
+        expect.objectContaining({ cancelled: true, success: false })
+      );
+    });
+
     it("sends failure details for failed automation runs", async () => {
       const completeAutomationRun = vi.fn(async () => undefined);
       const h = createTestHarness({

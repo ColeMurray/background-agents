@@ -17,6 +17,7 @@ const TONE_CLASSES: Record<AutomationInvocationTone, string> = {
 
 const SHAPE_CLASSES: Record<Exclude<AutomationInvocationStatus, "failed">, string> = {
   starting: "h-2 w-2 rounded-full border border-current motion-safe:animate-pulse",
+  retrying: "h-2 w-2 rounded-full border border-dashed border-current motion-safe:animate-pulse",
   running: "h-2 w-2 rounded-full bg-current motion-safe:animate-pulse",
   completed: "h-3 w-1 rounded-[1px] bg-current",
   partial_failed: "h-3 w-1 border border-dashed border-current",

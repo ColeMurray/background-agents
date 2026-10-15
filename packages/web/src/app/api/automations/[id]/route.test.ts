@@ -15,6 +15,17 @@ describe("automation update BFF", () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ automation: {} }));
   });
 
+  it.each([0, 3])("forwards maxRetries=%s", async (maxRetries) => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ automation: {} }));
+    await PUT({ json: async () => ({ maxRetries }) } as unknown as NextRequest, {
+      params: Promise.resolve({ id: "auto-1" }),
+    });
+    expect(
+      JSON.parse(String(vi.mocked(controlPlaneUserFetch).mock.calls[0][1]?.body))
+    ).toHaveProperty("maxRetries", maxRetries);
+  });
+
   it("forwards providerSelections but strips hydrated auth and identity", async () => {
     const providerSelections = { xai: { mode: "api_key" } };
     await PUT(

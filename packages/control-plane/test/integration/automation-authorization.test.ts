@@ -213,6 +213,7 @@ describe("automation router authorization", () => {
     };
     await store.create(row);
     await sqlDatabase(env.DB).batch(store.bindEnvironmentInserts(row.id, ["env_original"], 1));
+    const before = await store.getById(row.id);
 
     const response = await serviceFetch(`https://cp.test/automations/${row.id}`, {
       method: "PUT",
@@ -224,7 +225,7 @@ describe("automation router authorization", () => {
       code: "target_team_missing_grant",
       repository: "acme/api",
     });
-    expect(await store.getById(row.id)).toEqual(row);
+    expect(await store.getById(row.id)).toEqual(before);
     expect(
       (await store.getEnvironmentsForAutomation(row.id)).map((member) => member.environment_id)
     ).toEqual(["env_original"]);

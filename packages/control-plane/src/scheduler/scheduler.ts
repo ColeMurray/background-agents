@@ -55,6 +55,12 @@ import {
   AutomationModelProviderAuthStore,
   toProviderSelections,
 } from "../db/automation-model-provider-auth";
+import {
+  automationRetryContextSchema,
+  listDueRetries,
+  withdrawIneligibleRetries,
+  claimRetry,
+} from "../db/automation-retries";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { SessionIndexStore } from "../db/session-index";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
@@ -70,7 +76,10 @@ import { getUserAuth } from "../auth/user/runtime";
 import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
 import { TeamStore } from "../db/teams";
-import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
+import {
+  prepareAutomationTargetAdmission,
+  type LaunchTargetSnapshot,
+} from "../automation/target-admission";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
 import { generateId, hashToken } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -95,6 +104,7 @@ import {
   type AutomationSessionTarget,
 } from "../automation/session-target";
 import {
+  AutomationExecutionUnauthorizedError,
   isAutomationExecutionAuthorized,
   type AutomationExecutionAuthorizationRequest,
 } from "../automation/authorization-guard";
@@ -234,6 +244,7 @@ export interface AutomationRunCompletion {
   messageId: string;
   success: boolean;
   error?: string;
+  cancelled?: boolean;
 }
 
 export interface SchedulerTickResult {
@@ -265,15 +276,6 @@ export class AutomationTriggerBlockedError extends Error {
         : "An active run already exists"
     );
     this.name = "AutomationTriggerBlockedError";
-  }
-}
-
-/** Raised when an automation's execution principal lacks required authorization. */
-export class AutomationExecutionUnauthorizedError extends Error {
-  /** Create an error for an unauthorized automation execution principal. */
-  constructor(readonly reason = "execution_authorization_denied") {
-    super("Automation execution principal is not authorized");
-    this.name = "AutomationExecutionUnauthorizedError";
   }
 }
 
@@ -386,19 +388,6 @@ interface LaunchAdmission {
 }
 
 /** Coordinates authorized automation scheduling, dispatch, and completion handling. */
-/** A launch candidate's target as resolved at admission, or why it could not be resolved. */
-type LaunchTargetSnapshot = { target: AutomationSessionTarget } | { error: unknown };
-
-/** Repository IDs that the resolved launch targets will open. */
-function launchTargetRepoIds(snapshots: ReadonlyMap<string, LaunchTargetSnapshot>): number[] {
-  return [...snapshots.values()].flatMap((snapshot) => {
-    if (!("target" in snapshot)) return [];
-    const { target } = snapshot;
-    if (target.repositories) return target.repositories.map((repository) => repository.repoId);
-    return target.repoId === null ? [] : [target.repoId];
-  });
-}
-
 export class Scheduler {
   private readonly log: Logger;
 
@@ -445,7 +434,7 @@ export class Scheduler {
     const aggregate = await store.getInvocationRunAggregate(invocationId);
     if (aggregate.total === 0) return; // childless skip — never counts
 
-    if (aggregate.failed > 0) {
+    if (aggregate.failed > 0 && !aggregate.failureCountingDeferred) {
       const won = await store.tryMarkInvocationFailureCounted(invocationId);
       if (!won) return;
       await this.trackAutomationFailure(store, automationId);
@@ -514,11 +503,6 @@ export class Scheduler {
       params.repositories ?? store.getRepositoriesForAutomation(automation.id),
       params.environments ?? store.getEnvironmentsForAutomation(automation.id),
     ]);
-    // One snapshot of the owning team classifies denials and pins the grants version.
-    const team =
-      automation.owner_team_id === null
-        ? null
-        : await new TeamStore(this.db).getById(automation.owner_team_id);
     const authorization: AutomationExecutionAuthorizationRequest = {
       automationId: automation.id,
       executionUserId: executionPrincipal.platformUserId,
@@ -526,19 +510,13 @@ export class Scheduler {
       requiresEnvironmentUse: environmentSelection.length > 0,
     };
     if (!(await isAutomationExecutionAuthorized(this.db, authorization))) {
+      const team =
+        automation.owner_team_id === null
+          ? null
+          : await new TeamStore(this.db).getById(automation.owner_team_id);
       return { outcome: "unauthorized", reason: executionDenialReason(team) };
     }
-    const resolutions = await resolveAutomationRepositories(this.env, selection);
-    for (const resolution of resolutions) {
-      if (
-        params.eventRepositoryId !== undefined &&
-        resolution.repository !== null &&
-        resolution.repository.repoId !== params.eventRepositoryId
-      ) {
-        resolution.repository = null;
-        resolution.error = "Repository identity changed during event resolution";
-      }
-    }
+    const resolutions = await this.resolveRepositoryRequests(selection, params.eventRepositoryId);
 
     const invocationId = params.invocationId ?? generateId();
     const scheduledAt = params.scheduledAt ?? now;
@@ -577,6 +555,7 @@ export class Scheduler {
         status: resolution.error ? "failed" : "starting",
         failure_reason: resolution.error,
         completed_at: resolution.error ? now : null,
+        target_resolved: resolution.error ? 0 : 1,
         repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
         repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
         repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
@@ -593,22 +572,21 @@ export class Scheduler {
     }
 
     const launchCandidates = children.filter((child) => child.status === "starting");
-    let launchTargets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
+    let launchTargets: ReadonlyMap<string, LaunchTargetSnapshot>;
     let teamGrantsVersion: { teamId: string; version: number } | undefined;
-    if (automation.owner_team_id !== null) {
-      if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
-      // Snapshot the grants version before checking coverage; the guarded insert
-      // refuses admission if grants change in between.
-      teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
-      launchTargets = await this.resolveLaunchTargets(automation, launchCandidates);
-      if (
-        !(await new TeamRepositoryGrantStore(this.db).covers(
-          team.id,
-          launchTargetRepoIds(launchTargets)
-        ))
-      ) {
-        return { outcome: "unauthorized", reason: "target_team_missing_grant" };
-      }
+    try {
+      ({ targets: launchTargets, teamGrantsVersion } = await prepareAutomationTargetAdmission(
+        this.db,
+        this.env,
+        automation,
+        launchCandidates,
+        this.backgroundJobs,
+        this.log
+      ));
+    } catch (error) {
+      if (error instanceof AutomationExecutionUnauthorizedError)
+        return { outcome: "unauthorized", reason: error.reason };
+      throw error;
     }
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
@@ -633,6 +611,15 @@ export class Scheduler {
     }
 
     const invocation: AutomationInvocationRow = {
+      retry_context:
+        (automation.max_retries ?? 0) > 0
+          ? JSON.stringify({
+              instructions: params.instructionsOverride ?? automation.instructions,
+              platformUserId: executionPrincipal.platformUserId,
+              participantUserId: executionPrincipal.participantUserId,
+              eventRepositoryId: params.eventRepositoryId,
+            })
+          : null,
       id: invocationId,
       automation_id: automation.id,
       source,
@@ -745,83 +732,27 @@ export class Scheduler {
       }
     }
 
-    const launchChild = async (child: AutomationRunRow): Promise<void> => {
+    // Launch and retries must use the same persisted context, even if the richer snapshot fails.
+    if (params.instructionsOverrideFactory && (automation.max_retries ?? 0) > 0) {
       try {
-        if (attributionError !== undefined) throw attributionError;
-        if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
-        const targetSnapshot = launchTargets.get(child.id);
-        if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
-        const sessionId = generateId();
-        // Claim the generated session before initialization. Otherwise the orphan sweep can
-        // terminalize an old `starting` row while initialization is still creating its session.
-        // The deadline claimed here is the deployment-wide one; session creation replaces it
-        // with the budget this session's own settings resolve to. If the worker dies in
-        // between, the run stays covered by the shorter of the two, which is what a launch
-        // that never finished deserves.
-        const claimedAt = Date.now();
-        const claimed = await store.claimRunSession(
-          child.id,
-          sessionId,
-          claimedAt,
-          claimedAt + this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS)
+        await store.setRetryContext(
+          invocationId,
+          JSON.stringify({
+            instructions: instructionsOverride ?? automation.instructions,
+            platformUserId: executionPrincipal.platformUserId,
+            participantUserId: executionPrincipal.participantUserId,
+            eventRepositoryId: params.eventRepositoryId,
+          })
         );
-        if (!claimed) {
-          throw new Error("Automation run was recovered before launch claimed its session");
-        }
-        await this.createSessionForAutomationRun(
-          store,
-          automation,
-          child,
-          providerAuthSnapshot.providerAuth,
-          sessionId,
-          executionPrincipal,
-          claimedAt,
-          {
-            authorization,
-            target:
-              targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
-          }
-        );
-        await this.sendPromptToSession(
-          sessionId,
-          automation,
-          child.id,
-          executionPrincipal,
-          instructionsOverride
-        );
-        child.status = "running";
-        child.session_id = sessionId;
-        await this.releaseFollowUpsHeldDuringLaunch(store, child);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        this.log.error("Failed to launch automation run", {
-          event: "scheduler.session_creation_failed",
-          automation_id: automation.id,
+      } catch (error) {
+        instructionsOverride = params.instructionsOverride;
+        this.log.warn("Failed to save expanded retry context; using admitted fallback", {
+          event: "scheduler.retry_context_failed",
           invocation_id: invocationId,
-          run_id: child.id,
-          error: message,
+          error,
         });
-        // Losing authorization is not an automation failure: the run is unauthorized, so only
-        // genuine sibling failures count a strike. The next admission re-evaluates the
-        // principal and pauses if still denied.
-        const outcome: Partial<AutomationRunRow> =
-          e instanceof AutomationExecutionUnauthorizedError
-            ? { status: "unauthorized", failure_reason: e.reason, session_id: null }
-            : { status: "failed", failure_reason: message };
-        try {
-          await store.updateRun(child.id, { ...outcome, completed_at: Date.now() });
-        } catch (updateError) {
-          this.log.error("Failed to record launch failure", {
-            event: "scheduler.fail_track_error",
-            automation_id: automation.id,
-            run_id: child.id,
-            original_reason: message,
-            error: updateError instanceof Error ? updateError.message : String(updateError),
-          });
-        }
-        Object.assign(child, outcome);
       }
-    };
+    }
 
     let nextLaunchIndex = 0;
     const launchWorkerCount = Math.min(AUTOMATION_LAUNCH_CONCURRENCY, launchCandidates.length);
@@ -830,7 +761,14 @@ export class Scheduler {
         for (;;) {
           const child = launchCandidates[nextLaunchIndex++];
           if (!child) return;
-          await launchChild(child);
+          await this.launchChild(store, automation, child, {
+            executionPrincipal,
+            authorization,
+            providerAuthSnapshot,
+            targetSnapshot: launchTargets.get(child.id),
+            instructionsOverride,
+            attributionError,
+          });
         }
       })
     );
@@ -842,6 +780,16 @@ export class Scheduler {
     if (children.some((child) => child.status === "failed")) {
       try {
         await this.applyInvocationAccounting(store, automation.id, invocationId);
+        if ((automation.max_retries ?? 0) > 0) {
+          for (const child of children.filter((run) => run.status === "failed")) {
+            const updated =
+              (await store.getReservedRetry(child.id)) ??
+              (await store.getRunById(automation.id, child.id));
+            // Return the reserved attempt so callers report accepted work during backoff.
+            // The completed attempt keeps its own ID and terminal result in persisted history.
+            if (updated) Object.assign(child, updated);
+          }
+        }
       } catch (e) {
         this.log.error("Failed to apply invocation accounting after launch failures", {
           event: "scheduler.fail_track_error",
@@ -853,6 +801,269 @@ export class Scheduler {
     }
 
     return { outcome: "started", invocationId, runs: children, launched };
+  }
+
+  private async launchChild(
+    store: AutomationStore,
+    automation: AutomationRow,
+    child: AutomationRunRow,
+    launch: {
+      executionPrincipal: ExecutionPrincipal;
+      authorization: AutomationExecutionAuthorizationRequest;
+      providerAuthSnapshot: { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown };
+      targetSnapshot?: LaunchTargetSnapshot;
+      instructionsOverride?: string;
+      attributionError?: unknown;
+    }
+  ): Promise<void> {
+    const {
+      executionPrincipal,
+      authorization,
+      providerAuthSnapshot,
+      targetSnapshot,
+      instructionsOverride,
+      attributionError,
+    } = launch;
+    let promptAttempted = false;
+    try {
+      if (attributionError !== undefined) throw attributionError;
+      if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
+      if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
+      const sessionId = generateId();
+      // Claim the generated session before initialization. Otherwise the orphan sweep can
+      // terminalize an old `starting` row while initialization is still creating its session.
+      // The deadline claimed here is the deployment-wide one; session creation replaces it
+      // with the budget this session's own settings resolve to. If the worker dies in
+      // between, the run stays covered by the shorter of the two, which is what a launch
+      // that never finished deserves.
+      const claimedAt = Date.now();
+      const claimed = await store.claimRunSession(
+        child.id,
+        sessionId,
+        claimedAt,
+        claimedAt + this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS)
+      );
+      if (!claimed) {
+        throw new Error("Automation run was recovered before launch claimed its session");
+      }
+      await this.createSessionForAutomationRun(
+        store,
+        automation,
+        child,
+        providerAuthSnapshot.providerAuth,
+        sessionId,
+        executionPrincipal,
+        claimedAt,
+        {
+          authorization,
+          target: targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
+        }
+      );
+      promptAttempted = true;
+      await this.sendPromptToSession(
+        sessionId,
+        automation,
+        child.id,
+        executionPrincipal,
+        instructionsOverride
+      );
+      child.status = "running";
+      child.session_id = sessionId;
+      await this.releaseFollowUpsHeldDuringLaunch(store, child);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.log.error("Failed to launch automation run", {
+        event: "scheduler.session_creation_failed",
+        automation_id: automation.id,
+        invocation_id: child.invocation_id,
+        run_id: child.id,
+        error: message,
+      });
+      // Losing authorization is not an automation failure: the run is unauthorized, so only
+      // genuine sibling failures count a strike. The next admission re-evaluates the
+      // principal and pauses if still denied.
+      const outcome: Partial<AutomationRunRow> =
+        e instanceof AutomationExecutionUnauthorizedError
+          ? { status: "unauthorized", failure_reason: e.reason, session_id: null }
+          : { status: "failed", failure_reason: message, retryable: promptAttempted ? 0 : 1 };
+      try {
+        await store.updateRun(child.id, { ...outcome, completed_at: Date.now() });
+      } catch (updateError) {
+        this.log.error("Failed to record launch failure", {
+          event: "scheduler.fail_track_error",
+          automation_id: automation.id,
+          run_id: child.id,
+          original_reason: message,
+          error: updateError instanceof Error ? updateError.message : String(updateError),
+        });
+      }
+      Object.assign(child, outcome);
+    }
+  }
+
+  /** Retry only failed targets; successful siblings and the schedule slot remain unchanged. */
+  private async retrySweep(store: AutomationStore, now: number): Promise<number> {
+    let due: AutomationRunRow[];
+    try {
+      await withdrawIneligibleRetries(this.db, now);
+      due = await listDueRetries(this.db, now, MAX_PER_TICK);
+    } catch (error) {
+      this.log.error("Failed to discover due automation retries", {
+        event: "scheduler.retry_discovery_failed",
+        error,
+      });
+      return 0;
+    }
+    let launched = 0;
+    for (const previous of due) {
+      try {
+        const automation = await store.getById(previous.automation_id);
+        const invocation = await store.getInvocationById(previous.invocation_id);
+        if (!automation || !invocation) continue;
+        const context = automationRetryContextSchema.parse(
+          JSON.parse(invocation.retry_context ?? "null")
+        );
+        let child = { ...previous };
+        let claimed = false;
+        const authorization: AutomationExecutionAuthorizationRequest = {
+          automationId: automation.id,
+          executionUserId: context.platformUserId,
+          requiresRepositoryUse: child.repo_owner !== null,
+          requiresEnvironmentUse: child.environment_id !== null,
+        };
+        try {
+          const principal: ExecutionPrincipal = {
+            ...context,
+            scmEnrichment: await this.resolveScmEnrichment(context.platformUserId),
+          };
+          const providerAuth = await resolveAutomationProviderAuth(
+            this.db,
+            automation.id,
+            getValidHarnessOrDefault(automation.harness)
+          );
+          await validateHarnessExecution(
+            this.db,
+            this.env,
+            {
+              harness: getValidHarnessOrDefault(automation.harness),
+              model: automation.model,
+              reasoningEffort: automation.reasoning_effort,
+            },
+            Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+          );
+          if (child.target_resolved === 0) {
+            const [resolution] = await this.resolveRepositoryRequests(
+              [
+                {
+                  repo_owner: child.repo_owner!,
+                  repo_name: child.repo_name!,
+                  repo_id: child.repo_id,
+                  base_branch: child.base_branch,
+                },
+              ],
+              context.eventRepositoryId
+            );
+            if (!resolution.repository)
+              throw new Error(resolution.error ?? "Repository resolution failed");
+            Object.assign(child, {
+              repo_owner: resolution.repository.repoOwner,
+              repo_name: resolution.repository.repoName,
+              repo_id: resolution.repository.repoId,
+              base_branch: resolution.repository.baseBranch,
+              target_resolved: 1,
+            });
+          }
+          const admission = await prepareAutomationTargetAdmission(
+            this.db,
+            this.env,
+            automation,
+            [child],
+            this.backgroundJobs,
+            this.log
+          );
+          const admitted = await claimRetry(this.db, child, now, admission.teamGrantsVersion);
+          if (!admitted) continue;
+          child = admitted;
+          claimed = true;
+          launched++;
+          this.log.info("Launching automation retry", {
+            event: "scheduler.retry",
+            automation_id: automation.id,
+            invocation_id: child.invocation_id,
+            run_id: child.id,
+            attempt: child.attempt,
+          });
+          await this.launchChild(store, automation, child, {
+            executionPrincipal: principal,
+            authorization,
+            providerAuthSnapshot: { providerAuth },
+            targetSnapshot: admission.targets.get(child.id),
+            instructionsOverride: context.instructions,
+          });
+        } catch (error) {
+          if (!claimed) {
+            const admitted = await claimRetry(this.db, previous, now);
+            if (!admitted) continue;
+            child = admitted;
+            launched++;
+          }
+          await store.updateRun(child.id, {
+            status:
+              error instanceof AutomationExecutionUnauthorizedError ? "unauthorized" : "failed",
+            completed_at: Date.now(),
+            failure_reason:
+              error instanceof AutomationExecutionUnauthorizedError
+                ? error.reason
+                : error instanceof Error
+                  ? error.message
+                  : String(error),
+            retryable: 1,
+          });
+        }
+        await this.applyInvocationAccounting(store, automation.id, child.invocation_id);
+        const settled = await store.getRunById(automation.id, child.id);
+        if (
+          settled &&
+          (settled.status === "failed" || settled.status === "unauthorized") &&
+          (await store.claimRetryCompletionPublication(child.id))
+        ) {
+          // Use an existing attempt's session for publication scope when this retry never opened one.
+          const history = await store.getInvocation(automation.id, child.invocation_id);
+          let sessionId: string | undefined;
+          const sessions = new SessionIndexStore(this.db);
+          for (const attempt of history?.runs.slice().reverse() ?? []) {
+            if (attempt.sessionId && (await sessions.get(attempt.sessionId))) {
+              sessionId = attempt.sessionId;
+              break;
+            }
+          }
+          if (sessionId) {
+            await this.notifySlackCompletion(store, settled, {
+              automationId: automation.id,
+              runId: child.id,
+              sessionId,
+              messageId: `automation-retry-failure:${child.id}`,
+              success: false,
+              error: settled.failure_reason ?? "Automation retry failed",
+            });
+          } else {
+            this.log.warn("Skipping retry completion without a session publication scope", {
+              event: "scheduler.retry_completion_missing_session",
+              run_id: child.id,
+            });
+          }
+        }
+      } catch (error) {
+        this.log.error("Automation retry failed; continuing scheduler tick", {
+          event: "scheduler.retry_failed",
+          automation_id: previous.automation_id,
+          invocation_id: previous.invocation_id,
+          run_id: previous.id,
+          error,
+        });
+      }
+    }
+    return launched;
   }
 
   /**
@@ -919,6 +1130,7 @@ export class Scheduler {
 
     // 1. Recovery sweeps
     await this.recoverySweep(store);
+    launchedChildren += await this.retrySweep(store, now);
     await sweepHeldPrompts(this.continuityDeps(store), now);
 
     // 2. Process overdue automations, bounded by the per-tick child budget.
@@ -964,10 +1176,8 @@ export class Scheduler {
 
         switch (result.outcome) {
           case "started":
-            // Summary parity with the pre-invocations tick: a firing that
-            // launched nothing (every child pre-failed or failed to launch)
-            // reports as failed, not processed.
-            if (result.launched > 0) {
+            // A queued retry is accepted work. Only a final launch failure counts as failed.
+            if (result.launched > 0 || result.runs.some((run) => run.status === "retrying")) {
               processed++;
             } else if (allRunsUnauthorized(result.runs)) {
               skipped++;
@@ -1488,9 +1698,8 @@ export class Scheduler {
 
       switch (result.outcome) {
         case "started":
-          // Counter parity with the pre-invocations path: a firing whose
-          // launch failed counted as neither triggered nor skipped.
-          if (result.launched > 0) {
+          // A queued retry is accepted work even when its first launch failed.
+          if (result.launched > 0 || result.runs.some((run) => run.status === "retrying")) {
             triggered++;
           } else if (allRunsUnauthorized(result.runs)) {
             skipped++;
@@ -1578,7 +1787,7 @@ export class Scheduler {
     const runs = result.runs.map((run) =>
       toAutomationRun({ ...run, session_title: null, artifact_summary: null })
     );
-    if (result.launched === 0) {
+    if (result.launched === 0 && !result.runs.some((run) => run.status === "retrying")) {
       this.log.error("Manual trigger failed", {
         event: "scheduler.manual_trigger_failed",
         automation_id: automationId,
@@ -1605,12 +1814,12 @@ export class Scheduler {
     const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
-    if (!run) {
+    if (!run || run.superseded_at != null || run.status === "retrying") {
       this.log.warn("Ignoring run-complete callback for non-active run", {
         event: "scheduler.run_complete_ignored",
         automation_id: body.automationId,
         run_id: body.runId,
-        current_status: "not_found",
+        current_status: run?.status ?? "not_found",
       });
       return;
     }
@@ -1632,6 +1841,7 @@ export class Scheduler {
         : {
             status: "failed",
             failure_reason: body.error || "Unknown error",
+            retryable: body.cancelled ? 0 : 1,
             completed_at: now,
           }
     );
@@ -1673,6 +1883,9 @@ export class Scheduler {
       await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
     }
 
+    const updatedRun = await store.getRunById(body.automationId, body.runId);
+    if (updatedRun?.superseded_at != null || updatedRun?.status === "retrying") return;
+
     if (body.success) {
       this.log.info("Run completed successfully", {
         event: "scheduler.run_complete",
@@ -1695,7 +1908,9 @@ export class Scheduler {
     // this fan-out (not the session callback path) because the message
     // coordinates live on the invocation. Only the terminal CAS winner owns
     // publication retries; retrying runComplete itself would be ignored.
-    await this.notifySlackCompletion(store, run, body);
+    if ((run.attempt ?? 1) <= 1 || (await store.claimRetryCompletionPublication(run.id))) {
+      await this.notifySlackCompletion(store, run, body);
+    }
   }
 
   /**
@@ -1901,37 +2116,22 @@ export class Scheduler {
     return resolveExecutionBudgetMs(sandboxSettings, this.env) + EXECUTION_DEADLINE_GRACE_MS;
   }
 
-  /**
-   * Resolve each launch candidate's session target once, at admission, so grant coverage is
-   * checked against exactly what launch will open. Resolution errors become launch failures.
-   */
-  private async resolveLaunchTargets(
-    automation: AutomationRow,
-    candidates: readonly AutomationRunRow[]
-  ): Promise<ReadonlyMap<string, LaunchTargetSnapshot>> {
-    const snapshots = new Map<string, LaunchTargetSnapshot>();
-    await Promise.all(
-      candidates.map(async (child) => {
-        try {
-          const target = await resolveAutomationSessionTarget(
-            this.env,
-            child,
-            {
-              trace_id: `automation:${automation.id}`,
-              request_id: child.id,
-              metrics: createRequestMetrics(),
-              db: this.db,
-              executionCtx: this.backgroundJobs,
-            },
-            this.log
-          );
-          snapshots.set(child.id, { target });
-        } catch (error) {
-          snapshots.set(child.id, { error });
-        }
-      })
-    );
-    return snapshots;
+  private async resolveRepositoryRequests(
+    selection: AutomationRepositoryInsert[],
+    eventRepositoryId?: number
+  ) {
+    const resolutions = await resolveAutomationRepositories(this.env, selection);
+    for (const resolution of resolutions) {
+      if (
+        eventRepositoryId !== undefined &&
+        resolution.repository &&
+        resolution.repository.repoId !== eventRepositoryId
+      ) {
+        resolution.repository = null;
+        resolution.error = "Repository identity changed during event resolution";
+      }
+    }
+    return resolutions;
   }
 
   private async createSessionForAutomationRun(

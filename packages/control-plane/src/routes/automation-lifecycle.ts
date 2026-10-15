@@ -3,13 +3,10 @@
  */
 
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
+import { AutomationExecutionUnauthorizedError } from "../automation/authorization-guard";
 import { AutomationStore } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
-import {
-  AutomationExecutionUnauthorizedError,
-  AutomationTriggerBlockedError,
-  Scheduler,
-} from "../scheduler/scheduler";
+import { AutomationTriggerBlockedError, Scheduler } from "../scheduler/scheduler";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -41,7 +38,7 @@ async function handlePauseAutomation(
   const id = params.id;
 
   const store = new AutomationStore(ctx.db);
-  const result = await ctx.db.batch([store.bindPause(id)]);
+  const result = await ctx.db.batch([store.bindPause(id), store.bindWithdrawIneligibleRetries(id)]);
   const paused = result[0]?.meta.changes === 1;
   if (!paused) return error("Automation not found", 404);
 

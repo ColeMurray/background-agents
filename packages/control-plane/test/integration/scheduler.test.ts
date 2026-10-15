@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
+import { AutomationExecutionUnauthorizedError } from "../../src/automation/authorization-guard";
 import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { GitHubAutomationStore } from "../../src/db/github-automation-store";
@@ -8,11 +9,7 @@ import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { seedTeam } from "./ownership-test-helpers";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-import {
-  AutomationExecutionUnauthorizedError,
-  Scheduler,
-  resolveAutomationProviderAuth,
-} from "../../src/scheduler/scheduler";
+import { Scheduler, resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";

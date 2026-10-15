@@ -19,6 +19,8 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import { SessionBudgetService } from "./budget-service";
+import type { EventRepository } from "./event-repository";
 import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
@@ -1823,6 +1825,13 @@ describe("SessionMessageQueue", () => {
     expect(preparation).not.toBeNull();
     if (!preparation) throw new Error("Expected a prepared stop");
     await h.executionStop.deliver(preparation);
+    await h.backgroundTasks.settle();
+
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-budget",
+      false,
+      "Session cost limit reached"
+    );
 
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ error: "Session cost limit reached" }),
@@ -1835,6 +1844,34 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.alarmDeadlines.setPendingEarliest).toHaveBeenCalledWith(expect.any(Number));
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+  });
+
+  it("reports budget exhaustion as a failure without user cancellation", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ total_cost: 10 }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-budget",
+      created_at: 900,
+    });
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    const budget = new SessionBudgetService(
+      { ...h.repository, setSessionBudget: vi.fn() } as unknown as SessionCoreRepository,
+      { raiseReportedCost: vi.fn() },
+      h.repository as unknown as EventRepository,
+      { broadcast: h.broadcast, sendToSandbox: vi.fn() },
+      h.executionStop,
+      () => h.queue.processMessageQueue(),
+      () => "budget-warning"
+    );
+
+    await budget.updateLimit(5, 1000);
+    await h.backgroundTasks.settle();
+
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledExactlyOnceWith(
+      "msg-budget",
+      false,
+      "Session cost limit reached: $10.00 of $5.00"
+    );
   });
 
   it("continues budget stop delivery when alarm scheduling fails", async () => {
@@ -1955,6 +1992,14 @@ describe("SessionMessageQueue", () => {
     });
 
     await h.executionStop.stop();
+    await h.backgroundTasks.settle();
+
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledExactlyOnceWith(
+      "msg-9",
+      false,
+      "Execution was stopped",
+      true
+    );
 
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2205,6 +2250,19 @@ describe("SessionMessageQueue", () => {
       }),
       expect.any(Number),
       "processing"
+    );
+    await h.backgroundTasks.settle();
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-pending",
+      false,
+      "Execution was cancelled before it started",
+      true
+    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-processing",
+      false,
+      "Execution was cancelled",
+      true
     );
   });
 

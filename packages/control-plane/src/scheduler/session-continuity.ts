@@ -37,6 +37,7 @@ const SESSION_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const HELD_PROMPT_RETRY_MS = 2 * 60 * 1000;
 const HELD_PROMPT_SWEEP_LIMIT = 50;
+const MAX_CONTINUATION_ATTEMPTS = 3;
 
 /**
  * The clientRequestId of a run's own first prompt: the session can say whether it took
@@ -118,19 +119,30 @@ export async function continueSession(
   now: number,
   policy: ContinuationPolicy
 ): Promise<ContinuationOutcome> {
-  const run = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
-  if (!run || run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS)
-    return { kind: "fall_through" };
-  if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy);
+  let invocationId: string | undefined;
+  for (let attempt = 0; attempt < MAX_CONTINUATION_ATTEMPTS; attempt++) {
+    const run = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
+    if (!run || run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS)
+      return { kind: "fall_through" };
+    invocationId = run.invocation_id;
+    if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy);
 
-  const held = await holdFollowUp(deps, run, policy);
-  if (held) return held;
-  // The run got past its first prompt, and its held follow-ups were released, while
-  // this follow-up was being built.
-  const launched = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
-  return launched && !holdsFollowUps(launched)
-    ? continueRunSession(deps, launched, policy)
-    : { kind: "fall_through" };
+    const held = await holdFollowUp(deps, run, policy);
+    if (held) return held;
+    // Launch or retry ownership changed while the prompt was built. Re-read the current
+    // attempt rather than letting an accepted thread reply fall through to trigger matching.
+  }
+  await policy.releaseDelivery?.();
+  deps.log.warn("Follow-up continuity did not stabilize", {
+    event: "scheduler.continuity_unstable",
+    automation_id: automation.id,
+  });
+  return {
+    kind: "refused",
+    invocationId: invocationId!,
+    status: null,
+    code: "continuity_unstable",
+  };
 }
 
 /**
@@ -245,6 +257,7 @@ async function settleHeldPrompts(
   deps: SessionContinuityDeps,
   run: AutomationRunRow
 ): Promise<boolean> {
+  if (run.status === "retrying") return false;
   if (run.status === "starting" || run.first_prompt_pending === 1 || run.session_id === null) {
     const queued =
       run.status !== "starting" &&
@@ -277,6 +290,7 @@ async function settleHeldPrompts(
 function holdsFollowUps(run: ContinuableRunRow): boolean {
   return (
     run.status === "starting" ||
+    run.status === "retrying" ||
     (run.status === "running" && run.first_prompt_pending === 1) ||
     run.has_held_prompts === 1
   );

@@ -44,6 +44,7 @@ export const mockStore = {
   bindAutomationUpdate: vi.fn(),
   bindSoftDelete: vi.fn(),
   bindPause: vi.fn(),
+  bindWithdrawIneligibleRetries: vi.fn(),
   bindResume: vi.fn(),
   bindRepositoryInserts: vi.fn(),
   bindReplaceRepositories: vi.fn(),
@@ -198,6 +199,7 @@ export function applyMockDefaults(): void {
   mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
   mockStore.bindAutomationUpdate.mockReturnValue({ sql: "update-automation" });
   mockStore.bindSoftDelete.mockReturnValue({ sql: "delete-automation" });
+  mockStore.bindWithdrawIneligibleRetries.mockReturnValue({ sql: "withdraw-retries" });
   mockStore.bindPause.mockReturnValue({ sql: "pause-automation" });
   mockStore.bindResume.mockReturnValue({ sql: "resume-automation" });
   mockStore.bindRepositoryInserts.mockReturnValue([{ sql: "insert-repositories" }]);

@@ -8,12 +8,10 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AutomationExecutionUnauthorizedError } from "../automation/authorization-guard";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { ModelPreferencesStore } from "../db/model-preferences";
-import {
-  AutomationExecutionUnauthorizedError,
-  AutomationTriggerBlockedError,
-} from "../scheduler/scheduler";
+import { AutomationTriggerBlockedError } from "../scheduler/scheduler";
 import { createTestRequestHandler } from "../router.test-support";
 import { automationRoutes } from "./automations";
 import {
@@ -88,12 +86,6 @@ vi.mock("../session/identity", () => ({
 }));
 
 vi.mock("../scheduler/scheduler", () => ({
-  AutomationExecutionUnauthorizedError: class AutomationExecutionUnauthorizedError extends Error {
-    constructor() {
-      super("Automation owner is not authorized to execute");
-      this.name = "AutomationExecutionUnauthorizedError";
-    }
-  },
   AutomationTriggerBlockedError: class AutomationTriggerBlockedError extends Error {
     constructor(readonly reason = "concurrent_run_active") {
       super("An active run already exists");
@@ -120,6 +112,11 @@ describe("automation lifecycle routes", () => {
       const res = await callRoute("POST", "/automations/auto-1/pause");
       expect(res.status).toBe(200);
       expect(mockStore.bindPause).toHaveBeenCalledWith("auto-1");
+      expect(mockStore.bindWithdrawIneligibleRetries).toHaveBeenCalledWith("auto-1");
+      expect(mockBatch).toHaveBeenCalledWith([
+        { sql: "pause-automation" },
+        { sql: "withdraw-retries" },
+      ]);
     });
 
     it("returns 404 when not found", async () => {
@@ -290,7 +287,10 @@ describe("automation lifecycle routes", () => {
       const res = await callRoute("POST", "/automations/auto-1/trigger");
 
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "Execution authorization required" });
+      expect(await res.json()).toEqual({
+        error: "Execution authorization required",
+        reason_code: "execution_authorization_denied",
+      });
     });
 
     it("returns 500 when the scheduler cannot launch the automation", async () => {

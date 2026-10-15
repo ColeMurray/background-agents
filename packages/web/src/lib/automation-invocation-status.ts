@@ -7,6 +7,7 @@ export const AUTOMATION_INVOCATION_STATUS: Record<
   { label: string; tone: AutomationInvocationTone }
 > = {
   starting: { label: "Starting", tone: "neutral" },
+  retrying: { label: "Retrying", tone: "warning" },
   running: { label: "Running", tone: "info" },
   completed: { label: "Completed", tone: "success" },
   failed: { label: "Failed", tone: "danger" },

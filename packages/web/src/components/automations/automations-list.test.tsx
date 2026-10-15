@@ -226,6 +226,28 @@ describe("AutomationsList actions", () => {
 });
 
 describe("AutomationsList execution activity", () => {
+  it("labels a pending retry in recent execution activity", () => {
+    render(
+      <AutomationsList
+        canCreate
+        automations={[
+          makeAutomation({
+            recentExecutions: [{ id: "inv-retry", status: "retrying", createdAt: 100 }],
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+    expect(screen.getByRole("listitem", { name: /^Retrying,/ })).toHaveAttribute(
+      "data-status-shape",
+      "retrying"
+    );
+  });
+
   it("renders an unauthorized execution as a terminal denial with an accessible label", () => {
     render(
       <AutomationsList
