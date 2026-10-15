@@ -219,7 +219,7 @@ class ClaudeHarness:
         self._needs_reconnect = False
         self._reconnects = 0
         self._interrupted = False
-        self._turn_open = False
+        self._turn_deadline: float | None = None
         self._steered = 0
         self._echoed = 0
         self._tool_client: ControlPlaneToolClient | None = None
@@ -477,7 +477,7 @@ class ClaudeHarness:
         try:
             async with asyncio.timeout_at(deadline):
                 await client.query(self._user_messages(prompt))
-                self._turn_open = True
+                self._turn_deadline = deadline
                 stream = aiter(client.receive_messages())
                 while True:
                     try:
@@ -529,20 +529,26 @@ class ClaudeHarness:
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
         finally:
-            self._turn_open = False
+            self._turn_deadline = None
 
     async def steer(self, prompt: HarnessPrompt) -> bool:
         client = self._client
-        if not self._turn_open or self._interrupted or self._echoed == 0 or client is None:
+        deadline = self._turn_deadline
+        if deadline is None or self._interrupted or self._echoed == 0 or client is None:
             return False
         # Counted before the await, so a result arriving meanwhile keeps the turn open for it.
         self._steered += 1
         try:
-            await client.query(self._user_messages(prompt))
+            async with asyncio.timeout_at(deadline):
+                await client.query(self._user_messages(prompt))
+        except TimeoutError:
+            self._steered -= 1
+            return False
         except BaseException:
             self._steered -= 1
             raise
-        return True
+        # A turn that closed meanwhile also dropped its client, so the agent never answers it.
+        return self._turn_deadline == deadline and not self._interrupted
 
     async def _interrupt_within_budget(self) -> bool:
         """Interrupt within the cleanup budget; drop the child if that hangs too.
