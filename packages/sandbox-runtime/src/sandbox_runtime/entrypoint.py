@@ -27,6 +27,7 @@ from .image_build_context_start import (
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
+from .mcp_packages import McpPackageInstaller
 from .memories import MemoryMaterializer, SessionMemoryClient, memory_path
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
@@ -64,10 +65,18 @@ def build_harness_process(
                 warnings.record,
             )
         case HarnessId.CLAUDE:
-            return ClaudeStager(config.claude_stager_config(), log, config_dir=claude_config_dir)
+            return ClaudeStager(
+                config.claude_stager_config(),
+                log,
+                config_dir=claude_config_dir,
+                mcp_packages=McpPackageInstaller(log),
+            )
         case HarnessId.CODEX:
             return CodexStager(
-                config.codex_stager_config(), log, config_dir=resolve_codex_config_dir()
+                config.codex_stager_config(),
+                log,
+                config_dir=resolve_codex_config_dir(),
+                mcp_packages=McpPackageInstaller(log),
             )
     raise ValueError(f"Unsupported harness: {config.harness}")
 
