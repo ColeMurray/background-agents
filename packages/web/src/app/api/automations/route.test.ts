@@ -87,6 +87,17 @@ describe("automations API route (POST)", () => {
     expect(controlPlaneBody()).toEqual({ ...validBody, teamId });
   });
 
+  it("forwards a one-shot timestamp without adding cron", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: {} }, { status: 201 })
+    );
+    const { scheduleCron: _cron, ...oneShot } = validBody;
+    const body = { ...oneShot, scheduleOnceAt: Date.now() + 60_000 };
+    expect((await POST(postRequest(body))).status).toBe(201);
+    expect(controlPlaneBody()).toEqual(body);
+  });
+
   it("returns 401 when the user session is missing", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue(null);
 

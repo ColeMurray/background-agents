@@ -308,8 +308,8 @@ interface StartInvocationParams {
   executionPrincipal?: ExecutionPrincipal;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
   scheduledAt?: number;
-  /** Next cron slot, advanced atomically with the insert (schedule source only). */
-  advanceToNextRunAt?: number;
+  /** Next slot, or null to disable a one-shot; advanced atomically with its invocation. */
+  advanceToNextRunAt?: number | null;
   triggerKey?: string | null;
   /** Finalize a webhook follow-up reservation as soon as its invocation is admitted. */
   webhookFollowUpClaimId?: string;
@@ -665,7 +665,7 @@ export class Scheduler {
         // A UNIQUE violation rolls back the whole batch INCLUDING the schedule
         // advance. The colliding firing owns this slot (cron double-fire) or
         // event (trigger_key dedup) — re-advance and stand down.
-        if (source === "schedule" && params.advanceToNextRunAt !== undefined) {
+        if (source === "schedule" && params.advanceToNextRunAt != null) {
           // Monotonic: never rewind the schedule. A stale duplicate for an old
           // slot must not move next_run_at behind a newer tick's advance.
           await store.advanceNextRunAt(automation.id, params.advanceToNextRunAt);
@@ -691,9 +691,11 @@ export class Scheduler {
     }
     if (!inserted) {
       // Raced an active invocation between the pre-check and the batch. The
-      // batch's schedule advance already ran (deliberately unconditional), so
-      // the skip record must not advance again.
-      return this.recordOverlapSkip(store, params, { advanceSchedule: false });
+      // recurring schedule already advanced. A one-shot keeps its slot until
+      // the skip is recorded, so disabling it cannot lose the history entry.
+      return this.recordOverlapSkip(store, params, {
+        advanceSchedule: automation.schedule_once_at != null,
+      });
     }
 
     if (params.webhookFollowUpClaimId && triggerKey) {
@@ -948,10 +950,10 @@ export class Scheduler {
         break;
       }
       try {
-        const nextRunAt = nextCronOccurrence(
-          automation.schedule_cron!,
-          automation.schedule_tz
-        ).getTime();
+        const nextRunAt =
+          automation.schedule_once_at != null
+            ? null
+            : nextCronOccurrence(automation.schedule_cron!, automation.schedule_tz).getTime();
 
         const result = await this.startInvocation(store, {
           automation,

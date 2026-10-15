@@ -46,6 +46,7 @@ const automation: AutomationRow = {
   trigger_config: null,
   trigger_auth_data: null,
   schedule_cron: null,
+  schedule_once_at: null,
   schedule_tz: "UTC",
   harness: "opencode",
   model: "anthropic/claude-sonnet-4-6",
