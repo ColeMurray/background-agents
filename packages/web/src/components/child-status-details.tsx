@@ -126,7 +126,9 @@ function ChildStatusDetails({
       <details className="min-w-0 border border-border-muted bg-card p-3 text-xs">
         <summary className="cursor-pointer text-muted-foreground">Full tool output</summary>
         <pre className="mt-2 max-h-64 max-w-full overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-          {result.agentMessage}
+          {result.kind === "detail" && result.finalResponse
+            ? `${result.agentMessage}\n\nfinalResponse.textContent:\n${result.finalResponse.textContent}`
+            : result.agentMessage}
         </pre>
       </details>
     </div>

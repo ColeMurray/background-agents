@@ -49,7 +49,8 @@ def child_status_list_output(children: Sequence[Mapping[str, Any]], agent_messag
                 for child in children
             ],
             "agentMessage": agent_message,
-        }
+        },
+        ensure_ascii=False,
     )
 
 
@@ -76,5 +77,6 @@ def child_status_detail_output(detail: Mapping[str, Any], child_id: str, agent_m
             "hasUnfinishedPrompt": detail.get("hasUnfinishedPrompt") is True,
             "finalResponse": response,
             "agentMessage": agent_message,
-        }
+        },
+        ensure_ascii=False,
     )

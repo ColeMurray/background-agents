@@ -534,11 +534,14 @@ async def test_child_status_empty_list_and_error_fallback(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("producer", ["python", "opencode"])
-@pytest.mark.parametrize("response_chars", [MAX_EVENT_BYTES // 2, MAX_EVENT_BYTES - 20_000])
+@pytest.mark.parametrize(
+    ("response_char", "response_chars"),
+    [("x", MAX_EVENT_BYTES // 2), ("x", MAX_EVENT_BYTES - 20_000), ("🚀", 75_000)],
+)
 async def test_child_status_near_limit_response_survives_forwarding(
-    tmp_path: Path, producer: str, response_chars: int
+    tmp_path: Path, producer: str, response_char: str, response_chars: int
 ) -> None:
-    text = "x" * response_chars
+    text = response_char * response_chars
     detail = {
         "session": {"id": "c1", "title": "Large response", "status": "completed"},
         "finalResponse": {"success": True, "textContent": text},
@@ -596,3 +599,17 @@ async def test_child_status_near_limit_response_survives_forwarding(
     forwarded = sent_events(ws)[0]
     assert "truncated" not in forwarded
     assert json.loads(forwarded["output"])["finalResponse"]["textContent"] == text
+
+
+@pytest.mark.asyncio
+async def test_child_status_list_keeps_unicode_unescaped(tmp_path: Path) -> None:
+    title = "日本語 🧪"
+    tools, _ = _tools(
+        tmp_path,
+        lambda _r: httpx.Response(
+            200, json={"children": [{"id": "c1", "title": title, "status": "active"}]}
+        ),
+    )
+    output = _text(await tools.get_child_status({}))
+    assert title in output
+    assert json.loads(output)["children"][0]["title"] == title

@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@/types/session";
+import { childStatusDetailOutput } from "../../../sandbox-runtime/src/sandbox_runtime/tools/get-child-status-format.js";
 import { ToolCallItem } from "./tool-call-item";
 import { ToolCallGroup } from "./tool-call-group";
 import { toolCallKey } from "@/lib/timeline-items";
@@ -67,6 +68,24 @@ describe("child status tool presentation", () => {
       "https://github.com/acme/web/pull/42"
     );
     expect(screen.getByText("Full tool output")).toBeInTheDocument();
+  });
+
+  it("includes the producer's original Markdown inside Full tool output", () => {
+    const output = childStatusDetailOutput(
+      { session: detail.session, finalResponse: detail.finalResponse },
+      detail.session.id,
+      { includeResponse: true }
+    );
+    expect(JSON.parse(output).agentMessage).not.toContain(detail.finalResponse.textContent);
+    show(event(output));
+    const summary = screen.getByText("Full tool output");
+    fireEvent.click(summary);
+    const disclosure = summary.closest("details");
+    expect(disclosure).toHaveAttribute("open");
+    expect(disclosure?.querySelector("pre")?.textContent).toContain(
+      detail.finalResponse.textContent
+    );
+    expect(disclosure?.querySelector("pre")?.textContent).toContain("finalResponse.textContent:");
   });
 
   it("labels a previous response while another prompt is unfinished", () => {
