@@ -99,6 +99,23 @@ the OpenInspect runtime, which:
 OpenComputer owns sandbox hibernation and wake-up. Open-Inspect should not need to manually stop
 OpenComputer sandboxes during normal operation.
 
+### Checkpoint Retention
+
+Checkpoint creation explicitly disables automatic eviction (`retentionPolicy: { mode: "none" }`).
+OpenComputer's `delete_oldest` policy deletes an old checkpoint before creating its replacement.
+Repeated captures whose responses are lost could otherwise evict the last checkpoint that
+Open-Inspect has durably confirmed, leaving its recovery reference unusable.
+
+Provider quotas still apply. The inspected upstream implementation limits disk-only checkpoints to
+100 per source sandbox. At capacity, new captures fail instead of deleting recovery data. A healthy
+runtime still releases an uncertain routine checkpoint at its settle time, so queued work is not
+held indefinitely; graceful shutdown still requires a confirmed recovery point and may remain held.
+Long-lived sessions therefore require operator cleanup of checkpoints verified to be unreferenced
+before new captures can succeed. There is no automatic session-checkpoint cleanup in Open-Inspect.
+Do not delete checkpoints referenced by session recovery state, images, forks, or in-flight
+captures. This policy does not recover already-evicted checkpoints or cancel older in-flight
+eviction requests.
+
 ## Required Secrets
 
 Terraform passes these provider-level values to the control plane:

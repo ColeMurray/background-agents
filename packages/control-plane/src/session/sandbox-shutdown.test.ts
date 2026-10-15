@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
+import { OpenComputerRestClient } from "../sandbox/opencomputer-rest-client";
+import { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import {
   SandboxShutdownRepository,
@@ -2130,6 +2132,75 @@ describe("unconfirmed routine checkpoint settlement", () => {
       ([, fields]) => (fields as { decision?: string }).decision === decision
     );
   }
+
+  it("preserves OpenComputer's confirmed checkpoint across uncertain captures and quota failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    const checkpoints: string[] = [];
+    let quotaRejections = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      expect(init?.method).toBe("POST");
+      const { retentionPolicy } = JSON.parse(init?.body as string) as {
+        retentionPolicy: { mode: string; maxCount?: number };
+      };
+      // Model upstream's eviction BEFORE capture, independently of its response.
+      if (retentionPolicy.mode === "delete_oldest") {
+        const deleteCount = checkpoints.length - retentionPolicy.maxCount! + 1;
+        if (deleteCount > 0) checkpoints.splice(0, deleteCount);
+      }
+      if (checkpoints.length >= 100) {
+        quotaRejections++;
+        return new Response("Checkpoint limit reached", { status: 400 });
+      }
+      const id = `checkpoint-${checkpoints.length}`;
+      checkpoints.push(id);
+      if (checkpoints.length === 1) {
+        return Response.json({ id, sandboxId: "provider-object-1", status: "ready" });
+      }
+      return new Response("Response lost after remote capture", { status: 502 });
+    });
+    try {
+      const opencomputer = new OpenComputerSandboxProvider(
+        new OpenComputerRestClient({ apiUrl: "https://opencomputer.test", apiKey: "test-key" }),
+        { scmProvider: "github", sandboxAccessPasswordSecret: "test-secret" }
+      );
+      const f = fixture(opencomputer, { durable: true });
+      await readyWithoutDeadline(f);
+      let shutdown = f.shutdown;
+      await expect(
+        shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue")
+      ).resolves.toMatchObject({ outcome: "saved", imageId: "checkpoint-0" });
+
+      for (let attempt = 0; attempt < 101; attempt++) {
+        await expect(
+          shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue")
+        ).resolves.toEqual({ outcome: "unknown" });
+        expect(shutdown.admissionDecision()).toBe("held");
+
+        const settleAtMs = f.store.value!.captureOp!.settleAtMs;
+        f.setNow(settleAtMs);
+        vi.setSystemTime(settleAtMs);
+        f.sandboxRow.last_heartbeat = settleAtMs;
+        // Settlement must also survive losing the coordinator instance.
+        shutdown = new SandboxShutdownCoordinator(f.deps as never);
+        await expect(shutdown.handleAlarm()).resolves.toBe("continue");
+        expect(shutdown.admissionDecision()).toBe("ready");
+        expect(f.sandboxRow.status).toBe("ready");
+        expect(checkpoints).toContain("checkpoint-0");
+      }
+
+      expect(quotaRejections).toBe(2);
+      expect(checkpoints).toHaveLength(100);
+      expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledExactlyOnceWith(
+        GENERATION.sandboxId,
+        "checkpoint-0",
+        "runtime-1"
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 
   it("holds an unconfirmed provider outcome until its settle time without failing", async () => {
     const f = settlementFixture();

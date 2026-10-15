@@ -14,10 +14,9 @@ const log = createLogger("opencomputer-rest-client");
 
 export const OPENCOMPUTER_CHECKPOINT_KIND = "disk_only" as const;
 
-export const OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY = {
-  mode: "delete_oldest",
-  maxCount: 30,
-} as const;
+// Provider eviction happens before capture and cannot protect our last confirmed
+// recovery point. At quota, reject new captures rather than delete that point.
+export const OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY = { mode: "none" } as const;
 
 export interface OpenComputerRestConfig {
   /** OpenComputer API base URL, e.g. https://api.opencomputer.dev */

@@ -32,6 +32,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("disables automatic eviction when creating a checkpoint with default options", async () => {
+  fetchSpy.mockResolvedValue(
+    jsonResponse({ id: "checkpoint-1", sandboxId: "sb-1", status: "ready" })
+  );
+
+  await new OpenComputerRestClient(config).createCheckpoint("sb-1", "checkpoint");
+
+  expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({
+    name: "checkpoint",
+    kind: "disk_only",
+    retentionPolicy: { mode: "none" },
+  });
+});
+
 // OpenComputer launches the runtime via `exec`, whose shell does NOT inherit the
 // image's baked env. Pin both the runtime version and the managed interpreter:
 // relying on the provider shell's python alias can select a Python without the

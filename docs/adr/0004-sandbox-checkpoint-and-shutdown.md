@@ -68,6 +68,13 @@ first waits for the settle time and then captures the source itself. Checkpoints
 stopping the source, captures that stop or alter it, and shutdown captures keep their existing
 holds: shutdown uncertainty never reopens admission.
 
+Repeated capture attempts must not evict the last durably confirmed recovery artifact before a
+replacement is committed. OpenComputer captures disable automatic eviction for this reason; reaching
+its checkpoint quota fails the capture, not the retained recovery point. Routine settlement still
+releases a healthy runtime in that case. See
+[checkpoint retention](../OPENCOMPUTER_PROVIDER.md#checkpoint-retention) for the operator cleanup
+requirement.
+
 ### Keep scheduling bounds separate from retirement evidence
 
 A conservative request-start-plus-timeout estimate can schedule shutdown early. It cannot prove that
