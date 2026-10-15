@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ..attachment_processor import HydratedSessionAttachment
+    from ..conversation_recovery import ConversationRecovery
     from ..repo_config import RepoEntry
 
 
@@ -78,6 +79,8 @@ class HarnessPrompt:
     # before the turn began (holding the prompt while the sandbox booted).
     # ``None`` means the harness's configured ``prompt_max_duration_seconds``.
     max_duration_seconds: float | None = None
+    # The native lifecycle prepares recovery after resume and commits it at acceptance.
+    recovery: ConversationRecovery | None = None
 
 
 @dataclass(frozen=True)
@@ -141,7 +144,7 @@ class AgentHarness(Protocol):
         ...
 
     async def create_session(self) -> None:
-        """Create a fresh vendor session and set ``session_id``. The bridge calls this lazily."""
+        """Create a fresh vendor session and set ``session_id`` after native reopen/resume."""
         ...
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:

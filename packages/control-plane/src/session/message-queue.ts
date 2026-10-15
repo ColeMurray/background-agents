@@ -31,6 +31,7 @@ import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } fr
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
+import type { EventRepository } from "./event-repository";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -175,7 +176,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly eventRepository: Pick<EventRepository, "getRecoveryContext">
   ) {}
 
   async enqueueAutofix(
@@ -555,6 +557,7 @@ export class SessionMessageQueue {
       type: "prompt",
       messageId: message.id,
       content: message.content,
+      recoveryContext: this.eventRepository.getRecoveryContext(message.id),
       model: resolvedModel,
       reasoningEffort: resolvedEffort,
       author: {

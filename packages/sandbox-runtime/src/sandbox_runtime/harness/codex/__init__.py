@@ -289,7 +289,7 @@ class CodexHarness:
                 "excludeTurns": True,
             },
         )
-        return result.get("thread", {}).get("id") == thread_id
+        return bool(result.get("thread", {}).get("id") == thread_id)
 
     async def resume_session(self, persisted_id: str) -> bool:
         if persisted_id == self.session_id:
@@ -372,10 +372,18 @@ class CodexHarness:
                 # API-key login is already established for this process in open().
                 if self.config.oauth_managed:
                     await self._authenticate()
-                if not self.session_id:
+                fresh = self.session_id is None
+                if fresh:
+                    if prompt.recovery:
+                        prompt.recovery.creating()
                     await self.create_session()
                 assert self._client is not None and self.session_id is not None
-                inputs: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]
+                text = (
+                    await prompt.recovery.prepare(self.session_id, prompt.text, fresh=fresh)
+                    if prompt.recovery
+                    else prompt.text
+                )
+                inputs: list[dict[str, Any]] = [{"type": "text", "text": text}]
                 for attachment in prompt.attachments:
                     directory = self.config.state_dir / "openinspect-input"
                     directory.mkdir(exist_ok=True, mode=0o700)
@@ -395,22 +403,31 @@ class CodexHarness:
                 self._persist()
                 self._submitting = True
                 self._turn_known.clear()
-                response = await self._client.request(
-                    "turn/start",
-                    {
-                        "threadId": self.session_id,
-                        "input": inputs,
-                        "model": model,
-                        "effort": prompt.reasoning_effort,
-                        "approvalPolicy": "never",
-                        "sandboxPolicy": {
-                            "type": "externalSandbox",
-                            "networkAccess": "enabled",
+                if prompt.recovery:
+                    prompt.recovery.submitting()
+                try:
+                    response = await self._client.request(
+                        "turn/start",
+                        {
+                            "threadId": self.session_id,
+                            "input": inputs,
+                            "model": model,
+                            "effort": prompt.reasoning_effort,
+                            "approvalPolicy": "never",
+                            "sandboxPolicy": {
+                                "type": "externalSandbox",
+                                "networkAccess": "enabled",
+                            },
                         },
-                    },
-                )
+                    )
+                except CodexRpcError:
+                    if prompt.recovery:
+                        prompt.recovery.rejected()
+                    raise
                 self._turn_id = response["turn"]["id"]
                 self._turn_known.set()
+                if prompt.recovery:
+                    prompt.recovery.accepted()
                 state = CodexTurnEvents(
                     prompt.message_id,
                     self.session_id,

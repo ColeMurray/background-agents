@@ -14,6 +14,7 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
 import type { GitPushSpec } from "../source-control";
+import type { ConversationRecoveryContext } from "./event-repository";
 import { z } from "zod";
 
 // Database row types (match SQLite schema)
@@ -232,6 +233,7 @@ interface PromptCommand {
   type: "prompt";
   messageId: string;
   content: string;
+  recoveryContext?: ConversationRecoveryContext;
   model?: string; // LLM model for per-message override
   reasoningEffort?: string; // Reasoning effort level
   author: {

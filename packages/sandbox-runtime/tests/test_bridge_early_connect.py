@@ -520,15 +520,13 @@ class TestCommandsWhileBooting:
     async def test_slow_preflight_is_taken_off_the_turn_budget(self, tmp_path, monkeypatch):
         """One deadline covers the whole prompt, the work before the turn included."""
 
-        class SlowSessionHarness(ScriptedHarness):
-            async def create_session(self) -> None:
-                await asyncio.sleep(0.2)
-                self.session_id = "oc-session-new"
+        async def slow_git_identity(*_args):
+            await asyncio.sleep(0.2)
 
-        harness = SlowSessionHarness(session_id=None)
+        harness = ScriptedHarness()
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
         bridge._send_event = AsyncMock()
-        bridge.git_signing.refresh = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock(side_effect=slow_git_identity)
 
         await bridge._handle_prompt(_agent_prompt("msg-1"))
 
@@ -555,15 +553,13 @@ class TestCommandsWhileBooting:
     ):
         """The deadline is enforced on the work before the turn, not only subtracted."""
 
-        class StalledSessionHarness(ScriptedHarness):
-            async def create_session(self) -> None:
-                await asyncio.sleep(0.5)
-                self.session_id = "oc-session-new"
+        async def stalled_git_identity(*_args):
+            await asyncio.sleep(0.5)
 
-        harness = StalledSessionHarness(session_id=None)
+        harness = ScriptedHarness()
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
         bridge._send_event = AsyncMock()
-        bridge.git_signing.refresh = AsyncMock()
+        bridge.git_signing.refresh = AsyncMock(side_effect=stalled_git_identity)
         bridge.prompt_limits = replace(bridge.prompt_limits, prompt_max_duration_seconds=0.05)
 
         started_at = time.monotonic()

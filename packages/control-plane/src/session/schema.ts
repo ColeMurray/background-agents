@@ -277,6 +277,9 @@ CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
+CREATE INDEX IF NOT EXISTS idx_events_recovery_chronology
+ON events(created_at DESC, timeline_sequence DESC)
+WHERE type IN ('user_message', 'token');
 CREATE INDEX IF NOT EXISTS idx_step_usage_message ON step_usage(message_id);
 CREATE INDEX IF NOT EXISTS idx_step_usage_created ON step_usage(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);

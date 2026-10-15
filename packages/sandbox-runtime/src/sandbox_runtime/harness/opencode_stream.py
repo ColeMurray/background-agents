@@ -22,6 +22,7 @@ from ..child_activity import (
 from ..message_attribution import AssistantMessageDisposition, MessageAttribution
 from ..opencode_identifier import OpenCodeIdentifier
 from .opencode_client import (
+    PromptRejectedError,
     SSEConnectionError,
     SSEInactivityTimeoutError,
     SSEStreamDisconnectedError,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from ..attachment_processor import AttachmentProcessor, HydratedSessionAttachment
+    from ..conversation_recovery import ConversationRecovery
     from ..log_config import StructuredLogger
     from .opencode_client import OpenCodeClient
 
@@ -177,6 +179,8 @@ class OpenCodePromptStream:
         reasoning_effort: str | None = None,
         attachments: list[HydratedSessionAttachment] | None = None,
         max_duration_seconds: float | None = None,
+        recovery: ConversationRecovery | None = None,
+        fresh: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
@@ -189,9 +193,6 @@ class OpenCodePromptStream:
         maximum, for a caller that already spent part of the prompt's budget.
         """
         opencode_message_id = OpenCodeIdentifier.ascending("message")
-        request_body = self._build_prompt_request_body(
-            content, model, opencode_message_id, reasoning_effort, attachments
-        )
 
         state = _PromptState(
             opencode_session_id=opencode_session_id,
@@ -215,7 +216,23 @@ class OpenCodePromptStream:
                                 inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
                             )
                         )
-                        await self._client.post_prompt(opencode_session_id, request_body)
+                        if recovery:
+                            content = await recovery.prepare(
+                                opencode_session_id, content, fresh=fresh
+                            )
+                        request_body = self._build_prompt_request_body(
+                            content, model, opencode_message_id, reasoning_effort, attachments
+                        )
+                        if recovery:
+                            recovery.submitting()
+                        try:
+                            await self._client.post_prompt(opencode_session_id, request_body)
+                        except PromptRejectedError:
+                            if recovery:
+                                recovery.rejected()
+                            raise
+                        if recovery:
+                            recovery.accepted()
                 except TimeoutError as error:
                     raise _PromptMaxDurationTimeout from error
                 event_iterator = aiter(sse_events)
