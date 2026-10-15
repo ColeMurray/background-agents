@@ -2,6 +2,13 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 15, 2026
+
+**GitHub sign-in diagnostics.** Failed provider and admission checks return to the login page with
+an error and a retry option. If the GitHub App lacks **Email addresses: Read-only**, the page names
+the permission to check and the control plane logs GitHub's status. Rate limits show a temporary
+failure instead.
+
 ## October 8, 2026
 
 **Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
