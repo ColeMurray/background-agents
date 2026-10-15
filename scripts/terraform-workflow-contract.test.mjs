@@ -32,12 +32,32 @@ test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
   );
 });
 
-test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
-  assertInPlanAndApply(
+for (const [label, assignment] of [
+  [
+    "classifier Anthropic key",
     "TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}",
-    "classifier Anthropic key"
-  );
-});
+  ],
+  [
+    "classifier OpenAI key",
+    "TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}",
+  ],
+  [
+    "classifier Bedrock key",
+    "TF_VAR_classification_bedrock_api_key: ${{ secrets.CLASSIFICATION_BEDROCK_API_KEY }}",
+  ],
+  [
+    "classifier model with default",
+    "TF_VAR_classification_model: \"${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}\"",
+  ],
+  [
+    "classifier reasoning effort",
+    'TF_VAR_classification_reasoning_effort: "${{ vars.CLASSIFICATION_REASONING_EFFORT }}"',
+  ],
+]) {
+  test(`${label} reaches Terraform plan and apply`, () => {
+    assertInPlanAndApply(assignment, label);
+  });
+}
 
 // Inputs the workflow deliberately does not take from the environment:
 // control_plane_* values are staged per migration (the "Stage SchedulerDO
