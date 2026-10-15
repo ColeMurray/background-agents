@@ -23,9 +23,12 @@ describe("Mermaid security boundary", () => {
     "---\nconfig:\n  securityLevel: loose\n---\nflowchart LR\n A --> B",
     "flowchart LR\n A-->B\n classDef default fill:url(https://evil.test/x)",
     'flowchart LR\n A-->B\n classDef default background-image:image-set("https://evil.test/x" 1x)',
+    "sequenceDiagram\n Alice->>Bob: $$x^2$$",
     "flowchart LR\n" + "A".repeat(MAX_MERMAID_SOURCE_LENGTH),
-  ])("rejects untrusted configuration and oversized input without rendering", async (source) => {
+  ])("rejects unsafe or unsupported source before initializing Mermaid", async (source) => {
     expect(await renderMermaid(source, false)).toBeNull();
+    expect(mermaid.initialize).not.toHaveBeenCalled();
+    expect(mermaid.mermaidAPI.getDiagramFromText).not.toHaveBeenCalled();
     expect(mermaid.render).not.toHaveBeenCalled();
   });
 

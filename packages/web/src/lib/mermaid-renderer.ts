@@ -33,6 +33,9 @@ export function renderMermaid(source: string, dark: boolean): Promise<MermaidIma
     if (
       source.length > MAX_MERMAID_SOURCE_LENGTH ||
       source.includes("%%{") ||
+      // Math uses live HTML measurement even with htmlLabels disabled. Keep it as source
+      // before Mermaid can insert model-authored HTML or load resources during drawing.
+      source.includes("$$") ||
       /^\s*---/.test(source) ||
       // Disallow CSS resource functions/imports and escapes that could conceal them.
       /\b(?:url|image(?:-set)?)\s*\(|@import|\\/i.test(source)
