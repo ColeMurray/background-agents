@@ -75,10 +75,19 @@ async function handleResumeAutomation(
   // For event-driven automations, resume with null next_run_at.
   let nextRunAt: number | null;
   if (existing.trigger_type === "schedule") {
-    if (!existing.schedule_cron) {
+    if (existing.schedule_once_at != null) {
+      if (existing.schedule_once_at <= Date.now()) {
+        return error(
+          "Cannot resume a one-shot whose scheduled time has passed; choose a future time first",
+          400
+        );
+      }
+      nextRunAt = existing.schedule_once_at;
+    } else if (!existing.schedule_cron) {
       return error("Cannot resume: automation has no cron schedule", 400);
+    } else {
+      nextRunAt = nextCronOccurrence(existing.schedule_cron, existing.schedule_tz).getTime();
     }
-    nextRunAt = nextCronOccurrence(existing.schedule_cron, existing.schedule_tz).getTime();
   } else {
     nextRunAt = null;
   }

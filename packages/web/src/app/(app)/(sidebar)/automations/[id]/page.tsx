@@ -208,9 +208,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dt className="text-muted-foreground">Trigger</dt>
                 <dd className="text-foreground">
                   {automation.triggerType === "schedule"
-                    ? automation.scheduleCron
-                      ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                      : "Schedule (no cron)"
+                    ? automation.scheduleOnceAt != null
+                      ? `Once at ${new Date(automation.scheduleOnceAt).toLocaleString()}`
+                      : automation.scheduleCron
+                        ? describeCron(automation.scheduleCron, automation.scheduleTz)
+                        : "Schedule (no cron)"
                     : {
                         sentry: "Sentry Alert",
                         webhook: "Inbound Webhook",

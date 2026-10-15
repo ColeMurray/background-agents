@@ -131,6 +131,33 @@ describe("automation lifecycle routes", () => {
   });
 
   describe("POST /automations/:id/resume", () => {
+    it("resumes a cancelled one-shot at its original future time", async () => {
+      const at = Date.now() + 3_600_000;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: at,
+        enabled: 0,
+        next_run_at: null,
+      });
+      const response = await callRoute("POST", "/automations/auto-1/resume");
+      expect(response.status).toBe(200);
+      expect(mockStore.bindResume).toHaveBeenCalledWith("auto-1", at);
+    });
+
+    it("refuses to re-arm a one-shot whose scheduled time has passed", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: Date.now() - 1,
+        enabled: 0,
+        next_run_at: null,
+      });
+      const response = await callRoute("POST", "/automations/auto-1/resume");
+      expect(response.status).toBe(400);
+      expect(mockStore.bindResume).not.toHaveBeenCalled();
+    });
+
     it("resumes Codex without querying execution policy", async () => {
       const preferences = vi
         .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")

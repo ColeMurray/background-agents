@@ -31,6 +31,7 @@ export interface AutomationFormValues {
   model: string;
   reasoningEffort: string | null;
   scheduleCron?: string;
+  scheduleOnceAt?: number;
   scheduleTz?: string;
   instructions: string;
   triggerType: AutomationTriggerType;
@@ -43,6 +44,8 @@ export interface AutomationFormValues {
 export interface AutomationTriggerDraft {
   type: AutomationTriggerType;
   scheduleCron: string;
+  scheduleMode: "recurring" | "once";
+  scheduleOnceAt: string;
   scheduleTz: string;
   eventType: string;
   conditions: TriggerCondition[];
@@ -93,6 +96,11 @@ type InitialAutomationFormValues = Partial<AutomationFormValues>;
 
 export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 
+function toLocalDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 export function createAutomationFormDraft(
   initialValues: InitialAutomationFormValues = {}
 ): AutomationFormDraft {
@@ -107,6 +115,9 @@ export function createAutomationFormDraft(
     trigger: {
       type: initialValues.triggerType ?? "schedule",
       scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
+      scheduleMode: initialValues.scheduleOnceAt != null ? "once" : "recurring",
+      scheduleOnceAt:
+        initialValues.scheduleOnceAt != null ? toLocalDateTime(initialValues.scheduleOnceAt) : "",
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
@@ -185,12 +196,15 @@ function findInvalidEvaluation({
     return { valid: false, reason: "required-fields" };
   }
   if (draft.trigger.type === "schedule") {
-    if (
-      validateAutomationCron(draft.trigger.scheduleCron) ||
-      !isValidTimeZone(draft.trigger.scheduleTz)
-    ) {
-      return { valid: false, reason: "invalid-schedule" };
-    }
+    const onceAt = new Date(draft.trigger.scheduleOnceAt).getTime();
+    const unchangedTime =
+      mode === "edit" && draft.trigger.scheduleOnceAt === originalTrigger?.scheduleOnceAt;
+    const validSchedule =
+      draft.trigger.scheduleMode === "once"
+        ? Number.isFinite(onceAt) && (onceAt > Date.now() || unchangedTime)
+        : !validateAutomationCron(draft.trigger.scheduleCron) &&
+          isValidTimeZone(draft.trigger.scheduleTz);
+    if (!validSchedule) return { valid: false, reason: "invalid-schedule" };
   }
   const targetError = validateAutomationTargetCounts(
     draft.trigger.type,
@@ -280,8 +294,13 @@ function buildSubmissionValues({
   if (draft.trigger.type === "schedule") {
     return {
       ...values,
-      scheduleCron: draft.trigger.scheduleCron,
-      scheduleTz: draft.trigger.scheduleTz,
+      ...(draft.trigger.scheduleMode === "once"
+        ? { scheduleOnceAt: new Date(draft.trigger.scheduleOnceAt).getTime() }
+        : { scheduleCron: draft.trigger.scheduleCron }),
+      scheduleTz:
+        draft.trigger.scheduleMode === "once"
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone
+          : draft.trigger.scheduleTz,
     };
   }
 
