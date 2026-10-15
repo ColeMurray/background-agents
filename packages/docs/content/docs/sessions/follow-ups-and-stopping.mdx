@@ -29,7 +29,7 @@ You can send a prompt at any time. If the agent is still working on an earlier p
 Prompt 1 (processing) -> Prompt 2 (queued) -> Prompt 3 (queued)
 ```
 
-Both harnesses behave the same way here: OpenCode and Claude Agent hold follow-ups until the running turn finishes. A follow-up never interrupts the agent mid-turn.
+By default both harnesses behave the same way here: OpenCode and Claude Agent hold follow-ups until the running turn finishes, so a queued follow-up never interrupts the agent mid-turn. To change course without waiting, steer instead; see [Steering the running turn](#steering-the-running-turn).
 
 ```mermaid
 sequenceDiagram
@@ -60,6 +60,14 @@ While a turn runs the composer placeholder changes to "Add a follow-up..." and t
 Unsent text, including a removed queued prompt restored into the composer, is saved in tab-scoped `sessionStorage` for your account and this session. It survives reloads in that tab, stays after a failed send, and clears after a successful send. Retrying an unchanged restored draft reuses an unconfirmed send's request identity; editing the text starts a new request identity. See [The composer](/sessions/session-page#the-composer) for storage and sign-out behavior.
 
 A prompt sent while the sandbox is still booting waits until the sandbox is ready, then dispatches. The header shows the boot phase while you wait.
+
+## Steering the running turn
+
+On a Claude Agent session, a follow-up can steer the turn that is running instead of queueing behind it. Next to "Queue", the composer shows "Steer" while a turn runs. A steered follow-up goes to the agent at its next step, so it can change course, answer a question or take in a correction without the turn starting over, and it shows in the timeline where the agent picked it up.
+
+- It stays queued until the agent takes it, and when the turn ends first it simply runs next, the same as a queued follow-up.
+- OpenCode and Codex sessions do not offer it, and a follow-up with attachments always queues.
+- The API takes the same choice as `"steer": true` on a prompt, and an inbound webhook follow-up as `"steer": true` on its delivery; see [Continuing a session](/automations/inbound-webhooks#continuing-a-session).
 
 ## What a good follow-up contains
 

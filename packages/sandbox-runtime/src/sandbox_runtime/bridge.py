@@ -60,6 +60,7 @@ from .harness import (
     HarnessId,
     HarnessPrompt,
     HarnessStartError,
+    SteerableHarness,
     TurnOutcome,
     build_agent_harness,
     parse_harness_id,
@@ -696,6 +697,8 @@ class AgentBridge:
             # Returning it would add it to background_tasks, which gets cancelled
             # in the _connect_and_run finally block on WS close.
             return None
+        elif cmd_type == "steer":
+            await self._handle_steer(cmd)
         elif cmd_type == "stop":
             await self._handle_stop()
         elif cmd_type == "snapshot":
@@ -948,6 +951,24 @@ class AgentBridge:
             return
         await harness.create_session()
         await self._save_session_id(harness)
+
+    async def _handle_steer(self, cmd: dict[str, Any]) -> None:
+        message_id = cmd.get("messageId") or "unknown"
+        harness = self.harness
+        accepted = False
+        if (
+            isinstance(harness, SteerableHarness)
+            and self.activity.current_prompt_task is not None
+            and not self.shutdown_preparation.fenced
+            and not cmd.get("attachments")
+        ):
+            accepted = await harness.steer(
+                HarnessPrompt(message_id=message_id, text=str(cmd.get("content") or ""))
+            )
+        self.log.info("bridge.steer", message_id=message_id, accepted=accepted)
+        await self._send_event(
+            {"type": "steer_result", "messageId": message_id, "accepted": accepted}
+        )
 
     async def _handle_stop(self) -> None:
         """Handle stop command - cancel prompt task and ask the harness to abort."""

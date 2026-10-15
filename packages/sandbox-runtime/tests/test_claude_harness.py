@@ -554,6 +554,117 @@ class TestTranslation:
         assert len([e for e in events if e["type"] == "step_finish"]) == 1
 
 
+def _echo(text: str) -> UserMessage:
+    return UserMessage(content=[TextBlock(text)], origin={"kind": "human"})
+
+
+class TestSteering:
+    @pytest.mark.asyncio
+    async def test_a_steered_message_joins_the_running_turn(self, tmp_path: Path) -> None:
+        steered: list[bool] = []
+        h: Harness
+
+        async def steer() -> None:
+            steered.append(await h.harness.steer(HarnessPrompt(message_id="m2", text="and this")))
+
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    _echo("hi"),
+                    AssistantMessage(
+                        content=[ToolUseBlock(id="tu_1", name="Bash", input={"command": "ls"})],
+                        model="claude-sonnet-4-6",
+                        message_id="msg_1",
+                    ),
+                    steer,
+                    UserMessage(content=[ToolResultBlock(tool_use_id="tu_1", content="a.txt")]),
+                    _echo("and this"),
+                    AssistantMessage(
+                        content=[TextBlock("Done, and this too.")],
+                        model="claude-sonnet-4-6",
+                        message_id="msg_2",
+                    ),
+                    _result(0.2),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+
+        assert steered == [True]
+        assert outcome.success
+        assert [q[0]["message"]["content"][0]["text"] for q in h.client.queries] == [
+            "hi",
+            "and this",
+        ]
+        assert not await h.harness.steer(HarnessPrompt(message_id="m3", text="too late"))
+
+    @pytest.mark.asyncio
+    async def test_a_message_steered_after_the_last_tool_call_ends_the_prompt_after_its_own_turn(
+        self, tmp_path: Path
+    ) -> None:
+        h: Harness
+
+        async def steer() -> None:
+            assert await h.harness.steer(HarnessPrompt(message_id="m2", text="one more"))
+
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    _echo("hi"),
+                    steer,
+                    _result(0.1),
+                    _echo("one more"),
+                    AssistantMessage(
+                        content=[TextBlock("Paris")], model="claude-sonnet-4-6", message_id="msg_2"
+                    ),
+                    _result(0.3),
+                ],
+                [_result(0.4)],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+
+        assert outcome.success
+        assert outcome.message_cost_usd == pytest.approx(0.3)
+        _, next_outcome = await _run(h.harness, HarnessPrompt(message_id="m3", text="next"))
+        assert next_outcome.message_cost_usd == pytest.approx(0.1)
+
+    @pytest.mark.asyncio
+    async def test_steering_is_refused_without_a_turn_or_before_the_cli_echoes_its_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        refused: list[bool] = []
+        h: Harness
+
+        async def steer() -> None:
+            refused.append(await h.harness.steer(HarnessPrompt(message_id="m2", text="early")))
+
+        h = Harness(tmp_path, turns=[[steer, _result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        assert not await h.harness.steer(HarnessPrompt(message_id="m0", text="idle"))
+        _, outcome = await _run(h.harness)
+
+        assert refused == [False]
+        assert outcome.success
+        assert len(h.client.queries) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_cli_echoes_user_messages(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+
+        assert h.client.options["extra_args"] == {"replay-user-messages": None}
+
+
 class TestCostBaseline:
     """§5.3: messageCostUsd = running total at turn end - baseline."""
 

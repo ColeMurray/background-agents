@@ -113,6 +113,10 @@ const nonArtifactSandboxEventSchemas = [
     preservationProtocolVersion: z.literal(1).optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("steer_result"),
+    accepted: z.boolean(),
+  }),
   sandboxEventBaseSchema.extend({
     type: z.literal("sandbox_generation_ready"),
     generation: sandboxGenerationSchema,

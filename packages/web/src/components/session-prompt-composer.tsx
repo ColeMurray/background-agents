@@ -16,7 +16,7 @@ import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import type { PromptSkillSuggestionSource } from "@/lib/prompt-skill-completion";
 import type { ModelCategory, ReasoningEffort, ValidModel } from "@open-inspect/shared/models";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
-import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { getHarnessCapabilities, type HarnessId } from "@open-inspect/shared/harnesses";
 
 type SessionPromptComposerProps = {
   session: {
@@ -39,6 +39,7 @@ type SessionPromptComposerProps = {
     submitError: string | null;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
+    onSteer?: (e: React.FormEvent) => void;
     onValueChange: (value: string) => void;
     onKeyDown: (e: React.KeyboardEvent) => void;
     onStopExecution: () => void;
@@ -73,6 +74,11 @@ export function SessionPromptComposer({
   const sessionPromptable = isSessionPromptable(session.status);
   const sendDisabled =
     !hasContent || prompt.draftLocked || prompt.sendBlocked || !sessionPromptable;
+  const canSteer =
+    prompt.isProcessing &&
+    prompt.onSteer !== undefined &&
+    getHarnessCapabilities(session.harness).steer &&
+    attachments.items.length === 0;
   // Keep the complete draft stable while its attachments upload and until
   // the server confirms that the matching prompt was queued.
   const attachmentsLocked = prompt.draftLocked;
@@ -181,6 +187,18 @@ export function SessionPromptComposer({
                   aria-label="Stop current prompt; queued prompts will continue"
                 >
                   <StopIcon className="w-5 h-5" />
+                </button>
+              )}
+              {canSteer && (
+                <button
+                  type="button"
+                  onClick={prompt.onSteer}
+                  disabled={sendDisabled}
+                  className="p-2 text-xs font-medium text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                  title="Steer the current prompt; the agent picks this up at its next step"
+                  aria-label="Steer the current prompt; the agent picks this up at its next step"
+                >
+                  Steer
                 </button>
               )}
               <button

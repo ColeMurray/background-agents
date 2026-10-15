@@ -99,6 +99,9 @@ class FakeSdkClient:
             await asyncio.Event().wait()
         turn = self.turns.pop(0) if self.turns else []
         for message in turn:
+            if callable(message):
+                await message()
+                continue
             yield message
 
 
