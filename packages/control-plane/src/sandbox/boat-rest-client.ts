@@ -15,7 +15,7 @@ const TIMEOUT_COMMAND_MS = 30_000;
 const TIMEOUT_HOST_MS = 15_000;
 const TIMEOUT_FILE_MS = 30_000;
 
-export const BOAT_SANDBOX_TYPES = ["small", "default", "large"] as const;
+export const BOAT_SANDBOX_TYPES = ["small", "default", "large", "xlarge"] as const;
 export type BoatSandboxType = (typeof BOAT_SANDBOX_TYPES)[number];
 
 export interface BoatRestConfig {
@@ -53,6 +53,22 @@ const boatActionResponseSchema = z.object({
   id: z.string(),
   status: z.string(),
   sandbox: boatSandboxSchema.nullable().optional(),
+});
+
+const boatStopOperationSchema = z.object({
+  id: z.string(),
+  status: z.enum(["pending", "failing", "completed", "superseded"]),
+  requestedAt: z.string().nullable(),
+  lastAttemptAt: z.string().nullable(),
+  error: z.string().nullable(),
+  endedAt: z.string().nullable(),
+});
+
+export type BoatStopOperation = z.infer<typeof boatStopOperationSchema>;
+
+const boatStopOperationResponseSchema = z.object({
+  id: z.string(),
+  stop: boatStopOperationSchema,
 });
 
 const boatCommandStartedSchema = z.object({
@@ -202,12 +218,16 @@ export class BoatRestClient {
     return response.sandbox;
   }
 
-  async updateSandboxName(id: string, name: string, signal?: AbortSignal): Promise<BoatSandbox> {
+  async updateSandboxTimeout(
+    id: string,
+    ttlSeconds: number,
+    signal?: AbortSignal
+  ): Promise<BoatSandbox> {
     const response = await this.requestJson(boatSandboxInfoResponseSchema, {
       method: "PATCH",
       path: `/sandboxes/${encodeURIComponent(id)}`,
       timeoutMs: TIMEOUT_GET_MS,
-      body: { name },
+      body: { ttlSeconds },
       signal,
     });
     return response.sandbox;
@@ -215,7 +235,7 @@ export class BoatRestClient {
 
   async resumeSandbox(
     id: string,
-    params: { type: BoatSandboxType; ttlSeconds: number },
+    params: { type?: BoatSandboxType; ttlSeconds: number },
     signal?: AbortSignal
   ): Promise<void> {
     await this.requestJson(boatActionResponseSchema, {
@@ -227,14 +247,25 @@ export class BoatRestClient {
     });
   }
 
-  async stopSandbox(id: string, signal?: AbortSignal): Promise<void> {
-    await this.requestJson(boatActionResponseSchema, {
+  async stopSandbox(id: string, signal?: AbortSignal): Promise<{ id: string; status: string }> {
+    const response = await this.requestJson(boatActionResponseSchema, {
       method: "POST",
       path: `/sandboxes/${encodeURIComponent(id)}/stop`,
       timeoutMs: TIMEOUT_STOP_MS,
       body: { force: false },
       signal,
     });
+    return { id: response.id, status: response.status };
+  }
+
+  async getStop(id: string, stopId: string, signal?: AbortSignal): Promise<BoatStopOperation> {
+    const response = await this.requestJson(boatStopOperationResponseSchema, {
+      method: "GET",
+      path: `/sandboxes/${encodeURIComponent(id)}/stops/${encodeURIComponent(stopId)}`,
+      timeoutMs: TIMEOUT_GET_MS,
+      signal,
+    });
+    return response.stop;
   }
 
   async startDetachedCommand(
@@ -421,6 +452,11 @@ function assertSafeBoatApiUrl(value: string): void {
     url = new URL(value);
   } catch {
     throw new Error("BoatRestClient requires a valid apiUrl");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      "BoatRestClient apiUrl must not contain credentials, query parameters, or fragments"
+    );
   }
   if (url.protocol === "https:") return;
   if (

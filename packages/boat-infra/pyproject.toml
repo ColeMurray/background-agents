@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Boat named-snapshot build for Open-Inspect coding agents"
 requires-python = ">=3.12"
 dependencies = [
-    "boat-sdk==1.0.0",
+    "boat-sdk==1.7.0",
     "websockets==15.0.1",
 ]
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { hashToken } from "../../src/auth/crypto";
+import { decryptToken, hashToken } from "../../src/auth/crypto";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
@@ -162,12 +162,12 @@ async function refuseEncryptedLookup(change: "reference" | "timestamp") {
     const realEncrypt = crypto.subtle.encrypt.bind(crypto.subtle);
     let releaseEncryption!: () => void;
     const encryptionGate = new Promise<void>((resolve) => (releaseEncryption = resolve));
-    let encryptedBothSecrets!: () => void;
-    const encrypted = new Promise<void>((resolve) => (encryptedBothSecrets = resolve));
+    let encryptedAccess!: () => void;
+    const encrypted = new Promise<void>((resolve) => (encryptedAccess = resolve));
     let encryptionCount = 0;
     const encrypt = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
       const ciphertext = await realEncrypt(...args);
-      if (++encryptionCount === 2) encryptedBothSecrets();
+      if (++encryptionCount === 5) encryptedAccess();
       await encryptionGate;
       return ciphertext;
     });
@@ -178,7 +178,7 @@ async function refuseEncryptedLookup(change: "reference" | "timestamp") {
       const resolution = f.vmResolution();
       f.finishLookup(f.result);
       await encrypted;
-      expect(encrypt).toHaveBeenCalledTimes(2);
+      expect(encrypt).toHaveBeenCalledTimes(5);
       expect(sandbox.getSandbox()).toMatchObject({
         status: "ready",
         modal_object_id: f.reference,
@@ -268,7 +268,8 @@ describe("production-wired VM startup reconciliation", () => {
         });
 
         expect(manager.onRuntimeReady(Date.now(), "opencode", 1)).toBe(true);
-        expect(sandbox.getSandbox()).toMatchObject({
+        const foregroundResolvedSandbox = sandbox.getSandbox();
+        expect(foregroundResolvedSandbox).toMatchObject({
           status: "ready",
           modal_object_id: f.reference,
         });
@@ -309,7 +310,8 @@ describe("production-wired VM startup reconciliation", () => {
         expect(manager.pushAdmissionDecision()).toBe("held");
         f.shutdown.write(acknowledged);
         expect(manager.mayProcessQueuedWork()).toBe(true);
-        expect(sandbox.getSandbox()).toMatchObject({
+        const foregroundCompletedSandbox = sandbox.getSandbox();
+        expect(foregroundCompletedSandbox).toMatchObject({
           modal_object_id: f.reference,
           code_server_url: null,
           vnc_url: null,
@@ -327,17 +329,27 @@ describe("production-wired VM startup reconciliation", () => {
         f.finishLookup(f.result);
         await resolution.promise;
 
-        expect(sandbox.getSandbox()).toMatchObject({
+        const resolvedSandbox = sandbox.getSandbox();
+        expect(resolvedSandbox).toMatchObject({
           status: "ready",
           modal_object_id: "resolved-vm",
-          code_server_url: f.result.codeServerUrl,
+          code_server_url: expect.any(String),
           code_server_password: expect.any(String),
-          vnc_url: f.result.vncAccess!.url,
+          vnc_url: expect.any(String),
           vnc_password: expect.any(String),
           ttyd_url: null,
           ttyd_token: null,
-          tunnel_urls: JSON.stringify(f.result.tunnelUrls),
+          tunnel_urls: expect.any(String),
         });
+        await expect(
+          decryptToken(resolvedSandbox!.code_server_url!, env.REPO_SECRETS_ENCRYPTION_KEY!)
+        ).resolves.toBe(f.result.codeServerUrl);
+        await expect(
+          decryptToken(resolvedSandbox!.vnc_url!, env.REPO_SECRETS_ENCRYPTION_KEY!)
+        ).resolves.toBe(f.result.vncAccess!.url);
+        await expect(
+          decryptToken(resolvedSandbox!.tunnel_urls!, env.REPO_SECRETS_ENCRYPTION_KEY!)
+        ).resolves.toBe(JSON.stringify(f.result.tunnelUrls));
         expect(sandbox.getSandbox()?.code_server_password).not.toBe(f.result.codeServerPassword);
         expect(sandbox.getSandbox()?.vnc_password).not.toBe(f.result.vncAccess!.password);
         const reread = createSessionRuntime(f.platform, f.runtimeEnv).internals.sandboxRepository;
@@ -356,14 +368,18 @@ describe("production-wired VM startup reconciliation", () => {
         await f.finish();
         expect(f.resolve).toHaveBeenCalledTimes(2);
         expect(f.resolve.mock.calls[1][0]).toMatchObject(f.resolve.mock.calls[0][0]);
-        expect(sandbox.getSandbox()).toMatchObject({
+        const foregroundFinishedSandbox = sandbox.getSandbox();
+        expect(foregroundFinishedSandbox).toMatchObject({
           status: "ready",
           modal_sandbox_id: f.generation.sandboxId,
           created_at: f.generation.createdAt,
           modal_object_id: "resolved-vm",
-          ttyd_url: f.result.ttydUrl,
+          ttyd_url: expect.any(String),
           last_spawn_error: null,
         });
+        await expect(
+          decryptToken(foregroundFinishedSandbox!.ttyd_url!, env.REPO_SECRETS_ENCRYPTION_KEY!)
+        ).resolves.toBe(f.result.ttydUrl);
         expect(await sandbox.getSandboxAccessSecret("codeServer")).toBe(
           f.result.codeServerPassword
         );

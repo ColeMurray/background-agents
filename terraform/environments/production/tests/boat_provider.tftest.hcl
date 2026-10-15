@@ -104,14 +104,17 @@ run "rejects_short_access_secret" {
   expect_failures = [var.boat_sandbox_access_secret]
 }
 
-run "rejects_undocumented_xlarge_type" {
+run "accepts_documented_xlarge_type" {
   command = plan
 
   variables {
     boat_sandbox_type = "xlarge"
   }
 
-  expect_failures = [var.boat_sandbox_type]
+  assert {
+    condition     = var.boat_sandbox_type == "xlarge"
+    error_message = "Boat xlarge is a documented public machine type."
+  }
 }
 
 run "retains_the_boat_runtime_key_after_switching_providers" {
@@ -141,6 +144,16 @@ run "rejects_plaintext_non_loopback_api_urls" {
 
   variables {
     boat_api_url = "http://boat.example/api/v1"
+  }
+
+  expect_failures = [var.boat_api_url]
+}
+
+run "rejects_secret_bearing_api_urls" {
+  command = plan
+
+  variables {
+    boat_api_url = "https://user@boat.dev/api/v1?token=secret"
   }
 
   expect_failures = [var.boat_api_url]

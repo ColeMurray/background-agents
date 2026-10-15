@@ -11,7 +11,7 @@ import {
 import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
-import { decryptStoredAccessValue } from "./sandbox-access";
+import { decryptStoredAccessValue, decryptStoredAccessValueOrPlaintext } from "./sandbox-access";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 const rawSandboxRowSchema = sandboxRowSchema.extend({ status: z.unknown().optional() });
@@ -554,6 +554,20 @@ export class SandboxRepository {
       throw new SessionStorageIntegrityError("Malformed persisted sandbox access secret");
     }
     return decryptStoredAccessValue(parsed?.data.secret ?? null, this.encryptionKey, this.log);
+  }
+
+  /** Read encrypted tunnel metadata, accepting plaintext rows from older deployments. */
+  async getSandboxTunnelUrls(): Promise<string | null> {
+    const row = this.sql.exec("SELECT tunnel_urls AS secret FROM sandbox LIMIT 1").toArray()[0];
+    const parsed = row === undefined ? null : sandboxAccessSecretRowSchema.safeParse(row);
+    if (parsed && !parsed.success) {
+      throw new SessionStorageIntegrityError("Malformed persisted sandbox tunnel URLs");
+    }
+    return decryptStoredAccessValueOrPlaintext(
+      parsed?.data.secret ?? null,
+      this.encryptionKey,
+      this.log
+    );
   }
 
   /** Clear one access artifact's URL and secret. */

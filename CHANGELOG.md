@@ -96,11 +96,11 @@ model provider, repositories, pull request lifecycle, and token totals. Bulk exp
 **Boat sandbox provider.** Boat joins the selectable sandbox backends with direct REST lifecycle
 management, finite provider deadlines, preset resource mapping, private hosted editor/terminal/VNC
 access, and durable same-ID stop/resume. Terraform builds and fresh-restore-verifies an immutable
-shared Boat named snapshot before Worker rollout, retaining one rollback artifact under Boat's
-ten-template cap. Boat intentionally does not expose repository/environment prebuilds. Persistent
-workspace data lives under Boat's captured `/home/user` tree, with `/workspace` recreated on every
-boot. An expired terminal credential now disables only terminal access instead of replacing any
-persistent-provider sandbox.
+shared Boat named snapshot before Worker rollout, retaining one rollback artifact while pruning
+older deployment-owned snapshots. Boat intentionally does not expose repository/environment
+prebuilds. Persistent workspace data lives under Boat's captured `/home/user` tree, with
+`/workspace` recreated on every boot. An expired terminal credential now disables only terminal
+access instead of replacing any persistent-provider sandbox.
 
 ## September 23, 2026
 

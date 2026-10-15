@@ -26,12 +26,6 @@ variable "snapshot_prefix" {
   type        = string
 }
 
-variable "protected_snapshot" {
-  description = "Currently deployed snapshot that must not be pruned during the build"
-  type        = string
-  default     = ""
-}
-
 variable "sandbox_type" {
   description = "Boat machine type used to build and verify the template"
   type        = string

@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { IMAGE_BUILD_PROVIDER_IDS } from "./image-builds";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_MODAL_CPU_CORES,
@@ -179,6 +180,15 @@ describe("sandbox resource limit validation", () => {
 });
 
 describe("sandbox provider settings capabilities", () => {
+  it("registers Boat for sessions without advertising repository image builds", () => {
+    expect(sandboxSettingCapabilities("boat")).toEqual({
+      resources: true,
+      resourceLimits: false,
+      timeout: true,
+    });
+    expect(IMAGE_BUILD_PROVIDER_IDS).not.toContain("boat");
+  });
+
   it.each([
     { provider: "modal", resources: true, resourceLimits: true, timeout: true },
     { provider: "modal-vm", resources: true, resourceLimits: true, timeout: true },

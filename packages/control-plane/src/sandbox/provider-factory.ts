@@ -23,10 +23,7 @@ import { createVercelProvider, type VercelSandboxProvider } from "./providers/ve
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
 
-function createModalProviderFromEnv(
-  env: Env,
-  backend: "modal" | "modal-vm"
-): ModalSandboxProvider {
+function createModalProviderFromEnv(env: Env, backend: "modal" | "modal-vm"): ModalSandboxProvider {
   if (!env.MODAL_API_SECRET || !env.MODAL_WORKSPACE) {
     throw new Error(
       `MODAL_API_SECRET and MODAL_WORKSPACE are required when SANDBOX_PROVIDER=${backend}`
@@ -179,12 +176,14 @@ function createBoatProviderFromEnv(env: Env): BoatSandboxProvider {
       "BOAT_API_KEY, BOAT_BASE_SNAPSHOT, and BOAT_SANDBOX_ACCESS_SECRET are required when SANDBOX_PROVIDER=boat"
     );
   }
-  if (env.BOAT_SANDBOX_ACCESS_SECRET.length < 32) {
-    throw new Error("BOAT_SANDBOX_ACCESS_SECRET must contain at least 32 characters");
+  if (env.BOAT_SANDBOX_ACCESS_SECRET.trim().length < 32) {
+    throw new Error(
+      "BOAT_SANDBOX_ACCESS_SECRET must contain at least 32 non-whitespace characters"
+    );
   }
   const rawType = env.BOAT_SANDBOX_TYPE?.trim().toLowerCase() || "default";
   if (!(BOAT_SANDBOX_TYPES as readonly string[]).includes(rawType)) {
-    throw new Error("BOAT_SANDBOX_TYPE must be small, default, or large");
+    throw new Error("BOAT_SANDBOX_TYPE must be small, default, large, or xlarge");
   }
   const client = createBoatRestClient({
     apiKey: env.BOAT_API_KEY,

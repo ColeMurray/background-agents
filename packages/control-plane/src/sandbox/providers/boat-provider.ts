@@ -2,6 +2,7 @@ import { supportsConfigurableSandboxTimeout } from "@open-inspect/shared/types/i
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import {
+  BOAT_SANDBOX_TYPES,
   BoatApiError,
   BoatConflictError,
   BoatNotFoundError,
@@ -46,17 +47,37 @@ const BOAT_ENTRYPOINT_COMMAND = "/home/user/openinspect/start-runtime";
 const BOAT_TUNNEL_ENV_PATH = "/home/user/openinspect/workspace/.tunnels.env";
 const TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
+const BOAT_DEFAULT_VNC_PORT = 6081;
+const BOAT_RESERVED_PORTS = new Set([
+  22,
+  6080,
+  8090,
+  8911,
+  ...Array.from({ length: 27 }, (_, index) => 47_984 + index),
+]);
 
 const BOAT_MACHINE_RESOURCES = {
   small: { cpu: 2, memoryMib: 4096 },
   default: { cpu: 4, memoryMib: 8192 },
   large: { cpu: 8, memoryMib: 16384 },
+  xlarge: { cpu: 16, memoryMib: 32768 },
 } as const satisfies Record<BoatSandboxType, { cpu: number; memoryMib: number }>;
 
 const READY_STATES = new Set(["ready", "idle"]);
 const ACTIVE_STATES = new Set(["ready", "idle", "running"]);
 const STOPPED_STATES = new Set(["stopped", "archived"]);
+const STOPPING_STATES = new Set(["stopping", "archiving"]);
 const STARTING_STATES = new Set(["init", "provisioning", "provisioned", "cloning", "resuming"]);
+const BOAT_RESERVED_ENV_KEYS = new Set([
+  "ASCII_TOKEN",
+  "ASCII_API_URL",
+  "AGENT_ID",
+  "PRODUCT_MODE",
+  "ENVIRONMENT_ID",
+  "BOAT_ID",
+  "SERVICE_PREVIEW_TOKEN",
+  "BOAT_CLI_TOKEN",
+]);
 export interface BoatProviderConfig {
   scmProvider: SourceControlProviderName;
   sandboxAccessPasswordSecret: string;
@@ -72,7 +93,7 @@ export function resolveBoatSandboxType(
   const memoryMib = settings?.memoryMib ?? undefined;
   if (cpu === undefined && memoryMib === undefined) return defaultType;
 
-  for (const type of ["small", "default", "large"] as const) {
+  for (const type of BOAT_SANDBOX_TYPES) {
     const resources = BOAT_MACHINE_RESOURCES[type];
     if (
       (cpu === undefined || cpu <= resources.cpu) &&
@@ -82,7 +103,7 @@ export function resolveBoatSandboxType(
     }
   }
   throw new SandboxProviderError(
-    "Boat resource request exceeds the largest supported machine (8 CPU, 16384 MiB)",
+    "Boat resource request exceeds the largest supported machine (16 CPU, 32768 MiB)",
     "permanent"
   );
 }
@@ -100,6 +121,12 @@ export function validateBoatEnvironment(env: Record<string, string>): void {
     if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key)) {
       throw new SandboxProviderError(
         `Boat sandbox environment contains an invalid key: ${key}`,
+        "permanent"
+      );
+    }
+    if (BOAT_RESERVED_ENV_KEYS.has(key)) {
+      throw new SandboxProviderError(
+        `Boat sandbox environment contains a reserved key: ${key}`,
         "permanent"
       );
     }
@@ -139,7 +166,7 @@ export class BoatSandboxProvider implements SandboxProvider {
       }
       const timeoutSeconds = resolveBoatTimeoutSeconds(config.timeoutSeconds);
       const type = resolveBoatSandboxType(this.providerConfig.defaultType, config.sandboxSettings);
-      const portPlan = resolveSandboxPortPlan(
+      const portPlan = resolveBoatPortPlan(
         {
           codeServer: config.codeServerEnabled === true,
           terminal: config.sandboxSettings?.terminalEnabled === true,
@@ -211,16 +238,26 @@ export class BoatSandboxProvider implements SandboxProvider {
         throw error;
       }
 
-      if (STOPPED_STATES.has(sandbox.state)) {
+      if (STOPPED_STATES.has(sandbox.state) || STOPPING_STATES.has(sandbox.state)) {
         try {
           await this.client.resumeSandbox(config.providerObjectId, {
-            type,
+            ...(STOPPING_STATES.has(sandbox.state) ? {} : { type }),
             ttlSeconds: timeoutSeconds,
           });
         } catch (error) {
-          if (!(error instanceof BoatConflictError)) throw error;
+          if (error instanceof BoatConflictError && error.code === "snapshot_data_expired") {
+            return {
+              success: false,
+              error:
+                "Boat deleted the stopped sandbox data after its retention window; automatic resume is unavailable",
+            };
+          }
+          if (!(error instanceof BoatConflictError) || error.code !== "sandbox_resuming")
+            throw error;
         }
-      } else if (!ACTIVE_STATES.has(sandbox.state) && !STARTING_STATES.has(sandbox.state)) {
+      } else if (ACTIVE_STATES.has(sandbox.state)) {
+        await this.client.updateSandboxTimeout(config.providerObjectId, timeoutSeconds);
+      } else if (!STARTING_STATES.has(sandbox.state)) {
         return {
           success: false,
           error: `Boat sandbox is in non-resumable state: ${sandbox.state}`,
@@ -232,7 +269,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         (current) => READY_STATES.has(current.state),
         BOAT_STARTUP_POLL_MS
       );
-      const portPlan = resolveSandboxPortPlan(
+      const portPlan = resolveBoatPortPlan(
         {
           codeServer: config.codeServerEnabled === true,
           terminal: config.sandboxSettings?.terminalEnabled === true,
@@ -291,11 +328,13 @@ export class BoatSandboxProvider implements SandboxProvider {
         }
         throw error;
       }
+      let stop: { id: string; status: string } | undefined;
       if (!STOPPED_STATES.has(current.state)) {
         try {
-          await this.client.stopSandbox(config.providerObjectId, signal);
+          stop = await this.client.stopSandbox(config.providerObjectId, signal);
         } catch (error) {
-          if (!(error instanceof BoatConflictError)) throw error;
+          if (!(error instanceof BoatConflictError) || error.code !== "sandbox_stopping")
+            throw error;
         }
       }
       const stopped = await this.waitForState(
@@ -306,6 +345,15 @@ export class BoatSandboxProvider implements SandboxProvider {
       );
       if (!stopped.snapshotAvailable) {
         return { success: false, error: "Boat stopped without a verified filesystem snapshot" };
+      }
+      if (stop) {
+        const operation = await this.client.getStop(config.providerObjectId, stop.id, signal);
+        if (operation.status !== "completed") {
+          return {
+            success: false,
+            error: `Boat stop operation was ${operation.status}${operation.error ? `: ${operation.error}` : ""}`,
+          };
+        }
       }
       return { success: true };
     } catch (error) {
@@ -387,6 +435,12 @@ export class BoatSandboxProvider implements SandboxProvider {
       if (accept(sandbox)) return sandbox;
       if (sandbox.state === "error") {
         throw new SandboxProviderError("Boat sandbox entered the error state", "permanent");
+      }
+      if (sandbox.state === "cancelled") {
+        throw new SandboxProviderError(
+          "Boat sandbox start was cancelled before a machine was assigned",
+          "transient"
+        );
       }
       if (Date.now() >= deadline) {
         throw new SandboxProviderError(`Boat sandbox remained ${sandbox.state}`, "transient");
@@ -477,9 +531,13 @@ export class BoatSandboxProvider implements SandboxProvider {
         return;
       } catch (error) {
         const retryable =
-          (error instanceof BoatApiError && error.status >= 500) ||
+          (error instanceof BoatApiError &&
+            (error.status >= 500 ||
+              error.code === "sandbox_starting" ||
+              error.code === "sandbox_resuming")) ||
           SandboxProviderError.isTransientNetworkError(error);
         if (!retryable || attempt === 3) throw error;
+        await delay(BOAT_STATE_POLL_INTERVAL_MS);
       }
     }
   }
@@ -622,4 +680,23 @@ export function createBoatProvider(
   providerConfig: BoatProviderConfig
 ): BoatSandboxProvider {
   return new BoatSandboxProvider(client, providerConfig);
+}
+
+function resolveBoatPortPlan(
+  enabled: { codeServer: boolean; terminal: boolean; vnc: boolean },
+  settings: CreateSandboxConfig["sandboxSettings"]
+): SandboxPortPlan {
+  const effectiveSettings =
+    enabled.vnc && settings?.vncPort === undefined
+      ? { ...settings, vncPort: BOAT_DEFAULT_VNC_PORT }
+      : settings;
+  const plan = resolveSandboxPortPlan(enabled, effectiveSettings);
+  const reserved = plan.allExposedPorts.find((port) => BOAT_RESERVED_PORTS.has(port));
+  if (reserved !== undefined) {
+    throw new SandboxProviderError(
+      `Boat reserves port ${reserved} for platform services`,
+      "permanent"
+    );
+  }
+  return plan;
 }

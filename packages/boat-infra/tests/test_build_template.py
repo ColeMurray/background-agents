@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import io
 import runpy
 from pathlib import Path
 from unittest.mock import Mock
@@ -10,10 +12,10 @@ MODULE = runpy.run_path(str(Path(__file__).parents[1] / "build_template.py"))
 CommandStatus = MODULE["CommandStatus"]
 SandboxInfo = MODULE["SandboxInfo"]
 SnapshotInfo = MODULE["SnapshotInfo"]
+SdkBoatBuildClient = MODULE["SdkBoatBuildClient"]
 build_template = MODULE["build_template"]
 candidate_name = MODULE["candidate_name"]
 cleanup_snapshots = MODULE["cleanup_snapshots"]
-ensure_snapshot_capacity = MODULE["ensure_snapshot_capacity"]
 load_client = MODULE["load_client"]
 wait_for_command = MODULE["wait_for_command"]
 
@@ -39,8 +41,8 @@ class FakeClient:
             snapshot_available=sandbox_id in self.stopped,
         )
 
-    def write_base64(self, sandbox_id, path, content):
-        assert sandbox_id and path == "/tmp/openinspect-image.tar.gz" and content
+    def upload_file(self, sandbox_id, path, content):
+        assert sandbox_id and path == "/tmp/openinspect-image.tar.gz" and isinstance(content, bytes)
 
     def start_command(self, sandbox_id, command):
         self.commands.append((sandbox_id, command))
@@ -108,43 +110,6 @@ def test_candidate_name_is_deterministic_and_valid(monkeypatch):
     monkeypatch.setenv("OPENINSPECT_IMAGE_CANDIDATE", "invalid_name")
     with pytest.raises(ValueError, match="named snapshot"):
         candidate_name("openinspect", "a" * 64)
-
-
-def test_capacity_removes_only_old_managed_snapshots():
-    snapshots = [
-        SnapshotInfo(f"openinspect-{index}", "ready", f"2030-01-{index + 1:02d}T00:00:00Z")
-        for index in range(8)
-    ] + [
-        SnapshotInfo("unrelated-one", "ready", "2030-01-01T00:00:00Z"),
-        SnapshotInfo("unrelated-two", "ready", "2030-01-01T00:00:00Z"),
-    ]
-    client = FakeClient(snapshots)
-    ensure_snapshot_capacity(
-        client,
-        prefix="openinspect",
-        candidate="openinspect-new",
-        protected={"openinspect-7"},
-    )
-    assert client.deleted_snapshots == ["openinspect-0"]
-    assert {
-        snapshot.name for snapshot in client.snapshots if snapshot.name.startswith("unrelated")
-    } == {
-        "unrelated-one",
-        "unrelated-two",
-    }
-
-
-def test_capacity_fails_when_only_unrelated_or_protected_slots_exist():
-    snapshots = [
-        SnapshotInfo(f"unrelated-{index}", "ready", "2030-01-01T00:00:00Z") for index in range(10)
-    ]
-    with pytest.raises(RuntimeError, match="limit reached"):
-        ensure_snapshot_capacity(
-            FakeClient(snapshots),
-            prefix="openinspect",
-            candidate="openinspect-new",
-            protected=set(),
-        )
 
 
 def test_build_reuses_and_reverifies_existing_candidate(bundle):
@@ -258,3 +223,115 @@ def test_manual_builder_rejects_plaintext_non_loopback_api_urls(monkeypatch):
     monkeypatch.setenv("BOAT_API_URL", "http://boat.example/api/v1")
     with pytest.raises(ValueError, match="must use HTTPS"):
         load_client()
+
+
+def test_manual_builder_rejects_secret_bearing_api_urls(monkeypatch):
+    monkeypatch.setenv("BOAT_BUILD_API_KEY", "secret")
+    monkeypatch.setenv("BOAT_API_URL", "https://user@boat.dev/api/v1?token=secret")
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        load_client()
+
+
+def test_pinned_boat_sdk_exposes_the_template_build_contract():
+    from boat_sdk.api.boat_api import BoatApi
+    from boat_sdk.models.create_sandbox_request import CreateSandboxRequest
+
+    required_methods = {
+        "create",
+        "get",
+        "write_file",
+        "command",
+        "command_status",
+        "save_named_snapshot",
+        "list_named_snapshots",
+        "get_named_snapshot",
+        "delete_named_snapshot",
+        "host_port",
+        "stop",
+        "delete_sandbox",
+        "get_deletion_operation",
+    }
+    assert required_methods <= set(dir(BoatApi))
+    assert "idempotency_key" in inspect.signature(BoatApi.create).parameters
+    request = CreateSandboxRequest.model_construct(
+        type="xlarge",
+        ttl_seconds=3600,
+        env={"OPENINSPECT_BUILD": "1"},
+        no_env=True,
+        var_from="openinspect-base",
+    )
+    assert request.type == "xlarge"
+    assert request.ttl_seconds == 3600
+    assert request.no_env is True
+
+    client = SdkBoatBuildClient("boat-test", "https://boat.dev/api/v1", "team-acme")
+    try:
+        assert client._api_client.default_headers["X-Boat-Org"] == "team-acme"
+    finally:
+        client.close()
+
+
+def test_large_bundle_upload_keeps_bearer_key_off_the_signed_url(monkeypatch):
+    requests = []
+
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def urlopen(request, timeout):
+        requests.append((request, timeout))
+        if len(requests) == 1:
+            return Response(b'{"url":"https://upload.boat.dev/signed-secret"}')
+        return Response(b"")
+
+    monkeypatch.setattr(MODULE["urllib"].request, "urlopen", urlopen)
+    client = SdkBoatBuildClient.__new__(SdkBoatBuildClient)
+    client._api_key = "boat-secret"
+    client._api_url = "https://boat.dev/api/v1"
+    client._org = "team-acme"
+
+    client.upload_file("bx_23456789", "/tmp/bundle.tar.gz", b"bundle-bytes")
+
+    metadata_request = requests[0][0]
+    upload_request = requests[1][0]
+    assert metadata_request.get_header("Authorization") == "Bearer boat-secret"
+    assert metadata_request.get_header("X-boat-org") == "team-acme"
+    assert upload_request.full_url == "https://upload.boat.dev/signed-secret"
+    assert upload_request.get_header("Authorization") is None
+    assert upload_request.data == b"bundle-bytes"
+
+
+def test_large_bundle_upload_redacts_a_failed_signed_url(monkeypatch):
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    calls = 0
+
+    def urlopen(_request, timeout):
+        assert timeout in {120, 600}
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Response(b'{"url":"https://upload.boat.dev/leaked-token"}')
+        raise RuntimeError("request failed at https://upload.boat.dev/leaked-token")
+
+    monkeypatch.setattr(MODULE["urllib"].request, "urlopen", urlopen)
+    client = SdkBoatBuildClient.__new__(SdkBoatBuildClient)
+    client._api_key = "boat-secret"
+    client._api_url = "https://boat.dev/api/v1"
+    client._org = None
+
+    with pytest.raises(RuntimeError, match="signed file upload failed") as error:
+        client.upload_file("bx_23456789", "/tmp/bundle.tar.gz", b"bundle-bytes")
+    assert "leaked-token" not in str(error.value)

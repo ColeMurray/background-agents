@@ -44,6 +44,7 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
 // deletion migration" step writes them to an auto.tfvars.json file), and
 // project_root is a path inside the checkout.
 const NOT_FROM_ENVIRONMENT = new Set([
+  "boat_previous_base_snapshot",
   "control_plane_migration_tag",
   "control_plane_migration_old_tag",
   "control_plane_new_sqlite_classes",

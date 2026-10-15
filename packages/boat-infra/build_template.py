@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import base64
+import json
 import os
 import re
 import shutil
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from http.cookiejar import CookieJar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,7 +37,6 @@ STATE_POLL_SECONDS = 2
 START_TIMEOUT_SECONDS = 300
 COMMAND_TIMEOUT_SECONDS = 1800
 SNAPSHOT_TIMEOUT_SECONDS = 600
-MAX_NAMED_SNAPSHOTS = 10
 VERIFY_PORT = 43123
 
 INSTALL_COMMAND = " && ".join(
@@ -120,7 +119,7 @@ class BoatBuildClient(Protocol):
 
     def get_sandbox(self, sandbox_id: str) -> SandboxInfo: ...
 
-    def write_base64(self, sandbox_id: str, path: str, content: str) -> None: ...
+    def upload_file(self, sandbox_id: str, path: str, content: bytes) -> None: ...
 
     def start_command(self, sandbox_id: str, command: str) -> int: ...
 
@@ -154,7 +153,11 @@ class SdkBoatBuildClient:
 
         configuration = Configuration(host=api_url, access_token=api_key)
         self._api_client = ApiClient(configuration).__enter__()
+        if org:
+            self._api_client.default_headers["X-Boat-Org"] = org
         self._api = BoatApi(self._api_client)
+        self._api_key = api_key
+        self._api_url = api_url.rstrip("/")
         self._org = org
 
     def create_sandbox(
@@ -167,12 +170,21 @@ class SdkBoatBuildClient:
     ) -> SandboxInfo:
         from boat_sdk.models.create_sandbox_request import CreateSandboxRequest
 
-        request = CreateSandboxRequest(
-            type=sandbox_type,
-            ttlSeconds=ttl_seconds,
-            env=environment or {},
-            noEnv=True,
-            var_from=snapshot,
+        request_fields = {
+            "type": sandbox_type,
+            "ttl_seconds": ttl_seconds,
+            "env": environment or {},
+            "no_env": True,
+            "var_from": snapshot,
+        }
+        # Boat's public API and current docs expose xlarge, but boat-sdk 1.7.0's
+        # generated validator still carries the former three-value enum. Build
+        # the same generated model without that stale local validator; the API
+        # remains authoritative and rejects accounts whose plan lacks xlarge.
+        request = (
+            CreateSandboxRequest.model_construct(**request_fields)
+            if sandbox_type == "xlarge"
+            else CreateSandboxRequest(**request_fields)
         )
         response = self._api.create(
             idempotency_key=str(uuid.uuid4()),
@@ -194,14 +206,35 @@ class SdkBoatBuildClient:
             snapshot_available=response.sandbox.snapshot_available,
         )
 
-    def write_base64(self, sandbox_id: str, path: str, content: str) -> None:
-        from boat_sdk.models.file_write_request import FileWriteRequest
-
-        self._api.write_file(
-            sandbox_id,
-            FileWriteRequest(path=path, content=content, encoding="base64"),
-            _request_timeout=120,
+    def upload_file(self, sandbox_id: str, path: str, content: bytes) -> None:
+        request = urllib.request.Request(
+            f"{self._api_url}/sandboxes/{quote(sandbox_id, safe='')}/files/upload-url",
+            data=json.dumps({"path": path, "ttlSeconds": 3600}).encode(),
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                **({"X-Boat-Org": self._org} if self._org else {}),
+            },
+            method="POST",
         )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            result = json.load(response)
+        upload_url = result.get("url")
+        if not isinstance(upload_url, str) or urlsplit(upload_url).scheme != "https":
+            raise RuntimeError("Boat did not return a secure upload URL")
+        upload = urllib.request.Request(
+            upload_url,
+            data=content,
+            headers={"Content-Type": "application/octet-stream"},
+            method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(upload, timeout=600) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f"Boat file upload failed with HTTP {response.status}")
+        except Exception:
+            # urllib errors include the signed URL in their string form.
+            raise RuntimeError("Boat signed file upload failed") from None
 
     def start_command(self, sandbox_id: str, command: str) -> int:
         from boat_sdk.models.command_request import CommandRequest
@@ -400,12 +433,12 @@ def wait_for_snapshot(client: BoatBuildClient, name: str) -> SnapshotInfo:
     raise RuntimeError("Boat named snapshot did not become ready")
 
 
-def archive_bundle(bundle: PackedBundle) -> str:
+def archive_bundle(bundle: PackedBundle) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".tar.gz") as archive:
         with tarfile.open(archive.name, "w:gz") as tar:
             for path in sorted(bundle.directory.rglob("*")):
                 tar.add(path, arcname=path.relative_to(bundle.directory), recursive=False)
-        return base64.b64encode(Path(archive.name).read_bytes()).decode()
+        return Path(archive.name).read_bytes()
 
 
 def verify_hosted_websocket(client: BoatBuildClient, sandbox_id: str) -> None:
@@ -432,36 +465,6 @@ def verify_hosted_websocket(client: BoatBuildClient, sandbox_id: str) -> None:
         websocket.send("boat-websocket-ok")
         if websocket.recv(timeout=10) != "boat-websocket-ok":
             raise RuntimeError("Boat hosted WebSocket probe did not echo")
-
-
-def managed_snapshot_candidates(
-    snapshots: list[SnapshotInfo], prefix: str, protected: set[str]
-) -> list[SnapshotInfo]:
-    managed = [snapshot for snapshot in snapshots if snapshot.name.startswith(f"{prefix}-")]
-    newest = max(managed, key=lambda snapshot: snapshot.created_at, default=None)
-    if newest:
-        protected.add(newest.name)
-    return sorted(
-        (snapshot for snapshot in managed if snapshot.name not in protected),
-        key=lambda snapshot: snapshot.created_at,
-    )
-
-
-def ensure_snapshot_capacity(
-    client: BoatBuildClient, *, prefix: str, candidate: str, protected: set[str]
-) -> None:
-    snapshots = client.list_named_snapshots()
-    if any(snapshot.name == candidate for snapshot in snapshots):
-        return
-    removable = managed_snapshot_candidates(snapshots, prefix, protected | {candidate})
-    while len(snapshots) >= MAX_NAMED_SNAPSHOTS and removable:
-        snapshot = removable.pop(0)
-        client.delete_named_snapshot(snapshot.name)
-        snapshots = [current for current in snapshots if current.name != snapshot.name]
-    if len(snapshots) >= MAX_NAMED_SNAPSHOTS:
-        raise RuntimeError(
-            "Boat named-snapshot limit reached and no deployment-owned snapshot is safe to remove"
-        )
 
 
 def cleanup_snapshots(client: BoatBuildClient, *, prefix: str, keep: set[str]) -> None:
@@ -496,8 +499,6 @@ def build_template(
     verify_host: Callable[[BoatBuildClient, str], None] = verify_hosted_websocket,
 ) -> str:
     candidate = candidate_name(prefix, bundle.plan["buildHash"])
-    protected = {value for value in (os.environ.get("BOAT_PROTECTED_SNAPSHOT"),) if value}
-    ensure_snapshot_capacity(client, prefix=prefix, candidate=candidate, protected=protected)
 
     existing = next(
         (snapshot for snapshot in client.list_named_snapshots() if snapshot.name == candidate), None
@@ -519,7 +520,7 @@ def build_template(
             )
             source_id = source.id
             wait_for_sandbox(client, source.id)
-            client.write_base64(source.id, "/tmp/openinspect-image.tar.gz", archive_bundle(bundle))
+            client.upload_file(source.id, "/tmp/openinspect-image.tar.gz", archive_bundle(bundle))
             wait_for_command(client, source.id, client.start_command(source.id, INSTALL_COMMAND))
             install_probe = client.run_command(
                 source.id,
@@ -576,6 +577,10 @@ def load_client() -> SdkBoatBuildClient:
         raise RuntimeError("BOAT_BUILD_API_KEY or BOAT_API_KEY is required")
     api_url = os.environ.get("BOAT_API_URL", DEFAULT_API_URL)
     parsed = urlsplit(api_url)
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError(
+            "BOAT_API_URL must not contain credentials, query parameters, or fragments"
+        )
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     ):

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 
 [[package]]
@@ -13,7 +13,7 @@ wheels = [
 
 [[package]]
 name = "boat-sdk"
-version = "1.0.0"
+version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -21,9 +21,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/dc/18b92836272e8f74f0608ceda2a05a75af8f423f78badf223fc38e686ba8/boat_sdk-1.0.0.tar.gz", hash = "sha256:96c53ac65cd40f8476fea5b92b70584c86a8d8809eabfe46cb9214dfd3fb6ef8", size = 123043, upload-time = "2026-09-16T17:40:59.347Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/2d/81733b93f6eddb28b1b7fdb3649a73ce4aaf8cbb3669b06a62fa7eaefb0b/boat_sdk-1.7.0.tar.gz", hash = "sha256:f66bff37127c3a41f6df1e626c5521b0801e1cc0bce8c4a874bcd0b02edd9d48", size = 143525, upload-time = "2026-10-07T09:18:08.327Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/8c/7dd27391470c1a11fba436f65259ef98ef2f190ebf2e2b0dceff345d20cc/boat_sdk-1.0.0-py3-none-any.whl", hash = "sha256:78109641834e956e01a1ef838730a8b8bf298601fa1b5a2f458637e5a48759e5", size = 265886, upload-time = "2026-09-16T17:40:57.7Z" },
+    { url = "https://files.pythonhosted.org/packages/30/0a/d63a7085fdc6a8b57eb9ffb2d13ebd8327b00b903af29393437de28b5493/boat_sdk-1.7.0-py3-none-any.whl", hash = "sha256:558f4cb0f09c1af2665eb290a7514b5feb7e393311e92aaf584579939a44a0fc", size = 303369, upload-time = "2026-10-07T09:18:06.694Z" },
 ]
 
 [[package]]
@@ -61,7 +61,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boat-sdk", specifier = "==1.0.0" },
+    { name = "boat-sdk", specifier = "==1.7.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.4.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.13.1" },
     { name = "websockets", specifier = "==15.0.1" },

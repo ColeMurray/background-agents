@@ -69,11 +69,11 @@ repositories.
 
 Open-Inspect uses Terraform to automate deployment across multiple cloud providers:
 
-| Provider                                                                     | Purpose                          | What Terraform Creates                                                                                          |
-| ---------------------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| **Cloudflare**                                                               | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                            |
-| **Vercel** _or_ **Cloudflare Workers**                                       | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                               |
-| **Modal**, **Daytona**, **Vercel Sandboxes**, **OpenComputer**, _or_ **E2B** | Sandbox execution infrastructure | Modal app deployment, Daytona/Vercel API config, OpenComputer template/API config, _or_ E2B template/API config |
+| Provider                                                                               | Purpose                          | What Terraform Creates                                                             |
+| -------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------- |
+| **Cloudflare**                                                                         | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                               |
+| **Vercel** _or_ **Cloudflare Workers**                                                 | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                  |
+| **Modal**, **Daytona**, **Vercel Sandboxes**, **OpenComputer**, **E2B**, _or_ **Boat** | Sandbox execution infrastructure | Modal deployment, direct provider API config, and provider-specific base templates |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -962,7 +962,8 @@ For the full runtime, lifecycle, and configuration model, see
    `boat_sandbox_access_secret`.
 3. Leave `boat_base_snapshot = ""` for Terraform to build and fresh-restore-verify an immutable
    named snapshot, or set it to a previously verified manual rollback pin.
-4. Choose `boat_sandbox_type` from `small`, `default`, or `large`.
+4. Choose `boat_sandbox_type` from `small`, `default`, `large`, or `xlarge` (which requires a
+   qualifying Boat plan).
 
 Boat repository and environment prebuilds are intentionally unavailable; sessions use same-ID
 stop/resume persistence. See [Boat Sandbox Provider](BOAT_SANDBOX_PROVIDER.md) for scopes, template

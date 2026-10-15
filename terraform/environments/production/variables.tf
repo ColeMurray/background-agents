@@ -740,10 +740,12 @@ variable "boat_api_url" {
 
   validation {
     condition = (
-      can(regex("^https://", var.boat_api_url)) ||
-      can(regex("^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:/|$)", var.boat_api_url))
+      !can(regex("[@?#]", var.boat_api_url)) && (
+        can(regex("^https://", var.boat_api_url)) ||
+        can(regex("^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:/|$)", var.boat_api_url))
+      )
     )
-    error_message = "boat_api_url must use HTTPS except for loopback development URLs."
+    error_message = "boat_api_url must use HTTPS except for loopback development URLs and contain no credentials, query, or fragment."
   }
 }
 
@@ -792,8 +794,8 @@ variable "boat_sandbox_type" {
   default     = "default"
 
   validation {
-    condition     = contains(["small", "default", "large"], var.boat_sandbox_type)
-    error_message = "boat_sandbox_type must be 'small', 'default', or 'large'."
+    condition     = contains(["small", "default", "large", "xlarge"], var.boat_sandbox_type)
+    error_message = "boat_sandbox_type must be 'small', 'default', 'large', or 'xlarge'."
   }
 }
 
@@ -803,8 +805,8 @@ variable "boat_template_sandbox_type" {
   default     = "default"
 
   validation {
-    condition     = contains(["small", "default", "large"], var.boat_template_sandbox_type)
-    error_message = "boat_template_sandbox_type must be 'small', 'default', or 'large'."
+    condition     = contains(["small", "default", "large", "xlarge"], var.boat_template_sandbox_type)
+    error_message = "boat_template_sandbox_type must be 'small', 'default', 'large', or 'xlarge'."
   }
 }
 

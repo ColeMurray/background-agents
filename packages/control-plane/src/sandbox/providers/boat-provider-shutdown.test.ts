@@ -13,7 +13,22 @@ const ready: BoatSandbox = {
 function provider(overrides: Partial<BoatRestClient>) {
   const client = {
     getSandbox: vi.fn(async () => ready),
-    stopSandbox: vi.fn(async () => {}),
+    stopSandbox: vi.fn(async () => ({
+      id: "stop_123",
+      status: "pending" as const,
+      requestedAt: "2030-01-01T00:00:00Z",
+      lastAttemptAt: null,
+      error: null,
+      endedAt: null,
+    })),
+    getStop: vi.fn(async () => ({
+      id: "stop_123",
+      status: "completed" as const,
+      requestedAt: "2030-01-01T00:00:00Z",
+      lastAttemptAt: "2030-01-01T00:00:05Z",
+      error: null,
+      endedAt: "2030-01-01T00:00:05Z",
+    })),
     deleteSandbox: vi.fn(async () => ({
       id: "bdop_0123456789abcdef0123456789abcdef",
       kind: "sandbox" as const,
@@ -62,7 +77,36 @@ describe("BoatSandboxProvider shutdown", () => {
       })
     ).resolves.toEqual({ success: true });
     expect(client.stopSandbox).toHaveBeenCalledWith(ready.id, undefined);
+    expect(client.getStop).toHaveBeenCalledWith(ready.id, "stop_123", undefined);
     expect(client.deleteSandbox).not.toHaveBeenCalled();
+  });
+
+  it("does not report preservation when Boat's stop operation is still failing", async () => {
+    const { provider: boat } = provider({
+      getSandbox: vi
+        .fn()
+        .mockResolvedValueOnce(ready)
+        .mockResolvedValueOnce({ ...ready, state: "archived", snapshotAvailable: true }),
+      getStop: vi.fn(async () => ({
+        id: "stop_123",
+        status: "failing" as const,
+        requestedAt: "2030-01-01T00:00:00Z",
+        lastAttemptAt: "2030-01-01T00:01:00Z",
+        error: "snapshot retrying",
+        endedAt: null,
+      })),
+    });
+    await expect(
+      boat.stopSandbox({
+        providerObjectId: ready.id,
+        sessionId: "session-1",
+        reason: "inactivity_timeout",
+        intent: "preserve",
+      })
+    ).resolves.toEqual({
+      success: false,
+      error: "Boat stop operation was failing: snapshot retrying",
+    });
   });
 
   it("refuses to report preservation without a verified snapshot", async () => {

@@ -56,12 +56,12 @@ export class SandboxAccess {
   }
 
   async storeCodeServer(url: string, password: string): Promise<void> {
-    this.deps.getLogger().info("Storing code-server info", { url });
+    this.deps.getLogger().info("Storing code-server info");
     await this.deps.storage.updateSandboxAccess("codeServer", url, password);
   }
 
   async storeVnc(url: string, password: string): Promise<void> {
-    this.deps.getLogger().info("Storing VNC info", { url });
+    this.deps.getLogger().info("Storing VNC info");
     await this.deps.storage.updateSandboxAccess("vnc", url, password);
   }
 
@@ -81,7 +81,7 @@ export class SandboxAccess {
     sandboxId: string
   ): Promise<void> {
     const token = await this.mintTtydToken(sandboxAuthToken, sessionId, sandboxId);
-    this.deps.getLogger().info("Storing ttyd info", { url });
+    this.deps.getLogger().info("Storing ttyd info");
     await this.deps.storage.updateSandboxAccess("ttyd", url, token);
   }
 

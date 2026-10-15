@@ -128,7 +128,8 @@ modal profile current
 ### Boat (Only If Selected In Phase 1)
 
 - **Runtime API key**: scoped key for sandbox operations
-- **Build API key**: optional separate key with snapshot write access; otherwise reuse the runtime key
+- **Build API key**: optional separate key with snapshot write access; otherwise reuse the runtime
+  key
 - **Sandbox access secret**: generate a stable 32+ character value in Phase 6
 
 ### Anthropic

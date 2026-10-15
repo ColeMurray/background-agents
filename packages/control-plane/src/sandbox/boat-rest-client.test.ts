@@ -46,6 +46,9 @@ describe("BoatRestClient", () => {
       "must use HTTPS"
     );
     expect(
+      () => new BoatRestClient({ apiKey: "key", apiUrl: "https://user@boat.test/api?secret=x" })
+    ).toThrow("must not contain credentials");
+    expect(
       () => new BoatRestClient({ apiKey: "key", apiUrl: "http://localhost:8787" })
     ).not.toThrow();
     expect(() => new BoatRestClient({ apiKey: "key" }).requireBaseSnapshot()).toThrow(
@@ -111,10 +114,62 @@ describe("BoatRestClient", () => {
     });
 
     fetchSpy.mockResolvedValue(
-      jsonResponse({ ok: true, type: "sandbox.stopping", id: sandbox.id, status: "stopping" }, 202)
+      jsonResponse(
+        {
+          ok: true,
+          type: "sandbox.stopping",
+          id: "stop_123",
+          status: "archiving",
+          sandbox: { ...sandbox, state: "archiving" },
+        },
+        202
+      )
     );
-    await client.stopSandbox(sandbox.id);
+    await expect(client.stopSandbox(sandbox.id)).resolves.toMatchObject({
+      id: "stop_123",
+      status: "archiving",
+    });
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ force: false });
+  });
+
+  it("reads a stop operation by its stable id", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        type: "stop.status",
+        id: sandbox.id,
+        stop: {
+          id: "stop_123",
+          status: "failing",
+          requestedAt: "2030-01-01T00:00:00Z",
+          lastAttemptAt: "2030-01-01T00:01:00Z",
+          error: "snapshot retrying",
+          endedAt: null,
+        },
+      })
+    );
+    await expect(new BoatRestClient(config).getStop(sandbox.id, "stop_123")).resolves.toMatchObject(
+      {
+        status: "failing",
+        error: "snapshot retrying",
+      }
+    );
+    expect(fetchSpy.mock.calls[0][0]).toBe(
+      "https://boat.test/api/v1/sandboxes/bx_23456789/stops/stop_123"
+    );
+  });
+
+  it("extends an active sandbox through the documented PATCH TTL", async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        type: "sandbox.info",
+        sandbox: { ...sandbox, archiveAfter: "2030-01-02T04:04:05.000Z" },
+      })
+    );
+    await new BoatRestClient(config).updateSandboxTimeout(sandbox.id, 1800);
+    expect(fetchSpy.mock.calls[0][1].method).toBe("PATCH");
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ ttlSeconds: 1800 });
   });
 
   it("starts only a fixed detached command", async () => {

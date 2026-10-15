@@ -18,7 +18,7 @@ boat_sandbox_access_secret = "a stable random secret with at least 32 characters
 boat_api_url              = "https://boat.dev/api/v1"
 boat_org                  = "personal"
 boat_template_prefix      = "" # derives a deployment-specific managed prefix
-boat_sandbox_type         = "default" # small, default, or large
+boat_sandbox_type         = "default" # small, default, large, or xlarge
 boat_template_sandbox_type = "default"
 boat_build_api_key        = "boat_..." # falls back to boat_api_key
 boat_base_snapshot        = ""         # verified manual pin; skips managed build
@@ -43,9 +43,8 @@ Boat API key so resumed sandboxes retain their access credentials.
 
 Use scoped, expiring service keys. The runtime key needs:
 
-- `sandbox.create`, `sandbox.read`, `sandbox.update`, `sandbox.stop`, `sandbox.resume`, and
-  `sandbox.delete`
-- `exec`, `file.write`, `host`, `snapshot.read`, and `account.read` (deletion-operation status)
+- `sandbox.create`, `sandbox.read`, `sandbox.stop`, `sandbox.resume`, and `sandbox.delete`
+- `exec`, `file.write`, `host`, and `snapshot.read`
 
 The build key additionally needs `snapshot.write`. It is consumed only by Terraform/local template
 construction and is never bound to the control-plane Worker. If one key is used for both roles,
@@ -66,25 +65,31 @@ Boat is represented as a persistent-resume provider:
   normal reads immediately; physical deletion can remain `blocked` while deduplicated snapshot data
   is shared, without leaving runnable compute.
 
-The public OpenAPI currently calls the retained state `archived`; live API/CLI 1.0.28 validation on
-September 24, 2026 returned `stopped`. Open-Inspect accepts both and requires `snapshotAvailable`
-before recording preservation success.
+The public API calls the retained state `archived`; Open-Inspect also accepts the legacy `stopped`
+spelling and requires `snapshotAvailable` before recording preservation success. It tracks Boat's
+stop operation and refuses to report preservation unless that operation completed.
+
+Boat keeps an archived sandbox's automatic snapshot for 14 days. Open-Inspect does not create a paid
+named snapshot per session, so a Boat session left stopped beyond that provider retention window
+cannot resume automatically; Boat returns `snapshot_data_expired` and Open-Inspect fails closed
+rather than silently replacing the lost workspace. Operators that require longer archival must
+preserve selected sandboxes as Boat named snapshots and manage their cost outside the session
+lifecycle.
 
 ## Persistent Workspace
 
-Boat documents `/home/user` plus selected system trees as captured. `/workspace` itself is not
-captured. Open-Inspect therefore stores user state at:
+Boat captures `/home/user`, new root-level directories, and changes in selected system trees.
+Open-Inspect keeps user state under the stable home-directory path:
 
 ```text
 /home/user/openinspect/workspace
 ```
 
 The persistent launcher and `/app` payload live under `/home/user/openinspect`. It recreates `/app`
-and `/workspace` as symlinks, then force-reads the required `/opt`, desktop, and noVNC trees until
-Boat's lazy snapshot hydration is stable. Live probes confirmed `/app` is not captured and that
-starting immediately can observe `/opt` as absent or being renamed by hydration; launch waits rather
-than racing or duplicating the provider's working root restore. Existing runtime, editor,
-repository, and harness paths remain unchanged after preparation.
+and `/workspace` as symlinks, then verifies the required `/opt`, desktop, and noVNC trees before
+launch. This keeps the runtime independent of provider base-image changes and avoids racing Boat's
+background snapshot hydration. Existing runtime, editor, repository, and harness paths remain
+unchanged after preparation.
 
 Boat's Ubuntu host disables the unprivileged user namespaces Chrome's process sandbox requires. The
 Boat template therefore configures agent-browser with `--no-sandbox`; isolation remains the Boat VM
@@ -103,10 +108,11 @@ CPU/memory settings map upward to Boat's public machine presets:
 | `small`   | 2   | 4096 MiB  |
 | `default` | 4   | 8192 MiB  |
 | `large`   | 8   | 16384 MiB |
+| `xlarge`  | 16  | 32768 MiB |
 
-Requests larger than `large` fail instead of silently receiving fewer resources. `xlarge` is not
-enabled because Boat's CLI documents it but the public OpenAPI does not. Session TTLs must be whole
-seconds from 1 through 2,592,000 (30 days); account-plan limits may be lower.
+Requests larger than `xlarge` fail instead of silently receiving fewer resources. Boat requires a
+qualifying paid plan for `xlarge`. Session TTLs must be whole seconds from 1 through 2,592,000 (30
+days); account-plan limits may be lower.
 
 ## Private Access
 
@@ -114,6 +120,11 @@ Code-server, ttyd, noVNC, and configured tunnel ports use Boat's private `host` 
 contain a bearer `_token` query parameter and are encrypted by the existing sandbox-access storage.
 They must never be logged or made public. The web URL helpers preserve `_token` when adding ttyd
 authentication or the noVNC path and password fragment.
+
+Boat reserves ports 22, 6080, 8090, 8911, and 47984–48010 for platform services. Open-Inspect uses
+6081 for noVNC on Boat unless `vncPort` is explicitly set and rejects reserved ports before creating
+a sandbox. Open-Inspect's shared tunnel configuration limit remains below Boat's 50-hosted-port
+limit.
 
 Live compatibility probes confirmed private hosted HTTP and WebSocket upgrades and stable tokens
 after resume. An expired ttyd JWT disables terminal access with a warning; it never destroys a
@@ -131,16 +142,17 @@ Terraform builds a hash-qualified immutable named snapshot before deploying a Wo
 it:
 
 1. Pack the shared provider-neutral image bundle and verify frozen locks.
-2. Install it in a finite-TTL, no-env Boat sandbox.
+2. Upload it through Boat's short-lived large-file URL and install it in a finite-TTL, no-env
+   sandbox.
 3. Save a named snapshot under `<boat_template_prefix>-<build hash>`.
 4. Deploy a fresh verifier from that exact snapshot.
 5. Run the full image smoke suite plus private hosted HTTP/WebSocket probes.
 6. Publish the snapshot name only after verification and delete temporary sandboxes.
 
-Boat permits ten named snapshots. The builder deletes only stale snapshots under its deployment
-prefix, protects the currently deployed reference while constructing a candidate, and keeps the new
-and immediately previous references after Worker deployment. It never deletes unrelated account
-snapshots. `boat_base_snapshot` is the manual rollback/override pin.
+Boat includes ten named snapshots free and bills additional snapshots. The builder deletes only
+stale snapshots under its deployment prefix and keeps the new and immediately previous references
+after Worker deployment. It never deletes unrelated account snapshots. `boat_base_snapshot` is the
+manual rollback/override pin.
 
 Manual build:
 
@@ -155,10 +167,10 @@ uv run --frozen python build_template.py
 ## Unsupported Capabilities
 
 Boat is intentionally not registered in Open-Inspect's repository/environment image-build subsystem.
-The public platform offers at most ten account-level named templates, not independently addressable
-provider artifacts suitable for an unbounded set of repositories. Settings > Images and image-build
-API routes therefore report Boat as unsupported. This does not affect the shared base runtime
-template or persistent session recovery.
+The platform's account-level named templates are not suitable for Open-Inspect's unbounded,
+independently addressable repository artifact set. Settings > Images and image-build API routes
+therefore report Boat as unsupported. This does not affect the shared base runtime template or
+persistent session recovery.
 
 Boat also has no public region selector or GPU support. Native Boat repository environments are not
 used; Open-Inspect keeps its credential-brokered GitHub, GitLab, and Bitbucket clone path.
@@ -184,8 +196,9 @@ URLs and environment values are intentionally absent.
 
 Before switching away from Boat, stop/drain active sessions and keep `BOAT_API_KEY`, the current
 named snapshot, and the previous rollback snapshot configured through the rollback window. Archived
-Boat sandboxes retain storage but no running compute. Open-Inspect does not migrate recovery state
-across providers; switching back to Boat makes retained sessions eligible to resume again.
+Boat sandboxes retain storage but no running compute for Boat's 14-day automatic-snapshot window.
+Open-Inspect does not migrate recovery state across providers; switching back to Boat makes sessions
+still inside that retention window eligible to resume again.
 
 ## References
 

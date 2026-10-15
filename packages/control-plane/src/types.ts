@@ -98,7 +98,7 @@ export interface EnvConfig {
   BOAT_API_URL?: string; // Boat REST API base URL (default https://boat.dev/api/v1)
   BOAT_ORG?: string; // Optional organization billing scope
   BOAT_BASE_SNAPSHOT?: string; // Verified named snapshot used for fresh sandboxes
-  BOAT_SANDBOX_TYPE?: string; // Default machine type: small, default, or large
+  BOAT_SANDBOX_TYPE?: string; // Default machine type: small, default, large, or xlarge
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

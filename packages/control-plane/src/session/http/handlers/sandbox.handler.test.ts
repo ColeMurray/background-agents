@@ -23,6 +23,7 @@ function createHandler() {
   const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
   const processSandboxEvent = vi.fn();
   const getSandbox = vi.fn<() => SandboxRow | null>();
+  const getSandboxTunnelUrls = vi.fn(async () => getSandbox()?.tunnel_urls ?? null);
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
@@ -47,7 +48,7 @@ function createHandler() {
     repository as unknown as EventRepository,
     artifactRepository,
     { getSession } as unknown as SessionCoreRepository,
-    { getSandbox } as unknown as SandboxRepository,
+    { getSandbox, getSandboxTunnelUrls } as unknown as SandboxRepository,
     { processSandboxEvent } as unknown as SessionSandboxEventProcessor,
     messenger,
     refreshOpenAIToken,
@@ -78,6 +79,7 @@ function createHandler() {
     artifactRepository,
     processSandboxEvent,
     getSandbox,
+    getSandboxTunnelUrls,
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,

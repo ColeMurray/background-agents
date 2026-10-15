@@ -112,7 +112,7 @@ describe("createSandboxProviderFromEnv", () => {
     ).not.toThrow();
   });
 
-  it("rejects an unsupported Boat machine type", () => {
+  it("accepts xlarge and rejects unknown Boat machine types", () => {
     expect(() =>
       createSandboxProviderFromEnv(
         createEnv({
@@ -123,7 +123,19 @@ describe("createSandboxProviderFromEnv", () => {
         }),
         "boat"
       )
-    ).toThrow("BOAT_SANDBOX_TYPE must be small, default, or large");
+    ).not.toThrow();
+
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: "stable-access-secret-at-least-32-chars",
+          BOAT_SANDBOX_TYPE: "enormous",
+        }),
+        "boat"
+      )
+    ).toThrow("BOAT_SANDBOX_TYPE must be small, default, large, or xlarge");
   });
 
   it("rejects a short Boat sandbox access secret", () => {
@@ -136,6 +148,17 @@ describe("createSandboxProviderFromEnv", () => {
         }),
         "boat"
       )
-    ).toThrow("at least 32 characters");
+    ).toThrow("at least 32 non-whitespace characters");
+
+    expect(() =>
+      createSandboxProviderFromEnv(
+        createEnv({
+          BOAT_API_KEY: "boat-key",
+          BOAT_BASE_SNAPSHOT: "oi-base",
+          BOAT_SANDBOX_ACCESS_SECRET: " ".repeat(32),
+        }),
+        "boat"
+      )
+    ).toThrow("at least 32 non-whitespace characters");
   });
 });

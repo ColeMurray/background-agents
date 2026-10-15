@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { encryptToken, generateEncryptionKey } from "../auth/crypto";
+import { decryptToken, encryptToken, generateEncryptionKey } from "../auth/crypto";
 import { createLogger } from "../logger";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { SandboxRepository } from "./sandbox-repository";
@@ -108,13 +108,19 @@ describe("SandboxRepository completeProviderResume (SQLite)", () => {
 
         const row = repository.getSandbox();
         if (shouldCommit) {
-          expect(row).toMatchObject({
-            modal_object_id: access.providerObjectId,
-            code_server_url: access.codeServer.url,
-            vnc_url: access.vnc.url,
-            ttyd_url: access.ttyd.url,
-            tunnel_urls: JSON.stringify(access.tunnelUrls),
-          });
+          expect(row?.modal_object_id).toBe(access.providerObjectId);
+          await expect(decryptToken(row!.code_server_url!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+            access.codeServer.url
+          );
+          await expect(decryptToken(row!.vnc_url!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+            access.vnc.url
+          );
+          await expect(decryptToken(row!.ttyd_url!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+            access.ttyd.url
+          );
+          await expect(decryptToken(row!.tunnel_urls!, TEST_ENCRYPTION_KEY)).resolves.toBe(
+            JSON.stringify(access.tunnelUrls)
+          );
           expect(row?.code_server_password).not.toBe(access.codeServer.password);
           expect(row?.vnc_password).not.toBe(access.vnc.password);
           expect(row?.ttyd_token).not.toBe(access.ttyd.token);
@@ -137,4 +143,21 @@ describe("SandboxRepository completeProviderResume (SQLite)", () => {
       }
     }
   );
+
+  it("reads encrypted and legacy plaintext tunnel metadata", async () => {
+    const { db, repository, set } = createSqliteRepository();
+    try {
+      await repository.updateSandboxTunnelUrls({ "3000": "https://preview.test?_token=secret" });
+      await expect(repository.getSandboxTunnelUrls()).resolves.toBe(
+        JSON.stringify({ "3000": "https://preview.test?_token=secret" })
+      );
+
+      set("tunnel_urls = ?", JSON.stringify({ "4000": "https://legacy.test" }));
+      await expect(repository.getSandboxTunnelUrls()).resolves.toBe(
+        JSON.stringify({ "4000": "https://legacy.test" })
+      );
+    } finally {
+      db.close();
+    }
+  });
 });

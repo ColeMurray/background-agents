@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BoatNotFoundError, type BoatRestClient, type BoatSandbox } from "../boat-rest-client";
+import {
+  BoatConflictError,
+  BoatNotFoundError,
+  type BoatRestClient,
+  type BoatSandbox,
+} from "../boat-rest-client";
 import { SandboxProviderError, type CreateSandboxConfig } from "../provider";
 import {
   BoatSandboxProvider,
@@ -39,9 +44,17 @@ function mockClient(overrides: Partial<BoatRestClient> = {}): BoatRestClient {
     requireBaseSnapshot: vi.fn(() => "oi-base"),
     createSandbox: vi.fn(async () => created),
     getSandbox: vi.fn(async () => ready),
-    updateSandboxName: vi.fn(async () => ready),
+    updateSandboxTimeout: vi.fn(async () => ready),
     resumeSandbox: vi.fn(async () => {}),
-    stopSandbox: vi.fn(async () => {}),
+    stopSandbox: vi.fn(async () => ({
+      id: "stop_123",
+      status: "pending" as const,
+      requestedAt: "2030-01-01T00:00:00Z",
+      lastAttemptAt: null,
+      error: null,
+      endedAt: null,
+    })),
+    getStop: vi.fn(),
     startDetachedCommand: vi.fn(async () => ({
       success: true,
       processId: 42,
@@ -134,7 +147,7 @@ describe("BoatSandboxProvider", () => {
       },
       codeServerUrl: "https://boat.test/8080?_token=private-8080",
       ttydUrl: "https://boat.test/7680?_token=private-7680",
-      vncAccess: { url: "https://boat.test/6080?_token=private-6080" },
+      vncAccess: { url: "https://boat.test/6081?_token=private-6081" },
       tunnelUrls: { "3000": "https://boat.test/3000?_token=private-3000" },
     });
   });
@@ -144,7 +157,9 @@ describe("BoatSandboxProvider", () => {
     expect(resolveBoatSandboxType("default", { cpuCores: 1, memoryMib: 1024 })).toBe("small");
     expect(resolveBoatSandboxType("small", { cpuCores: 4, memoryMib: 4096 })).toBe("default");
     expect(resolveBoatSandboxType("small", { cpuCores: 4, memoryMib: 9000 })).toBe("large");
-    expect(() => resolveBoatSandboxType("default", { cpuCores: 16 })).toThrow(
+    expect(resolveBoatSandboxType("default", { cpuCores: 16 })).toBe("xlarge");
+    expect(resolveBoatSandboxType("small", { memoryMib: 32_000 })).toBe("xlarge");
+    expect(() => resolveBoatSandboxType("default", { cpuCores: 17 })).toThrow(
       "exceeds the largest supported machine"
     );
   });
@@ -155,6 +170,9 @@ describe("BoatSandboxProvider", () => {
     );
     expect(() => validateBoatEnvironment(tooMany)).toThrow("101 variables");
     expect(() => validateBoatEnvironment({ "bad-key": "super-secret" })).toThrow("bad-key");
+    expect(() => validateBoatEnvironment({ ASCII_TOKEN: "super-secret" })).toThrow(
+      "reserved key: ASCII_TOKEN"
+    );
     expect(() => validateBoatEnvironment({ BIG: "x".repeat(65_536) })).toThrow("maximum is 65536");
     try {
       validateBoatEnvironment({ BIG: "secret-value".repeat(6_000) });
@@ -171,6 +189,17 @@ describe("BoatSandboxProvider", () => {
     await expect(
       provider(client).createSandbox({ ...baseConfig, timeoutSeconds: 2_592_001 })
     ).rejects.toThrow("1 to 2592000 seconds");
+    expect(client.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("avoids Boat platform ports", async () => {
+    const client = mockClient();
+    await expect(
+      provider(client).createSandbox({
+        ...baseConfig,
+        sandboxSettings: { tunnelPorts: [6080] },
+      })
+    ).rejects.toThrow("reserves port 6080");
     expect(client.createSandbox).not.toHaveBeenCalled();
   });
 
@@ -251,6 +280,24 @@ describe("BoatSandboxProvider", () => {
     });
   });
 
+  it("cancels an in-progress Boat stop without attempting a resize", async () => {
+    const stopping = { ...ready, state: "archiving" };
+    const client = mockClient({
+      getSandbox: vi
+        .fn()
+        .mockResolvedValueOnce(stopping)
+        .mockResolvedValueOnce(ready)
+        .mockResolvedValueOnce(ready),
+    });
+    await provider(client).resumeSandbox({
+      providerObjectId: created.id,
+      sessionId: "session-1",
+      sandboxId: "logical-1",
+      timeoutSeconds: 3600,
+    });
+    expect(client.resumeSandbox).toHaveBeenCalledWith(created.id, { ttlSeconds: 3600 });
+  });
+
   it("returns a fresh-spawn decision only for a confirmed missing sandbox", async () => {
     const client = mockClient({
       getSandbox: vi.fn(async () => {
@@ -266,6 +313,41 @@ describe("BoatSandboxProvider", () => {
     ).resolves.toMatchObject({ success: false, shouldSpawnFresh: true });
   });
 
+  it("fails closed when Boat's archived data passed its retention window", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({ ...ready, state: "archived", snapshotAvailable: false })),
+      resumeSandbox: vi.fn(async () => {
+        throw new BoatConflictError("expired", "snapshot_data_expired");
+      }),
+    });
+    await expect(
+      provider(client).resumeSandbox({
+        providerObjectId: created.id,
+        sessionId: "session-1",
+        sandboxId: "logical-1",
+      })
+    ).resolves.toEqual({
+      success: false,
+      error:
+        "Boat deleted the stopped sandbox data after its retention window; automatic resume is unavailable",
+    });
+  });
+
+  it("extends the finite TTL when the retained sandbox is already active", async () => {
+    const resumed = { ...ready, archiveAfter: "2030-01-01T05:00:00.000Z" };
+    const client = mockClient({
+      getSandbox: vi.fn(async () => resumed),
+    });
+    await provider(client).resumeSandbox({
+      providerObjectId: created.id,
+      sessionId: "session-1",
+      sandboxId: "logical-1",
+      timeoutSeconds: 1800,
+    });
+    expect(client.updateSandboxTimeout).toHaveBeenCalledWith(created.id, 1800);
+    expect(client.resumeSandbox).not.toHaveBeenCalled();
+  });
+
   it("does not replace retained state in an error state", async () => {
     const client = mockClient({ getSandbox: vi.fn(async () => ({ ...ready, state: "error" })) });
     const result = await provider(client).resumeSandbox({
@@ -275,5 +357,16 @@ describe("BoatSandboxProvider", () => {
     });
     expect(result).toMatchObject({ success: false });
     expect(result).not.toHaveProperty("shouldSpawnFresh");
+  });
+
+  it("treats a provider-cancelled start as transient capacity failure", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => ({ ...ready, state: "cancelled" })),
+    });
+    await expect(provider(client).createSandbox(baseConfig)).rejects.toMatchObject({
+      errorType: "transient",
+      message: expect.stringContaining("cancelled"),
+    });
+    expect(client.deleteSandbox).toHaveBeenCalled();
   });
 });

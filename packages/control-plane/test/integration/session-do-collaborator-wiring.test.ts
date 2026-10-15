@@ -268,12 +268,10 @@ describe("SessionDO collaborator wiring", () => {
     expect(warmSpawnCalls).toBeGreaterThan(0);
   });
 
-  it("surfaces stored tunnel URLs in the session snapshot", async () => {
+  it("keeps stored tunnel URLs out of the session snapshot", async () => {
     const { stub } = await initSession({ userId: "user-1" });
-    // The snapshot reads `tunnel_urls` regardless of sandbox status, so leave
-    // the row in the terminal `failed` state the test spawn put it in. Reviving
-    // it to `ready` would re-arm the lifecycle alarm against the row, and that
-    // alarm clears `tunnel_urls`.
+    // Leave the row in the terminal `failed` state the test spawn put it in.
+    // Reviving it would re-arm lifecycle alarms that can clear the stored value.
     await waitForSandboxStatus(stub, "failed");
     await queryDO(
       stub,
@@ -285,22 +283,20 @@ describe("SessionDO collaborator wiring", () => {
     expect(response.status).toBe(200);
 
     const snapshot = await response.json<{ session: { tunnelUrls: unknown } }>();
-    expect(snapshot.session.tunnelUrls).toEqual({
-      "3000": "https://app.tunnel.test",
-      "5000": "https://api.tunnel.test",
-    });
+    expect(snapshot.session.tunnelUrls).toBeNull();
   });
 
-  it("falls open to no tunnel URLs when the stored blob is corrupt", async () => {
+  it("falls open to no tunnel URLs when the authorized access blob is corrupt", async () => {
     const { stub } = await initSession({ userId: "user-1" });
     await waitForSandboxStatus(stub, "failed");
     await queryDO(stub, "UPDATE sandbox SET tunnel_urls = ?", "{not json");
 
-    const response = await stub.fetch("http://internal/internal/snapshot");
+    await queryDO(stub, "UPDATE sandbox SET status = 'ready'");
+    const response = await stub.fetch("http://internal/internal/sandbox-access");
     expect(response.status).toBe(200);
 
-    const snapshot = await response.json<{ session: { tunnelUrls: unknown } }>();
-    expect(snapshot.session.tunnelUrls).toBeNull();
+    const access = await response.json<{ tunnelUrls: unknown }>();
+    expect(access.tunnelUrls).toBeNull();
 
     // Pin that null came from the parser falling open rather than from the blob
     // having been cleared out from under the read.

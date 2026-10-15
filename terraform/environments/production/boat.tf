@@ -23,15 +23,14 @@ module "boat_infra" {
   count  = local.use_boat_backend && var.boat_base_snapshot == "" ? 1 : 0
   source = "../../modules/boat-infra"
 
-  api_key            = local.effective_boat_build_api_key
-  api_url            = var.boat_api_url
-  org                = var.boat_org
-  snapshot_name      = local.managed_boat_snapshot_name
-  snapshot_prefix    = local.effective_boat_template_prefix
-  protected_snapshot = var.boat_previous_base_snapshot
-  sandbox_type       = var.boat_template_sandbox_type
-  deploy_path        = "${var.project_root}/packages/boat-infra"
-  source_hash        = data.external.boat_source_hash[0].result.hash
+  api_key         = local.effective_boat_build_api_key
+  api_url         = var.boat_api_url
+  org             = var.boat_org
+  snapshot_name   = local.managed_boat_snapshot_name
+  snapshot_prefix = local.effective_boat_template_prefix
+  sandbox_type    = var.boat_template_sandbox_type
+  deploy_path     = "${var.project_root}/packages/boat-infra"
+  source_hash     = data.external.boat_source_hash[0].result.hash
 }
 
 # Reclaim deployment-owned candidates only after the Worker has switched to the

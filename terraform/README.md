@@ -258,7 +258,7 @@ BOAT_API_URL # Optional; defaults to https://boat.dev/api/v1
 BOAT_ORG # Optional billing scope
 BOAT_BASE_SNAPSHOT # Optional verified manual pin; skips managed build
 BOAT_TEMPLATE_PREFIX # Optional; empty derives a deployment-specific prefix
-BOAT_SANDBOX_TYPE # Optional: small, default, or large
+BOAT_SANDBOX_TYPE # Optional: small, default, large, or xlarge
 BOAT_TEMPLATE_SANDBOX_TYPE # Optional build/verification size
 
 # Optional GitHub sign-in pair (set both or neither)
