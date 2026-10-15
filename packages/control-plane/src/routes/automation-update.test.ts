@@ -183,8 +183,9 @@ describe("automation read, update, and delete routes", () => {
       expect(response.status).toBe(200);
       expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ schedule_once_at: at + 60_000, next_run_at: at + 60_000 })
+        expect.objectContaining({ schedule_once_at: at + 60_000 })
       );
+      expect(mockStore.bindAutomationUpdate.mock.calls[0][1]).not.toHaveProperty("next_run_at");
     });
 
     it("does not re-arm a settled one-shot when the form re-sends its timestamp", async () => {
@@ -218,8 +219,9 @@ describe("automation read, update, and delete routes", () => {
       expect(response.status).toBe(200);
       expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
         "auto-1",
-        expect.objectContaining({ schedule_once_at: at + 60_000, next_run_at: null })
+        expect.objectContaining({ schedule_once_at: at + 60_000 })
       );
+      expect(mockStore.bindAutomationUpdate.mock.calls[0][1]).not.toHaveProperty("next_run_at");
     });
 
     it("rejects moving a one-shot into the past or setting cron", async () => {

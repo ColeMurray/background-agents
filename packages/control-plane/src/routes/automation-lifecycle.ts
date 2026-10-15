@@ -94,7 +94,12 @@ async function handleResumeAutomation(
 
   const result = await ctx.db.batch([store.bindResume(id, nextRunAt)]);
   const resumed = result[0]?.meta.changes === 1;
-  if (!resumed) return error("Automation not found", 404);
+  if (!resumed) {
+    if (existing.schedule_once_at != null && (await store.getById(id))) {
+      return error("Automation schedule changed; reload and retry", 409);
+    }
+    return error("Automation not found", 404);
+  }
 
   logger.info("automation.resumed", {
     event: "automation.resumed",

@@ -107,6 +107,8 @@ describe("one-shot scheduled automations (real D1)", () => {
       runs: [{ sessionId: run.session_id, status: "completed" }],
     });
     expect(await store.getById("once")).not.toBeNull();
+    await store.update("once", { schedule_once_at: at });
+    expect(await store.getById("once")).toMatchObject({ enabled: 0, next_run_at: null });
   });
 
   it("admits only one session when two ticks hold the same due snapshot", async () => {
@@ -135,6 +137,109 @@ describe("one-shot scheduled automations (real D1)", () => {
     expect(runtime).toHaveBeenCalledTimes(2);
     expect(await fetchRuns("replay")).toHaveLength(1);
   });
+
+  it("keeps an authorization-denied one-shot visible after a real denied tick", async () => {
+    const store = await createOneShot("denied", Date.now() - 1);
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), OWNER)
+      .run();
+    const { scheduler, runtime } = createScheduler();
+    expect(await scheduler.tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+    expect(runtime).not.toHaveBeenCalled();
+    expect(await fetchRuns("denied")).toEqual([]);
+    expect(await store.getById("denied")).toMatchObject({ enabled: 0, next_run_at: null });
+    const history = await store.listInvocations("denied", { limit: 10, offset: 0 });
+    expect(history.invocations).toEqual([
+      expect.objectContaining({
+        status: "skipped",
+        skipReason: "execution_authorization_denied",
+        runs: [],
+      }),
+    ]);
+    expect((await store.list({ limit: 1 })).automations.map((a) => a.id)).toEqual(["denied"]);
+  });
+
+  it("rejects a stale resume after a concurrent reschedule and fires only at the new time", async () => {
+    const firstAt = Date.now() + 60_000;
+    const secondAt = firstAt + 60_000;
+    const store = await createOneShot("rescheduled", firstAt);
+    await store.pause("rescheduled");
+    // Resume read T1; an edit commits T2 before the prepared resume is executed.
+    const observed = (await store.getById("rescheduled"))!;
+    const resume = store.bindResume(observed.id, observed.schedule_once_at!);
+    await store.update("rescheduled", { schedule_once_at: secondAt, next_run_at: null });
+    const result = await resume.run();
+    expect(result.meta.changes).toBe(0);
+    expect(await store.getById("rescheduled")).toMatchObject({
+      enabled: 0,
+      schedule_once_at: secondAt,
+      next_run_at: null,
+    });
+    expect(await store.resume("rescheduled", secondAt)).toBe(true);
+    const { scheduler, runtime } = createScheduler();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(firstAt);
+    await scheduler.tick();
+    expect(runtime).not.toHaveBeenCalled();
+    expect(await fetchRuns("rescheduled")).toEqual([]);
+    clock.mockReturnValue(secondAt);
+    expect(await scheduler.tick()).toMatchObject({ processed: 1, failed: 0 });
+    expect(await fetchRuns("rescheduled")).toEqual([
+      expect.objectContaining({ scheduled_at: secondAt, status: "running" }),
+    ]);
+  });
+
+  it("uses the live enabled state when a concurrent resume commits before rescheduling", async () => {
+    const firstAt = Date.now() + 60_000;
+    const secondAt = firstAt + 60_000;
+    const store = await createOneShot("resume-first", firstAt);
+    await store.pause("resume-first");
+    // The edit read a paused row, then resume commits before the edit writes.
+    const edit = store.bindAutomationUpdate("resume-first", {
+      schedule_once_at: secondAt,
+      next_run_at: null,
+    })!;
+    expect(await store.resume("resume-first", firstAt)).toBe(true);
+    await edit.run();
+    expect(await store.getById("resume-first")).toMatchObject({
+      enabled: 1,
+      schedule_once_at: secondAt,
+      next_run_at: secondAt,
+    });
+    const { scheduler, runtime } = createScheduler();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(firstAt);
+    await scheduler.tick();
+    expect(runtime).not.toHaveBeenCalled();
+    clock.mockReturnValue(secondAt);
+    expect(await scheduler.tick()).toMatchObject({ processed: 1, failed: 0 });
+  });
+
+  it.each(["admission", "overlap", "denial"] as const)(
+    "refuses a stale next_run_at at one-shot %s",
+    async (path) => {
+      const firstAt = Date.now() + 60_000;
+      const secondAt = firstAt + 60_000;
+      const store = await createOneShot("stale-slot", secondAt);
+      // Reproduce a row left by the old reschedule/resume race.
+      await store.update("stale-slot", { next_run_at: firstAt });
+      if (path === "overlap")
+        await seedRun(makeRunRow("stale-slot", { status: "running", started_at: Date.now() }));
+      if (path === "denial")
+        await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+          .bind(Date.now(), OWNER)
+          .run();
+      vi.spyOn(Date, "now").mockReturnValue(firstAt);
+      const { scheduler, runtime } = createScheduler();
+      await scheduler.tick();
+      expect(runtime).not.toHaveBeenCalled();
+      const history = await store.listInvocations("stale-slot", { limit: 10, offset: 0 });
+      expect(history.invocations.filter((i) => i.source === "schedule")).toEqual([]);
+      expect(await store.getById("stale-slot")).toMatchObject({
+        enabled: 1,
+        schedule_once_at: secondAt,
+        next_run_at: firstAt,
+      });
+    }
+  );
 
   it("disables a failed one-shot without retrying it and keeps it visible for inspection", async () => {
     const store = await createOneShot("failure", Date.now() - 1);

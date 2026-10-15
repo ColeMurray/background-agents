@@ -570,12 +570,14 @@ export class AutomationStore {
     const conditions: string[] = [
       "deleted_at IS NULL",
       // Filter before LIMIT/cursor pagination, using the same status as history.
+      // Denials are childless too, but must remain visible for authorization repair.
       `NOT (trigger_type = 'schedule' AND schedule_once_at IS NOT NULL AND enabled = 0
         AND EXISTS (
           SELECT 1 FROM automation_invocations i
           LEFT JOIN automation_runs r ON r.invocation_id = i.id
           WHERE i.automation_id = automations.id AND i.source = 'schedule'
             AND i.scheduled_at = automations.schedule_once_at
+            AND (i.skip_reason IS NULL OR i.skip_reason = 'concurrent_run_active')
           GROUP BY i.id
           HAVING ${DERIVED_INVOCATION_STATUS_SQL} IN ('completed', 'skipped')
         )
@@ -720,10 +722,19 @@ export class AutomationStore {
     ];
 
     for (const field of allowedFields) {
+      if (field === "next_run_at" && fields.schedule_once_at != null) continue;
       if (field in fields) {
         setClauses.push(`${field} = ?`);
         params.push(fields[field] as unknown);
       }
+    }
+
+    if (fields.schedule_once_at != null) {
+      // Compute from the live row: a concurrent resume/pause must not strand or re-arm a slot.
+      setClauses.push(
+        "next_run_at = CASE WHEN schedule_once_at = ? THEN next_run_at WHEN enabled = 1 THEN ? ELSE NULL END"
+      );
+      params.push(fields.schedule_once_at, fields.schedule_once_at);
     }
 
     if (setClauses.length === 0) return null;
@@ -820,13 +831,14 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  /** Build a resume statement for composition in an atomic batch. */
+  /** Resume only the observed one-shot slot, so a concurrent reschedule wins. */
   bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
     return this.db
       .prepare(
-        "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+        `UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND (schedule_once_at IS NULL OR schedule_once_at = ?)`
       )
-      .bind(nextRunAt, now, id);
+      .bind(nextRunAt, now, id, nextRunAt);
   }
 
   /** Resume an automation and report whether a live row changed. */
@@ -1235,7 +1247,7 @@ export class AutomationStore {
     if (invocation.source !== "schedule") return { sql: "", params: [] };
     return {
       sql: `AND EXISTS (SELECT 1 FROM automations a WHERE a.id = ? AND a.deleted_at IS NULL
-        AND (a.schedule_once_at IS NULL OR (a.enabled = 1 AND a.next_run_at = ?)))`,
+        AND (a.schedule_once_at IS NULL OR (a.enabled = 1 AND a.next_run_at = ? AND a.schedule_once_at = a.next_run_at)))`,
       params: [invocation.automation_id, invocation.scheduled_at],
     };
   }
@@ -1412,7 +1424,8 @@ export class AutomationStore {
           .prepare(
             `UPDATE automations SET next_run_at = ?, updated_at = ?,
                enabled = CASE WHEN schedule_once_at IS NOT NULL THEN 0 ELSE enabled END
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ?`
+             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ?
+               AND (schedule_once_at IS NULL OR schedule_once_at = next_run_at)`
           )
           .bind(
             advanceSchedule.nextRunAt,
@@ -1461,7 +1474,8 @@ export class AutomationStore {
         .prepare(
           `UPDATE automations
            SET enabled = 0, next_run_at = NULL, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?`
+           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?
+             AND (schedule_once_at IS NULL OR schedule_once_at = next_run_at)`
         )
         .bind(Date.now(), invocation.automation_id, fromSlot),
     ]);

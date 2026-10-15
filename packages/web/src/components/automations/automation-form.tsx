@@ -133,6 +133,7 @@ export function AutomationForm({
   const formEvaluation = evaluateAutomationForm({
     mode,
     originalTrigger: initialDraft.trigger,
+    originalScheduleOnceAt: initialValues?.scheduleOnceAt,
     modelAvailability: modelSelection.availability,
     resolvedModel,
     draft: {
@@ -163,17 +164,7 @@ export function AutomationForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formEvaluation.valid || !scopeValid || !environmentsUsable || submitting) return;
-    const values = { ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) };
-    // Keep the original instant when the displayed minute is unchanged, including
-    // any seconds and the timezone offset in a daylight-saving overlap.
-    if (
-      mode === "edit" &&
-      values.scheduleOnceAt !== undefined &&
-      trigger.scheduleOnceAt === initialDraft.trigger.scheduleOnceAt
-    ) {
-      values.scheduleOnceAt = initialValues?.scheduleOnceAt;
-    }
-    onSubmit(values);
+    onSubmit({ ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) });
   };
 
   return (

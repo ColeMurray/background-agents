@@ -209,7 +209,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dd className="text-foreground">
                   {automation.triggerType === "schedule"
                     ? automation.scheduleOnceAt != null
-                      ? `Once at ${new Date(automation.scheduleOnceAt).toLocaleString()}`
+                      ? `Once at ${new Date(automation.scheduleOnceAt).toLocaleString(undefined, { timeZone: automation.scheduleTz })}`
                       : automation.scheduleCron
                         ? describeCron(automation.scheduleCron, automation.scheduleTz)
                         : "Schedule (no cron)"
@@ -302,7 +302,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <div>
                   <dt className="text-muted-foreground">Next Run</dt>
                   <dd className="text-foreground">
-                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
+                    {automation.nextRunAt
+                      ? new Date(automation.nextRunAt).toLocaleString(undefined, {
+                          timeZone: automation.scheduleTz,
+                        })
+                      : "—"}
                   </dd>
                 </div>
               )}
