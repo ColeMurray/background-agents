@@ -136,6 +136,9 @@ jobs:
       - name: Test Terraform workflow contract
         run: npm run test:terraform-workflow-contract
 
+      - name: Test managed base snapshot retention
+        run: npm run test:base-snapshot-retention
+
       - name: Test Node version workflow contract
         run: npm run test:node-version-workflow-contract
 

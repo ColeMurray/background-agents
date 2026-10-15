@@ -41,10 +41,10 @@ export interface DaytonaRestConfig {
    * record does not name.
    */
   toolboxApiUrl?: string;
-  /** Minutes before Daytona auto-stops an idle sandbox (default 120) */
-  autoStopIntervalMinutes: number;
-  /** Minutes before Daytona auto-archives a stopped sandbox (default 10080) */
-  autoArchiveIntervalMinutes: number;
+  /** Minutes before auto-stop; omitted by inventory-only clients. */
+  autoStopIntervalMinutes?: number;
+  /** Minutes before auto-archive; omitted by inventory-only clients. */
+  autoArchiveIntervalMinutes?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +62,7 @@ const TIMEOUT_PREVIEW_URL_MS = 15_000;
 const TIMEOUT_SNAPSHOT_MS = 120_000;
 const TIMEOUT_SNAPSHOT_GET_MS = 15_000;
 const TIMEOUT_SNAPSHOT_MUTATE_MS = 30_000;
+const SNAPSHOT_PAGE_SIZE = 100;
 const TIMEOUT_TOOLBOX_MS = 30_000;
 
 /** Longest provider error body kept on an error message. */
@@ -173,6 +174,17 @@ const daytonaSnapshotResponseSchema = z.object({
 });
 
 export type DaytonaSnapshotResponse = z.infer<typeof daytonaSnapshotResponseSchema>;
+
+const daytonaSnapshotMetadataSchema = daytonaSnapshotResponseSchema.extend({
+  createdAt: z.string().nullish(),
+  lastUsedAt: z.string().nullish(),
+});
+export type DaytonaSnapshotMetadata = z.infer<typeof daytonaSnapshotMetadataSchema>;
+const daytonaSnapshotPageSchema = z.object({
+  items: z.array(daytonaSnapshotMetadataSchema),
+  page: z.number().int().positive(),
+  totalPages: z.number().int().nonnegative(),
+});
 
 export const daytonaSignedPreviewUrlResponseSchema = z.object({
   url: z.string(),
@@ -457,6 +469,28 @@ export class DaytonaRestClient {
       body: params,
       signal,
     });
+  }
+
+  /** Complete metadata inventory, collected before a caller starts deleting snapshots. */
+  async listSnapshots(signal?: AbortSignal): Promise<DaytonaSnapshotMetadata[]> {
+    const snapshots: DaytonaSnapshotMetadata[] = [];
+    for (let pageNumber = 1; ; pageNumber++) {
+      const page = await this.requestJson(daytonaSnapshotPageSchema, {
+        method: "GET",
+        path: `/snapshots?page=${pageNumber}&limit=${SNAPSHOT_PAGE_SIZE}&sort=createdAt&order=asc`,
+        timeoutMs: TIMEOUT_SNAPSHOT_GET_MS,
+        signal,
+      });
+      if (
+        page.page !== pageNumber ||
+        (page.totalPages < pageNumber &&
+          !(pageNumber === 1 && page.totalPages === 0 && page.items.length === 0))
+      ) {
+        throw new DaytonaApiError("Invalid Daytona pagination response", 200);
+      }
+      snapshots.push(...page.items);
+      if (pageNumber >= page.totalPages) return snapshots;
+    }
   }
 
   /** Look a snapshot up by its immutable id or by name. 404 throws. */

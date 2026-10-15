@@ -7,7 +7,7 @@
  */
 
 import { createLogger } from "../../../logger";
-import type { CorrelationContext } from "../../../logger";
+import type { CorrelationContext, Logger } from "../../../logger";
 import { z } from "zod";
 import { withRequestDeadline } from "../../request-deadline";
 
@@ -22,6 +22,7 @@ export const VERCEL_COMMAND_REQUEST_DEADLINE_MS = 60_000;
 export const VERCEL_SNAPSHOT_REQUEST_DEADLINE_MS = 310_000;
 export const VERCEL_API_REQUEST_DEADLINE_MS = 60_000;
 export const VERCEL_CLEANUP_REQUEST_DEADLINE_MS = 60_000;
+const INVENTORY_PAGE_SIZE = 50;
 export const VERCEL_COMMAND_REQUEST_DEADLINE_HEADROOM_MS = 10_000;
 
 export interface VercelSandboxClientConfig {
@@ -170,6 +171,8 @@ const vercelListSnapshotsResponseSchema = z.object({
   snapshots: z.array(vercelSnapshotMetadataSchema),
 });
 
+const cursorPaginationSchema = z.object({ next: z.string().min(1).nullable() });
+
 export class VercelSandboxApiError extends Error {
   constructor(
     message: string,
@@ -184,7 +187,10 @@ export class VercelSandboxApiError extends Error {
 export class VercelSandboxClient {
   private readonly apiBaseUrl: string;
 
-  constructor(private readonly config: VercelSandboxClientConfig) {
+  constructor(
+    private readonly config: VercelSandboxClientConfig,
+    private readonly logger: Pick<Logger, "info"> = log
+  ) {
     if (!config.token) throw new Error("VercelSandboxClient requires VERCEL_TOKEN");
     if (!config.projectId) throw new Error("VercelSandboxClient requires VERCEL_PROJECT_ID");
     this.apiBaseUrl = (config.apiBaseUrl || DEFAULT_VERCEL_API_BASE_URL).replace(/\/$/, "");
@@ -336,6 +342,68 @@ export class VercelSandboxClient {
     return response.snapshots;
   }
 
+  /** Complete inventory for tooling; the single-page listSnapshots contract is unchanged. */
+  async listAllSnapshots(
+    request: Pick<VercelListSnapshotsRequest, "name" | "sortOrder" | "signal"> = {}
+  ): Promise<VercelSnapshotMetadata[]> {
+    return this.listPages(
+      vercelListSnapshotsResponseSchema
+        .extend({ pagination: cursorPaginationSchema })
+        .transform(({ snapshots, pagination }) => ({ items: snapshots, next: pagination.next })),
+      "/v2/sandboxes/snapshots",
+      { name: request.name, sortOrder: request.sortOrder },
+      request.signal
+    );
+  }
+
+  async listNamedSandboxes(
+    request: { namePrefix?: string; signal?: AbortSignal } = {}
+  ): Promise<VercelSandboxMetadata[]> {
+    return this.listPages(
+      z
+        .object({
+          sandboxes: z.array(vercelSandboxMetadataSchema),
+          pagination: cursorPaginationSchema,
+        })
+        .transform(({ sandboxes, pagination }) => ({ items: sandboxes, next: pagination.next })),
+      "/v2/sandboxes",
+      { namePrefix: request.namePrefix, sortBy: "name" },
+      request.signal
+    );
+  }
+
+  private async listPages<T>(
+    schema: z.ZodType<{ items: T[]; next: string | null }>,
+    path: string,
+    query: Record<string, string | undefined>,
+    signal?: AbortSignal
+  ): Promise<T[]> {
+    const items: T[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    while (true) {
+      const page = await this.requestJson(
+        buildQueryPath(path, {
+          project: this.config.projectId,
+          ...query,
+          limit: INVENTORY_PAGE_SIZE,
+          cursor,
+        }),
+        { method: "GET", signal },
+        schema,
+        undefined,
+        "listInventory",
+        VERCEL_API_REQUEST_DEADLINE_MS
+      );
+      items.push(...page.items);
+      if (page.next === null) return items;
+      if (cursors.has(page.next))
+        throw new VercelSandboxApiError("Repeated pagination cursor", 200);
+      cursors.add(page.next);
+      cursor = page.next;
+    }
+  }
+
   async stopSession(
     sessionId: string,
     correlation?: CorrelationContext,
@@ -473,7 +541,7 @@ export class VercelSandboxClient {
       outcome = "success";
       return result;
     } finally {
-      log.info("vercel_sandbox.request", {
+      this.logger.info("vercel_sandbox.request", {
         event: "vercel_sandbox.request",
         endpoint,
         trace_id: correlation?.trace_id,

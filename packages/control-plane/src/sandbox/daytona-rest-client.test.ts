@@ -456,6 +456,41 @@ describe("DaytonaRestClient", () => {
 describe("DaytonaRestClient snapshots", () => {
   const client = () => new DaytonaRestClient(defaultConfig);
 
+  it("lists all snapshot pages and preserves age and source metadata", async () => {
+    const snapshot = {
+      id: "snap-1",
+      name: "base-a",
+      state: "active",
+      sourceSandboxId: "sb-1",
+      createdAt: "2020-01-01T00:00:00Z",
+      lastUsedAt: "2026-01-01T00:00:00Z",
+    };
+    fetchSpy
+      .mockResolvedValueOnce(jsonResponse({ items: [snapshot], page: 1, totalPages: 2 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ items: [{ ...snapshot, id: "snap-2" }], page: 2, totalPages: 2 })
+      );
+    const snapshots = await client().listSnapshots(new AbortController().signal);
+    expect(snapshots).toEqual([snapshot, { ...snapshot, id: "snap-2" }]);
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+      "https://daytona.test/api/snapshots?page=1&limit=100&sort=createdAt&order=asc",
+      "https://daytona.test/api/snapshots?page=2&limit=100&sort=createdAt&order=asc",
+    ]);
+  });
+
+  it("rejects incomplete snapshot pagination and accepts an empty inventory", async () => {
+    for (const page of [
+      { items: [], page: 2, totalPages: 2 },
+      { items: [], page: 1 },
+      { items: [{ id: "snap-1", name: "base", state: "active" }], page: 1, totalPages: 0 },
+    ]) {
+      fetchSpy.mockResolvedValue(jsonResponse(page));
+      await expect(client().listSnapshots()).rejects.toBeInstanceOf(DaytonaApiError);
+    }
+    fetchSpy.mockResolvedValue(jsonResponse({ items: [], page: 1, totalPages: 0 }));
+    expect(await client().listSnapshots()).toEqual([]);
+  });
+
   it("requests a filesystem-only capture and returns the SOURCE sandbox", async () => {
     fetchSpy.mockResolvedValue(jsonResponse({ id: "sb-1", state: "snapshotting" }));
 

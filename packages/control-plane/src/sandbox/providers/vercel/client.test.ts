@@ -472,6 +472,70 @@ describe("VercelSandboxClient", () => {
     expect(snapshots[0]?.region).toBeUndefined();
   });
 
+  it("collects named sandbox inventory with supported prefix sorting and cursor pagination", async () => {
+    const sandbox = (name: string) => ({
+      name,
+      currentSessionId: "session",
+      createdAt: 1,
+      status: "stopped",
+    });
+    fetchSpy
+      .mockResolvedValueOnce(
+        jsonResponse({ sandboxes: [sandbox("base-a")], pagination: { next: "next-page" } })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ sandboxes: [sandbox("base-b")], pagination: { next: null } })
+      );
+    const signal = new AbortController().signal;
+    const inventory = await createClient().listNamedSandboxes({ namePrefix: "base-", signal });
+    expect(inventory.map((item) => item.name)).toEqual(["base-a", "base-b"]);
+    const requests = fetchSpy.mock.calls.map(([url]) => new URL(url));
+    for (const url of requests) {
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("sortBy")).toBe("name");
+      expect(url.searchParams.get("namePrefix")).toBe("base-");
+      expect(url.searchParams.get("project")).toBe("project-123");
+      expect(url.searchParams.get("teamId")).toBe("team-456");
+    }
+    expect(requests[1].searchParams.get("cursor")).toBe("next-page");
+    expect(lastFetchInit().signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("collects every snapshot page with timestamps and rejects repeated cursors", async () => {
+    const snapshot = (id: string) => ({
+      id,
+      sourceSessionId: "session",
+      status: "created",
+      sizeBytes: 1,
+      createdAt: 10,
+      updatedAt: 11,
+      lastUsedAt: 12,
+    });
+    fetchSpy
+      .mockResolvedValueOnce(
+        jsonResponse({ snapshots: [snapshot("a")], pagination: { next: "second" } })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ snapshots: [snapshot("b")], pagination: { next: null } })
+      );
+    const inventory = await createClient().listAllSnapshots({ name: "base-a" });
+    expect(inventory.map((item) => [item.id, item.createdAt, item.lastUsedAt])).toEqual([
+      ["a", 10, 12],
+      ["b", 10, 12],
+    ]);
+    expect(new URL(fetchSpy.mock.calls[1][0]).searchParams.get("cursor")).toBe("second");
+    expect(new URL(fetchSpy.mock.calls[1][0]).searchParams.get("limit")).toBe("50");
+    fetchSpy.mockImplementation(() =>
+      jsonResponse({ snapshots: [], pagination: { next: "same" } })
+    );
+    await expect(createClient().listAllSnapshots()).rejects.toThrow("Repeated pagination cursor");
+  });
+
+  it("refuses inventory responses without pagination metadata", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({ snapshots: [] }));
+    await expect(createClient().listAllSnapshots()).rejects.toBeInstanceOf(VercelSandboxApiError);
+  });
+
   it("stops a sandbox session with the expected endpoint", async () => {
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
 
