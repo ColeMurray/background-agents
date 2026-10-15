@@ -137,19 +137,21 @@ afterEach(() => {
 });
 
 describe("useSidebarSessions", () => {
-  it.each([
-    { initiator: "header", descendant: false, settlement: "HTTP-first" },
-    { initiator: "row", descendant: false, settlement: "HTTP-first" },
-    { initiator: "header", descendant: true, settlement: "HTTP-first" },
-    { initiator: "row", descendant: true, settlement: "HTTP-first" },
-    { initiator: "row", descendant: false, settlement: "socket-first" },
-    { initiator: "header", descendant: true, settlement: "lost-response" },
-    { initiator: "header", descendant: false, settlement: "superseded" },
-    { initiator: "row", descendant: true, settlement: "failed" },
-    { initiator: "row", descendant: false, settlement: "no-detail" },
-  ])(
-    "retains a confirmed $initiator rename in a loaded page ($settlement, descendant: $descendant)",
-    async ({ initiator, descendant, settlement }) => {
+  it.each(
+    [
+      { initiator: "header", descendant: false, settlement: "HTTP-first" },
+      { initiator: "row", descendant: false, settlement: "HTTP-first" },
+      { initiator: "header", descendant: true, settlement: "HTTP-first" },
+      { initiator: "row", descendant: true, settlement: "HTTP-first" },
+      { initiator: "row", descendant: false, settlement: "socket-first" },
+      { initiator: "header", descendant: true, settlement: "lost-response" },
+      { initiator: "header", descendant: false, settlement: "superseded" },
+      { initiator: "row", descendant: true, settlement: "failed" },
+      { initiator: "row", descendant: false, settlement: "no-detail" },
+    ].flatMap((scenario) => [false, true].map((pendingPage) => ({ ...scenario, pendingPage })))
+  )(
+    "retains a confirmed $initiator rename in a loaded page ($settlement, descendant: $descendant, pending: $pendingPage)",
+    async ({ initiator, descendant, settlement, pendingPage }) => {
       const sessionId = "rename-tail";
       const tailItem = item(descendant ? "tail-parent" : sessionId);
       const renamedSession = { ...item(sessionId).rootSession, title: "Original" };
@@ -165,8 +167,11 @@ describe("useSidebarSessions", () => {
         hasMore: false,
         nextCursor: null,
       };
+      const cursorResponse = deferred<SessionInboxPage>();
       const fetcher = vi.fn(async (key: string) =>
-        key.includes("category=") ? tailPage : snapshot({ needs_attention: page(["head"], "next") })
+        key.includes("category=")
+          ? cursorResponse.promise
+          : snapshot({ needs_attention: page(["head"], "next") })
       );
       const renameResponse = deferred<Response>();
       vi.mocked(browserApiFetch).mockReturnValue(renameResponse.promise);
@@ -198,7 +203,11 @@ describe("useSidebarSessions", () => {
       );
       await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
       act(() => result.current.sidebar.sectionPagination.needsAttention.loadMore());
-      await waitFor(() => expect(result.current.displayTitle).toBe("Original"));
+      await waitFor(() => expect(fetcher).toHaveBeenCalledWith(expect.stringContaining("cursor=")));
+      if (!pendingPage) {
+        await act(async () => cursorResponse.resolve(tailPage));
+        await waitFor(() => expect(result.current.displayTitle).toBe("Original"));
+      }
 
       let rename!: Promise<boolean>;
       act(() => {
@@ -214,7 +223,7 @@ describe("useSidebarSessions", () => {
             : "Renamed";
       if (["socket-first", "lost-response", "superseded"].includes(settlement)) {
         rerender({ authoritativeTitle: expectedTitle });
-        expect(result.current.displayTitle).toBe(expectedTitle);
+        if (!pendingPage) expect(result.current.displayTitle).toBe(expectedTitle);
       }
       await act(async () => {
         if (settlement === "lost-response") {
@@ -228,7 +237,8 @@ describe("useSidebarSessions", () => {
       });
       if (settlement === "HTTP-first") rerender({ authoritativeTitle: "Renamed" });
       expect(result.current.header.optimisticTitle).toBeUndefined();
-      expect(result.current.displayTitle).toBe(expectedTitle);
+      if (pendingPage) await act(async () => cursorResponse.resolve(tailPage));
+      await waitFor(() => expect(result.current.displayTitle).toBe(expectedTitle));
       expect(result.current.session?.title).toBe(expectedTitle);
       // The loaded page never refetches, and its fetched response remains untouched.
       expect(fetcher.mock.calls.filter(([key]) => key.includes("category="))).toHaveLength(1);
