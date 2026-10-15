@@ -7,7 +7,15 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { z } from "zod";
+import type { z } from "zod";
+import {
+  OPENAI_SLACK_CLASSIFICATION_MODEL,
+  SLACK_OAUTH_CLASSIFICATION_TIMEOUT_MS,
+  SLACK_CLASSIFICATION_TOOL,
+  slackClassificationDecisionSchema,
+  slackClassificationRequestSchema,
+} from "@open-inspect/shared/slack-classification";
+import { signedControlPlaneFetch } from "../internal-auth";
 import type { Env, ThreadContext, ClassificationResult } from "../types";
 import { buildRepoDescriptions } from "./repos";
 import { buildEnvironmentDescriptions } from "./environments";
@@ -32,45 +40,9 @@ import {
 import { createLogger } from "../logger";
 
 const log = createLogger("classifier");
-const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
+const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = SLACK_CLASSIFICATION_TOOL;
+const CLASSIFY_TARGET_TOOL_NAME = SLACK_CLASSIFICATION_TOOL.name;
 const CLASSIFY_TARGET_SYSTEM_PROMPT = `Answer by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool exactly once. Do not reply in plain text.`;
-const CONFIDENCE_LEVELS = [
-  "high",
-  "medium",
-  "low",
-] as const satisfies readonly ClassificationResult["confidence"][];
-
-const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
-  name: CLASSIFY_TARGET_TOOL_NAME,
-  description:
-    "Classify which repository, environment, or repository-less sandbox a Slack message needs. " +
-    "Use targetId as null when uncertain.",
-  input_schema: {
-    type: "object",
-    properties: {
-      targetId: {
-        type: ["string", "null"],
-        description: `A repository "owner/name", an environment id ("env_…"), or "${NO_REPOSITORY_TARGET_VALUE}". Use null when unclear.`,
-      },
-      confidence: {
-        type: "string",
-        enum: CONFIDENCE_LEVELS,
-      },
-      reasoning: {
-        type: "string",
-        description: "Brief explanation of classification decision.",
-      },
-      alternatives: {
-        type: "array",
-        items: { type: "string" },
-        description: `Other reasonable repository fullNames, environment ids, or "${NO_REPOSITORY_TARGET_VALUE}", especially whenever clarification may be required.`,
-      },
-    },
-    required: ["targetId", "confidence", "reasoning", "alternatives"],
-    additionalProperties: false,
-  },
-};
-
 /**
  * Build the classification prompt for the LLM over the target catalog.
  */
@@ -146,32 +118,10 @@ Respond with a JSON object with these fields:
 - alternatives: other reasonable targets, especially whenever clarification may be required`;
 }
 
-const llmResponseSchema = z.object({
-  targetId: z
-    .union([z.string(), z.null()])
-    .transform((value) => (typeof value === "string" && value.trim() ? value.trim() : null)),
-  confidence: z
-    .string()
-    .transform((value) => value.trim().toLowerCase())
-    .pipe(z.enum(CONFIDENCE_LEVELS)),
-  reasoning: z
-    .string()
-    .transform((value) => value.trim())
-    .pipe(z.string().min(1)),
-  alternatives: z
-    .array(
-      z
-        .string()
-        .transform((value) => value.trim())
-        .pipe(z.string().min(1))
-    )
-    .transform((values) => [...new Set(values)]),
-});
-
-type LLMResponse = z.infer<typeof llmResponseSchema>;
+type LLMResponse = z.infer<typeof slackClassificationDecisionSchema>;
 
 function normalizeModelResponse(raw: unknown): LLMResponse {
-  const parsed = llmResponseSchema.safeParse(raw);
+  const parsed = slackClassificationDecisionSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error("Invalid LLM response");
   }
@@ -273,6 +223,25 @@ export class RepoClassifier {
     );
 
     return extractStructuredResponse(response);
+  }
+
+  private async callOpenAIOAuth(prompt: string, traceId?: string): Promise<LLMResponse> {
+    const body = JSON.stringify(slackClassificationRequestSchema.parse({ prompt }));
+    const response = await signedControlPlaneFetch(
+      this.env,
+      {
+        method: "POST",
+        url: "https://internal/slack/target-classifications",
+        body,
+        traceId,
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(SLACK_OAUTH_CLASSIFICATION_TIMEOUT_MS),
+      }
+    );
+    if (!response.ok) throw new Error(`Target classification failed with ${response.status}`);
+    return normalizeModelResponse(await response.json());
   }
 
   /**
@@ -424,9 +393,16 @@ export class RepoClassifier {
       };
     };
 
-    let llmTarget: ClassificationTarget;
+    let llmTarget: ClassificationTarget | { protocol: "openai-oauth"; provider: "openai" };
     try {
-      llmTarget = resolveClassificationTarget(this.env);
+      if (this.env.CLASSIFICATION_OPENAI_AUTH === "oauth") {
+        if (this.env.CLASSIFICATION_MODEL !== OPENAI_SLACK_CLASSIFICATION_MODEL) {
+          throw new Error("Unsupported Slack OAuth classification model");
+        }
+        llmTarget = { protocol: "openai-oauth", provider: "openai" };
+      } else {
+        llmTarget = resolveClassificationTarget(this.env);
+      }
     } catch (e) {
       return offerPicker(e);
     }
@@ -434,9 +410,11 @@ export class RepoClassifier {
     try {
       const prompt = buildClassificationPrompt(message, catalog, context);
       const llmResult =
-        llmTarget.protocol === "anthropic-messages"
-          ? await this.callAnthropic(llmTarget, prompt)
-          : await callOpenAI(llmTarget, prompt, this.env.CLASSIFICATION_REASONING_EFFORT);
+        llmTarget.protocol === "openai-oauth"
+          ? await this.callOpenAIOAuth(prompt, traceId)
+          : llmTarget.protocol === "anthropic-messages"
+            ? await this.callAnthropic(llmTarget, prompt)
+            : await callOpenAI(llmTarget, prompt, this.env.CLASSIFICATION_REASONING_EFFORT);
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 

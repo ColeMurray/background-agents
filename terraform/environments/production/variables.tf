@@ -364,12 +364,11 @@ variable "classification_anthropic_api_key" {
   # classifier that rejects every message.
   validation {
     condition = (
-      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
-      local.classifier_provider != "anthropic" ||
+      !local.classifier_api_key_required.anthropic ||
       trimspace(var.classification_anthropic_api_key) != "" ||
       trimspace(var.anthropic_api_key) != ""
     )
-    error_message = "classification_anthropic_api_key or anthropic_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an Anthropic model."
+    error_message = "classification_anthropic_api_key or anthropic_api_key must be non-blank when a deployed bot uses an Anthropic classifier."
   }
 }
 
@@ -391,8 +390,22 @@ variable "classification_model" {
   }
 }
 
+variable "slack_classification_model" {
+  description = "Optional Slack-only classifier override. Blank inherits classification_model and its API key. anthropic/claude-haiku-4-5 uses the Anthropic classifier key; openai/gpt-5.6-luna uses global managed ChatGPT OAuth through control-plane VPC egress, without a provider key in Slack."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition = contains([
+      "", "anthropic/claude-haiku-4-5", "openai/gpt-5.6-luna"
+    ], var.slack_classification_model)
+    error_message = "slack_classification_model must be blank, anthropic/claude-haiku-4-5, or openai/gpt-5.6-luna."
+  }
+}
+
 variable "classification_openai_api_key" {
-  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled."
+  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when a deployed bot uses the OpenAI API-key classifier. The Slack managed OAuth override does not use this key."
   type        = string
   sensitive   = true
   default     = ""
@@ -403,11 +416,10 @@ variable "classification_openai_api_key" {
   # credential-less classifier that rejects every message.
   validation {
     condition = (
-      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
-      local.classifier_provider != "openai" ||
+      !local.classifier_api_key_required.openai ||
       trimspace(var.classification_openai_api_key) != ""
     )
-    error_message = "classification_openai_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an OpenAI model."
+    error_message = "classification_openai_api_key must be non-blank when a deployed bot uses the OpenAI API-key classifier."
   }
 }
 
@@ -423,11 +435,10 @@ variable "classification_bedrock_api_key" {
   # credential-less classifier that rejects every message.
   validation {
     condition = (
-      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
-      local.classifier_provider != "bedrock" ||
+      !local.classifier_api_key_required.bedrock ||
       trimspace(var.classification_bedrock_api_key) != ""
     )
-    error_message = "classification_bedrock_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is a Bedrock model."
+    error_message = "classification_bedrock_api_key must be non-blank when a deployed bot uses a Bedrock classifier."
   }
 }
 

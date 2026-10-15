@@ -74,6 +74,25 @@ locals {
     bedrock   = { BEDROCK_API_KEY = { value = var.classification_bedrock_api_key } }
   }[local.classifier_provider]
 
+  slack_classifier_model      = var.slack_classification_model != "" ? var.slack_classification_model : var.classification_model
+  slack_classifier_uses_oauth = var.slack_classification_model == "openai/gpt-5.6-luna"
+  slack_classifier_secret_bindings = var.slack_classification_model == "" ? local.classifier_secret_bindings : (
+    local.slack_classifier_uses_oauth ? {} : {
+      ANTHROPIC_API_KEY = { value = local.classifier_anthropic_api_key }
+    }
+  )
+
+  # API-key validation applies only to bots that actually consume that key.
+  classifier_api_key_required = {
+    for provider in keys(local.classifier_model_patterns) : provider => (
+      (var.enable_linear_bot && local.classifier_provider == provider) ||
+      (var.enable_slack_bot && (
+        (var.slack_classification_model == "" && local.classifier_provider == provider) ||
+        (var.slack_classification_model == "anthropic/claude-haiku-4-5" && provider == "anthropic")
+      ))
+    )
+  }
+
   # Bound only when set, so an unconfigured classifier keeps the model default.
   classifier_reasoning_effort_bindings = var.classification_reasoning_effort != "" ? {
     CLASSIFICATION_REASONING_EFFORT = { value = var.classification_reasoning_effort }

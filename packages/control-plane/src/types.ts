@@ -52,6 +52,7 @@ export interface EnvConfig {
   // Variables
   DEPLOYMENT_NAME: string;
   APP_NAME?: string; // Display name for user-visible UI, PR footers, and HTTP User-Agent headers
+  SLACK_CLASSIFICATION_MODEL?: string;
   GITHUB_BOT_USERNAME: string; // GitHub App bot login used for self-origin checks
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
@@ -123,6 +124,8 @@ export interface Platform {
   SLACK_BOT?: FetchClient;
   /** The linear-bot service, when deployed. */
   LINEAR_BOT?: FetchClient;
+  /** Workers VPC egress for ChatGPT subscription inference. */
+  EGRESS?: FetchClient;
   /** GitHub Autofix queues, read for health metrics only. */
   AUTOFIX_QUEUE?: QueueMetricsSource;
   AUTOFIX_DLQ?: QueueMetricsSource;

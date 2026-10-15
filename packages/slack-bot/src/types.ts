@@ -32,6 +32,7 @@ export interface Env {
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
+  CLASSIFICATION_OPENAI_AUTH?: "oauth"; // Global ChatGPT OAuth, held by the control plane
   CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
   APP_NAME?: string;
 
@@ -40,9 +41,9 @@ export interface Env {
   SLACK_SIGNING_SECRET: string;
   SLACK_APP_TOKEN?: string;
   /**
-   * Classifier provider credentials. The deployment binds exactly the one
-   * `CLASSIFICATION_MODEL` selects, so each is optional on its own and the
-   * classifier guards the branch it needs.
+   * API-key classifiers receive only their selected provider's key. Managed
+   * OAuth classification receives no provider credential; the control plane
+   * owns that request. Each classifier guards the branch it needs.
    */
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;

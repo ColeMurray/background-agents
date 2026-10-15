@@ -14,6 +14,8 @@
 
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Environment } from "@open-inspect/shared/types/environments";
+import { NO_REPOSITORY_TARGET_VALUE } from "@open-inspect/shared/slack-classification";
+export { NO_REPOSITORY_TARGET_VALUE };
 
 export type SlackSessionTarget =
   | { kind: "repository"; repo: RepoConfig }
@@ -27,7 +29,6 @@ export type SlackSessionTarget =
  * Mirrors the web picker's `env:<id>` select-value convention.
  */
 const ENVIRONMENT_VALUE_PREFIX = "env:";
-export const NO_REPOSITORY_TARGET_VALUE = "__no_repository__";
 export const NO_REPOSITORY_TARGET_LABEL = "No repository";
 
 /** Reference decoded from a Slack option/button value — resolved against the live lists. */

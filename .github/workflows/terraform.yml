@@ -236,6 +236,7 @@ jobs:
           TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
           TF_VAR_classification_bedrock_api_key: ${{ secrets.CLASSIFICATION_BEDROCK_API_KEY }}
           TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
+          TF_VAR_slack_classification_model: "${{ vars.SLACK_CLASSIFICATION_MODEL }}"
           TF_VAR_classification_reasoning_effort: "${{ vars.CLASSIFICATION_REASONING_EFFORT }}"
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
@@ -520,6 +521,7 @@ jobs:
           TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
           TF_VAR_classification_bedrock_api_key: ${{ secrets.CLASSIFICATION_BEDROCK_API_KEY }}
           TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
+          TF_VAR_slack_classification_model: "${{ vars.SLACK_CLASSIFICATION_MODEL }}"
           TF_VAR_classification_reasoning_effort: "${{ vars.CLASSIFICATION_REASONING_EFFORT }}"
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}

@@ -272,6 +272,14 @@ classification_openai_api_key = ""
 # "bedrock/<aws-region>/<inference-profile-id>" id by
 # classification_bedrock_api_key, through Claude in Amazon Bedrock in that Region.
 # classification_model = "claude-haiku-4-5"
+
+# Optional Slack-only override: global managed ChatGPT OAuth through the control
+# plane, with no provider API key bound to Slack. Configure the installation
+# default ChatGPT account and unattended subscription access in Settings, and
+# permit VPC Gateway egress to chatgpt.com (Connectivity Directory Bind permission).
+# Linear retains classification_model and its required provider key.
+# Blank inherits classification_model; Anthropic is still the default.
+# slack_classification_model = "openai/gpt-5.6-luna"
 # classification_model = "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # Reasoning effort for an OpenAI classification_model, sent as reasoning_effort.

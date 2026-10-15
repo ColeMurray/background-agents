@@ -39,6 +39,13 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
   );
 });
 
+test("Slack OAuth classifier selection reaches Terraform plan and apply", () => {
+  assertInPlanAndApply(
+    'TF_VAR_slack_classification_model: "${{ vars.SLACK_CLASSIFICATION_MODEL }}"',
+    "Slack classifier override"
+  );
+});
+
 // Inputs the workflow deliberately does not take from the environment:
 // control_plane_* values are staged per migration (the "Stage SchedulerDO
 // deletion migration" step writes them to an auto.tfvars.json file), and

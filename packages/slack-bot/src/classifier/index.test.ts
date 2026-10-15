@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Env } from "../types";
+import type * as ReposModule from "./repos";
+import {
+  SLACK_OAUTH_CLASSIFICATION_SERVER_TIMEOUT_MS,
+  SLACK_OAUTH_CLASSIFICATION_TIMEOUT_MS,
+} from "@open-inspect/shared/slack-classification";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
@@ -111,6 +116,202 @@ describe("RepoClassifier", () => {
     // buildRepoDescriptions is synchronous — a resolved-value mock would interpolate
     // "[object Promise]" into the prompt instead of the repository list.
     mockBuildRepoDescriptions.mockReturnValue("- acme/prod\n- acme/web");
+  });
+
+  it("classifies with global ChatGPT OAuth through the control plane without a provider key", async () => {
+    const decision = {
+      targetId: "acme/prod",
+      confidence: "high",
+      reasoning: "The production service is named.",
+      alternatives: [],
+    };
+    const controlPlaneFetch = vi.fn().mockResolvedValue(Response.json(decision));
+    const providerFetch = vi.fn();
+    vi.stubGlobal("fetch", providerFetch);
+    try {
+      const classifier = new RepoClassifier({
+        CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+        CLASSIFICATION_OPENAI_AUTH: "oauth",
+        SERVICE_AUTH_SECRET: "test-service-secret",
+        CONTROL_PLANE: { fetch: controlPlaneFetch },
+      } as unknown as Env);
+
+      const result = await classifier.classify("fix prod alerts", undefined, "trace-oauth");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.needsClarification).toBe(false);
+      expect(controlPlaneFetch).toHaveBeenCalledOnce();
+      const request = new Request(...(controlPlaneFetch.mock.calls[0] as [string, RequestInit]));
+      expect(new URL(request.url).pathname).toBe("/slack/target-classifications");
+      expect(request.headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      expect(await request.json()).toEqual({ prompt: expect.stringContaining("fix prod alerts") });
+      expect(providerFetch).not.toHaveBeenCalled();
+      expect(Anthropic).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("classifies a large complete catalog through OAuth without dropping targets or context", async () => {
+    const repos = Array.from({ length: 1000 }, (_, index) => ({
+      ...TEST_REPOS[0],
+      id: `acme/service-${index}`,
+      name: `service-${index}`,
+      fullName: `acme/service-${index}`,
+      description: `Service ${index}: ${"Repository description. ".repeat(20)}`,
+    }));
+    const environments = Array.from({ length: 50 }, (_, index) => ({
+      ...TEST_ENVIRONMENT,
+      id: `env_catalog_${index}`,
+      name: `environment-${index}`,
+    }));
+    const { buildRepoDescriptions } = await vi.importActual<typeof ReposModule>("./repos");
+    mockBuildRepoDescriptions.mockImplementationOnce(buildRepoDescriptions);
+    mockGetAvailableRepos.mockResolvedValue(repos);
+    mockGetAvailableEnvironments.mockResolvedValue(environments);
+    const controlPlaneFetch = vi.fn().mockResolvedValue(
+      Response.json({
+        targetId: repos.at(-1)!.fullName,
+        confidence: "high",
+        reasoning: "The final service is named.",
+        alternatives: [],
+      })
+    );
+    const classifier = new RepoClassifier({
+      CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+      CLASSIFICATION_OPENAI_AUTH: "oauth",
+      SERVICE_AUTH_SECRET: "test-service-secret",
+      CONTROL_PLANE: { fetch: controlPlaneFetch },
+    } as unknown as Env);
+
+    const result = await classifier.classify("fix service-999", {
+      channelId: "C123",
+      previousMessages: ["The earlier discussion supplies context."],
+    });
+
+    expect(classifiedRepoFullName(result)).toBe("acme/service-999");
+    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    const request = new Request(...(controlPlaneFetch.mock.calls[0] as [string, RequestInit]));
+    const { prompt } = (await request.json()) as { prompt: string };
+    expect(prompt.length).toBeGreaterThan(64 * 1024);
+    for (const repo of repos) expect(prompt).toContain(`**${repo.id}**`);
+    for (const environment of environments) expect(prompt).toContain(`**${environment.id}**`);
+    expect(prompt).toContain("The earlier discussion supplies context.");
+    expect(prompt).toContain("fix service-999");
+  });
+
+  it("allows response delivery after the server inference budget", async () => {
+    vi.useFakeTimers();
+    const callerController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      setTimeout(() => callerController.abort(), timeoutMs);
+      return callerController.signal;
+    });
+    const responseTransitMs = 2_000;
+    const controlPlaneFetch = vi.fn().mockImplementation(
+      (_url, init: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          setTimeout(
+            () =>
+              resolve(
+                Response.json({
+                  targetId: "acme/prod",
+                  confidence: "high",
+                  reasoning: "The service is named.",
+                  alternatives: [],
+                })
+              ),
+            SLACK_OAUTH_CLASSIFICATION_SERVER_TIMEOUT_MS + responseTransitMs
+          );
+          init.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("Caller deadline exceeded")),
+            { once: true }
+          );
+        })
+    );
+    try {
+      const classifier = new RepoClassifier({
+        CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+        CLASSIFICATION_OPENAI_AUTH: "oauth",
+        SERVICE_AUTH_SECRET: "test-service-secret",
+        CONTROL_PLANE: { fetch: controlPlaneFetch },
+      } as unknown as Env);
+      const operation = classifier.classify("fix prod alerts");
+      await vi.waitFor(() => expect(controlPlaneFetch).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(
+        SLACK_OAUTH_CLASSIFICATION_SERVER_TIMEOUT_MS + responseTransitMs
+      );
+      expect(classifiedRepoFullName(await operation)).toBe("acme/prod");
+      expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(SLACK_OAUTH_CLASSIFICATION_TIMEOUT_MS);
+      expect(callerController.signal.aborted).toBe(false);
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      name: "routing rule ahead of channel association",
+      rules: [{ keyword: "frontend", target: "acme/web" }],
+      expected: "acme/web",
+      source: "routing_rule",
+    },
+    {
+      name: "channel association ahead of OAuth",
+      rules: [],
+      expected: "acme/prod",
+      source: "channel_association",
+    },
+  ])("keeps $name", async ({ rules, expected, source }) => {
+    mockGetRoutingRules.mockResolvedValue(rules);
+    mockGetAvailableRepos.mockResolvedValue([
+      { ...TEST_REPOS[0], channelAssociations: ["C123"] },
+      TEST_REPOS[1],
+    ]);
+    const controlPlaneFetch = vi.fn();
+    const classifier = new RepoClassifier({
+      CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+      CLASSIFICATION_OPENAI_AUTH: "oauth",
+      CONTROL_PLANE: { fetch: controlPlaneFetch },
+    } as unknown as Env);
+    const result = await classifier.classify("fix frontend", { channelId: "C123" });
+    expect(classifiedRepoFullName(result)).toBe(expected);
+    expect(result.source).toBe(source);
+    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(Anthropic).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "unavailable OAuth",
+      response: () => new Response("private-upstream-body", { status: 503 }),
+    },
+    { name: "malformed decision", response: () => Response.json({ targetId: "acme/prod" }) },
+    {
+      name: "inaccessible target",
+      response: () =>
+        Response.json({
+          targetId: "other/private",
+          confidence: "high",
+          reasoning: "A target outside the catalog.",
+          alternatives: [],
+        }),
+    },
+  ])("offers the picker for $name", async ({ response }) => {
+    const classifier = new RepoClassifier({
+      CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+      CLASSIFICATION_OPENAI_AUTH: "oauth",
+      SERVICE_AUTH_SECRET: "test-service-secret",
+      CONTROL_PLANE: { fetch: vi.fn().mockResolvedValue(response()) },
+    } as unknown as Env);
+    const result = await classifier.classify("fix prod alerts");
+    expect(result.target).toBeNull();
+    expect(result.needsClarification).toBe(true);
+    expect(result.reasoning).not.toContain("private-upstream-body");
+    expect(Anthropic).not.toHaveBeenCalled();
   });
 
   it("uses tool output when provider returns valid structured classification", async () => {

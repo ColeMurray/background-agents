@@ -57,6 +57,11 @@ run "anthropic_classifier_by_default" {
   command = plan
 
   assert {
+    condition     = length(module.control_plane_worker.vpc_network_bindings) == 0
+    error_message = "Default classification must not add VPC egress."
+  }
+
+  assert {
     condition     = local.classifier_provider == "anthropic"
     error_message = "The default classification model must resolve to Anthropic."
   }
@@ -118,6 +123,84 @@ run "anthropic_classifier_by_default" {
     )
     error_message = "An Anthropic-classifier deployment must not bind a Bedrock key."
   }
+}
+
+run "oauth_slack_without_provider_keys" {
+  command = plan
+
+  variables {
+    slack_classification_model = "openai/gpt-5.6-luna"
+    enable_linear_bot          = false
+    anthropic_api_key          = ""
+  }
+
+  assert {
+    condition = length(setintersection(
+      toset(module.slack_bot_worker[0].secret_binding_names),
+      toset(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "BEDROCK_API_KEY"])
+    )) == 0
+    error_message = "OAuth Slack must receive no provider API key."
+  }
+
+  assert {
+    condition = (
+      module.slack_bot_worker[0].plain_text_bindings["CLASSIFICATION_MODEL"] == "openai/gpt-5.6-luna" &&
+      module.slack_bot_worker[0].plain_text_bindings["CLASSIFICATION_OPENAI_AUTH"] == "oauth" &&
+      module.control_plane_worker.plain_text_bindings["SLACK_CLASSIFICATION_MODEL"] == "openai/gpt-5.6-luna" &&
+      module.control_plane_worker.vpc_network_bindings["EGRESS"].network_id == "cf1:network"
+    )
+    error_message = "OAuth classification needs coordinated Slack and control-plane configuration and VPC egress."
+  }
+}
+
+run "oauth_slack_preserves_linear_credentials" {
+  command = plan
+
+  variables {
+    slack_classification_model = "openai/gpt-5.6-luna"
+  }
+
+  assert {
+    condition = (
+      !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      contains(module.linear_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      module.linear_bot_worker[0].plain_text_bindings["CLASSIFICATION_MODEL"] == "claude-haiku-4-5"
+    )
+    error_message = "Slack's OAuth override must preserve Linear's configured classifier and key."
+  }
+}
+
+run "explicit_anthropic_slack_requires_key" {
+  command = plan
+
+  variables {
+    slack_classification_model = "anthropic/claude-haiku-4-5"
+    enable_linear_bot          = false
+    anthropic_api_key          = ""
+  }
+
+  expect_failures = [var.classification_anthropic_api_key]
+}
+
+run "oauth_slack_does_not_exempt_linear_openai_key" {
+  command = plan
+
+  variables {
+    slack_classification_model = "openai/gpt-5.6-luna"
+    classification_model       = "openai/gpt-5.4-mini"
+  }
+
+  expect_failures = [var.classification_openai_api_key]
+}
+
+run "reject_unknown_slack_override" {
+  command = plan
+
+  variables {
+    slack_classification_model = "openai/unknown"
+  }
+
+  expect_failures = [var.slack_classification_model]
 }
 
 # A classifier-only deployment sets the dedicated key and leaves the sandbox key

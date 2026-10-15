@@ -68,9 +68,12 @@ module "slack_bot_worker" {
       DEPLOYMENT_NAME      = { value = var.deployment_name }
       APP_NAME             = { value = var.app_name }
       DEFAULT_MODEL        = { value = var.slack_bot_default_model }
-      CLASSIFICATION_MODEL = { value = var.classification_model }
+      CLASSIFICATION_MODEL = { value = local.slack_classifier_model }
     },
-    local.classifier_reasoning_effort_bindings
+    local.slack_classifier_uses_oauth ? {} : local.classifier_reasoning_effort_bindings,
+    local.slack_classifier_uses_oauth ? {
+      CLASSIFICATION_OPENAI_AUTH = { value = "oauth" }
+    } : {}
   )
 
   secrets = merge(
@@ -79,7 +82,7 @@ module "slack_bot_worker" {
       SLACK_SIGNING_SECRET = { value = var.slack_signing_secret }
       SERVICE_AUTH_SECRET  = { value = random_password.service_auth_secret_slack_bot.result }
     },
-    local.classifier_secret_bindings
+    local.slack_classifier_secret_bindings
   )
 
   compatibility_date  = "2024-09-23"

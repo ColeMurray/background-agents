@@ -236,10 +236,11 @@ Create an R2 API Token:
 
 Optional for the core path, which sets `enable_slack_bot = false` and `enable_linear_bot = false` in
 Step 5. Terraform's own default enables the Slack bot, and its classifier runs on Claude, so
-`terraform apply` fails without this key unless both bots are disabled or `classification_model`
-points at an OpenAI or Bedrock model. If you enable Slack or Linear later, set either
-`classification_anthropic_api_key` or `anthropic_api_key` then; prefer the classifier-only key
-unless you also want a deployment-wide sandbox key, because it is never injected into sandboxes.
+`terraform apply` fails without this key unless both bots are disabled, `classification_model`
+points at an OpenAI or Bedrock model, or only Slack is enabled with
+`slack_classification_model = "openai/gpt-5.6-luna"`. If you enable Slack or Linear later, set
+either `classification_anthropic_api_key` or `anthropic_api_key` then; prefer the classifier-only
+key unless you also want a deployment-wide sandbox key, because it is never injected into sandboxes.
 Coding sessions themselves need no key here — those model credentials can be added as secrets in the
 web app after deploying. With Modal, a key set in `anthropic_api_key` is also injected into session
 sandboxes as a deployment-wide default.
@@ -1052,7 +1053,43 @@ classification_anthropic_api_key = "sk-ant-..." # Classifier-only; or set anthro
 ```
 
 The Slack classifier needs an Anthropic key unless `classification_model` points at an OpenAI or
-Bedrock model; see [Anthropic (Optional)](#anthropic-optional).
+Bedrock model, or the Slack-only OAuth option below is enabled; see
+[Anthropic (Optional)](#anthropic-optional).
+
+To classify Slack targets using your managed ChatGPT subscription instead of a provider API key:
+
+```hcl
+slack_classification_model = "openai/gpt-5.6-luna"
+```
+
+Connect ChatGPT in **Settings > Provider Accounts**, choose it as the OpenAI default account, and
+set **Unattended mode > Use default account**. The classifier uses this installation-wide account
+before a repository or environment is selected. Existing installations without a provider-account
+default can continue using their global `OPENAI_OAUTH_*` secrets; repository and environment OAuth
+secrets are never used for classification. A configured default that is unavailable or has
+unattended subscription access disabled falls back to the target picker, without trying legacy
+credentials.
+
+Only the control plane reads or refreshes the OAuth credential and calls ChatGPT. Slack receives the
+validated classification result and no provider token or API key. Routing rules and channel
+associations still run before the LLM. Linear retains `classification_model` and its credentials; if
+Linear uses Anthropic, its classifier still requires an Anthropic key.
+
+OAuth classification accepts the complete prompt up to 1,048,576 UTF-16 code units, including the
+repository/environment catalog, message, and thread context. No targets or context are truncated to
+fit. Larger prompts use the target picker; the model's context limit also applies.
+
+This option adds an `EGRESS` Workers VPC Network binding on the control plane using `cf1:network`.
+The deployment's Cloudflare API token needs **Connectivity Directory Bind** permission, and
+[Workers VPC network access](https://developers.cloudflare.com/workers-vpc/configuration/vpc-networks/)
+requires an active Cloudflare Tunnel, Mesh node, or WAN on-ramp that can reach the target services,
+as well as Gateway routing and policy permitting `chatgpt.com`. Direct Worker requests to ChatGPT
+can be blocked by its edge protection; the classifier requires the egress binding and never
+substitutes direct Worker fetch. Verify a deployed Slack classification with your account after
+configuring egress. The Node control-plane host does not supply this VPC binding.
+
+Leave `slack_classification_model` blank to inherit the existing classifier configuration (Claude
+Haiku by default), or set `anthropic/claude-haiku-4-5` to select Haiku for Slack explicitly.
 
 #### Event Subscriptions (Configure After Deployment)
 
@@ -1467,6 +1504,12 @@ secret; an Anthropic value is served by `CLASSIFICATION_ANTHROPIC_API_KEY`, fall
 credentials from Open-Inspect's secret store. The optional `CLASSIFICATION_REASONING_EFFORT`
 variable sets the reasoning effort an OpenAI classifier requests (for example `low`); leave it unset
 to use the model's default.
+
+`SLACK_CLASSIFICATION_MODEL` is an optional Actions variable for the Slack-only override described
+under [Slack Bot](#slack-bot-optional). Set it to `openai/gpt-5.6-luna` to use managed ChatGPT OAuth
+through the control plane. This mode uses Luna's default reasoning effort;
+`CLASSIFICATION_REASONING_EFFORT` continues to configure the API-key classifiers. Leave the override
+unset to inherit `CLASSIFICATION_MODEL`.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

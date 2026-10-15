@@ -32,6 +32,7 @@ import { scmSettingsRoutes } from "./scm-settings";
 import { secretsRoutes } from "./secrets";
 import { sessionRoutes } from "./sessions";
 import { slackNotifyRoutes } from "./slack-notify";
+import { slackClassificationRoutes } from "./slack-classification";
 import { signInProviderRoutes } from "./sign-in-providers";
 import { skillRoutes } from "./skills";
 import { teamRoutes } from "./teams";
@@ -54,6 +55,7 @@ export const catalog: readonly RouteModule[] = [
   // Session management, then the agent-initiated Slack notification
   sessionRoutes,
   slackNotifyRoutes,
+  slackClassificationRoutes,
 
   // Repository management
   reposRoutes,

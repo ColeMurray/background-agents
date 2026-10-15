@@ -233,6 +233,10 @@
     "./generated-files": {
       "import": "./dist/generated-files.js",
       "types": "./dist/generated-files.d.ts"
+    },
+    "./slack-classification": {
+      "import": "./dist/slack-classification.js",
+      "types": "./dist/slack-classification.d.ts"
     }
   },
   "scripts": {

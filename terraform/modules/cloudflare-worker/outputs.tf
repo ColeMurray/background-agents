@@ -42,3 +42,8 @@ output "secret_binding_names" {
   description = "Names of configured secret bindings; secret values are not exposed."
   value       = nonsensitive(keys(var.secrets))
 }
+
+output "vpc_network_bindings" {
+  description = "Configured VPC networks keyed by binding name."
+  value       = var.vpc_networks
+}

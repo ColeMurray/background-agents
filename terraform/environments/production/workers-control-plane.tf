@@ -87,7 +87,16 @@ module "control_plane_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
+  # ChatGPT subscription inference uses Gateway egress rather than a direct
+  # Worker subrequest, which ChatGPT's edge protection can reject.
+  vpc_networks = var.enable_slack_bot && local.slack_classifier_uses_oauth ? {
+    EGRESS = { network_id = "cf1:network" }
+  } : {}
+
   plain_text_bindings = merge(
+    local.slack_classifier_uses_oauth ? {
+      SLACK_CLASSIFICATION_MODEL = { value = local.slack_classifier_model }
+    } : {},
     {
       WEB_APP_URL                   = { value = local.web_app_url }
       ALLOWED_USERS                 = { value = var.allowed_users }

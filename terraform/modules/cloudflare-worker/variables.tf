@@ -69,6 +69,14 @@ variable "queue_bindings" {
   default = {}
 }
 
+variable "vpc_networks" {
+  description = "Workers VPC Network bindings keyed by binding name"
+  type = map(object({
+    network_id = string
+  }))
+  default = {}
+}
+
 variable "plain_text_bindings" {
   description = "Map of plain text environment variable bindings keyed by binding name"
   type = map(object({

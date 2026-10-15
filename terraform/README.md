@@ -280,6 +280,9 @@ LINEAR_CLIENT_SECRET
 LINEAR_WEBHOOK_SECRET
 LINEAR_API_KEY # Optional; fallback comment posting
 
+# Classifier model overrides (Actions variables)
+SLACK_CLASSIFICATION_MODEL # Optional; openai/gpt-5.6-luna uses global managed OAuth through control-plane VPC egress. Blank inherits CLASSIFICATION_MODEL. See docs/GETTING_STARTED.md.
+
 # API Keys
 ANTHROPIC_API_KEY # Optional; injected into Modal/OpenComputer sandboxes and used by an Anthropic classifier when CLASSIFICATION_ANTHROPIC_API_KEY is unset
 CLASSIFICATION_ANTHROPIC_API_KEY # Optional; classifier-only Anthropic key that never reaches sandboxes
