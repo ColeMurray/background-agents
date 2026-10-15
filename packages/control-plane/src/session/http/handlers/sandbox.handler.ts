@@ -105,12 +105,6 @@ export class SandboxHandler {
     if (sandbox.modal_sandbox_id && sandboxId !== sandbox.modal_sandbox_id) {
       return Response.json({ error: "Wrong sandbox" }, { status: 403 });
     }
-    // Read before the awaits below: a `failed` generation may reconnect while
-    // this request is suspended and be published as `ready` with these same
-    // credentials. The report still describes the sandbox as it was when it
-    // was sent, so a dead row at either point means it is stale.
-    const wasDead = isDeadSandboxStatus(sandbox.status);
-
     if (!(await this.isValidSandboxToken(token, sandbox))) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -134,13 +128,10 @@ export class SandboxHandler {
     ) {
       return Response.json({ error: "Sandbox credentials changed" }, { status: 403 });
     }
-    // A dead row has nobody to terminate and nothing to retry. `failed` is
-    // deliberately in that set: the connect watchdog fails a slow boot but
-    // cannot always stop it (Modal has no explicit stop), so the orphan runs
-    // on until a sandbox-authenticated call refuses it and it reports that
-    // refusal as fatal. Acting on that report would re-drive the pending
-    // prompt onto a fresh sandbox that meets the same fate.
-    if (wasDead || isDeadSandboxStatus(currentSandbox.status)) {
+    // Ignore reports only while the current generation is still dead. A
+    // watchdog-failed generation can reconnect with the same credentials during
+    // authentication or body parsing; once live, its fatal report must fail it.
+    if (isDeadSandboxStatus(currentSandbox.status)) {
       log.warn("Ignoring fatal report from a sandbox that is no longer live", {
         event: "sandbox.error_ignored",
         sandbox_status: currentSandbox.status,
