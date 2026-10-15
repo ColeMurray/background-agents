@@ -6,6 +6,7 @@ import {
   type BoatSandbox,
 } from "../boat-rest-client";
 import { SandboxProviderError, type CreateSandboxConfig } from "../provider";
+import { RequestDeadlineError } from "../request-deadline";
 import {
   BoatSandboxProvider,
   isBoatRuntimeReady,
@@ -157,6 +158,22 @@ describe("BoatSandboxProvider", () => {
       vncAccess: { url: "https://boat.test/6081?_token=private-6081" },
       tunnelUrls: { "3000": "https://boat.test/3000?_token=private-3000" },
     });
+  });
+
+  it("retries transient Boat reads while waiting for a created sandbox", async () => {
+    const client = mockClient({
+      getSandbox: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new RequestDeadlineError("Boat", `GET /sandboxes/${created.id}`, 15_000)
+        )
+        .mockResolvedValueOnce(ready),
+    });
+
+    await expect(provider(client).createSandbox(baseConfig)).resolves.toMatchObject({
+      providerObjectId: created.id,
+    });
+    expect(client.getSandbox).toHaveBeenCalledTimes(2);
   });
 
   it("maps CPU and memory requests to the smallest public machine type", () => {

@@ -428,7 +428,18 @@ export class BoatSandboxProvider implements SandboxProvider {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       if (callerSignal?.aborted) throw callerSignal.reason;
-      const sandbox = await this.client.getSandbox(id, callerSignal);
+      let sandbox: BoatSandbox;
+      try {
+        sandbox = await this.client.getSandbox(id, callerSignal);
+      } catch (error) {
+        if (callerSignal?.aborted) throw callerSignal.reason;
+        const retryable =
+          (error instanceof BoatApiError && (error.status === 429 || error.status >= 500)) ||
+          SandboxProviderError.isTransientNetworkError(error);
+        if (!retryable || Date.now() >= deadline) throw error;
+        await delay(BOAT_STATE_POLL_INTERVAL_MS, callerSignal);
+        continue;
+      }
       if (accept(sandbox)) return sandbox;
       if (sandbox.state === "error") {
         throw new SandboxProviderError("Boat sandbox entered the error state", "permanent");
