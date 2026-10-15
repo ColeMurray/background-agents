@@ -11,7 +11,13 @@ import type { Env } from "../types";
 
 export type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment" | "clientRequestId"
+  | "content"
+  | "authorId"
+  | "canonicalUserId"
+  | "source"
+  | "scmEnrichment"
+  | "clientRequestId"
+  | "title"
 > & {
   callbackContext?: AutomationCallbackContext | SlackCallbackContext;
 };
@@ -62,24 +68,6 @@ export async function enqueueSerializedSessionPrompt(
     return { kind: "request_id_taken" };
   }
   return { kind: "rejected", status: response.status, code };
-}
-
-export async function setSessionTitle(
-  env: Env,
-  sessionId: string,
-  title: string,
-  ctx: CorrelationContext
-): Promise<boolean> {
-  const response = await createSessionRuntimeClient(env, ctx).fetch(
-    sessionId,
-    SessionInternalPaths.updateTitle,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    }
-  );
-  return response.ok;
 }
 
 /** Whether the session queued a prompt under this clientRequestId; throws when it cannot say. */

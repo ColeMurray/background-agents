@@ -42,6 +42,7 @@ interface MessageServiceDeps {
   artifactRepository: ArtifactRepository;
   usageRepository: UsageRepository;
   messageQueue: SessionMessageQueue;
+  applyTitle: (title: string) => void;
   stopExecution: () => Promise<void>;
   parseArtifactMetadata: (
     artifact: Pick<ArtifactRow, "id" | "metadata">
@@ -118,7 +119,11 @@ export class MessageService {
   enqueuePrompt(
     request: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued"; deduplicated: boolean }> {
-    return this.deps.messageQueue.enqueuePromptFromApi(request);
+    const { title } = request;
+    return this.deps.messageQueue.enqueuePromptFromApi(
+      request,
+      title ? () => this.deps.applyTitle(title) : undefined
+    );
   }
 
   /** Whether the session queued a prompt under this clientRequestId. */
