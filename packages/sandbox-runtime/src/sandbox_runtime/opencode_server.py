@@ -411,7 +411,18 @@ class OpenCodeServer:
                                 effort: {"reasoning": {"effort": effort}}
                                 for effort in ("low", "high", "max")
                             }
-                        }
+                        },
+                        # Explicit, so these efforts don't depend on the model
+                        # being in the cached catalog. Same OpenRouter shape.
+                        **{
+                            model: {
+                                "variants": {
+                                    effort: {"reasoning": {"effort": effort}}
+                                    for effort in ("low", "medium", "high", "xhigh")
+                                }
+                            }
+                            for model in ("openai/gpt-6.1-sol", "openai/gpt-6-luna")
+                        },
                     }
                 },
                 "anthropic": {

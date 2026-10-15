@@ -370,6 +370,36 @@ class TestBuildPromptRequestBody:
             "modelID": "deepseek/deepseek-v4.1-flash",
         }
 
+    @pytest.mark.parametrize("model", ["openai/gpt-6.1-sol", "openai/gpt-6-luna"])
+    @pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh"])
+    def test_openrouter_gpt6_forwards_explicit_effort(
+        self, bridge: AgentBridge, model: str, effort: str
+    ):
+        body = bridge.harness.prompt_stream._build_prompt_request_body(
+            "Hello", f"openrouter/{model}", reasoning_effort=effort
+        )
+
+        assert body["variant"] == effort
+        assert body["model"] == {"providerID": "openrouter", "modelID": model}
+
+    @pytest.mark.parametrize("model", ["openai/gpt-6.1-sol", "openai/gpt-6-luna"])
+    @pytest.mark.parametrize("effort", ["max", "none", "ultra"])
+    def test_openrouter_gpt6_rejects_unsupported_effort(
+        self, bridge: AgentBridge, model: str, effort: str
+    ):
+        with pytest.raises(ValueError):
+            bridge.harness.prompt_stream._build_prompt_request_body(
+                "Hello", f"openrouter/{model}", reasoning_effort=effort
+            )
+
+    def test_openrouter_mimo_runs_at_provider_default(self, bridge: AgentBridge):
+        body = bridge.harness.prompt_stream._build_prompt_request_body(
+            "Hello", "openrouter/xiaomi/mimo-v2.6-pro", reasoning_effort="high"
+        )
+
+        assert "variant" not in body
+        assert body["model"] == {"providerID": "openrouter", "modelID": "xiaomi/mimo-v2.6-pro"}
+
     def test_other_openrouter_model_ignores_effort(self, bridge: AgentBridge):
         body = bridge.harness.prompt_stream._build_prompt_request_body(
             "Hello", "openrouter/other/model", reasoning_effort="high"

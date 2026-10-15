@@ -21,6 +21,7 @@ import {
 
 const ANTHROPIC_MODELS = [
   "anthropic/claude-haiku-4-5",
+  "anthropic/claude-haiku-5-5",
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-sonnet-5",
@@ -29,6 +30,7 @@ const ANTHROPIC_MODELS = [
   "anthropic/claude-opus-4-7",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-opus-5",
+  "anthropic/claude-opus-5-5",
   "anthropic/claude-fable-5",
   "anthropic/claude-fable-5-1",
 ] as const;
@@ -95,6 +97,21 @@ describe("model utilities", () => {
         )
       )
     );
+  });
+
+  it("defaults the Agent World models to the efforts their cost figures assume", () => {
+    expect(getDefaultReasoningEffort("anthropic/claude-haiku-5-5")).toBe("high");
+    expect(getDefaultReasoningEffort("anthropic/claude-opus-5-5")).toBe("high");
+    expect(getDefaultReasoningEffort("openrouter/openai/gpt-6.1-sol")).toBe("high");
+    expect(getDefaultReasoningEffort("openrouter/openai/gpt-6-luna")).toBe("high");
+    // OpenRouter offers no effort control for MiMo-V2.6-Pro: provider default.
+    expect(isValidModel("openrouter/xiaomi/mimo-v2.6-pro")).toBe(true);
+    expect(supportsReasoning("openrouter/xiaomi/mimo-v2.6-pro")).toBe(false);
+    // OpenRouter's OpenAI efforts stop at xhigh.
+    expect(isValidReasoningEffort("openrouter/openai/gpt-6.1-sol", "xhigh")).toBe(true);
+    expect(isValidReasoningEffort("openrouter/openai/gpt-6.1-sol", "max")).toBe(false);
+    expect(isValidReasoningEffort("openrouter/openai/gpt-6-luna", "max")).toBe(false);
+    expect(isValidReasoningEffort("anthropic/claude-opus-5-5", "max")).toBe(true);
   });
 
   it("keeps DEFAULT_MODEL valid", () => {

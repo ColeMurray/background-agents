@@ -44,6 +44,12 @@ CONTEXT_OVERFLOW_ERROR_NAME: Final = "ContextOverflowError"
 # An effort outside this set is rejected instead of being silently dropped.
 OPENROUTER_DEEPSEEK_MODEL: Final = "openrouter/deepseek/deepseek-v4.1-flash"
 OPENROUTER_DEEPSEEK_EFFORTS: Final = frozenset({"low", "high", "max"})
+OPENROUTER_OPENAI_EFFORTS: Final = frozenset({"low", "medium", "high", "xhigh"})
+OPENROUTER_MODEL_EFFORTS: Final[dict[str, frozenset[str]]] = {
+    OPENROUTER_DEEPSEEK_MODEL: OPENROUTER_DEEPSEEK_EFFORTS,
+    "openrouter/openai/gpt-6.1-sol": OPENROUTER_OPENAI_EFFORTS,
+    "openrouter/openai/gpt-6-luna": OPENROUTER_OPENAI_EFFORTS,
+}
 
 OPENCODE_DEFAULT_TITLE_RE: Final = re.compile(
     r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
@@ -855,12 +861,13 @@ class OpenCodePromptStream:
 
             if reasoning_effort:
                 full_model_id = f"{provider_id}/{model_id}"
-                if full_model_id == OPENROUTER_DEEPSEEK_MODEL:
-                    if reasoning_effort not in OPENROUTER_DEEPSEEK_EFFORTS:
+                openrouter_efforts = OPENROUTER_MODEL_EFFORTS.get(full_model_id)
+                if openrouter_efforts is not None:
+                    if reasoning_effort not in openrouter_efforts:
                         raise ValueError(
                             f"Unsupported reasoning effort {reasoning_effort!r} for "
-                            f"{OPENROUTER_DEEPSEEK_MODEL}; expected one of "
-                            f"{sorted(OPENROUTER_DEEPSEEK_EFFORTS)}."
+                            f"{full_model_id}; expected one of "
+                            f"{sorted(openrouter_efforts)}."
                         )
                     request_body["variant"] = reasoning_effort
                 elif provider_id in {"anthropic", "openai", "xai"}:

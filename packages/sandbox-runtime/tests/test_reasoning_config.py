@@ -45,3 +45,27 @@ async def test_deepseek_variants_use_openrouter_reasoning_shape(reasoning_config
     assert model == {
         "variants": {effort: {"reasoning": {"effort": effort}} for effort in ("low", "high", "max")}
     }
+
+
+async def test_gpt6_openrouter_variants_use_openrouter_reasoning_shape(reasoning_config):
+    models = reasoning_config["provider"]["openrouter"]["models"]
+    assert set(models) == {
+        "deepseek/deepseek-v4.1-flash",
+        "openai/gpt-6.1-sol",
+        "openai/gpt-6-luna",
+    }
+    for model in ("openai/gpt-6.1-sol", "openai/gpt-6-luna"):
+        assert models[model] == {
+            "variants": {
+                effort: {"reasoning": {"effort": effort}}
+                for effort in ("low", "medium", "high", "xhigh")
+            }
+        }
+
+
+async def test_claude_5_5_models_keep_opencode_adaptive_variants(reasoning_config):
+    # Haiku 5.5 and Opus 5.5 reject budgetTokens; OpenCode's own adaptive
+    # variants (low through max) must apply, so no manual override is set.
+    models = reasoning_config["provider"]["anthropic"]["models"]
+    assert "claude-haiku-5-5" not in models
+    assert "claude-opus-5-5" not in models

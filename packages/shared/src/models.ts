@@ -55,6 +55,17 @@ export const MODEL_CATALOG = [
         reasoning: { efforts: ["high", "max"], default: "max" },
       },
       {
+        id: "anthropic/claude-haiku-5-5",
+        name: "Claude Haiku 5.5",
+        description: "Latest Haiku, adaptive thinking",
+        // The API defaults Haiku 5.5 to medium; high matches the effort its
+        // cost-quality figures were chosen at (Agent World, 2026-10-15).
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
         id: "anthropic/claude-sonnet-4-5",
         name: "Claude Sonnet 4.5",
         description: "Balanced performance",
@@ -109,7 +120,18 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-opus-5",
         name: "Claude Opus 5",
+        description: "Opus 5, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
+        id: "anthropic/claude-opus-5-5",
+        name: "Claude Opus 5.5",
         description: "Latest Opus, adaptive thinking",
+        // Thinking can't be disabled on Opus 5.5 and the API defaults it to
+        // medium; pin high so a session without an effort runs at high.
         reasoning: {
           efforts: ["low", "medium", "high", "xhigh", "max"],
           default: "high",
@@ -261,6 +283,26 @@ export const MODEL_CATALOG = [
         name: "DeepSeek V4.1 Flash (OpenRouter)",
         description: "OpenRouter model used by the investigation profile",
         reasoning: { efforts: ["low", "high", "max"], default: "high" },
+      },
+      {
+        id: "openrouter/xiaomi/mimo-v2.6-pro",
+        name: "MiMo-V2.6-Pro (OpenRouter)",
+        description: "Xiaomi; low cost per task",
+        // OpenRouter lists reasoning but not reasoning_effort for this model,
+        // so it runs at the provider's default and offers no effort control.
+      },
+      {
+        id: "openrouter/openai/gpt-6-luna",
+        name: "GPT-6 Luna (OpenRouter)",
+        description: "Fast, low-cost GPT-6",
+        // OpenRouter's OpenAI reasoning efforts; it has no "max".
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
+      },
+      {
+        id: "openrouter/openai/gpt-6.1-sol",
+        name: "GPT-6.1 Sol (OpenRouter)",
+        description: "Frontier GPT-6.1",
+        reasoning: { efforts: ["low", "medium", "high", "xhigh"], default: "high" },
       },
     ],
   },
