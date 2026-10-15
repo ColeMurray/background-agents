@@ -8,10 +8,37 @@ import {
   type SessionInboxMarkReadRequest,
 } from "@open-inspect/shared/types/session-inbox";
 
+/**
+ * A cross-origin page can send a credentialed `text/plain` POST without a
+ * preflight, and `{}` is a valid body, so require a same-origin JSON request.
+ */
+function isSameOriginJsonRequest(request: NextRequest): boolean {
+  const contentType = request.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") return false;
+  const origin = request.headers.get("origin");
+  if (!origin) return false;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return false;
+  }
+  // Behind a proxy the request URL may carry an internal host; browsers
+  // cannot forge Host or X-Forwarded-Host.
+  return [
+    new URL(request.url).host,
+    request.headers.get("host"),
+    request.headers.get("x-forwarded-host"),
+  ].includes(originHost);
+}
+
 export async function POST(request: NextRequest) {
   const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!isSameOriginJsonRequest(request)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   let body: SessionInboxMarkReadRequest | null;

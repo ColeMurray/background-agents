@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { markSessionInboxRead } from "@/lib/session-read-state";
 import { useAuthSession } from "@/lib/auth-session";
 import { isSessionScopeCacheKey } from "@/lib/session-scope";
 import { TeamOverview, useTeamSessionBucket } from "./team-overview";
@@ -70,6 +71,16 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+function unreadHierarchy(id: string) {
+  const unread = { latestMessageId: "message", unread: true, version: 1 };
+  const root = item(id);
+  const child = item(`${id}-child`).rootSession;
+  return {
+    rootSession: { ...root.rootSession, readState: unread },
+    descendantSessions: [{ ...child, parentSessionId: id, readState: unread }],
+  };
+}
 
 describe("team session buckets", () => {
   it("keeps two teams distinct and refreshes both after a visibility change", async () => {
@@ -273,7 +284,7 @@ describe("team session buckets", () => {
       }
       const attention = path.includes("bucket=needs_attention");
       return Response.json({
-        items: attention && markedRead ? [] : [item(attention ? "waiting" : "running")],
+        items: attention ? (markedRead ? [] : [unreadHierarchy("waiting")]) : [item("running")],
         hasMore: false,
         nextCursor: null,
       });
@@ -288,7 +299,9 @@ describe("team session buckets", () => {
     ).toBeNull();
 
     fireEvent.click(within(attention).getByRole("button", { name: "Mark all as read" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Mark read" }));
+    // The root and its unread child are both marked.
+    expect(await screen.findByText("Mark 2 sessions as read?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
 
     await waitFor(() => expect(within(attention).queryByText("waiting")).toBeNull());
     expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/inbox/read-state", {
@@ -297,5 +310,41 @@ describe("team session buckets", () => {
       body: JSON.stringify({ teamIds: ["team_one"] }),
     });
     expect(screen.getByText("running")).toBeTruthy();
+  });
+
+  it("returns to a freshly fetched first page after a bulk read from a later page", async () => {
+    let markedRead = false;
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (path === "/api/sessions/inbox/read-state") {
+        markedRead = true;
+        return Response.json({ markedCount: 2 });
+      }
+      if (path.includes("cursor=")) {
+        return Response.json({ items: [item("second")], hasMore: false, nextCursor: null });
+      }
+      return Response.json(
+        markedRead
+          ? { items: [], hasMore: false, nextCursor: null }
+          : { items: [item("first")], hasMore: true, nextCursor: "page-2" }
+      );
+    });
+    // Deduping keeps the cached first page unless its own key is revalidated.
+    const { result } = renderHook(() => useTeamSessionBucket("team_one", "needs_attention"), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 60_000 }}>
+          {children}
+        </SWRConfig>
+      ),
+    });
+    await waitFor(() => expect(result.current.items[0]?.rootSession.id).toBe("first"));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.items[0]?.rootSession.id).toBe("second"));
+
+    await act(async () => {
+      await markSessionInboxRead({ teamIds: ["team_one"] });
+    });
+
+    await waitFor(() => expect(result.current.items).toEqual([]));
+    expect(result.current.page).toBe(1);
   });
 });

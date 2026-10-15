@@ -99,6 +99,8 @@ beforeEach(() => {
   const recent = { ...session("recent", "Finished work"), status: "completed" as const };
   mockHook.mockReturnValue({
     needsAttention: [attention],
+    // One root row whose hierarchy holds two unread sessions.
+    attentionUnreadCount: 2,
     inProgress: [running],
     finished: [recent],
     childrenMap: new Map([[running.id, [child]]]),
@@ -279,13 +281,13 @@ describe("SessionSidebar", () => {
     const { handleMarkAllAttentionRead } = mockHook();
 
     fireEvent.click(screen.getByRole("button", { name: "Mark all as read" }));
-    expect(await screen.findByText("Mark 1 session as read?")).toBeInTheDocument();
+    expect(await screen.findByText("Mark 2 sessions as read?")).toBeInTheDocument();
     expect(handleMarkAllAttentionRead).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
     await waitFor(() => expect(handleMarkAllAttentionRead).toHaveBeenCalledOnce());
     await waitFor(() =>
-      expect(screen.queryByText("Mark 1 session as read?")).not.toBeInTheDocument()
+      expect(screen.queryByText("Mark 2 sessions as read?")).not.toBeInTheDocument()
     );
   });
 

@@ -115,6 +115,22 @@ export function isSessionInboxItemFullyRead(item: SessionInboxItem): boolean {
   );
 }
 
+interface ReadStateHierarchy {
+  rootSession: { readState: { unread: boolean } };
+  descendantSessions: ReadonlyArray<{ readState: { unread: boolean } }>;
+}
+
+/** Sessions a bulk read marks: each unread session, not each hierarchy row. */
+export function countUnreadSessions(items: readonly ReadStateHierarchy[]): number {
+  return items.reduce(
+    (count, { rootSession, descendantSessions }) =>
+      count +
+      Number(rootSession.readState.unread) +
+      descendantSessions.filter(({ readState }) => readState.unread).length,
+    0
+  );
+}
+
 /** Where a fully read hierarchy lands; mirrors the category rule in the inbox query. */
 export function sessionInboxDestinationCategory(
   item: SessionInboxItem

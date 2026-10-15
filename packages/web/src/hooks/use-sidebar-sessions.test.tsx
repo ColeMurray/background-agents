@@ -644,6 +644,26 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
   });
 
+  it("counts every unread session in attention, not just hierarchy roots", async () => {
+    const parent = unreadItem("parent");
+    const child = { ...unreadItem("child").rootSession, parentSessionId: "parent" };
+    const readChild = { ...item("read-child").rootSession, parentSessionId: "parent" };
+    const fetcher = vi.fn(async () =>
+      snapshot({
+        needs_attention: {
+          items: [{ ...parent, descendantSessions: [child, readChild] }],
+          hasMore: false,
+          nextCursor: null,
+        },
+      })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.needsAttention).toHaveLength(1);
+    expect(result.current.attentionUnreadCount).toBe(2);
+  });
+
   it("marks the filtered inbox read, then drops retained pages and refetches the head", async () => {
     teamContext.activeTeamId = "team_alpha";
     let markedRead = false;

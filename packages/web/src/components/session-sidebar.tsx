@@ -119,6 +119,7 @@ export function SessionSidebar({
 
   const {
     needsAttention,
+    attentionUnreadCount,
     inProgress,
     finished,
     childrenMap,
@@ -400,9 +401,7 @@ export function SessionSidebar({
                   true,
                   needsAttention.length > 0 && (
                     <MarkAllReadButton
-                      count={
-                        sectionPagination.needsAttention.hasMore ? null : needsAttention.length
-                      }
+                      count={sectionPagination.needsAttention.hasMore ? null : attentionUnreadCount}
                       scopeLabel={attentionScopeLabel}
                       onConfirm={handleMarkAllAttentionRead}
                     />

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import {
   teamSessionsResponseSchema,
   type TeamSessionsResponse,
@@ -14,6 +14,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatRelativeTime } from "@/lib/time";
 import { MarkAllReadButton } from "@/components/mark-all-read-button";
 import { markSessionInboxRead, subscribeSessionInboxMarkedRead } from "@/lib/session-read-state";
+import { countUnreadSessions } from "@/lib/session-inbox-api";
 
 const TEAM_SESSIONS_REFRESH_MS = 30_000;
 type TeamSessionPage = Extract<TeamSessionsResponse, { items: unknown }>;
@@ -31,10 +32,14 @@ export function useTeamSessionBucket(teamId: string, bucket: "needs_attention" |
   const [pagination, setPagination] = useState({ identity, cursors: [] as string[] });
   const cursors = pagination.identity === identity ? pagination.cursors : [];
   if (pagination.identity !== identity) setPagination({ identity, cursors: [] });
-  const params = new URLSearchParams({ bucket });
-  const cursor = cursors.at(-1);
-  if (cursor) params.set("cursor", cursor);
-  const key: BrowserApiPath = `/api/teams/${encodeURIComponent(teamId)}/sessions?${params.toString()}`;
+  const keyFor = (cursor?: string): BrowserApiPath => {
+    const params = new URLSearchParams({ bucket });
+    if (cursor) params.set("cursor", cursor);
+    return `/api/teams/${encodeURIComponent(teamId)}/sessions?${params.toString()}`;
+  };
+  const key = keyFor(cursors.at(-1));
+  const firstPageKey = keyFor();
+  const { mutate } = useSWRConfig();
   const result = useSWR<TeamSessionPage, Error>(
     userId ? ([key, userId] as const) : null,
     async ([path]: readonly [BrowserApiPath, string]) => {
@@ -46,15 +51,15 @@ export function useTeamSessionBucket(teamId: string, bucket: "needs_attention" |
     },
     { refreshInterval: TEAM_SESSIONS_REFRESH_MS, keepPreviousData: false }
   );
-  // A bulk read can empty later pages, so restart from the first page.
-  const revalidate = result.mutate;
+  // A bulk read can empty later pages, so restart from the first page and
+  // revalidate that page's key: a cached first page would otherwise be reused.
   useEffect(
     () =>
       subscribeSessionInboxMarkedRead(() => {
         setPagination({ identity, cursors: [] });
-        return revalidate();
+        return userId ? mutate([firstPageKey, userId]) : undefined;
       }),
-    [identity, revalidate]
+    [firstPageKey, identity, mutate, userId]
   );
   const accessDenied =
     result.error instanceof TeamSessionsRequestError &&
@@ -118,7 +123,7 @@ function SessionBucket({
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         {onMarkAllRead && bucket.items.length > 0 && (
           <MarkAllReadButton
-            count={bucket.hasMore || bucket.hasPrevious ? null : bucket.items.length}
+            count={bucket.hasMore || bucket.hasPrevious ? null : countUnreadSessions(bucket.items)}
             onConfirm={onMarkAllRead}
           />
         )}

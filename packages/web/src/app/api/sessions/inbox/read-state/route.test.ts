@@ -7,10 +7,16 @@ import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
-function markReadRequest(body: unknown) {
+function markReadRequest(
+  body: unknown,
+  headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Origin: "http://localhost",
+  }
+) {
   return new Request("http://localhost/api/sessions/inbox/read-state", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -41,6 +47,34 @@ describe("session inbox read-state BFF", () => {
 
     expect(response.status).toBe(400);
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a simple text/plain body", { "Content-Type": "text/plain", Origin: "http://localhost" }],
+    ["a cross-origin request", { "Content-Type": "application/json", Origin: "https://evil.test" }],
+    ["a request without an Origin", { "Content-Type": "application/json" }],
+  ])("rejects %s before parsing", async (_case, headers) => {
+    const response = await POST(markReadRequest({}, headers) as never);
+
+    expect(response.status).toBe(403);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts the public host from X-Forwarded-Host behind a proxy", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ markedCount: 0 }));
+
+    const response = await POST(
+      markReadRequest(
+        {},
+        {
+          "Content-Type": "application/json; charset=utf-8",
+          Origin: "https://inspect.example.com",
+          "X-Forwarded-Host": "inspect.example.com",
+        }
+      ) as never
+    );
+
+    expect(response.status).toBe(200);
   });
 
   it("rejects unauthenticated requests", async () => {

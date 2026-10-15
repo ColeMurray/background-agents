@@ -17,6 +17,7 @@ import {
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
+  countUnreadSessions,
   isSessionInboxItemFullyRead,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
@@ -495,6 +496,7 @@ export function useSidebarSessions() {
 
   return {
     needsAttention: attentionItems.map((item) => item.rootSession),
+    attentionUnreadCount: countUnreadSessions(attentionItems),
     inProgress: inProgressItems.map((item) => item.rootSession),
     finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
