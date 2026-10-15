@@ -378,14 +378,13 @@ callbacksRouter.post("/activity", async (c) => {
     return c.json({ error: "unauthorized" }, 401);
   }
 
-  c.executionCtx.waitUntil(
-    setAssistantThreadStatusBestEffort(
-      c.env,
-      valid.context.channel,
-      valid.context.threadTs,
-      ASSISTANT_WORKING_STATUS,
-      { event: "refresh", traceId, sessionId: valid.sessionId }
-    )
+  // Completion waits for this acknowledgement before delivering the final reply.
+  await setAssistantThreadStatusBestEffort(
+    c.env,
+    valid.context.channel,
+    valid.context.threadTs,
+    ASSISTANT_WORKING_STATUS,
+    { event: "refresh", traceId, sessionId: valid.sessionId }
   );
 
   log.info("http.request", {
