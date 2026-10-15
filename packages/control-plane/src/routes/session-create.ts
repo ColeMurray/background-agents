@@ -6,7 +6,7 @@ import {
   checkHarnessCompatibility,
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
-import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
+import { HarnessAdmissionError, resolveHarnessSelection } from "../harness-admission";
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
@@ -231,13 +231,18 @@ export async function handleCreateSession(
 
   // Validate harness, model and reasoning effort once for both DO init and D1 index
   const harness = getValidHarnessOrDefault(body.harness);
-  const model = getValidModelOrDefault(body.model);
-  const harnessModelIncompatibility = checkHarnessCompatibility(harness, model);
-  if (harnessModelIncompatibility) return error(harnessModelIncompatibility.message, 400);
-  const reasoningEffort =
-    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
-      ? body.reasoningEffort
-      : null;
+  let selection;
+  try {
+    selection = await resolveHarnessSelection(ctx.db, env, {
+      harness,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+    });
+  } catch (cause) {
+    if (cause instanceof HarnessAdmissionError) return error(cause.message, cause.status);
+    throw cause;
+  }
+  const { model, reasoningEffort } = selection;
 
   // Session-scoped integration settings resolve from the primary member (design
   // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
@@ -327,6 +332,7 @@ export async function handleCreateSession(
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (e instanceof HarnessAdmissionError) return error(e.message, e.status);
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,

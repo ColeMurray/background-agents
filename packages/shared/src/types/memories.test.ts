@@ -4,6 +4,8 @@ import {
   allowedMemoryActions,
   memoryScopeFromSearchParams,
   memoryScopeToSearchParams,
+  memoryListSearchFromInput,
+  memoryListSearchSchema,
   memorySearchSchema,
   MEMORY_TRANSITIONS,
   sandboxMemoryWriteSchema,
@@ -207,5 +209,34 @@ describe("memory lifecycle table", () => {
       status: "archived",
       archiveKind: "manual",
     });
+  });
+});
+
+describe("management list search", () => {
+  it("allows blank as no filter and applies agent search's bounds otherwise", () => {
+    const parse = (query: string) => memoryListSearchSchema.safeParse(query);
+    expect(parse("   ")).toMatchObject({ success: true, data: "" });
+    expect(parse(" ab ")).toMatchObject({ success: true, data: "ab" });
+    expect(parse("a").error?.issues[0].message).toBe("Use at least 2 characters.");
+    expect(parse("x".repeat(257)).error?.issues[0].message).toBe("Use at most 256 characters.");
+    expect(parse("a1 b2 c3 d4 e5 f6 g7 h8 i9").error?.issues[0].message).toBe(
+      "Use at most 8 search terms."
+    );
+    expect(parse("a1 b2 c3 d4 e5 f6 g7 h8").success).toBe(true);
+  });
+
+  it("treats typing under the minimum as no search yet and explains over-limit queries", () => {
+    expect(memoryListSearchFromInput("")).toEqual({ search: "" });
+    expect(memoryListSearchFromInput(" r ")).toEqual({ search: "" });
+    expect(memoryListSearchFromInput(" rspec ")).toEqual({ search: "rspec" });
+    expect(memoryListSearchFromInput("a1 b2 c3 d4 e5 f6 g7 h8 i9")).toEqual({
+      problem: "Use at most 8 search terms.",
+    });
+  });
+
+  it("gives agent search the same limits", () => {
+    expect(memorySearchSchema.safeParse({ query: "a" }).error?.issues[0].message).toBe(
+      "Use at least 2 characters."
+    );
   });
 });

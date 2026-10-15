@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { markSessionInboxRead } from "@/lib/session-read-state";
 import { useAuthSession } from "@/lib/auth-session";
 import { isSessionScopeCacheKey } from "@/lib/session-scope";
 import { TeamOverview, useTeamSessionBucket } from "./team-overview";
@@ -61,6 +71,16 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+function unreadHierarchy(id: string) {
+  const unread = { latestMessageId: "message", unread: true, version: 1 };
+  const root = item(id);
+  const child = item(`${id}-child`).rootSession;
+  return {
+    rootSession: { ...root.rootSession, readState: unread },
+    descendantSessions: [{ ...child, parentSessionId: id, readState: unread }],
+  };
+}
 
 describe("team session buckets", () => {
   it("keeps two teams distinct and refreshes both after a visibility change", async () => {
@@ -253,5 +273,81 @@ describe("team session buckets", () => {
     render(<TeamOverview teamId="team_one" />, { wrapper });
     await waitFor(() => expect(screen.getAllByText("read_denied")).toHaveLength(2));
     expect(screen.queryByRole("link", { name: "read_denied" })).toBeNull();
+  });
+
+  it("marks the team's attention sessions read after confirmation and refetches", async () => {
+    let markedRead = false;
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (path === "/api/sessions/inbox/read-state") {
+        markedRead = true;
+        return Response.json({ markedCount: 1 });
+      }
+      const attention = path.includes("bucket=needs_attention");
+      return Response.json({
+        items: attention ? (markedRead ? [] : [unreadHierarchy("waiting")]) : [item("running")],
+        hasMore: false,
+        nextCursor: null,
+      });
+    });
+    render(<TeamOverview teamId="team_one" />, { wrapper });
+    const attention = await screen.findByRole("region", { name: "Needs attention" });
+    await within(attention).findByText("waiting");
+    expect(
+      within(screen.getByRole("region", { name: "In progress" })).queryByRole("button", {
+        name: "Mark all as read",
+      })
+    ).toBeNull();
+
+    fireEvent.click(within(attention).getByRole("button", { name: "Mark all as read" }));
+    // The root and its unread child are both marked.
+    expect(await screen.findByText("Mark 2 sessions as read?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+
+    await waitFor(() => expect(within(attention).queryByText("waiting")).toBeNull());
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/inbox/read-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamIds: ["team_one"] }),
+    });
+    expect(screen.getByText("running")).toBeTruthy();
+  });
+
+  it("returns to a freshly fetched first page after a bulk read from a later page", async () => {
+    let markedRead = false;
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (path === "/api/sessions/inbox/read-state") {
+        markedRead = true;
+        return Response.json({ markedCount: 2 });
+      }
+      if (path.includes("cursor=")) {
+        return Response.json({ items: [item("second")], hasMore: false, nextCursor: null });
+      }
+      return Response.json(
+        markedRead
+          ? { items: [], hasMore: false, nextCursor: null }
+          : { items: [item("first")], hasMore: true, nextCursor: "page-2" }
+      );
+    });
+    // Production deduping would otherwise reuse the head request made moments ago.
+    const { result } = renderHook(() => useTeamSessionBucket("team_one", "needs_attention"), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 2_000 }}>
+          {children}
+        </SWRConfig>
+      ),
+    });
+    await waitFor(() => expect(result.current.items[0]?.rootSession.id).toBe("first"));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.items[0]?.rootSession.id).toBe("second"));
+
+    await act(async () => {
+      await markSessionInboxRead({ teamIds: ["team_one"] });
+    });
+
+    await waitFor(() => expect(result.current.items).toEqual([]));
+    expect(result.current.page).toBe(1);
+    const paths = vi.mocked(browserApiFetch).mock.calls.map(([path]) => path);
+    const headPath = "/api/teams/team_one/sessions?bucket=needs_attention";
+    expect(paths.slice(paths.indexOf("/api/sessions/inbox/read-state"))).toContain(headPath);
   });
 });

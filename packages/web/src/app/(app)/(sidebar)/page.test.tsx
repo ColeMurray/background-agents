@@ -595,6 +595,25 @@ describe("Home", () => {
     );
   });
 
+  it("uses the Codex default effort when changing the model", async () => {
+    mocks.enabledModelsValue = ["openai/gpt-5.6-sol", "openai/gpt-6.1-sol"];
+    localStorage.setItem("open-inspect-last-selected-harness", "codex");
+    localStorage.setItem("open-inspect-last-selected-model", "openai/gpt-5.6-sol");
+    render(<Home />);
+    await screen.findByRole("button", { name: "Agent, model and effort: codex" });
+    fireEvent.click(screen.getByRole("button", { name: "Switch model to GPT-6.1" }));
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+        reasoningEffort: "low",
+      })
+    );
+  });
+
   it("restores a stored harness and switches an incompatible model to one it can run", async () => {
     const openAiModel = "openai/gpt-5.4";
     mocks.enabledModelsValue = [DEFAULT_MODEL, openAiModel];

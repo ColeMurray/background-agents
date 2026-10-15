@@ -15,7 +15,6 @@ import {
   type VncSettings,
 } from "@open-inspect/shared/types/integrations";
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
-import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -401,20 +400,15 @@ async function handleGetResolvedConfig(
 
   if (id === "github") {
     const githubSettings = settings as GitHubBotSettings;
-    const reasoningEffort =
-      githubSettings.model &&
-      githubSettings.reasoningEffort &&
-      !isValidReasoningEffort(githubSettings.model, githubSettings.reasoningEffort)
-        ? null
-        : (githubSettings.reasoningEffort ?? null);
+    const harness = getValidHarnessOrDefault(githubSettings.harness);
 
     return json({
       integrationId: id,
       repo,
       config: {
         model: githubSettings.model ?? null,
-        harness: getValidHarnessOrDefault(githubSettings.harness),
-        reasoningEffort,
+        harness,
+        reasoningEffort: githubSettings.reasoningEffort ?? null,
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
@@ -426,20 +420,15 @@ async function handleGetResolvedConfig(
 
   if (id === "linear") {
     const linearSettings = linearBotGlobalSettingsSchema.parse(settings);
-    const linearReasoningEffort =
-      linearSettings.model &&
-      linearSettings.reasoningEffort &&
-      !isValidReasoningEffort(linearSettings.model, linearSettings.reasoningEffort)
-        ? null
-        : (linearSettings.reasoningEffort ?? null);
+    const harness = getValidHarnessOrDefault(linearSettings.harness);
 
     return json({
       integrationId: id,
       repo,
       config: {
-        harness: getValidHarnessOrDefault(linearSettings.harness),
+        harness,
         model: linearSettings.model ?? null,
-        reasoningEffort: linearReasoningEffort,
+        reasoningEffort: linearSettings.reasoningEffort ?? null,
         allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
         allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
         emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,

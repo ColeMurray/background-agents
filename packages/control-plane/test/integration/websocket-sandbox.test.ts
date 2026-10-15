@@ -13,6 +13,7 @@ import {
   seedMessage,
   queryDO,
   waitForSandboxStatus,
+  closeWebSocket,
 } from "./helpers";
 
 const SANDBOX_TOKEN = "test-sandbox-auth-token-abc123";
@@ -36,7 +37,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(response.status).toBe(101);
     expect(ws).not.toBeNull();
     ws!.accept();
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("upgrade with wrong token returns 401", async () => {
@@ -136,7 +137,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
         JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() / 1000 })
       );
       await waitForSandboxStatus(stub, "ready");
-      ws!.close();
+      await closeWebSocket(ws!);
     }
   );
 
@@ -317,7 +318,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       expect(state.getTags(liveSandboxSockets[0])).toContain(`sid:${SANDBOX_ID}`);
     });
 
-    replacementWs!.close();
+    await closeWebSocket(replacementWs!);
   });
 
   it("dispatches only from the sandbox socket whose identity the session persisted", async () => {
@@ -377,7 +378,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(callIds).toContain("call-active");
     expect(callIds).not.toContain("call-replaced");
 
-    activeWs!.close();
+    await closeWebSocket(activeWs!);
   });
 
   it("revokes dispatch authority on detach before the close completes", async () => {
@@ -465,7 +466,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     const state = await stateRes.json<{ sandbox: { status: string } }>();
     expect(state.sandbox.status).toBe("ready");
 
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("publishes sandbox access only after it becomes readable", async () => {
@@ -533,8 +534,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxDashboardUrl: null,
     });
 
-    sandboxWs!.close();
-    clientWs.close();
+    await closeWebSocket(sandboxWs!);
+    await closeWebSocket(clientWs);
   });
 
   it("does not publish sandbox access for replacement bridges during provider startup", async () => {
@@ -577,8 +578,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ]);
     expect(messages).not.toContainEqual({ type: "sandbox_access_changed" });
 
-    replacementSandboxWs!.close();
-    clientWs.close();
+    await closeWebSocket(replacementSandboxWs!);
+    await closeWebSocket(clientWs);
   });
 
   it.each([1000, 1001])(
@@ -616,7 +617,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       expect(response.status).toBe(101);
       expect(reconnectedWs).not.toBeNull();
       reconnectedWs!.accept();
-      reconnectedWs!.close();
+      await closeWebSocket(reconnectedWs!);
     }
   );
 
@@ -666,7 +667,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     const sandboxAfterAlarm = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
     expect(sandboxAfterAlarm[0].status).toBe("ready");
 
-    reconnectedWs!.close();
+    await closeWebSocket(reconnectedWs!);
   });
 
   it("failed sandbox can reconnect and self-heal to ready", async () => {
@@ -710,7 +711,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       expect.objectContaining({ content: "Still here?" })
     );
     expect(ws!.readyState).toBe(WebSocket.OPEN);
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("refuses a fenced generation's bridge at the door", async () => {
@@ -776,7 +777,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     });
     expect(matching.length).toBeGreaterThanOrEqual(1);
 
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   hostContract("host.socket-ack-redelivery", async () => {
@@ -834,7 +835,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       )
     ).toEqual([{ count: 1 }]);
 
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("preserves token segments around context compaction for replay", async () => {
@@ -912,9 +913,9 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       after,
     ]);
 
-    sandboxWs!.close();
-    clientWs.close();
-    replayWs.close();
+    await closeWebSocket(sandboxWs!);
+    await closeWebSocket(clientWs);
+    await closeWebSocket(replayWs);
   });
 
   it("accepts step_finish messages with structured token usage", async () => {
@@ -965,7 +966,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(stepFinish).toBeDefined();
     expect((stepFinish!.event as { tokens: unknown }).tokens).toEqual(tokenUsage);
 
-    sandboxWs!.close();
-    clientWs.close();
+    await closeWebSocket(sandboxWs!);
+    await closeWebSocket(clientWs);
   });
 });

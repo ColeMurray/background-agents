@@ -156,6 +156,8 @@ export {
   sessionInboxItemSchema,
   sessionInboxPageSchema,
   sessionInboxSnapshotSchema,
+  sessionInboxMarkReadRequestSchema,
+  sessionInboxMarkReadResponseSchema,
 } from "./session-inbox";
 export type {
   SessionInboxCategory,
@@ -163,6 +165,7 @@ export type {
   SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
+  SessionInboxMarkReadRequest,
 } from "./session-inbox";
 
 export {
@@ -336,6 +339,7 @@ export type {
   AutomationInvocation,
   ListAutomationInvocationsResponse,
   WebhookTriggerResponse,
+  WebhookFollowUpRefusedResponse,
   WebhookInvocationStatusResponse,
 } from "./automations";
 

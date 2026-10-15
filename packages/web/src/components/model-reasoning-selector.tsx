@@ -2,13 +2,14 @@
 
 import { Fragment, useState } from "react";
 import {
-  getReasoningConfig,
   type ModelCategory,
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
 import {
+  DEFAULT_HARNESS,
   HARNESS_IDS,
+  getHarnessReasoningConfig,
   getHarnessLabel,
   isValidHarness,
   type HarnessId,
@@ -62,7 +63,7 @@ export function ModelReasoningSelector({
 }: ModelReasoningSelectorProps) {
   const isMobile = useIsMobile();
   const [mobileView, setMobileView] = useState<"main" | "agent" | "model" | "effort">("main");
-  const reasoningConfig = getReasoningConfig(selectedModel);
+  const reasoningConfig = getHarnessReasoningConfig(harness ?? DEFAULT_HARNESS, selectedModel);
   const selectedEffort = reasoningEffort ?? reasoningConfig?.default;
   const effortLabel = selectedEffort ? formatEffort(selectedEffort) : "Default";
   const modelLabel = formatModelNameLower(selectedModel);

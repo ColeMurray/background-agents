@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { resolveInlinePromptOptions, sessionLaunchPlanSchema } from "./inline-flags";
+import {
+  normalizeModelSelection,
+  resolveInlinePromptOptions,
+  sessionLaunchPlanSchema,
+} from "./inline-flags";
 
 describe("resolveInlinePromptOptions", () => {
   const defaults = { model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" };
@@ -97,6 +101,17 @@ describe("resolveInlinePromptOptions", () => {
       error:
         'Reasoning effort "&lt;@U123&gt;" is not valid for "anthropic/claude-sonnet-4-6". Supported values: low, medium, high, max.',
     });
+  });
+});
+
+describe("normalizeModelSelection", () => {
+  it("parses valid stored reasoning efforts and falls back for malformed values", () => {
+    expect(
+      normalizeModelSelection({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" })
+    ).toEqual({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" });
+    expect(
+      normalizeModelSelection({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "ultra" })
+    ).toEqual({ model: "anthropic/claude-sonnet-4-6", reasoningEffort: "high" });
   });
 });
 

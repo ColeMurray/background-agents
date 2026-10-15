@@ -36,6 +36,7 @@ export interface ClaimedProviderCredentialExchangeRequest {
   adapter: ErasedProviderAccountAdapter;
   owner: string;
   now: () => number;
+  refreshDeadlineAt?: number;
   complete: (context: CompletionContext) => Promise<boolean>;
 }
 
@@ -87,6 +88,16 @@ export class ClaimedProviderCredentialExchange {
 
     let refreshed: ProviderRefreshResult<unknown>;
     try {
+      if (request.refreshDeadlineAt !== undefined && request.refreshDeadlineAt <= request.now()) {
+        // No grant was submitted. Release, rather than terminally fencing, this claim.
+        throw new ProviderRefreshError(
+          "Provider access deadline exceeded before exchange",
+          "retry_safe"
+        );
+      }
+      // Once submitted, a rotating grant runs under the provider timeout, not the
+      // caller's budget: aborting a consumed grant would fence the shared account.
+      // The route bounds the caller's wait and keeps this settlement alive.
       refreshed = await request.adapter.refresh(credential, request.now());
     } catch (cause) {
       if (cause instanceof ProviderRefreshError && cause.classification === "retry_safe") {

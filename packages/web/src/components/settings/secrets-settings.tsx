@@ -4,7 +4,7 @@ import { SecretsEditor } from "@/components/secrets-editor";
 import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
 import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
-import { Combobox } from "@/components/ui/combobox";
+import { Combobox, FIELD_COMBOBOX_TRIGGER_CLASS } from "@/components/ui/combobox";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const GLOBAL_SCOPE = "__global__";
@@ -66,7 +66,7 @@ export function SecretsSettings() {
           direction="down"
           dropdownWidth="w-full max-w-sm"
           disabled={loadingRepos || (!canManageGlobal && !canManageRepos)}
-          triggerClassName="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          triggerClassName={FIELD_COMBOBOX_TRIGGER_CLASS}
           prependContent={({ select }) =>
             canManageGlobal ? (
               <>

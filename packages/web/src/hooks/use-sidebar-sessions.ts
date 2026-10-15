@@ -17,6 +17,7 @@ import {
   applySessionInboxReadStateUpdate,
   buildSessionInboxKey,
   buildSessionInboxSnapshotKey,
+  countUnreadSessions,
   isSessionInboxItemFullyRead,
   isSessionInboxKey,
   isSessionInboxPaginationKey,
@@ -27,7 +28,9 @@ import {
 } from "@/lib/session-inbox-api";
 import {
   markLatestMessageRead,
+  markSessionInboxRead,
   reconcileSessionReadState,
+  subscribeSessionInboxMarkedRead,
   subscribeSessionReadStateReconciliation,
   type SessionReadStateReconciledDetail,
 } from "@/lib/session-read-state";
@@ -466,8 +469,34 @@ export function useSidebarSessions() {
     await reconcileSessionReadState(result);
   }, []);
 
+  // A bulk read moves hierarchies the client may never have loaded, so every
+  // retained chain restarts from a freshly fetched head.
+  const resetAttentionRetained = attention.resetRetainedPages;
+  useEffect(
+    () =>
+      subscribeSessionInboxMarkedRead(() => {
+        resetAttentionRetained();
+        resetInProgressRetained();
+        resetFinishedRetained();
+        return Promise.all([
+          mutateCache<SessionInboxPage | undefined>(isSessionInboxPaginationKey, () => undefined, {
+            populateCache: true,
+            revalidate: false,
+          }),
+          mutateCache(isSessionInboxKey),
+        ]);
+      }),
+    [mutateCache, resetAttentionRetained, resetFinishedRetained, resetInProgressRetained]
+  );
+
+  const handleMarkAllAttentionRead = useCallback(
+    () => markSessionInboxRead({ ...filters, mine }),
+    [filters, mine]
+  );
+
   return {
     needsAttention: attentionItems.map((item) => item.rootSession),
+    attentionUnreadCount: countUnreadSessions(attentionItems),
     inProgress: inProgressItems.map((item) => item.rootSession),
     finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
@@ -488,5 +517,6 @@ export function useSidebarSessions() {
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
+    handleMarkAllAttentionRead,
   };
 }

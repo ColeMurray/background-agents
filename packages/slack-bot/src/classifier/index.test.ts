@@ -137,17 +137,41 @@ describe("RepoClassifier", () => {
     expect(result.needsClarification).toBe(false);
     expect(mockMessagesCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        temperature: 0,
-        tool_choice: expect.objectContaining({
-          type: "tool",
-          name: "classify_target",
-        }),
         tools: [expect.objectContaining({ name: "classify_target" })],
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
     const prompt = mockMessagesCreate.mock.calls[0][0].messages[0].content as string;
     expect(prompt).toContain("## Available Repositories\n- acme/prod\n- acme/web");
+  });
+
+  it("sends a request that Claude Opus 4.7 and later accept", async () => {
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "classify_target",
+          input: {
+            targetId: "acme/prod",
+            confidence: "high",
+            reasoning: "The message explicitly mentions prod.",
+            alternatives: [],
+          },
+        },
+      ],
+    });
+
+    const classifier = new RepoClassifier(TEST_ENV);
+    await classifier.classify("please fix prod slack alerts");
+
+    const request = mockMessagesCreate.mock.calls[0][0];
+    // Opus 4.7 and later reject a non-default temperature, and Opus 5.5 rejects
+    // a forced tool call, each with HTTP 400.
+    expect(request).not.toHaveProperty("temperature");
+    expect(request.tool_choice).toEqual({ type: "auto", disable_parallel_tool_use: true });
+    // Under tool_choice auto the system prompt is what makes the model call the tool.
+    expect(request.system).toEqual(expect.stringContaining("classify_target"));
   });
 
   it("asks for clarification when tool payload is invalid", async () => {
@@ -733,6 +757,46 @@ describe("RepoClassifier", () => {
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
     });
 
+    it("asks for confirmation when the LLM picks no repository with high confidence", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The question doesn't need a repository.",
+          alternatives: ["acme/web"],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("can you look into this?", {
+        channelId: "C123",
+        threadTs: "1700000000.000100",
+      });
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.confidence).toBe("high");
+      expect(result.alternatives).toEqual([{ kind: "repository", repo: TEST_REPOS[1] }]);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("asks for confirmation when the LLM picks no repository without alternatives", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "General question.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("what is a monad?");
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.alternatives).toBeUndefined();
+      expect(result.needsClarification).toBe(true);
+    });
+
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
       mockMessagesCreate.mockResolvedValue(
         llmResponse({
@@ -808,6 +872,11 @@ describe("RepoClassifier", () => {
       expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
       // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
       expect(body).not.toHaveProperty("max_tokens");
+      // The Anthropic-only "call the tool" instruction must not leak into the
+      // prompt shared with this path; the response_format schema does that job.
+      expect(body.messages).toEqual([
+        { role: "user", content: expect.not.stringContaining("classify_target") },
+      ]);
 
       const jsonSchema = body.response_format.json_schema;
       expect(jsonSchema.name).toBe("classify_target");

@@ -4,7 +4,7 @@ import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
-import { Combobox } from "@/components/ui/combobox";
+import { Combobox, FIELD_COMBOBOX_TRIGGER_CLASS } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
@@ -694,7 +694,7 @@ export function SandboxSettingsPage() {
           direction="down"
           dropdownWidth="w-full max-w-sm"
           disabled={loadingRepos}
-          triggerClassName="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          triggerClassName={FIELD_COMBOBOX_TRIGGER_CLASS}
           prependContent={({ select }) => (
             <>
               <button

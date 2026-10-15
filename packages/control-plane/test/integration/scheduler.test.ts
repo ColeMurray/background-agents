@@ -59,6 +59,20 @@ describe("Scheduler (integration)", () => {
     );
   });
 
+  it("resolves a Codex automation without configured OpenAI auth to the API key", async () => {
+    const automation = makeAutomation({
+      id: "codex-auth-missing",
+      harness: "codex",
+      model: "openai/gpt-6.1-sol",
+    });
+    await new AutomationStore(env.DB).create(automation);
+    expect(await resolveAutomationProviderAuth(env.DB, automation.id, "codex")).toContainEqual({
+      provider: "openai",
+      authMode: "api_key",
+      selectionSource: "api_key_fallback",
+    });
+  });
+
   describe("automation provider auth resolution", () => {
     const accountIds = {
       openai: "00000000000000000000000000000001",
@@ -947,6 +961,7 @@ describe("Scheduler (integration)", () => {
           repo_id: null,
           base_branch: null,
           environment_id: null,
+          first_prompt_pending: 0,
         })),
         overlapScope: { kind: "automation" },
       });

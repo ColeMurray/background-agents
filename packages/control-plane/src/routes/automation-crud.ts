@@ -24,8 +24,15 @@ import {
   checkHarnessCompatibility,
   getValidHarnessOrDefault,
   selectedProviderAuthModes,
+  selectHarnessProviderSelections,
 } from "@open-inspect/shared/harnesses";
-import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
+import {
+  HarnessAdmissionError,
+  resolveHarnessSelection,
+  resolveHarnessAutomationUpdate,
+  validateHarnessAutomationAuth,
+} from "../harness-admission";
+import { isValidModel, normalizeModelId } from "@open-inspect/shared/models";
 import {
   AutomationStore,
   parseAutomationTriggerFields,
@@ -82,7 +89,6 @@ import {
   getRepositorySelection,
   getTriggerEventTypeError,
   resolveEnvironmentSelection,
-  resolveReasoningEffort,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
   validateTargetCounts,
@@ -258,10 +264,18 @@ async function handleCreateAutomation(
 
   // Validate harness and model
   const harness = getValidHarnessOrDefault(body.harness);
-  const model = getValidModelOrDefault(body.model);
-  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
-  if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
-  const reasoningEffort = resolveReasoningEffort(model, body.reasoningEffort);
+  let harnessSelection;
+  try {
+    harnessSelection = await resolveHarnessSelection(ctx.db, env, {
+      harness,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+    });
+  } catch (cause) {
+    if (cause instanceof HarnessAdmissionError) return error(cause.message, cause.status);
+    throw cause;
+  }
+  const { model, reasoningEffort } = harnessSelection;
   if (body.reasoningEffort !== undefined && body.reasoningEffort !== null && !reasoningEffort) {
     return error("Invalid reasoning effort for selected model", 400);
   }
@@ -283,7 +297,7 @@ async function handleCreateAutomation(
   try {
     providerSelections = await parseAndValidateAutomationProviderSelections(
       ctx.db,
-      body.providerSelections ?? {}
+      selectHarnessProviderSelections(harness, body.providerSelections ?? {})
     );
   } catch (e) {
     if (e instanceof AutomationProviderSelectionError) return error(e.message, 400);
@@ -298,6 +312,16 @@ async function handleCreateAutomation(
     selectedProviderAuthModes(providerSelections)
   );
   if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
+  try {
+    await validateHarnessAutomationAuth(ctx.db, harness, model, providerSelections);
+  } catch (cause) {
+    if (
+      cause instanceof HarnessAdmissionError ||
+      cause instanceof ProviderAccountSelectionPolicyError
+    )
+      return error(cause.message, cause.status);
+    throw cause;
+  }
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
@@ -465,7 +489,10 @@ async function handleUpdateAutomation(
     try {
       replacementProviderSelections = await parseAndValidateAutomationProviderSelections(
         ctx.db,
-        body.providerSelections
+        selectHarnessProviderSelections(
+          getValidHarnessOrDefault(body.harness ?? existing.harness),
+          body.providerSelections
+        )
       );
     } catch (e) {
       if (e instanceof AutomationProviderSelectionError) return error(e.message, 400);
@@ -509,29 +536,60 @@ async function handleUpdateAutomation(
     return error("Invalid model", 400);
   }
 
-  const nextModel = body.model !== undefined ? getValidModelOrDefault(body.model) : existing.model;
-  const nextHarness =
-    body.harness !== undefined ? body.harness : getValidHarnessOrDefault(existing.harness);
+  const storedHarness = getValidHarnessOrDefault(existing.harness);
+  const nextHarness = body.harness !== undefined ? body.harness : storedHarness;
+  const storedProviderSelections = toProviderSelections(await providerAuthStore.list(id));
+  // Execution changes are judged against the stored configuration, not by which
+  // fields were sent: the edit form always resubmits them unchanged.
+  const harnessChanged = nextHarness !== storedHarness;
+  const modelChanged = body.model !== undefined && normalizeModelId(body.model) !== existing.model;
+  const executionChanged =
+    harnessChanged ||
+    modelChanged ||
+    (body.reasoningEffort !== undefined &&
+      (body.reasoningEffort ?? null) !== existing.reasoning_effort) ||
+    (replacementProviderSelections !== null &&
+      !sameProviderSelections(replacementProviderSelections, storedProviderSelections));
   // The selections the automation will have after this write: the replacement
-  // when one is given, else the stored pins whenever harness or model moves.
+  // when one is given, else the stored pins whenever the execution changes.
   const nextProviderSelections =
-    replacementProviderSelections ??
-    (body.harness !== undefined || body.model !== undefined
-      ? toProviderSelections(await providerAuthStore.list(id))
-      : null);
+    replacementProviderSelections ?? (executionChanged ? storedProviderSelections : null);
+  const requestedReasoningEffort = body.reasoningEffort;
+  let updatedSelection;
+  try {
+    updatedSelection = await resolveHarnessAutomationUpdate(
+      ctx.db,
+      env,
+      { model: existing.model, reasoningEffort: existing.reasoning_effort },
+      {
+        harness: nextHarness,
+        model: body.model,
+        reasoningEffort: body.reasoningEffort,
+        executionChanged,
+      }
+    );
+    if (executionChanged)
+      await validateHarnessAutomationAuth(
+        ctx.db,
+        nextHarness,
+        updatedSelection.model,
+        nextProviderSelections ?? {}
+      );
+  } catch (cause) {
+    if (
+      cause instanceof HarnessAdmissionError ||
+      cause instanceof ProviderAccountSelectionPolicyError
+    )
+      return error(cause.message, cause.status);
+    throw cause;
+  }
+  const { model: nextModel, reasoningEffort: resolvedReasoningEffort } = updatedSelection;
   const harnessIncompatibility = checkHarnessCompatibility(
     nextHarness,
     nextModel,
     nextProviderSelections ? selectedProviderAuthModes(nextProviderSelections) : undefined
   );
   if (harnessIncompatibility) return error(harnessIncompatibility.message, 400);
-  const requestedReasoningEffort = body.reasoningEffort;
-  const resolvedReasoningEffort =
-    requestedReasoningEffort !== undefined
-      ? resolveReasoningEffort(nextModel, requestedReasoningEffort)
-      : body.model !== undefined && existing.reasoning_effort !== null
-        ? resolveReasoningEffort(nextModel, existing.reasoning_effort)
-        : existing.reasoning_effort;
 
   if (
     requestedReasoningEffort !== undefined &&
@@ -549,7 +607,8 @@ async function handleUpdateAutomation(
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
   if (body.harness !== undefined) updateFields.harness = nextHarness;
   if (body.model !== undefined) updateFields.model = nextModel;
-  if (body.reasoningEffort !== undefined || body.model !== undefined) {
+  // A harness switch can invalidate the stored effort just like a model change.
+  if (body.reasoningEffort !== undefined || body.model !== undefined || harnessChanged) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
   }
 
@@ -842,3 +901,13 @@ automationCrudRoutes.put("/automations/:id", AUTOMATION_MANAGE, (c) =>
 automationCrudRoutes.delete("/automations/:id", AUTOMATION_MANAGE, (c) =>
   dispatch(c, handleDeleteAutomation)
 );
+
+function sameProviderSelections(a: ModelProviderSelections, b: ModelProviderSelections): boolean {
+  const canonical = (selections: ModelProviderSelections) =>
+    JSON.stringify(
+      Object.entries(selections)
+        .filter(([, selection]) => selection !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+    );
+  return canonical(a) === canonical(b);
+}

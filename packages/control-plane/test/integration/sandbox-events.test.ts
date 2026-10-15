@@ -9,6 +9,7 @@ import {
   seedMessage,
   seedSandboxAuth,
   waitForSandboxStatus,
+  closeWebSocket,
 } from "./helpers";
 import { runInSessionDO } from "./session-do-access";
 
@@ -71,7 +72,7 @@ describe("POST /internal/sandbox-event", () => {
         { id: "step-usage", total_tokens: 5, reason: null },
       ]);
     });
-    ws!.close();
+    await closeWebSocket(ws!);
   });
   it("stores token event", async () => {
     const { stub } = await initSession();

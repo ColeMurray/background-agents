@@ -202,10 +202,16 @@ export const sentryAutomationEventSchema = z.object({
   culpritFile: z.string().optional(),
 });
 
+/** Longest webhook `sessionKey`; it is stored in the invocation's concurrency key. */
+export const WEBHOOK_SESSION_KEY_MAX_LENGTH = 256;
+
+export const webhookSessionKeySchema = z.string().min(1).max(WEBHOOK_SESSION_KEY_MAX_LENGTH);
+
 export const webhookAutomationEventSchema = z.object({
   ...baseAutomationEventSchema,
   source: z.literal("webhook"),
   automationId: z.string().min(1),
+  sessionKey: webhookSessionKeySchema.optional(),
   body: z.unknown(),
 });
 

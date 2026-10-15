@@ -41,6 +41,7 @@ function mockRepo(id: number, owner: string, name: string, defaultBranch = "main
 // Mutable per-test hook results; the hoisted mocks close over them.
 let enabledModelsValue: string[] = ["openai/gpt-5.4"];
 let loadingModelsValue = false;
+
 let reposValue: MockRepo[] = [];
 let environmentsValue: Array<{
   id: string;
@@ -69,6 +70,7 @@ beforeEach(() => {
   scopeMocks.allowWorkspace = true;
   enabledModelsValue = ["openai/gpt-5.4"];
   loadingModelsValue = false;
+
   environmentsValue = [];
   reposValue = [
     mockRepo(1, "open-inspect", "background-agents"),
@@ -1408,6 +1410,70 @@ describe("agent harness", () => {
     );
     return { onSubmit, submit: () => fireEvent.submit(container.querySelector("form")!) };
   };
+
+  it("offers Codex alongside the existing harnesses", () => {
+    enabledModelsValue = ["openai/gpt-5.6-sol"];
+    renderForm({ harness: "codex", model: "openai/gpt-5.6-sol" }, "edit");
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent("Codex");
+    fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+    const picker = within(screen.getByRole("listbox"));
+    for (const name of ["OpenCode", "Claude Agent", "Codex"]) {
+      expect(picker.getByRole("option", { name })).toBeInTheDocument();
+    }
+  });
+
+  it("submits native Codex max with explicit API routing", () => {
+    enabledModelsValue = ["openai/gpt-5.6-sol"];
+
+    const { onSubmit, submit } = renderForm(
+      {
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "max",
+        providerSelections: { openai: { mode: "api_key" } },
+      },
+      "edit"
+    );
+    expect(screen.getByRole("combobox", { name: "Agent harness" })).toHaveTextContent("Codex");
+    submit();
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "max",
+        providerSelections: { openai: { mode: "api_key" } },
+      })
+    );
+  });
+
+  it.each([
+    { from: "opencode", effort: "none", to: "Codex", harness: "codex" },
+    { from: "codex", effort: "max", to: "OpenCode", harness: "opencode" },
+  ] as const)(
+    "shows and submits the model default after switching $from to $to with an unsupported effort",
+    ({ from, effort, to, harness }) => {
+      enabledModelsValue = ["openai/gpt-5.6-sol"];
+      const { onSubmit, submit } = renderForm(
+        {
+          harness: from,
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: effort,
+          providerSelections: { openai: { mode: "api_key" } },
+        },
+        "edit"
+      );
+      fireEvent.click(screen.getByRole("combobox", { name: "Agent harness" }));
+      fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: to }));
+      // The control shows what will be saved, never a blank value.
+      expect(screen.getByRole("combobox", { name: "Reasoning Effort" })).toHaveTextContent(
+        "Use model default"
+      );
+      submit();
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ harness, reasoningEffort: null })
+      );
+    }
+  );
 
   it("submits the built-in harness when none was chosen", () => {
     const { onSubmit, submit } = renderForm({}, "create");

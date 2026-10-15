@@ -83,6 +83,56 @@ function setup(providerAdapter = adapter()) {
 }
 
 describe("ClaimedProviderCredentialExchange", () => {
+  it("releases a claim whose caller budget expired before grant submission", async () => {
+    const { exchange, providerAdapter, store, terminalFailure, complete } = setup();
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner",
+        now: () => NOW,
+        refreshDeadlineAt: NOW,
+        complete,
+      })
+    ).rejects.toMatchObject({ phase: "refresh", cause: { classification: "retry_safe" } });
+    expect(providerAdapter.refresh).not.toHaveBeenCalled();
+    expect(store.clearSafeFailure).toHaveBeenCalledOnce();
+    expect(terminalFailure).not.toHaveBeenCalled();
+  });
+
+  it("runs a submitted grant under the provider timeout and persists it after the caller deadline", async () => {
+    const { exchange, providerAdapter, complete, terminalFailure } = setup();
+    let now = NOW;
+    vi.mocked(providerAdapter.refresh).mockImplementation(async (...args: unknown[]) => {
+      // No caller budget reaches the provider call.
+      expect(args).toHaveLength(2);
+      now += 300;
+      return {
+        credential: { refreshToken: "rotated" },
+        accessToken: "access",
+        accessTokenExpiresAt: 4000,
+      };
+    });
+    await expect(
+      exchange.run({
+        providerAccountId: "account-1",
+        provider: "openai",
+        state: state(),
+        expectedAccountStatus: "active",
+        adapter: providerAdapter,
+        owner: "owner",
+        now: () => now,
+        refreshDeadlineAt: NOW + 200,
+        complete,
+      })
+    ).resolves.toMatchObject({ kind: "completed" });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(terminalFailure).not.toHaveBeenCalled();
+  });
+
   it("claims before parsing and refresh, then dispatches one fenced completion", async () => {
     const { calls, complete, exchange, providerAdapter } = setup();
     vi.mocked(providerAdapter.parseCredential).mockImplementation((value) => {

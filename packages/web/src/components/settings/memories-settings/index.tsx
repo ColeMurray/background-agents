@@ -14,12 +14,11 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { errorMessage, PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
 import { Switch } from "@/components/ui/switch";
 import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
+  Combobox,
+  FIELD_COMBOBOX_TRIGGER_CLASS,
+  type ComboboxGroup,
+} from "@/components/ui/combobox";
+import { ChevronDownIcon } from "@/components/ui/icons";
 import { MemoryCollection } from "./memory-collection";
 
 /** Persist the account-wide default and disclose the audience of included personal context. */
@@ -97,16 +96,34 @@ export function SharedMemoriesSettings() {
   const [selection, setSelection] = useState<MemoryScope | null>(null);
   const linkedScope = memoryScopeFromSearchParams(params);
   const scope = selection ?? (linkedScope?.type === "personal" ? null : linkedScope);
-  const options: { scope: MemoryScope; label: string }[] = [
-    ...repos.map((repo) => ({
-      scope: { type: "repository", repoOwner: repo.owner, repoName: repo.name } as const,
-      label: repo.fullName,
-    })),
-    ...environments.map((environment) => ({
-      scope: { type: "environment", environmentId: environment.id } as const,
-      label: `Environment: ${environment.name}`,
-    })),
-  ];
+  // Searchable and grouped, like the repository picker in Secrets: deployments can have many repos.
+  const scopeOptions = new Map<string, { scope: MemoryScope; label: string }>();
+  const group = (category: string, entries: { scope: MemoryScope; label: string }[]) => ({
+    category,
+    options: entries.map((entry) => {
+      const key = memoryScopeDisplayKey(entry.scope);
+      scopeOptions.set(key, entry);
+      return { value: key, label: entry.label };
+    }),
+  });
+  const groups: ComboboxGroup[] = [
+    group(
+      "Repositories",
+      repos.map((repo) => ({
+        scope: { type: "repository", repoOwner: repo.owner, repoName: repo.name },
+        label: repo.fullName,
+      }))
+    ),
+    group(
+      "Environments",
+      environments.map((environment) => ({
+        scope: { type: "environment", environmentId: environment.id },
+        label: environment.name,
+      }))
+    ),
+  ].filter((entry) => entry.options.length > 0);
+  const selectedKey = scope ? memoryScopeDisplayKey(scope) : "";
+  const selectedLabel = scopeOptions.get(selectedKey)?.label;
   return (
     <section className="space-y-6">
       <div>
@@ -116,28 +133,32 @@ export function SharedMemoriesSettings() {
           sessions load them.
         </p>
       </div>
-      <Select
-        value={scope ? memoryScopeDisplayKey(scope) : ""}
-        onValueChange={(key) =>
-          setSelection(
-            options.find((option) => memoryScopeDisplayKey(option.scope) === key)?.scope ?? null
-          )
-        }
-      >
-        <SelectTrigger aria-label="Memory scope">
-          <SelectValue placeholder="Choose a repository or environment" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => {
-            const key = memoryScopeDisplayKey(option.scope);
-            return (
-              <SelectItem key={key} value={key}>
-                {option.label}
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
+      <div>
+        <label
+          id="shared-memory-scope-label"
+          htmlFor="shared-memory-scope"
+          className="mb-1.5 block text-sm font-medium text-foreground"
+        >
+          Memory scope
+        </label>
+        <Combobox
+          id="shared-memory-scope"
+          labelId="shared-memory-scope-label"
+          value={selectedKey}
+          onChange={(key) => setSelection(scopeOptions.get(key)?.scope ?? null)}
+          items={groups}
+          searchable
+          searchPlaceholder="Search repositories and environments..."
+          direction="down"
+          dropdownWidth="w-full max-w-sm"
+          triggerClassName={FIELD_COMBOBOX_TRIGGER_CLASS}
+        >
+          <span className={`truncate ${selectedLabel ? "" : "text-muted-foreground"}`}>
+            {selectedLabel ?? "Choose a repository or environment"}
+          </span>
+          <ChevronDownIcon className="h-3 w-3 flex-shrink-0" />
+        </Combobox>
+      </div>
       {(reposLoading || environmentsLoading) && <p className="text-sm">Loading scopes…</p>}
       {(reposError || environmentsError) && (
         <p role="alert" className="text-sm text-destructive">

@@ -12,15 +12,21 @@ import {
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
 import {
-  MODEL_REASONING_CONFIG,
-  isValidReasoningEffort,
+  getValidModelOrDefault,
+  isValidModel,
   type ModelCategory,
-  type ValidModel,
 } from "@open-inspect/shared/models";
-import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  DEFAULT_HARNESS,
+  checkHarnessCompatibility,
+  getHarnessCapabilities,
+  getHarnessLabel,
+  getHarnessReasoningConfig,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
 import { HarnessSelect } from "./harness-select";
-import { GitHubHarnessWarning } from "./github-harness-warning";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +45,7 @@ import { GitHubAutofixSettingsFields } from "./github-autofix-settings-fields";
 import { GitHubAutoReviewDeprecationNotice } from "./github-auto-review-deprecation-notice";
 
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
+const INHERIT_MODEL_VALUE = "__inherit__";
 
 export interface RepoSettingsEntry {
   repo: string;
@@ -53,15 +60,17 @@ export function RepoOverridesSection({
   defaultAutofix,
   defaultHarness,
   defaultModel,
+  defaultReasoningEffort,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
-  /** Inherited global harness/model: rows filter and warn on the effective pair. */
+  /** The inherited global harness filters the model picker. */
   defaultHarness: HarnessId | null;
-  defaultModel: string;
+  defaultModel: string | undefined;
+  defaultReasoningEffort: string | undefined;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -111,6 +120,7 @@ export function RepoOverridesSection({
               defaultAutofix={defaultAutofix}
               defaultHarness={defaultHarness}
               defaultModel={defaultModel}
+              defaultReasoningEffort={defaultReasoningEffort}
             />
           ))}
         </div>
@@ -148,13 +158,15 @@ function RepoOverrideRow({
   defaultAutofix,
   defaultHarness,
   defaultModel,
+  defaultReasoningEffort,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
   defaultAutofix: ResolvedGitHubAutofixSettings;
   defaultHarness: HarnessId | null;
-  defaultModel: string;
+  defaultModel: string | undefined;
+  defaultReasoningEffort: string | undefined;
 }) {
   const autoReviewNoticeId = useId();
   const [model, setModel] = useState(entry.settings.model ?? "");
@@ -198,22 +210,42 @@ function RepoOverrideRow({
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
-  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
-
-  // The model picker only offers models the *effective* harness can run: the
-  // override when set, else the inherited global harness (built-in default
-  // when unset). A local/global pair the harness cannot run is still saveable
-  // as a sparse override — the bot falls back at runtime — but the picker can
-  // no longer silently produce it, and the mismatch is spelled out below.
+  // Only explicit settings block saves; effective cross-level mismatches are
+  // shown here and refused at launch.
   const effectiveHarness: HarnessId = harness ?? defaultHarness ?? DEFAULT_HARNESS;
   const effectiveModel = model || defaultModel;
+  const effectiveEffort = effort || defaultReasoningEffort;
+  const reasoningConfig = effectiveModel
+    ? getHarnessReasoningConfig(effectiveHarness, effectiveModel)
+    : undefined;
+  const reasoningEfforts = reasoningConfig?.efforts ?? [];
+  const visibleReasoningEfforts =
+    effort && !reasoningEfforts.some((value) => value === effort)
+      ? [effort, ...reasoningEfforts]
+      : reasoningEfforts;
   const visibleModelOptions = filterModelOptionsForHarness(effectiveHarness, enabledModelOptions);
+  const harnessNeedsModel =
+    harness !== undefined && getHarnessCapabilities(harness).modelFamilies !== "any";
+  const invalidModelSelection =
+    (harnessNeedsModel && !model) ||
+    (model !== "" &&
+      (!isValidModel(model) ||
+        (harness !== undefined && shouldClearModelForHarness(harness, model))));
+  const mismatch = effectiveModel
+    ? checkHarnessCompatibility(
+        effectiveHarness,
+        getValidModelOrDefault(effectiveModel),
+        undefined,
+        effectiveEffort
+      )
+    : null;
 
   const handleModelChange = (newModel: string) => {
-    setModel(newModel);
+    const value = newModel === INHERIT_MODEL_VALUE ? "" : newModel;
+    setModel(value);
     setDirty(true);
 
-    if (effort && newModel && !isValidReasoningEffort(newModel, effort)) {
+    if (effort && (!value || !isValidHarnessReasoningEffort(effectiveHarness, value, effort))) {
       setEffort("");
     }
   };
@@ -222,6 +254,12 @@ function RepoOverrideRow({
     setHarness(next);
     if (shouldClearModelForHarness(next ?? defaultHarness ?? DEFAULT_HARNESS, model)) {
       setModel("");
+      setEffort("");
+    } else if (
+      model &&
+      effort &&
+      !isValidHarnessReasoningEffort(next ?? defaultHarness ?? DEFAULT_HARNESS, model, effort)
+    ) {
       setEffort("");
     }
     setDirty(true);
@@ -236,6 +274,7 @@ function RepoOverrideRow({
   };
 
   const handleSave = async () => {
+    if (invalidModelSelection) return;
     const repository = parseRepositoryFullName(entry.repo);
     if (!repository) return;
     setSaving(true);
@@ -315,11 +354,17 @@ function RepoOverrideRow({
           {entry.repo}
         </span>
 
-        <Select value={model} onValueChange={handleModelChange}>
+        <Select
+          value={model || (harnessNeedsModel ? "" : INHERIT_MODEL_VALUE)}
+          onValueChange={handleModelChange}
+        >
           <SelectTrigger density="compact" className="flex-1 min-w-[180px]" aria-label="Model">
-            <SelectValue placeholder="Default model" />
+            <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
+            {!harnessNeedsModel && (
+              <SelectItem value={INHERIT_MODEL_VALUE}>Use global model</SelectItem>
+            )}
             {visibleModelOptions.map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>
@@ -333,7 +378,7 @@ function RepoOverrideRow({
           </SelectContent>
         </Select>
 
-        {reasoningConfig && (
+        {(reasoningConfig !== undefined || effort !== "") && (
           <Select
             value={effort}
             onValueChange={(v) => {
@@ -341,11 +386,11 @@ function RepoOverrideRow({
               setDirty(true);
             }}
           >
-            <SelectTrigger density="compact" className="w-36">
+            <SelectTrigger density="compact" className="w-36" aria-label="Reasoning effort">
               <SelectValue placeholder="Default effort" />
             </SelectTrigger>
             <SelectContent>
-              {reasoningConfig.efforts.map((value) => (
+              {visibleReasoningEfforts.map((value) => (
                 <SelectItem key={value} value={value}>
                   {value}
                 </SelectItem>
@@ -362,7 +407,7 @@ function RepoOverrideRow({
           className="w-44"
         />
 
-        <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+        <Button size="sm" onClick={handleSave} disabled={saving || !dirty || invalidModelSelection}>
           {saving ? "..." : "Save"}
         </Button>
 
@@ -371,7 +416,19 @@ function RepoOverrideRow({
         </Button>
       </div>
 
-      <GitHubHarnessWarning harness={effectiveHarness} model={effectiveModel} />
+      {invalidModelSelection && (
+        <p className="text-xs text-destructive">
+          Choose a default model {getHarnessLabel(effectiveHarness)} can run for this repository.
+          {harnessNeedsModel &&
+            " An explicit restricted harness requires a model at the same level."}
+        </p>
+      )}
+      {!invalidModelSelection && mismatch && (
+        <p className="text-xs text-warning">
+          {mismatch.message} Sessions using this default model will be refused. Choose a compatible
+          model or change the integration harness.
+        </p>
+      )}
 
       <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">

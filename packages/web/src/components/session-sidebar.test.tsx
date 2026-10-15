@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionSidebar } from "./session-sidebar";
 
@@ -99,6 +99,8 @@ beforeEach(() => {
   const recent = { ...session("recent", "Finished work"), status: "completed" as const };
   mockHook.mockReturnValue({
     needsAttention: [attention],
+    // One root row whose hierarchy holds two unread sessions.
+    attentionUnreadCount: 2,
     inProgress: [running],
     finished: [recent],
     childrenMap: new Map([[running.id, [child]]]),
@@ -114,6 +116,7 @@ beforeEach(() => {
     setSessionCreatorFilter: vi.fn(),
     handleSessionArchived: vi.fn(),
     handleMarkLatestMessageRead: vi.fn(),
+    handleMarkAllAttentionRead: vi.fn(async () => 1),
   });
 });
 
@@ -271,6 +274,39 @@ describe("SessionSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: "In progress" })).toBeInTheDocument();
+  });
+
+  it("confirms before marking every attention session read", async () => {
+    render(<SessionSidebar />);
+    const { handleMarkAllAttentionRead } = mockHook();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark all as read" }));
+    expect(await screen.findByText("Mark 2 sessions as read?")).toBeInTheDocument();
+    expect(handleMarkAllAttentionRead).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark read" }));
+    await waitFor(() => expect(handleMarkAllAttentionRead).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.queryByText("Mark 2 sessions as read?")).not.toBeInTheDocument()
+    );
+  });
+
+  it("names the filters and leaves the count open when more attention pages exist", async () => {
+    const value = mockHook();
+    mockHook.mockReturnValue({
+      ...value,
+      sessionCreatorFilter: "mine",
+      sectionPagination: {
+        ...value.sectionPagination,
+        needsAttention: { ...noPagination, hasMore: true },
+      },
+    });
+    render(<SessionSidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark all as read" }));
+    const confirmation = await screen.findByRole("dialog");
+    expect(within(confirmation).getByText("Mark all sessions as read?")).toBeInTheDocument();
+    expect(within(confirmation).getByText("Mine")).toBeInTheDocument();
   });
 
   it("surfaces a retryable error when the initial snapshot fails", () => {

@@ -4,7 +4,7 @@ description: Where to find the session's diff, the screenshots and command outpu
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-14"
 relatedCode:
   - packages/web/src/components/session-changes-panel.tsx
   - packages/web/src/components/sidebar/files-changed-section.tsx
@@ -35,6 +35,7 @@ The panel opens next to the timeline (or full-width on phones) with the selected
 - The header names the repository, the file path, its status, and its line counts. Use the up and down arrows ("Previous changed file" / "Next changed file") to step through files, the sidebar icon to hide or show the file list, and × or Escape to close.
 - "Compared with session start" expands to show the session's starting commit and the current head. The diff also includes uncommitted tracked and untracked files, so the head SHA alone does not describe everything shown.
 - The layout toggle switches between Unified and Split. Split is offered only when the panel is wide enough; narrower panels and phones always use Unified. "Wrap lines" wraps long lines.
+- Markdown files (`.md` and `.markdown`) also offer **Preview**. It renders the whole resulting document for the selected revision, including unchanged sections, with the edit applied. Deleted files explain that there is no document to preview. Choose Unified or Split to return to the diff. Preview does not run scripts, follow relative or in-page links, or load images from the repository.
 - Files that changed without a text diff show a message instead of a patch: "This binary file changed, but it does not have a text diff.", "This patch is too large to display safely.", a file mode change, or a submodule pointer change.
 - "This file is no longer part of the latest changes." means the agent's latest turn reverted or removed that file after you selected it. Pick another file from the list.
 - "Refreshing the latest revision…" appears briefly when a newer diff replaced the one you were viewing. "Unable to load this patch." means the patch request itself failed; use the Retry banner at the top of the panel, or reopen the file.

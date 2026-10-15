@@ -322,6 +322,8 @@ export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
 export const sendPromptResponseSchema = z.object({
   messageId: z.string().min(1),
   status: z.literal("queued").optional(),
+  /** True when the request's clientRequestId named a prompt the session had already queued. */
+  deduplicated: z.boolean().optional(),
 });
 
 export type SendPromptResponse = z.infer<typeof sendPromptResponseSchema>;

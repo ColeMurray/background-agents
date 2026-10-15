@@ -31,6 +31,7 @@ import {
   queryDO,
   seedMessage,
   seedSandboxAuth,
+  closeWebSocket,
 } from "./helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import { realLifecycleHarness } from "./sandbox-lifecycle-harness";
@@ -974,7 +975,7 @@ describe("sandbox graceful shutdown wiring", () => {
     expect(messages).toContainEqual(
       expect.objectContaining({ type: "prompt", messageId: "shutdown-pending" })
     );
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("dispatches restored legacy work when ready omits the shutdown protocol", async () => {
@@ -1033,7 +1034,7 @@ describe("sandbox graceful shutdown wiring", () => {
     expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
       { status: "ready" },
     ]);
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("keeps interrupted continuation paused across restart until an authenticated restore", async () => {
@@ -1407,6 +1408,6 @@ describe("sandbox graceful shutdown wiring", () => {
     );
     expect(await matchingAck).toContainEqual({ type: "ack", ackId: "matching-prepared" });
     expect(await readShutdown(stub)).toMatchObject({ phase: "failed" });
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 });

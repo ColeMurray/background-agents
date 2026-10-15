@@ -193,11 +193,22 @@ Model selection uses this priority, highest to lowest:
 3. Repository override or global Linear default.
 4. Deployment default model.
 
-The session then runs on the configured **Agent harness** when that harness can run the resolved
-model, and on OpenCode otherwise: Claude Agent runs Anthropic models only, so a `model:gpt-*` label
-or a non-Anthropic default runs on OpenCode. The "Creating coding session" activity names the
-harness. On Claude Agent, Linear sessions follow the provider's **Automated authentication** policy
-and may use a connected Claude account; see [Claude Agent](../CLAUDE_AGENT.md#linear-sessions).
+The configured **Agent harness** is preserved. If it cannot run the resolved model, the bot posts an
+error activity in Linear and creates no coding session instead of switching to OpenCode. Claude
+Agent runs Anthropic models only, so a `model:gpt-*` label is refused on that harness. Choose a
+compatible `model:*` label, user preference, or default model, or change the Linear integration
+harness, then delegate again. Labels and user preferences apply only when allowed.
+
+Omitted repository harness and model fields inherit individually from the global settings. If
+neither level sets a harness, it is OpenCode. Explicitly choosing a restricted harness such as
+**Claude Agent** requires a compatible default model at that same settings level (global or
+repository), not an inherited model. The settings form and control plane reject a missing model or
+an incompatible pair at that level. Save validation does not check the merged global/repository
+pair; a cross-level mismatch is refused at launch.
+
+For successful launches, the "Creating coding session" activity names the harness. On Claude Agent,
+Linear sessions follow the provider's **Automated authentication** policy and may use a connected
+Claude account; see [Claude Agent](../CLAUDE_AGENT.md#linear-sessions).
 
 Linear user preferences are currently admin/API-managed, not set from a self-service Linear screen.
 
@@ -277,8 +288,10 @@ the rejected API request once. A reinstall is not normally required.
 ### The wrong model was used
 
 Check **Settings > Integrations > Linear**. Repository overrides, user preferences, and `model:*`
-labels can affect model selection. A non-Anthropic model runs on OpenCode even when the harness is
-Claude Agent. Changes apply to new Linear-started sessions.
+labels can affect model selection. A model the configured harness cannot run is refused with an
+error activity and no coding session. Choose a compatible label, user preference, or default model,
+or change the integration harness, then delegate again. Changes apply to new Linear-started
+sessions.
 
 ### The wrong repository was used
 

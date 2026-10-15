@@ -322,10 +322,27 @@ export interface WebhookTriggerResponse {
   steered: number;
   /**
    * The invocation representing this request: newly started, recorded as
-   * skipped, or — for a retry with the same idempotency key — the original.
-   * Null when nothing was recorded (conditions did not match).
+   * skipped, the original for a retry with the same idempotency key, or the
+   * continued run's for a sessionKey follow-up. Null when nothing was recorded
+   * (conditions did not match).
    */
   invocationId: string | null;
+}
+
+/**
+ * `POST /webhooks/automation/:id` error when the session a `sessionKey` continues
+ * does not take the follow-up: 409 when it cannot take prompts, 429 when its queue
+ * is full, 503 when it could not be reached, 422 for any other refusal.
+ */
+export interface WebhookFollowUpRefusedResponse {
+  error: string;
+  /**
+   * e.g. SESSION_NOT_PROMPTABLE, BUDGET_EXHAUSTED, PROMPT_QUEUE_FULL, SESSION_UNAVAILABLE,
+   * FOLLOW_UP_REJECTED.
+   */
+  code: string;
+  /** The continued run's invocation. */
+  invocationId: string;
 }
 
 /**

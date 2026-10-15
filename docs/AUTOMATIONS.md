@@ -104,7 +104,9 @@ deployments, monitoring systems, scheduled jobs, and custom integrations.
 2. Copy the generated webhook URL and API key shown after creation.
 3. Send an authenticated HTTP `POST` request with a JSON body.
 4. Open-Inspect prepends a webhook context block to your automation instructions and starts a new
-   session if the request matches the automation's conditions.
+   session if the request matches the automation's conditions. A request with a `sessionKey` can
+   continue the session an earlier request started instead (see
+   [Continuing a Session](#continuing-a-session)).
 
 ### Setup Notes
 
@@ -204,6 +206,25 @@ shown to the agent.
 If you do not provide an `idempotencyKey`, each webhook delivery gets its own concurrency key. That
 means separate deliveries for the same automation can run at the same time.
 
+### Continuing a Session
+
+Include a `sessionKey` string in the JSON body to send several deliveries to one session. The first
+delivery with a key starts a run as usual. A later delivery with the same key is queued as a
+follow-up prompt on that run's session instead of starting a run, whether the run is still starting,
+working, or finished, as long as the session was active within the last 7 days. The follow-up
+carries the payload's context block without the saved instructions, and it is sent as the
+automation's executor, who must be able to collaborate on the session; without that access the
+delivery is skipped.
+
+Conditions still apply to follow-ups. The `sessionKey` stays in the stored body, is removed from the
+context block, and must be a non-empty string of at most 256 characters, or the request is rejected
+with `400`. Pair it with an `idempotencyKey`: the session recognizes a retried follow-up and the
+retry counts as skipped. A follow-up that arrives while the first run is still starting is held and
+queued right after the run's own first prompt. If the session will not take a follow-up (archived,
+cancelled, out of budget, needing sandbox recovery, or unreachable), the request fails with `409`,
+`422`, `429`, or `503` instead of starting over in a new session. After 7 days without activity in
+the session, the next delivery starts a new run.
+
 ### Responses
 
 Successful requests return JSON in this shape:
@@ -212,11 +233,12 @@ Successful requests return JSON in this shape:
 { "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-`triggered` is the number of automation runs started. `invocationId` identifies the firing this
-request belongs to (for a repeated `idempotencyKey`, the original firing), or is `null` when nothing
-was recorded. Read its status with the same API key at
-`GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which returns
-`{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
+`triggered` is the number of automation runs started, and `steered` the number of follow-ups routed
+into an existing session by a `sessionKey`. `invocationId` identifies the firing this request
+belongs to (for a repeated `idempotencyKey`, the original firing, and for a follow-up, the firing of
+the run whose session took it), or is `null` when nothing was recorded. Read its status with the
+same API key at `GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which
+returns `{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
 
 `skipped` includes runs not started because of duplicate delivery, concurrency protection, or
 runtime authorization denial. Authorization denial does not pause an event-driven automation or
@@ -225,13 +247,20 @@ another delivery.
 
 ### Error Responses
 
-| Status | Meaning                                          |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid JSON body                                |
-| `401`  | Missing or invalid API key                       |
-| `404`  | Automation not found or not a webhook automation |
-| `413`  | Payload too large                                |
-| `415`  | `Content-Type` was not `application/json`        |
+| Status | Meaning                                                                                                                 |
+| ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid JSON body, or an invalid `sessionKey`                                                                           |
+| `401`  | Missing or invalid API key                                                                                              |
+| `404`  | Automation not found or not a webhook automation                                                                        |
+| `409`  | The `sessionKey` session cannot take prompts: `SESSION_NOT_PROMPTABLE`, `BUDGET_EXHAUSTED`, `SANDBOX_RECOVERY_REQUIRED` |
+| `413`  | Payload too large                                                                                                       |
+| `415`  | `Content-Type` was not `application/json`                                                                               |
+| `422`  | The `sessionKey` session rejected the follow-up for another reason; a retry is rejected the same way                    |
+| `429`  | The `sessionKey` session's queue is full (`PROMPT_QUEUE_FULL`)                                                          |
+| `503`  | The `sessionKey` session could not be reached (`SESSION_UNAVAILABLE`); safe to retry with the same `idempotencyKey`     |
+
+A refused follow-up returns `{ "error", "code", "invocationId" }`, where `invocationId` is the run
+whose session refused it, and starts nothing.
 
 ---
 
@@ -325,14 +354,15 @@ the message needs nothing from you, reply with exactly `NO_REPLY` and nothing el
 agent will answer everything it is woken for unless told otherwise. A run that opened a pull request
 or produced other artifacts always posts.
 
-Every reply in a thread **continues the same session** — during the run and after it finishes — for
-up to 7 days after the thread's first trigger, exactly like replying in an `@mention` thread. The
-reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if it had gone
-idle), and the agent posts its response in-thread when the turn finishes. A follow-up does not need
-to match the trigger condition — conditions gate new runs, not replies that continue an existing
-thread. If a reply races the very first trigger before its session exists, it falls back to an
-ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply more than 7
-days after the first trigger starts a fresh run.
+Every reply in a thread **continues the same session** — while the run starts, during it, and after
+it finishes — until the session has been idle for 7 days, exactly like replying in an `@mention`
+thread. The reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if
+it had gone idle), and the agent posts its response in-thread when the turn finishes. A reply that
+arrives while the run is still starting is held and queued right after the run's own first prompt. A
+follow-up does not need to match the trigger condition — conditions gate new runs, not replies that
+continue an existing thread. If a reply races the very first trigger before its run exists, it falls
+back to an ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply
+after 7 idle days starts a fresh run.
 
 These automation follow-ups also forward text only. Attachments on a thread reply are not delivered
 to the session.
@@ -507,12 +537,13 @@ those triggers fires while a previous run is still in progress, the new run is r
 
 Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
-`idempotencyKey` can overlap.
+`idempotencyKey` can overlap. Deliveries that share a `sessionKey` are keyed by it: a later one
+continues the first run's session rather than overlapping it.
 
-Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — for 7 days
-after the thread's first trigger they continue the same session (during the run and after it
-finishes), routed to that session as follow-up prompts (see the **Run feedback** note under
-[Slack Message Triggers](#slack-message-triggers)).
+Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — until the
+session has been idle for 7 days they continue the same session (while the run starts, during it,
+and after it finishes), routed to that session as follow-up prompts (see the **Run feedback** note
+under [Slack Message Triggers](#slack-message-triggers)).
 
 This prevents overlapping sessions from interfering with each other on the same repository.
 

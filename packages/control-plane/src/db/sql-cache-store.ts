@@ -27,7 +27,11 @@
  * volume snapshot is the one artifact that carries it.
  */
 
-import type { CacheStore, CacheStorePutOptions } from "@open-inspect/shared/cache-store";
+import {
+  assertValidCacheTtlMs,
+  type CacheStore,
+  type CacheStorePutOptions,
+} from "@open-inspect/shared/cache-store";
 import type { SqlDatabase } from "./sql-database";
 
 /**
@@ -78,8 +82,9 @@ export class SqlCacheStore implements CacheStore {
   }
 
   async put(key: string, value: string, opts?: CacheStorePutOptions): Promise<void> {
-    const ttlSeconds = opts?.expirationTtl;
-    const expiresAt = ttlSeconds === undefined ? null : this.now() + ttlSeconds * 1000;
+    const ttlMs = opts?.ttlMs;
+    if (ttlMs !== undefined) assertValidCacheTtlMs(ttlMs);
+    const expiresAt = ttlMs === undefined ? null : this.now() + ttlMs;
     await this.db
       .prepare(
         `INSERT INTO cache_entries (key, value, expires_at) VALUES (?, ?, ?)

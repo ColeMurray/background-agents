@@ -148,6 +148,7 @@ export class OpenAIModelProviderAccountAdapter implements ModelProviderAccountAd
     externalAccountId: string | null
   ): Record<string, string> {
     const accountId = credential.accountId ?? externalAccountId;
+    this.validateExternalIdentity(accountId ?? undefined, externalAccountId);
     return accountId ? { accountId } : {};
   }
 

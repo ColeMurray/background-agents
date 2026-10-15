@@ -24,8 +24,8 @@ import {
   parseSessionDiscoveryQuery,
   type SessionDiscoveryQuery,
 } from "@/lib/session-discovery";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
-const SEARCH_DEBOUNCE_MS = 300;
 const MANAGE_ARCHIVED_SESSIONS_HREF = "/settings?tab=data-controls";
 
 export default function SessionsPage() {

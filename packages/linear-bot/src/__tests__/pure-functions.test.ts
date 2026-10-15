@@ -326,11 +326,11 @@ describe("resolveSessionAgentSettings", () => {
       ["user preference", { userModel: "openai/gpt-6-sol" }],
       ["model label", { labelModel: "openai/gpt-6-sol" }],
     ])(
-      "falls back to OpenCode when the %s resolves a model Claude Agent cannot run",
+      "preserves Claude Agent when the %s resolves an incompatible model for the handler to refuse",
       (_source, override) => {
         expect(
           resolveSessionAgentSettings({ ...base, configHarness: "claude", ...override })
-        ).toMatchObject({ harness: "opencode", model: "openai/gpt-6-sol" });
+        ).toMatchObject({ harness: "claude", model: "openai/gpt-6-sol" });
       }
     );
   });

@@ -215,6 +215,8 @@ class AgentBridge:
             )
         )
         self.shutdown_preparation = ShutdownPreparationCoordinator()
+        self._generation_request_serial = 0
+        self._reauthenticating_generation = False
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -668,6 +670,16 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
+            if self._reauthenticating_generation:
+                await self._send_event(
+                    {
+                        "type": "execution_complete",
+                        "messageId": message_id,
+                        "success": False,
+                        "error": "harness_reauthenticating",
+                    }
+                )
+                return None
             if self.shutdown_preparation.fenced:
                 await self._send_event(
                     {
@@ -893,10 +905,12 @@ class AgentBridge:
         running turn.
         """
         try:
+            self._assert_authenticated_generation()
             if self.shutdown_preparation.fenced:
                 raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 await self.boot_attach.wait_until_ready(message_id, deadline)
+                self._assert_authenticated_generation()
                 harness = self._require_harness()
                 await self._configure_git_identity(parse_prompt_git_author(author_data))
                 await self._ensure_agent_session(harness)
@@ -920,7 +934,12 @@ class AgentBridge:
             raise RuntimeError(f"prompt could not start within {budget} s") from None
         if self.shutdown_preparation.fenced:
             raise RuntimeError("sandbox_lifetime_expiring")
+        self._assert_authenticated_generation()
         return harness, attachments
+
+    def _assert_authenticated_generation(self) -> None:
+        if self._reauthenticating_generation:
+            raise RuntimeError("harness_reauthenticating")
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
         """Create the vendor session on first use and persist its id."""
@@ -966,6 +985,33 @@ class AgentBridge:
         if generation is None or generation["sandboxId"] != self.sandbox_id:
             self.log.warn("bridge.sandbox_generation_invalid")
             return
+        current = self.shutdown_preparation.state.generation
+        hook = getattr(self.harness, "reauthenticate_generation", None)
+        if (
+            hook is not None
+            and current is not None
+            and generation["createdAt"] < current["createdAt"]
+        ):
+            self.log.warn("bridge.sandbox_generation_stale")
+            return
+        if hook is not None and current is not None and generation != current:
+            self._generation_request_serial += 1
+            serial = self._generation_request_serial
+            self._reauthenticating_generation = True
+            try:
+                await hook(generation)
+                if serial != self._generation_request_serial:
+                    return
+            except Exception as error:
+                # Failure keeps admission fenced; reconnect must never implicitly
+                # clear it. Readiness is resent on every connection and the control
+                # plane answers with this generation, so reconnecting is the retry.
+                self.log.error("bridge.sandbox_generation_reauth_failed", exc=error)
+                if self.ws is not None:
+                    await self.ws.close(code=1011, reason="generation reauthentication failed")
+                return
+            else:
+                self._reauthenticating_generation = False
         await self._send_event(self.shutdown_preparation.establish_generation(generation))
 
     async def _handle_prepare_shutdown(self, cmd: dict[str, Any]) -> None:
