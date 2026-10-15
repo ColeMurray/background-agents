@@ -588,7 +588,16 @@ export class SessionMessageQueue {
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();
       this.sandboxLifecycle.updateLastActivity(now);
-      this.sandboxLifecycle.onPromptDispatched();
+      try {
+        this.sandboxLifecycle.onPromptDispatched();
+      } catch (error) {
+        // The prompt is already running; a failed breaker reset must not skip its deadline.
+        this.log.warn("prompt.circuit_breaker_reset_failed", {
+          event: "prompt.circuit_breaker_reset_failed",
+          message_id: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
 
       // Execution timeout shares the DO's single alarm slot with lifecycle checks.
       const deadline = now + this.getExecutionTimeoutMs();
