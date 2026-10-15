@@ -978,6 +978,106 @@ describe("CallbackNotificationService", () => {
       }
     });
 
+    it.each(["allowed", "denied"])(
+      "bounds a blocked authorization read and suppresses its late %s write",
+      async (outcome) => {
+        vi.useFakeTimers();
+        try {
+          const fetchMock = withSlackMessage();
+          let release!: (session: { ownerTeamId: string; visibility: "workspace" }) => void;
+          let onRead!: () => void;
+          const started = new Promise<void>((resolve) => {
+            onRead = resolve;
+          });
+          harness.slackPostScope.getSession.mockImplementationOnce(() => {
+            onRead();
+            return new Promise((resolve) => {
+              release = resolve;
+            });
+          });
+          const refresh = harness.service.refreshSlackActivity("msg-1", NOW);
+          await started;
+          harness.repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+          const completion = harness.service.notifyComplete("msg-1", true);
+          try {
+            await vi.runOnlyPendingTimersAsync();
+            await vi.waitFor(() => {
+              expect(fetchMock).toHaveBeenCalledWith(
+                "https://internal/callbacks/complete",
+                expect.anything()
+              );
+            });
+          } finally {
+            release({
+              ownerTeamId: outcome === "allowed" ? "team-a" : "team-b",
+              visibility: "workspace",
+            });
+            await Promise.all([refresh, completion]);
+          }
+          // Observe the resumed authorization path before checking for late writes.
+          await vi.waitFor(() => {
+            expect(harness.log.warn).toHaveBeenCalledWith(
+              "callback.activity_refresh",
+              expect.objectContaining({ outcome: "error", error: expect.any(Error) })
+            );
+          });
+          expect(fetchMock).toHaveBeenCalledOnce();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    );
+
+    it("bounds a blocked closure and suppresses retries after the deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = withSlackMessage();
+        harness.slackPostScope.getSession.mockResolvedValueOnce({
+          ownerTeamId: "team-b",
+          visibility: "workspace",
+        });
+        let release!: (response: Response) => void;
+        let onWire!: () => void;
+        const started = new Promise<void>((resolve) => {
+          onWire = resolve;
+        });
+        fetchMock.mockImplementationOnce(() => {
+          onWire();
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        });
+        const refresh = harness.service.refreshSlackActivity("msg-1", NOW);
+        await started;
+        harness.repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+        const completion = harness.service.notifyComplete("msg-1", true);
+        try {
+          await vi.runOnlyPendingTimersAsync();
+          await vi.waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+              "https://internal/callbacks/complete",
+              expect.anything()
+            );
+          });
+        } finally {
+          release(new Response("unavailable", { status: 503 }));
+          await Promise.all([refresh, completion]);
+        }
+        await vi.waitFor(() => {
+          expect(harness.log.info).toHaveBeenCalledWith(
+            "callback.activity_refresh",
+            expect.objectContaining({ outcome: "rejected" })
+          );
+        });
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+          "https://internal/callbacks/thread_closed",
+          "https://internal/callbacks/complete",
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("coalesces overlapping refreshes for the same message", async () => {
       const fetchMock = withSlackMessage();
       let release!: (response: Response) => void;

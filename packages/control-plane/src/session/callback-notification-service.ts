@@ -105,9 +105,10 @@ function hasSlackThreadCoordinates(context: unknown): context is {
 export const SLACK_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
 
 /**
- * One bounded attempt per refresh. A retry would buy a second correlated shot
- * at the same binding while widening the window in which a turn can terminate
- * under an in-flight refresh; the next heartbeat is the better retry.
+ * Bound the entire refresh, including authorization and signing. A retry
+ * would buy a second correlated shot at the same binding while widening the
+ * window in which a turn can terminate under an in-flight refresh; the next
+ * heartbeat is the better retry.
  */
 const ACTIVITY_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -180,13 +181,21 @@ export class CallbackNotificationService {
     sessionId: string,
     context: unknown,
     binding: FetchClient,
-    secret: string
+    secret: string,
+    cancellationSignal?: AbortSignal
   ): Promise<CallbackDeliveryResult> {
     if (!hasSlackThreadCoordinates(context)) {
       return { delivered: false, attempts: 0 };
     }
     return deliverWithRetry(
-      (signal) => this.sendSlackThreadClosed(sessionId, context, binding, secret, signal),
+      (signal) =>
+        this.sendSlackThreadClosed(
+          sessionId,
+          context,
+          binding,
+          secret,
+          cancellationSignal ? AbortSignal.any([signal, cancellationSignal]) : signal
+        ),
       this.sleep,
       ({ attempt, response, error }) => {
         this.log.warn("callback.thread_closed_delivery_attempt_failed", {
@@ -314,8 +323,8 @@ export class CallbackNotificationService {
 
       const refresh = this.slackActivityRefreshes.get(messageId);
       if (source === "slack" && refresh) {
-        // The message is terminal before this notification is submitted. Drain
-        // any refresh already in flight so it cannot follow the final reply.
+        // The message is terminal before this notification is submitted. Wait
+        // for the pending refresh attempt, bounded by its overall deadline.
         await Promise.allSettled([refresh]);
       }
 
@@ -536,14 +545,31 @@ export class CallbackNotificationService {
     if (pending) return pending;
 
     // Register before signing or authorization can yield to a completion.
-    const refresh = this.sendSlackActivityRefresh(messageId, now).finally(() => {
+    // D1 reads cannot be canceled, so the deadline also releases the fence.
+    const controller = new AbortController();
+    let timeoutId!: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<void>((resolve) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        resolve();
+      }, ACTIVITY_REFRESH_TIMEOUT_MS);
+    });
+    const refresh = Promise.race([
+      this.sendSlackActivityRefresh(messageId, now, controller.signal),
+      deadline,
+    ]).finally(() => {
+      clearTimeout(timeoutId);
       this.slackActivityRefreshes.delete(messageId);
     });
     this.slackActivityRefreshes.set(messageId, refresh);
     return refresh;
   }
 
-  private async sendSlackActivityRefresh(messageId: string, now: number): Promise<void> {
+  private async sendSlackActivityRefresh(
+    messageId: string,
+    now: number,
+    signal: AbortSignal
+  ): Promise<void> {
     if (now - this._lastSlackActivityAt < SLACK_ACTIVITY_REFRESH_INTERVAL_MS) return;
 
     // Web, Linear, automation and agent turns have no Slack indicator to hold
@@ -579,8 +605,9 @@ export class CallbackNotificationService {
     const sessionId = this.getSessionId();
     try {
       const denial = await this.slackPostDenial(sessionId, context);
+      signal.throwIfAborted();
       if (denial) {
-        await this.notifySlackThreadClosed(sessionId, context, binding, secret);
+        await this.notifySlackThreadClosed(sessionId, context, binding, secret, signal);
         this.log.info("callback.activity_refresh", {
           message_id: messageId,
           session_id: sessionId,
@@ -606,6 +633,7 @@ export class CallbackNotificationService {
       context,
     };
     const signature = await this.signPayload(callbackData, secret);
+    signal.throwIfAborted();
 
     // Last look before the wire. The turn can terminate between the heartbeat
     // that asked for this refresh and here — completion posts the final reply
@@ -622,15 +650,14 @@ export class CallbackNotificationService {
       return;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ACTIVITY_REFRESH_TIMEOUT_MS);
     try {
       const response = await binding.fetch("https://internal/callbacks/activity", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...callbackData, signature }),
-        signal: controller.signal,
+        signal,
       });
+      signal.throwIfAborted();
 
       const fields = {
         message_id: messageId,
@@ -658,8 +685,6 @@ export class CallbackNotificationService {
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: Date.now() - now,
       });
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
