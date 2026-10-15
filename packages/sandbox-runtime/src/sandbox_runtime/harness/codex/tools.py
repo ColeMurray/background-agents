@@ -1,4 +1,4 @@
-"""Adapt the existing OpenInspect tool definitions to Codex dynamic tools."""
+"""Adapt the shared sandbox tool definitions and results to Codex dynamic tools."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 from jsonschema import ValidationError, validate
 
-from ..claude_tools import ControlPlaneToolClient, build_tools
+from ..tools import ControlPlaneToolClient, build_tools
 
 
 class CodexTools:
@@ -48,13 +48,8 @@ class CodexTools:
             return self._failure("Invalid OpenInspect tool arguments")
         result = await tool.handler(args)
         return {
-            # Shared handlers use the SDK handler convention (tool_results.error_result).
-            "success": not result.get("is_error", False),
-            "contentItems": [
-                {"type": "inputText", "text": item["text"]}
-                for item in result.get("content", [])
-                if item.get("type") == "text"
-            ],
+            "success": not result.is_error,
+            "contentItems": [{"type": "inputText", "text": result.text}],
         }
 
     @staticmethod

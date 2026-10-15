@@ -451,7 +451,7 @@ async def test_native_pinned_memory_and_repository_guidance_survive_resume(
 async def test_native_platform_tool_callback_survives_restart(tmp_path, responses, native_factory):
     import httpx
 
-    from sandbox_runtime.harness.claude_tools import ToolServerConfig
+    from sandbox_runtime.harness.tools import ToolServerConfig
 
     _, requests, scripted = responses
     config = CodexHarnessConfig(

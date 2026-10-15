@@ -1,14 +1,23 @@
-"""Native dynamic tools use the existing session-scoped tool implementation."""
+"""Native dynamic tools adapt the vendor-neutral registry and results."""
 
+import builtins
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
-from sandbox_runtime.harness.claude_tools import ControlPlaneToolClient, ToolServerConfig
 from sandbox_runtime.harness.codex.tools import CodexTools
+from sandbox_runtime.harness.tools import ControlPlaneToolClient, ToolServerConfig, build_tools
 
 
-async def test_native_tool_uses_existing_authenticated_handler(tmp_path):
+async def test_native_tool_uses_existing_authenticated_handler(tmp_path, monkeypatch):
+    import_module = builtins.__import__
+
+    def no_vendor_imports(name, *args, **kwargs):
+        assert not name.startswith(("claude_agent_sdk", "mcp"))
+        return import_module(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_vendor_imports)
     requests = []
 
     def handle(request):
@@ -24,11 +33,22 @@ async def test_native_tool_uses_existing_authenticated_handler(tmp_path):
             http,
         )
         tools = CodexTools(client)
+        assert tools.specs()[0]["tools"] == [
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.input_schema,
+            }
+            for tool in build_tools(client)
+        ]
         names = {tool["name"] for tool in tools.specs()[0]["tools"]}
         assert {"get-child-status", "spawn-child", "memory_search"} <= names
         result = await tools.call({"namespace": "oi", "tool": "get-child-status", "arguments": {}})
-        assert result["success"]
-        assert result["contentItems"][0]["type"] == "inputText"
+        assert result == {
+            "success": True,
+            "contentItems": [{"type": "inputText", "text": "No child sessions found."}],
+        }
         assert len(requests) == 1
         assert str(requests[0].url) == "https://cp.example/sessions/session/children"
         assert requests[0].headers["Authorization"] == "Bearer fixture"
@@ -39,8 +59,11 @@ async def test_native_tool_uses_existing_authenticated_handler(tmp_path):
         assert len(requests) == 1
 
 
-async def test_handler_error_results_are_reported_as_native_failures(tmp_path):
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_handler_error_results_are_reported_as_native_failures(tmp_path, unavailable):
     def handle(request):
+        if unavailable:
+            raise httpx.ConnectError("unavailable", request=request)
         return httpx.Response(403, json={"error": "forbidden"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
@@ -51,8 +74,9 @@ async def test_handler_error_results_are_reported_as_native_failures(tmp_path):
             MagicMock(),
             http,
         )
-        result = await CodexTools(client).call(
-            {"namespace": "oi", "tool": "memory_search", "arguments": {"query": "deploy"}}
-        )
-        assert not result["success"]
-        assert "403" in result["contentItems"][0]["text"]
+        tools = CodexTools(client)
+        for name, args in [("memory_search", {"query": "deploy"}), ("get-child-status", {})]:
+            result = await tools.call({"namespace": "oi", "tool": name, "arguments": args})
+            assert result["success"] is False
+            assert result["contentItems"][0]["type"] == "inputText"
+            assert ("unavailable" if unavailable else "403") in result["contentItems"][0]["text"]

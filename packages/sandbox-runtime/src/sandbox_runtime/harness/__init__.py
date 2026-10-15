@@ -27,10 +27,10 @@ from .base import (
 )
 from .claude import ClaudeHarness, ClaudeHarnessConfig
 from .claude_env import OAUTH_MANAGED_ENV_VAR
-from .claude_tools import ToolServerConfig
 from .codex import CodexHarness, CodexHarnessConfig
 from .opencode import OpencodeHarness
 from .opencode_client import OpenCodeClient
+from .tools import ToolServerConfig
 
 if TYPE_CHECKING:
     from pathlib import Path

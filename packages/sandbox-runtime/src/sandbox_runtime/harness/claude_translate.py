@@ -26,8 +26,8 @@ from claude_agent_sdk import (
 )
 
 from .base import TurnOutcome
-from .claude_tools import OI_TOOL_SERVER_NAME
 from .tool_results import content_text
+from .tools import OI_TOOL_SERVER_NAME
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message, MessageOrigin

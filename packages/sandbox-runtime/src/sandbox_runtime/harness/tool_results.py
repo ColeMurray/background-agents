@@ -1,12 +1,19 @@
-"""MCP tool-result helpers shared by the Claude harness's in-process tools."""
+"""Vendor-neutral tool results and helpers for tool response text."""
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import httpx
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    text: str
+    is_error: bool = False
 
 
 def error_text(response: httpx.Response) -> str:
@@ -35,10 +42,9 @@ def content_text(content: Any) -> str:
     return "\n".join(parts)
 
 
-def text_result(text: str) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": text}]}
+def text_result(text: str) -> ToolResult:
+    return ToolResult(text)
 
 
-def error_result(text: str) -> dict[str, Any]:
-    # The SDK maps the handler's ``is_error`` onto the MCP result's ``isError``.
-    return {**text_result(text), "is_error": True}
+def error_result(text: str) -> ToolResult:
+    return ToolResult(text, is_error=True)

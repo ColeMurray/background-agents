@@ -28,7 +28,7 @@ from ..base import (
     PromptLimits,
     TurnOutcome,
 )
-from ..claude_tools import ControlPlaneToolClient, ToolServerConfig
+from ..tools import ControlPlaneToolClient, ToolServerConfig
 from .client import CodexClient, CodexRpcError, CodexTransportError
 from .env import (
     CODEX_BINARY,
