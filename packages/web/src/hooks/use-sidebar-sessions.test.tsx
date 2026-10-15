@@ -644,6 +644,39 @@ describe("useSidebarSessions", () => {
     expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
   });
 
+  it("marks the filtered inbox read, then drops retained pages and refetches the head", async () => {
+    teamContext.activeTeamId = "team_alpha";
+    let markedRead = false;
+    vi.mocked(browserApiFetch).mockImplementation(async () => {
+      markedRead = true;
+      return Response.json({ markedCount: 2 });
+    });
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? { items: [unreadItem("tail-unread")], hasMore: false, nextCursor: null }
+        : snapshot({
+            needs_attention: markedRead ? page([]) : page(["attention"], "next"),
+            finished: page(markedRead ? ["attention", "tail-unread"] : ["finished"]),
+          })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.handleMarkAllAttentionRead();
+    });
+
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/inbox/read-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamIds: ["team_alpha"], mine: false }),
+    });
+    await waitFor(() => expect(result.current.needsAttention).toEqual([]));
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["attention", "tail-unread"]);
+  });
+
   it("reconciles read state on retained pages when a session is marked read", async () => {
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")

@@ -155,6 +155,19 @@ export function CheckIcon({ className }: IconProps) {
   );
 }
 
+export function CheckCheckIcon({ className }: IconProps) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M2 12.5l4.5 4.5L15 8.5M11 16l1 1 9-9"
+      />
+    </svg>
+  );
+}
+
 export function CopyIcon({ className }: IconProps) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">

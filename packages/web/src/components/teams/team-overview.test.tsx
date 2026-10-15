@@ -1,6 +1,15 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -253,5 +262,40 @@ describe("team session buckets", () => {
     render(<TeamOverview teamId="team_one" />, { wrapper });
     await waitFor(() => expect(screen.getAllByText("read_denied")).toHaveLength(2));
     expect(screen.queryByRole("link", { name: "read_denied" })).toBeNull();
+  });
+
+  it("marks the team's attention sessions read after confirmation and refetches", async () => {
+    let markedRead = false;
+    vi.mocked(browserApiFetch).mockImplementation(async (path) => {
+      if (path === "/api/sessions/inbox/read-state") {
+        markedRead = true;
+        return Response.json({ markedCount: 1 });
+      }
+      const attention = path.includes("bucket=needs_attention");
+      return Response.json({
+        items: attention && markedRead ? [] : [item(attention ? "waiting" : "running")],
+        hasMore: false,
+        nextCursor: null,
+      });
+    });
+    render(<TeamOverview teamId="team_one" />, { wrapper });
+    const attention = await screen.findByRole("region", { name: "Needs attention" });
+    await within(attention).findByText("waiting");
+    expect(
+      within(screen.getByRole("region", { name: "In progress" })).queryByRole("button", {
+        name: "Mark all as read",
+      })
+    ).toBeNull();
+
+    fireEvent.click(within(attention).getByRole("button", { name: "Mark all as read" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Mark read" }));
+
+    await waitFor(() => expect(within(attention).queryByText("waiting")).toBeNull());
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/inbox/read-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamIds: ["team_one"] }),
+    });
+    expect(screen.getByText("running")).toBeTruthy();
   });
 });

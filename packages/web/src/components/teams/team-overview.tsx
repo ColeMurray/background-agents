@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import {
   teamSessionsResponseSchema,
@@ -12,6 +12,8 @@ import { useAuthSession } from "@/lib/auth-session";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatRelativeTime } from "@/lib/time";
+import { MarkAllReadButton } from "@/components/mark-all-read-button";
+import { markSessionInboxRead, subscribeSessionInboxMarkedRead } from "@/lib/session-read-state";
 
 const TEAM_SESSIONS_REFRESH_MS = 30_000;
 type TeamSessionPage = Extract<TeamSessionsResponse, { items: unknown }>;
@@ -43,6 +45,16 @@ export function useTeamSessionBucket(teamId: string, bucket: "needs_attention" |
       return page;
     },
     { refreshInterval: TEAM_SESSIONS_REFRESH_MS, keepPreviousData: false }
+  );
+  // A bulk read can empty later pages, so restart from the first page.
+  const revalidate = result.mutate;
+  useEffect(
+    () =>
+      subscribeSessionInboxMarkedRead(() => {
+        setPagination({ identity, cursors: [] });
+        return revalidate();
+      }),
+    [identity, revalidate]
   );
   const accessDenied =
     result.error instanceof TeamSessionsRequestError &&
@@ -81,7 +93,11 @@ export function TeamOverview({ teamId }: { teamId: string }) {
           Refresh
         </Button>
       </div>
-      <SessionBucket title="Needs attention" bucket={attention} />
+      <SessionBucket
+        title="Needs attention"
+        bucket={attention}
+        onMarkAllRead={() => markSessionInboxRead({ teamIds: [teamId] })}
+      />
       <SessionBucket title="In progress" bucket={progress} />
     </div>
   );
@@ -90,13 +106,23 @@ export function TeamOverview({ teamId }: { teamId: string }) {
 function SessionBucket({
   title,
   bucket,
+  onMarkAllRead,
 }: {
   title: string;
   bucket: ReturnType<typeof useTeamSessionBucket>;
+  onMarkAllRead?: () => Promise<unknown>;
 }) {
   return (
     <section aria-label={title} className="space-y-3">
-      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <div className="group flex min-h-6 items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {onMarkAllRead && bucket.items.length > 0 && (
+          <MarkAllReadButton
+            count={bucket.hasMore || bucket.hasPrevious ? null : bucket.items.length}
+            onConfirm={onMarkAllRead}
+          />
+        )}
+      </div>
       {bucket.error && (
         <ErrorBanner role="alert">
           Unable to load {title.toLowerCase()} sessions.{" "}
