@@ -56,7 +56,11 @@ beforeEach(() => {
   mocks.verify.mockResolvedValue({ passed: true });
   mocks.list.mockResolvedValue([{ name: "candidate" }]);
   mocks.get.mockResolvedValue({ status: "ready" });
-  mocks.restore.mockResolvedValue({ exec: { run: mocks.exec }, kill: mocks.kill });
+  mocks.restore.mockResolvedValue({
+    endAt: "2032-01-01T00:00:00Z",
+    exec: { run: mocks.exec },
+    kill: mocks.kill,
+  });
   mocks.exec.mockResolvedValue({ exitCode: 0, stdout: '{"passed":true}' });
 });
 afterEach(() => vi.unstubAllEnvs());

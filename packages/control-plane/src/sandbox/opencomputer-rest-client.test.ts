@@ -7,6 +7,10 @@ import {
   openComputerSecretStoreResponseSchema,
 } from "./opencomputer-rest-client";
 import { SANDBOX_RUNTIME_VERSION } from "./runtime-manifest";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const config = {
   apiUrl: "https://api.opencomputer.dev",
@@ -37,6 +41,58 @@ afterEach(() => {
 // relying on the provider shell's python alias can select a Python without the
 // installed sandbox_runtime package while the detached shell still exits zero.
 describe("OpenComputerRestClient runtime launch contract", () => {
+  it.each([true, false])(
+    "launches without privilege escalation with proxy CA present=%s",
+    async (withProxy) => {
+      const directory = mkdtempSync(join(tmpdir(), "oi-rootless-runtime-"));
+      chmodSync(directory, 0o755);
+      const home = join(directory, "home");
+      mkdirSync(home, { mode: 0o777 });
+      chmodSync(home, 0o777);
+      const systemCa = join(directory, "system-ca.pem");
+      const proxyCa = join(directory, "proxy-ca.pem");
+      const python = join(directory, "python");
+      writeFileSync(systemCa, "system trust\n");
+      if (withProxy) writeFileSync(proxyCa, "provider trust\n");
+      writeFileSync(
+        python,
+        '#!/bin/sh\nprintf "%s\\n" "$SSL_CERT_FILE" "$SANDBOX_VERSION" > "$HOME/started"\necho runtime-started\n',
+        { mode: 0o755 }
+      );
+      const client = new OpenComputerRestClient(config);
+      fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "", stderr: "" }));
+      try {
+        await client.runRuntimeForeground("sb-1", 60);
+        let command = JSON.parse(fetchSpy.mock.calls[0][1].body as string).args[1] as string;
+        for (const [from, to] of [
+          ["/home/sandbox", home],
+          ["/etc/pki/tls/certs/ca-bundle.crt", systemCa],
+          ["/usr/local/share/ca-certificates/opensandbox-proxy.crt", proxyCa],
+          ["/opt/openinspect/python/bin/python", python],
+          ["/tmp/openinspect-runtime.log", join(home, "legacy.log")],
+        ])
+          command = command.replaceAll(from, to);
+        // Deny sudo even on CI hosts with passwordless elevation. When running
+        // as root locally, execute as nobody to enforce actual filesystem access.
+        writeFileSync(join(directory, "sudo"), "#!/bin/sh\nexit 125\n", { mode: 0o755 });
+        execFileSync("sh", ["-c", command], {
+          env: { PATH: `${directory}:/usr/bin:/bin` },
+          ...(process.getuid?.() === 0 ? { uid: 65534, gid: 65534 } : {}),
+        });
+        const [bundle, version] = readFileSync(join(home, "started"), "utf8").trim().split("\n");
+        expect(version).toBe(SANDBOX_RUNTIME_VERSION);
+        expect(readFileSync(bundle, "utf8")).toBe(
+          `system trust\n${withProxy ? "provider trust\n" : ""}`
+        );
+        expect(readFileSync(join(home, ".cache/openinspect/runtime.log"), "utf8")).toContain(
+          "runtime-started"
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
   it("startRuntime exports SANDBOX_VERSION and uses managed Python", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "123", stderr: "" }));

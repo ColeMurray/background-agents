@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   contract:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -25,8 +25,16 @@ jobs:
         include:
           - provider: e2b
             base: python:3.12-slim-bookworm
+            runner: ubuntu-latest
+            platform: linux/amd64
           - provider: vercel
             base: amazonlinux:2023
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - provider: opencomputer
+            base: amazonlinux:2023
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,8 +49,8 @@ jobs:
         run: |
           python3 packages/sandbox-images/cli.py lock --check
           uv run --frozen --project packages/sandbox-images --extra dev pytest packages/sandbox-images/tests
-      - name: Build and verify the reference image on native amd64
+      - name: Build and verify the reference image on native architecture
         run: |
           bundle=$(python3 packages/sandbox-images/cli.py pack --provider ${{ matrix.provider }})
-          docker build --platform linux/amd64 --build-arg BASE_IMAGE=${{ matrix.base }} -f packages/sandbox-images/Dockerfile -t openinspect-image-contract "$bundle"
-          docker run --rm --platform linux/amd64 openinspect-image-contract
+          docker build --platform ${{ matrix.platform }} --build-arg BASE_IMAGE=${{ matrix.base }} -f packages/sandbox-images/Dockerfile -t openinspect-image-contract "$bundle"
+          docker run --rm --platform ${{ matrix.platform }} openinspect-image-contract

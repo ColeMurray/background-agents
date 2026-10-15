@@ -3,7 +3,9 @@
 import asyncio
 import os
 import signal
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +13,26 @@ from sandbox_runtime.harness.codex import process as codex_process
 from sandbox_runtime.harness.codex.client import CodexClient
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper contract")
+
+
+@pytest.mark.parametrize("machine,exit_code", [("aarch64", 0), ("riscv64", 88)])
+def test_process_owner_architecture_gate(tmp_path, machine, exit_code):
+    marker = tmp_path / "child-ran"
+    script = (
+        "import platform,sys; "
+        f"platform.machine=lambda: {machine!r}; "
+        "from sandbox_runtime.harness.codex import process; "
+        f"sys.argv=['owner',sys.executable,'-c',\"from pathlib import Path; Path({str(marker)!r}).touch()\"]; "
+        "sys.exit(process.main())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=os.environ | {"PYTHONPATH": str(Path(codex_process.__file__).parents[3])},
+    )
+    assert result.returncode == exit_code, result.stderr
+    assert marker.exists() == (exit_code == 0)
 
 
 async def test_owned_detached_writer_stops_and_unrelated_process_survives(tmp_path):

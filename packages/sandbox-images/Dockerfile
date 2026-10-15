@@ -2,7 +2,7 @@
 ARG BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${BASE_IMAGE}
 COPY image-config.sh /tmp/openinspect-image/image-config.sh
-COPY packages/sandbox-images/install/install.sh packages/sandbox-images/install/common.sh /tmp/openinspect-image/packages/sandbox-images/install/
+COPY packages/sandbox-images/install/install.sh packages/sandbox-images/install/common.sh packages/sandbox-images/install/ffmpeg.sh /tmp/openinspect-image/packages/sandbox-images/install/
 COPY packages/sandbox-images/install/os /tmp/openinspect-image/packages/sandbox-images/install/os
 RUN bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh os
 COPY packages/sandbox-images/install/languages.sh /tmp/openinspect-image/packages/sandbox-images/install/languages.sh

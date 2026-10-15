@@ -4,9 +4,9 @@ source "$OI_INSTALL_DIR/common.sh"
 mkdir -p /opt/openinspect/node /opt/openinspect/uv
 download_dir="$(mktemp -d /tmp/openinspect-languages.XXXXXX)"
 trap 'rm -rf "$download_dir"' EXIT
-download_checked "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" "$NODE_SHA256" "$download_dir/node.tar.xz"
+download_checked "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$OI_NODE_ARCH.tar.xz" "$NODE_SHA256" "$download_dir/node.tar.xz"
 tar -xJf "$download_dir/node.tar.xz" -C /opt/openinspect/node --strip-components=1
-download_checked "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz" "$UV_SHA256" "$download_dir/uv.tar.gz"
+download_checked "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$OI_MACHINE_ARCH-unknown-linux-gnu.tar.gz" "$UV_SHA256" "$download_dir/uv.tar.gz"
 tar -xzf "$download_dir/uv.tar.gz" -C /opt/openinspect/uv --strip-components=1
 export UV_PYTHON_INSTALL_DIR=/opt/openinspect/python-downloads
 /opt/openinspect/uv/uv python install "$PYTHON_VERSION"

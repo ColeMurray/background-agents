@@ -8,6 +8,77 @@ Use `sandbox_provider = "opencomputer"` when you want sessions to run in OpenCom
 while keeping the same Open-Inspect control plane, web app, GitHub OAuth, and Slack/GitHub
 integrations.
 
+## v2 Migration Status
+
+Issue [#2000](https://github.com/ColeMurray/background-agents/issues/2000) remains open until a
+rebuilt managed template and production shutdown/restore canary have passed. The SDK builder now
+uses `@opencomputer/sdk` v2, and the direct REST client sends `x-oc-sdk-version` to select the
+active runtime. OpenComputer keeps the existing `/api` routes; changing the URL to `/v2` is not the
+migration. The builder requires `endAt` on its verification sandbox before publishing the template
+reference. An organization runtime pin can override version-based routing.
+
+The managed image targets Amazon Linux 2023 on ARM64, as specified in the pinned upstream
+[template documentation](https://github.com/diggerhq/opencomputer/blob/2a2462682589e9e327966a936ae0075528894a92/docs-sandbox/sandboxes/templates.mdx).
+Image planning selects SHA-256-pinned ARM64 archives for Node, uv, agent-browser, code-server, ttyd,
+Codex and Chrome. The existing amd64 pins remain unchanged. The old Chrome 152 pin has no Linux
+ARM64 download in Google's release manifest; ARM64 uses Chrome for Testing 155.0.8059.79 instead.
+The browser configuration follows the stable `/usr/local/bin/google-chrome` link. OpenComputer sets
+`--no-sandbox --disable-dev-shm-usage` explicitly: the guest cannot elevate and agent-browser's
+container detection does not identify this MicroVM. No browser emulation or unpinned browser
+package-manager fallback is used.
+
+Amazon Linux installation supports the provider's DNF without depending on DNF4's config-manager
+flags. The OpenComputer image builds a small recording toolchain from pinned FFmpeg, x264 and libvpx
+sources. Native image verification encodes H.264 MP4 and VP8 WebM files, the formats used by
+agent-browser's recorder. The CI reference-image matrix includes native ARM64/Amazon Linux; it
+complements the existing amd64 builds and does not replace a provider rebuild or production canary.
+
+The
+[pinned upstream migration guide](https://github.com/diggerhq/opencomputer/blob/2a2462682589e9e327966a936ae0075528894a92/docs-sandbox/migrating-from-v1.mdx)
+also documents filesystem-only checkpoints, a hard host lifetime reported in `endAt`, and
+unavailable checkpoint forking. The provider uses disk-only captures, creates a replacement from the
+managed template, restores the checkpoint in place, and starts the runtime again. Hibernation does
+not extend the host lifetime. Old v1 templates must be rebuilt; existing names alone do not
+establish compatibility.
+
+v2 sandbox commands run unprivileged and cannot elevate through `sudo`. Runtime launch uses the
+Amazon Linux system CA bundle plus the provider's optional proxy CA in a user-writable bundle, and
+logs to `/home/sandbox/.cache/openinspect/runtime.log` (also linked from
+`/tmp/openinspect-runtime.log`). Image verification runs as the sandbox user.
+
+Checkpoint archives contain `/home/sandbox` only. The managed image makes `/workspace` a symlink to
+`/home/sandbox/workspace`, so repository state is captured without changing application paths.
+Installations or data written outside that home at session runtime are not checkpointed; system
+tools installed during the base image build are retained by the template. See the pinned upstream
+[checkpoint implementation](https://github.com/diggerhq/opencomputer/blob/2a2462682589e9e327966a936ae0075528894a92/cmd/microvm-hooks/oc_workspace.go).
+
+Production template rebuilding, a deployed session handshake and the production shutdown canary
+remain unverified until run with provider credentials. Do not switch the default provider based only
+on local contract results.
+
+### Provider Canary
+
+Once a compatible managed template has been built and verified, run the opt-in provider test with a
+dedicated test account/template:
+
+```bash
+export OPENCOMPUTER_API_KEY="osb_..."
+export OPENCOMPUTER_API_URL="https://app.opencomputer.dev/api"
+export OPENCOMPUTER_TEMPLATE="<rebuilt-managed-template>"
+OPENCOMPUTER_RUN_LIVE_TESTS=1 npm test -w @open-inspect/control-plane -- \
+  src/sandbox/opencomputer-live.test.ts --maxWorkers=1
+```
+
+This allocates paid resources. It uses the real REST provider to create, checkpoint, preserve-stop,
+restore, wake, and destroy sandboxes. It checks managed runtime smoke verification and sentinel
+files in both `/workspace` and `/home/sandbox`, then deletes the canary checkpoint and sandboxes. It
+supplies no model credentials and points the runtime at a loopback control-plane address. Cleanup
+errors fail the test; inspect the provider account after any interrupted run.
+
+The test is skipped unless explicitly enabled. It does not exercise the shutdown coordinator, a
+deployed session's WebSocket handshake, or a production Terraform apply. Those acceptance checks
+still require the production deployment and an actual session before changing the default provider.
+
 ## Configuration
 
 Set these values in `terraform/environments/production/terraform.tfvars`:

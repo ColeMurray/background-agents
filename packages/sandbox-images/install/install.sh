@@ -5,10 +5,14 @@ OI_BUNDLE="$(cd "$(dirname "$0")/../../.." && pwd)"
 OI_INSTALL_DIR="$OI_BUNDLE/packages/sandbox-images/install"
 source "$OI_BUNDLE/image-config.sh"
 export OI_BUNDLE OI_INSTALL_DIR
-if [[ "$(id -u)" != 0 || "$(uname -m)" != x86_64 ]]; then
-  echo 'Image installation requires root on linux/amd64' >&2
+if [[ "$(id -u)" != 0 ]]; then
+  echo 'Image installation requires root' >&2
   exit 1
 fi
+case "$OI_ARCH:$(uname -m)" in
+  amd64:x86_64|arm64:aarch64) ;;
+  *) echo "Image architecture does not match $OI_ARCH" >&2; exit 1 ;;
+esac
 trap 'echo "Image installation failed in phase ${OI_PHASE:-initialization}" >&2' ERR
 phases=("os/$OI_OS" languages tools runtime filesystem)
 if (( $# )); then phases=("$@"); fi

@@ -26,7 +26,8 @@ _LIBC = ctypes.CDLL(None, use_errno=True)
 def _syscall(number: int, *arguments: int) -> int:
     # The packaged python-build-standalone omits os.pidfd_open and
     # signal.pidfd_send_signal. Use the same kernel ownership handles via libc.
-    # Linux x86-64 ABI: arch/x86/entry/syscalls/syscall_64.tbl, 424 and 434.
+    # Linux x86-64 and arm64 share pidfd syscall numbers 424 and 434
+    # (arch/x86/entry/syscalls/syscall_64.tbl and include/uapi/asm-generic/unistd.h).
     _LIBC.syscall.restype = ctypes.c_long
     result = int(_LIBC.syscall(*(ctypes.c_long(value) for value in (number, *arguments))))
     if result == -1:
@@ -106,7 +107,11 @@ def _contain() -> bool:
 
 
 def main() -> int:
-    if sys.platform != "linux" or platform.machine() != "x86_64" or len(sys.argv) < 2:
+    if (
+        sys.platform != "linux"
+        or platform.machine() not in ("x86_64", "aarch64")
+        or len(sys.argv) < 2
+    ):
         return CONTAINMENT_FAILURE_EXIT_CODE
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER

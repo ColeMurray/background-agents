@@ -97,8 +97,17 @@ docker build --platform linux/amd64 -f packages/sandbox-images/Dockerfile -t ope
 docker run --rm --platform linux/amd64 openinspect-image-contract
 ```
 
-For Amazon Linux, use a Vercel bundle and `--build-arg BASE_IMAGE=amazonlinux:2023`. Native-amd64 CI
-tests both OS families. Chromium may trap under amd64 emulation on ARM Macs. Reference-container
-success does not replace provider-native verification.
+For Amazon Linux on amd64, use a Vercel bundle and `--build-arg BASE_IMAGE=amazonlinux:2023`.
+OpenComputer bundles select Amazon Linux on ARM64; build/run them with `--platform linux/arm64` on a
+native ARM64 host. CI includes both architectures. Chromium and process containment should be
+verified natively, rather than inferred from emulation. Reference-container success does not replace
+provider-native verification.
+
+The toolchain's `architectures.arm64` records override native archive pins; `pack` writes the
+selected pins into the bundle so installation and verification use the same versions/checksums.
+Other providers keep their amd64 artifacts. OpenComputer uses a separately pinned ARM64 Chrome
+release, compiles FFmpeg/x264/libvpx from pinned sources for its recording codecs, and stores
+`/workspace` under the checkpointed runtime home. See
+[OpenComputer provider](../../docs/OPENCOMPUTER_PROVIDER.md).
 
 See [design scope](../../docs/plans/sandbox-image-dependency-consolidation.md).

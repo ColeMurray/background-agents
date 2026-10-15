@@ -75,5 +75,48 @@
   "codex": {
     "version": "0.160.0",
     "sha256": "4fcc47ab57f52ff75363951a8761146cd10c8288bd86fed45487dbb204a16b71"
+  },
+  "architectures": {
+    "arm64": {
+      "node": {
+        "24": {
+          "version": "24.20.0",
+          "sha256": "5f4ddab610c1ab2016b3c227cebdbf6d9495161487e4739c7b90090595f465f7"
+        }
+      },
+      "uv": {
+        "version": "0.9.7",
+        "sha256": "8b3d31a154673c6d357727d2083a33525b515589d153fa5b5455e1db9e9e6363"
+      },
+      "agentBrowserSha256": "0315a8c4f7bf167cc5fd5eeaea79009b0e6b5d2ae8b3057bf6f96be978483426",
+      "codeServer": {
+        "version": "4.109.5",
+        "sha256": "56af7eb5d85135482844798c607cca6be315f27a41e3b4ed83152442c7646bdc"
+      },
+      "ttyd": {
+        "version": "1.7.7",
+        "sha256": "b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165"
+      },
+      "codex": {
+        "version": "0.160.0",
+        "sha256": "7f0fe42ff22ecfa3a47bc4a34f5b22c4218b431a4ec0aba51c7d98299f07900c"
+      },
+      "chrome": {
+        "version": "155.0.8059.79",
+        "sha256": "6ba365c60cb1cff5e742caaa1e8b6f2c019f93f7a644fa42ea0bcfcf029d7e67"
+      }
+    }
+  },
+  "ffmpeg": {
+    "version": "9.0.2",
+    "sha256": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
+  },
+  "x264": {
+    "revision": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55",
+    "sha256": "cd71a7515b0e9a012e1ac9b1f8415bebcaf6fc97d4db32286642ac4c0fbe24f9"
+  },
+  "libvpx": {
+    "version": "1.17.0",
+    "sha256": "1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a"
   }
 }

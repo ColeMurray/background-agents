@@ -3,16 +3,21 @@ set -euo pipefail
 source "$OI_INSTALL_DIR/common.sh"
 source /etc/os-release
 [[ "$ID" == amzn && "$VERSION_ID" == 2023 ]] || { echo 'Expected Amazon Linux 2023' >&2; exit 1; }
-dnf install -y dnf-plugins-core git gcc gcc-c++ make ca-certificates openssh-clients jq unzip tar gzip \
+dnf install -y git gcc gcc-c++ make ca-certificates openssh-clients jq unzip tar gzip findutils which \
   util-linux shadow-utils procps-ng xorg-x11-server-Xvfb autoconf automake libtool cmake xz diffutils \
   pkgconf-pkg-config openssl-devel libjpeg-turbo-devel zlib-devel libX11-devel libXext-devel libXft-devel \
   libXinerama-devel libXpm-devel libXrandr-devel libXtst-devel libXfixes-devel libXdamage-devel \
   libX11 libXcomposite libXdamage libXext libXfixes libXrandr libxcb libxkbcommon libdrm mesa-libgbm \
-  alsa-lib atk at-spi2-atk cups-libs pango cairo nspr nss
-dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+  alsa-lib atk at-spi2-atk cups-libs pango cairo nspr nss dbus-libs expat systemd-libs
+curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo
 dnf install -y gh
-# Video encoding is optional on the legacy Vercel substrate; recorded by verification.
-dnf install -y ffmpeg || echo 'openinspect.image.optional_unavailable=ffmpeg'
+# OpenComputer needs the pinned recorder codecs on both reference and provider images.
+if [[ "$OI_PROVIDER" == opencomputer ]]; then
+  bash "$OI_INSTALL_DIR/ffmpeg.sh"
+else
+  # Video encoding remains optional on the legacy Vercel substrate.
+  dnf install -y ffmpeg || echo 'openinspect.image.optional_unavailable=ffmpeg'
+fi
 build_dir="$(mktemp -d /tmp/openinspect-desktop.XXXXXX)"
 trap 'rm -rf "$build_dir"' EXIT
 download_checked "https://sourceforge.net/projects/fluxbox/files/fluxbox/$FLUXBOX_VERSION/fluxbox-$FLUXBOX_VERSION.tar.xz/download" "$FLUXBOX_SHA256" "$build_dir/fluxbox.tar.xz"

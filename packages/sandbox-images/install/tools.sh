@@ -16,21 +16,21 @@ cp "$OI_BUNDLE/packages/sandbox-images/locks/plugins/"package*.json /app/opencod
 (cd /app/opencode-deps && npm ci --ignore-scripts --no-audit --no-fund)
 download_dir="$(mktemp -d /tmp/openinspect-tools.XXXXXX)"
 trap 'rm -rf "$download_dir"' EXIT
-download_checked "https://github.com/vercel-labs/agent-browser/releases/download/v$AGENT_BROWSER_VERSION/agent-browser-linux-x64" "$AGENT_BROWSER_SHA256" "$download_dir/agent-browser"
+download_checked "https://github.com/vercel-labs/agent-browser/releases/download/v$AGENT_BROWSER_VERSION/agent-browser-linux-$OI_NODE_ARCH" "$AGENT_BROWSER_SHA256" "$download_dir/agent-browser"
 install -m 0755 "$download_dir/agent-browser" /usr/local/bin/agent-browser
-download_checked "https://github.com/coder/code-server/releases/download/v$CODE_SERVER_VERSION/code-server-$CODE_SERVER_VERSION-linux-amd64.tar.gz" "$CODE_SERVER_SHA256" "$download_dir/code-server.tar.gz"
+download_checked "https://github.com/coder/code-server/releases/download/v$CODE_SERVER_VERSION/code-server-$CODE_SERVER_VERSION-linux-$OI_ARCH.tar.gz" "$CODE_SERVER_SHA256" "$download_dir/code-server.tar.gz"
 tar -xzf "$download_dir/code-server.tar.gz" -C /opt/openinspect/code-server --strip-components=1
 ln -sf /opt/openinspect/code-server/bin/code-server /usr/local/bin/code-server
-download_checked "https://github.com/tsl0922/ttyd/releases/download/$TTYD_VERSION/ttyd.x86_64" "$TTYD_SHA256" "$download_dir/ttyd"
+download_checked "https://github.com/tsl0922/ttyd/releases/download/$TTYD_VERSION/ttyd.$OI_MACHINE_ARCH" "$TTYD_SHA256" "$download_dir/ttyd"
 install -m 0755 "$download_dir/ttyd" /usr/local/bin/ttyd
-download_checked "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-linux64.zip" "$CHROME_SHA256" "$download_dir/chrome.zip"
+download_checked "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/$OI_CHROME_PLATFORM/chrome-$OI_CHROME_PLATFORM.zip" "$CHROME_SHA256" "$download_dir/chrome.zip"
 mkdir -p /opt/openinspect/chrome
 unzip -q "$download_dir/chrome.zip" -d /opt/openinspect/chrome
-ln -sf /opt/openinspect/chrome/chrome-linux64/chrome /usr/local/bin/google-chrome
+ln -sf "/opt/openinspect/chrome/chrome-$OI_CHROME_PLATFORM/chrome" /usr/local/bin/google-chrome
 
 # Keep the complete pinned native closure in its release layout. Codex resolves
 # code-mode, ripgrep and sandbox helpers relative to the real executable.
-download_checked "https://github.com/openai/codex/releases/download/rust-v$CODEX_VERSION/codex-package-x86_64-unknown-linux-musl.tar.gz" "$CODEX_SHA256" "$download_dir/codex.tar.gz"
+download_checked "https://github.com/openai/codex/releases/download/rust-v$CODEX_VERSION/codex-package-$OI_MACHINE_ARCH-unknown-linux-musl.tar.gz" "$CODEX_SHA256" "$download_dir/codex.tar.gz"
 mkdir -p /opt/openinspect/codex
 tar -xzf "$download_dir/codex.tar.gz" -C /opt/openinspect/codex
 ln -sf /opt/openinspect/codex/bin/codex /usr/local/bin/codex

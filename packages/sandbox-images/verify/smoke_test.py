@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -317,6 +318,41 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
     )
     if not video and plan["provider"] != "vercel":
         raise RuntimeError("Required video encoder missing")
+    if services and plan["provider"] == "opencomputer":
+        with tempfile.TemporaryDirectory(prefix="oi-video-probe-") as directory:
+            Path(directory).chmod(0o777)
+            frame = f"{directory}/frame.jpg"
+            probe.run(
+                [
+                    "ffmpeg",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=16x16:r=1",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "mjpeg",
+                    "-y",
+                    frame,
+                ]
+            )
+            for codec, extension in (("libx264", "mp4"), ("libvpx", "webm")):
+                # Match agent-browser's low-probe MJPEG pipe, not just whether
+                # FFmpeg exposes an encoder. Missing parsers fail this route.
+                probe.run(
+                    [
+                        "bash",
+                        "-o",
+                        "pipefail",
+                        "-c",
+                        "ffmpeg -y -hide_banner -avioflags direct -fpsprobesize 0 -probesize 32 "
+                        "-analyzeduration 0 -f image2pipe -c:v mjpeg -framerate 30 -i pipe:0 "
+                        "-vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' "
+                        f"-c:v {codec} -pix_fmt yuv420p {shlex.quote(f'{directory}/probe.{extension}')} "
+                        f"<{shlex.quote(frame)}",
+                    ]
+                )
     if services:
         probe.run(["python3", "-c", PNPM_GLOBAL_PROBE])
         probe.desktop()

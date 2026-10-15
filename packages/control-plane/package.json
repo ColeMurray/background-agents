@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@opencomputer/sdk": "^2.3.1",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "@vitest/coverage-v8": "^4.1.11",

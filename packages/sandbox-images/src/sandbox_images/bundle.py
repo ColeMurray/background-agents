@@ -49,6 +49,7 @@ INFRA_MODULES = {
 
 class ImageTarget(TypedDict):
     os: str
+    arch: str
     base: str
     node: str
     user: str
@@ -68,7 +69,19 @@ class PackedBundle(NamedTuple):
     plan: ImagePlan
 
 
+def toolchain_for_architecture(tools: dict[str, Any], architecture: str) -> dict[str, Any]:
+    if architecture not in ("amd64", "arm64"):
+        raise ValueError(f"Unsupported image architecture: {architecture}")
+    common = {key: value for key, value in tools.items() if key != "architectures"}
+    return common if architecture == "amd64" else common | tools["architectures"][architecture]
+
+
 def validate_toolchain(tools: dict[str, Any]) -> None:
+    for architecture in ("amd64", "arm64"):
+        validate_architecture_toolchain(toolchain_for_architecture(tools, architecture))
+
+
+def validate_architecture_toolchain(tools: dict[str, Any]) -> None:
     def version(value: str) -> tuple[int, ...]:
         if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){2,3}", value):
             raise ValueError(f"Image tools must have exact release versions: {value}")
@@ -94,11 +107,17 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
             "libvncserver",
             "x11vnc",
             "novnc",
+            "ffmpeg",
+            "libvpx",
         )
     ]
     archives.extend(tools["node"].values())
+    if not re.fullmatch(r"[a-f0-9]{40}", tools["x264"]["revision"]):
+        raise ValueError("x264 must pin a source revision")
+    archives.append(tools["x264"])
     for pin in archives:
-        version(pin["version"])
+        if "version" in pin:
+            version(pin["version"])
         if not re.fullmatch(r"[a-f0-9]{64}", pin["sha256"]):
             raise ValueError("Downloaded image tools must have a SHA-256 pin")
     # The optional Docker variant installs pinned Debian packages, never a
@@ -199,11 +218,17 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target, follow_symlinks=False)
         (destination / "build-config.json").write_text(json.dumps(plan) + "\n")
-        toolchain = read_json(root / IMAGE_PACKAGE / "toolchain.json")
+        toolchain = toolchain_for_architecture(
+            read_json(root / IMAGE_PACKAGE / "toolchain.json"), plan["target"]["arch"]
+        )
+        # Verification reads the same selected pins as installation, including
+        # the separately versioned ARM64 Chrome distribution.
+        (destination / IMAGE_PACKAGE / "toolchain.json").write_text(json.dumps(toolchain) + "\n")
         variables = {
             "OI_BUILD_CACHE_KEY": plan["buildHash"],
             "OI_PROVIDER": provider,
             "OI_OS": plan["target"]["os"],
+            "OI_ARCH": plan["target"]["arch"],
             "OI_RUNTIME_USER": plan["target"]["user"],
             "OI_RUNTIME_HOME": plan["target"]["home"],
             "PYTHON_VERSION": toolchain["python"],
@@ -221,10 +246,14 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             ("X11VNC", "x11vnc"),
             ("NOVNC", "novnc"),
             ("CHROME", "chrome"),
+            ("FFMPEG", "ffmpeg"),
+            ("LIBVPX", "libvpx"),
         ):
             pin = toolchain[key][plan["target"]["node"]] if key == "node" else toolchain[key]
             variables[f"{name}_VERSION"] = pin["version"]
             variables[f"{name}_SHA256"] = pin["sha256"]
+        variables["X264_REVISION"] = toolchain["x264"]["revision"]
+        variables["X264_SHA256"] = toolchain["x264"]["sha256"]
         for package in DOCKER_PACKAGES:
             pin = toolchain["docker"][package]
             variables[f"DOCKER_{package.upper()}_FILE"] = pin["file"]

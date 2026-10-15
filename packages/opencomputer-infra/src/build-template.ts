@@ -3,44 +3,29 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Image, Sandbox, Snapshots } from "@opencomputer/sdk/node";
 import { packImage, writeBuildResult } from "../../sandbox-images/src/node";
-const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
-const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
+const SYSTEM_CA_BUNDLE = "/etc/pki/tls/certs/ca-bundle.crt";
 const providerEnvironment = {
   SSL_CERT_FILE: SYSTEM_CA_BUNDLE,
   CURL_CA_BUNDLE: SYSTEM_CA_BUNDLE,
   REQUESTS_CA_BUNDLE: SYSTEM_CA_BUNDLE,
-  NODE_EXTRA_CA_CERTS: OPENSANDBOX_PROXY_CA,
-  NPM_CONFIG_CAFILE: OPENSANDBOX_PROXY_CA,
-  GIT_SSL_CAINFO: OPENSANDBOX_PROXY_CA,
+  NODE_EXTRA_CA_CERTS: SYSTEM_CA_BUNDLE,
+  NPM_CONFIG_CAFILE: SYSTEM_CA_BUNDLE,
+  GIT_SSL_CAINFO: SYSTEM_CA_BUNDLE,
   NO_PROXY: "localhost,127.0.0.1,::1",
   no_proxy: "localhost,127.0.0.1,::1",
 };
-const HOSTS_BOOTSTRAP =
-  "grep -Eq '^[[:space:]]*127\\.0\\.0\\.1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
-  "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
-  "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
-  "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
-const DNS_BOOTSTRAP =
-  "sudo rm -f /etc/resolv.conf; " +
-  "printf '%s\\n' 'nameserver 8.8.8.8' 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf >/dev/null";
 
 export async function main(): Promise<void> {
   const root =
     process.env.OPENINSPECT_REPO_ROOT ||
     execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
   const packed = packImage(root, "opencomputer");
-  let image = Image.base()
-    .env(providerEnvironment)
-    .runCommands(
-      HOSTS_BOOTSTRAP,
-      DNS_BOOTSTRAP,
-      `[ ! -f ${OPENSANDBOX_PROXY_CA} ] || sudo update-ca-certificates`
-    );
+  let image = Image.base().env(providerEnvironment);
   for (const file of packed.files) {
     image = image.addLocalFile(join(packed.directory, file), `/tmp/openinspect-image/${file}`);
   }
   image = image
-    .runCommands("sudo -E bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh")
+    .runCommands("bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh")
     .env({
       ...packed.plan.runtimeEnv,
       ...providerEnvironment,
@@ -71,8 +56,13 @@ export async function main(): Promise<void> {
     throw new Error(`OpenComputer candidate status is ${artifact.status}`);
   const sandbox = await Sandbox.create({ apiUrl, apiKey, snapshot: name });
   try {
+    if (!sandbox.endAt) {
+      throw new Error(
+        "OpenComputer verification sandbox omitted endAt; verify the organization's runtime pin uses v2"
+      );
+    }
     const report = await sandbox.exec.run(
-      `sudo -E /opt/openinspect/python/bin/python /app/verify/smoke_test.py verify`,
+      `/opt/openinspect/python/bin/python /app/verify/smoke_test.py verify`,
       { env: providerEnvironment, timeout: 240, timeoutMs: 250_000 }
     );
     if (report.exitCode !== 0)

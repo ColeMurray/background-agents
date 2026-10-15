@@ -217,24 +217,20 @@ const TIMEOUT_BUILD_EXEC_MS = 30 * 60_000;
 const TIMEOUT_CHECKPOINT_MS = 5 * 60_000;
 const TIMEOUT_SECRET_STORE_MS = 30_000;
 const RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS = 10_000;
-const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
+const SYSTEM_CA_BUNDLE = "/etc/pki/tls/certs/ca-bundle.crt";
 const OPENSANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/opensandbox-proxy.crt";
-const PYTHON_VENV = "/home/sandbox/.venv";
+const RUNTIME_STATE_DIR = "/home/sandbox/.cache/openinspect";
+const RUNTIME_CA_BUNDLE = `${RUNTIME_STATE_DIR}/ca-bundle.pem`;
 const USER_BIN = "/home/sandbox/.local/bin";
 const MANAGED_PYTHON_BIN = "/opt/openinspect/python/bin/python";
 const RUNTIME_CA_EXPORTS =
-  `SSL_CERT_FILE=${SYSTEM_CA_BUNDLE} ` +
-  `CURL_CA_BUNDLE=${SYSTEM_CA_BUNDLE} ` +
-  `REQUESTS_CA_BUNDLE=${SYSTEM_CA_BUNDLE} ` +
-  `NODE_EXTRA_CA_CERTS=${OPENSANDBOX_PROXY_CA} ` +
-  `NPM_CONFIG_CAFILE=${OPENSANDBOX_PROXY_CA} ` +
-  `GIT_SSL_CAINFO=${OPENSANDBOX_PROXY_CA}`;
+  `SSL_CERT_FILE=${RUNTIME_CA_BUNDLE} ` +
+  `CURL_CA_BUNDLE=${RUNTIME_CA_BUNDLE} ` +
+  `REQUESTS_CA_BUNDLE=${RUNTIME_CA_BUNDLE} ` +
+  `NODE_EXTRA_CA_CERTS=${RUNTIME_CA_BUNDLE} ` +
+  `NPM_CONFIG_CAFILE=${RUNTIME_CA_BUNDLE} ` +
+  `GIT_SSL_CAINFO=${RUNTIME_CA_BUNDLE}`;
 const LOCAL_NO_PROXY = "localhost,127.0.0.1,::1";
-const RUNTIME_HOSTS_BOOTSTRAP =
-  "grep -Eq '^[[:space:]]*127\\.0\\.0\\.1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
-  "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
-  "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
-  "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
 // Runtime version the sandbox reports back to the image-build callback.
 // OpenComputer launches the runtime via `exec`, which does NOT inherit the
 // image's baked env, so SANDBOX_VERSION must be re-exported here — otherwise the
@@ -243,25 +239,24 @@ const RUNTIME_HOSTS_BOOTSTRAP =
 export const OPENCOMPUTER_SANDBOX_VERSION = SANDBOX_RUNTIME_VERSION;
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
-  `VIRTUAL_ENV=${PYTHON_VENV} ` +
   "XDG_CONFIG_HOME=/home/sandbox/.config " +
   "PYTHONPATH=/app " +
-  "NODE_PATH=/home/sandbox/.npm-global/lib/node_modules:/usr/lib/node_modules " +
+  "NODE_PATH=/opt/openinspect/tools/node_modules:/home/sandbox/.npm-global/lib/node_modules:/usr/lib/node_modules " +
   `OPENINSPECT_BIN_INSTALL_DIR=${USER_BIN} ` +
   `NO_PROXY=${LOCAL_NO_PROXY} ` +
   `no_proxy=${LOCAL_NO_PROXY} ` +
-  `PATH=${PYTHON_VENV}/bin:/home/sandbox/.npm-global/bin:${USER_BIN}:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin ` +
+  `PATH=/opt/openinspect/python/bin:/opt/openinspect/node/bin:/opt/openinspect/tools/node_modules/.bin:/home/sandbox/.npm-global/bin:${USER_BIN}:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin ` +
   `SANDBOX_VERSION=${OPENCOMPUTER_SANDBOX_VERSION} ` +
   RUNTIME_CA_EXPORTS;
-const RUNTIME_CA_BOOTSTRAP =
-  `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates >/tmp/openinspect-update-ca.log 2>&1 || true; ` +
-  `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo git config --system http.sslCAInfo ${OPENSANDBOX_PROXY_CA} || true`;
-const RUNTIME_LOG_PATH = "/var/log/openinspect-runtime.log";
+// v2 executes as sandbox with no_new_privs: trust and logs must be writable
+// without sudo. The provider adds its proxy CA when a secret store is attached.
+const RUNTIME_LOG_PATH = `${RUNTIME_STATE_DIR}/runtime.log`;
 const LEGACY_RUNTIME_LOG_PATH = "/tmp/openinspect-runtime.log";
-const RUNTIME_LOG_BOOTSTRAP =
-  `sudo touch ${RUNTIME_LOG_PATH}; ` +
-  `sudo chown "$(id -u):$(id -g)" ${RUNTIME_LOG_PATH}; ` +
-  `ln -sf ${RUNTIME_LOG_PATH} ${LEGACY_RUNTIME_LOG_PATH}`;
+const RUNTIME_BOOTSTRAP =
+  `set -e; mkdir -p ${RUNTIME_STATE_DIR}; ` +
+  `cat ${SYSTEM_CA_BUNDLE} >${RUNTIME_CA_BUNDLE}; ` +
+  `if [ -f ${OPENSANDBOX_PROXY_CA} ]; then cat ${OPENSANDBOX_PROXY_CA} >>${RUNTIME_CA_BUNDLE}; fi; ` +
+  `touch ${RUNTIME_LOG_PATH}; ln -sf ${RUNTIME_LOG_PATH} ${LEGACY_RUNTIME_LOG_PATH}`;
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -437,7 +432,7 @@ export class OpenComputerRestClient {
         cmd: "sh",
         args: [
           "-c",
-          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup ${MANAGED_PYTHON_BIN} -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
+          `${RUNTIME_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup ${MANAGED_PYTHON_BIN} -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
         ],
         timeout: RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS / 1000,
       },
@@ -460,7 +455,7 @@ export class OpenComputerRestClient {
           cmd: "sh",
           args: [
             "-c",
-            `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} ${MANAGED_PYTHON_BIN} -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
+            `${RUNTIME_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} ${MANAGED_PYTHON_BIN} -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
           ],
           timeout: timeoutSeconds,
         },
@@ -535,6 +530,9 @@ export class OpenComputerRestClient {
     const authHeaderName = this.config.authHeaderName ?? "X-API-Key";
     return {
       "Content-Type": "application/json",
+      // Runtime selection uses the SDK major even for direct REST clients.
+      // Keep this protocol identity aligned with the managed template builder.
+      "x-oc-sdk-version": "2.3.1",
       [authHeaderName]: `${this.config.authHeaderValuePrefix ?? ""}${this.config.apiKey}`,
     };
   }
