@@ -7,7 +7,10 @@ log="$state/runtime.log"
 
 mkdir -p "$workspace" "$state"
 exec 9>"$state/runtime.lock"
-flock -n 9 || exit 0
+# Exit 75 is reserved for the idempotent "another runtime owns the lock"
+# outcome. The provider accepts only this exited launcher; an entrypoint that
+# terminates, even with exit 0, is not a live runtime.
+flock -n 9 || exit 75
 printf '%s\n' "$$" > "$state/runtime.pid"
 
 if [[ "$(readlink /app 2>/dev/null || true)" != /home/user/openinspect/app ]]; then

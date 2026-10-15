@@ -372,7 +372,24 @@ export class SandboxHandler {
     }
 
     let urls: Record<string, string> = {};
-    const storedTunnelUrls = await this.sandboxRepository.getSandboxTunnelUrls();
+    let storedTunnelUrls: string | null;
+    try {
+      storedTunnelUrls = await this.sandboxRepository.getSandboxTunnelUrls();
+    } catch (error) {
+      log.warn("Invalid stored tunnel_urls", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return Response.json({ error: "Invalid stored tunnel URLs" }, { status: 500 });
+    }
+    const current = this.sandboxRepository.getSandbox();
+    if (
+      !current ||
+      current.id !== sandbox.id ||
+      current.modal_object_id !== sandbox.modal_object_id ||
+      current.tunnel_urls !== sandbox.tunnel_urls
+    ) {
+      return Response.json({ error: "Sandbox access changed; retry" }, { status: 409 });
+    }
     if (storedTunnelUrls) {
       const parsed = parseTunnelUrls(storedTunnelUrls);
       if (!parsed) {

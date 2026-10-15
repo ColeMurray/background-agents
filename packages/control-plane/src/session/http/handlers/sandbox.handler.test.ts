@@ -6,7 +6,7 @@ import {
   OpenAITokenUnauthorizedError,
   OpenAITokenUpstreamError,
 } from "../../openai-token-refresh-service";
-import type { SandboxRow, SessionRow } from "../../types";
+import { SessionStorageIntegrityError, type SandboxRow, type SessionRow } from "../../types";
 import { SandboxHandler } from "./sandbox.handler";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
@@ -944,6 +944,39 @@ describe("SandboxHandler", () => {
     expect(await response.json()).toEqual({
       tunnelUrls: { "3000": "https://a.example", "5000": "https://b.example" },
     });
+  });
+
+  it("rejects tunnel URLs cleared while the encrypted value is being read", async () => {
+    const { handler, getSandbox, getSandboxTunnelUrls } = createHandler();
+    const initial = {
+      id: "sandbox-row-1",
+      modal_object_id: "provider-1",
+      tunnel_urls: "encrypted-old-urls",
+    } as unknown as SandboxRow;
+    getSandbox.mockReturnValueOnce(initial).mockReturnValueOnce({ ...initial, tunnel_urls: null });
+    getSandboxTunnelUrls.mockResolvedValue(JSON.stringify({ "3000": "https://old.example" }));
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Sandbox access changed; retry" });
+  });
+
+  it("returns 500 when encrypted tunnel metadata cannot be decrypted", async () => {
+    const { handler, getSandbox, getSandboxTunnelUrls, log } = createHandler();
+    getSandbox.mockReturnValue({
+      id: "sandbox-row-1",
+      tunnel_urls: "corrupt-ciphertext",
+    } as unknown as SandboxRow);
+    getSandboxTunnelUrls.mockRejectedValue(
+      new SessionStorageIntegrityError("Failed to decrypt persisted sandbox tunnel URLs")
+    );
+
+    const response = await handler.tunnelUrls();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Invalid stored tunnel URLs" });
+    expect(log.warn).toHaveBeenCalled();
   });
 
   it("returns 500 when stored tunnel URLs are malformed JSON", async () => {

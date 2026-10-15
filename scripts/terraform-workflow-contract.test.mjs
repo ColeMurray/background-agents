@@ -87,5 +87,10 @@ test("Boat deployment inputs reach Terraform plan and apply", () => {
   assert.match(workflow, /packages\/boat-infra\/\*\*/);
   assert.match(jobs.apply, /Protect current Boat snapshot during rollout/);
   assert.match(jobs.plan, /Protect current Boat snapshot during plan/);
+  for (const job of Object.values(jobs)) {
+    assert.match(job, /terraform output -json/);
+    assert.match(job, /\.boat_base_snapshot\.value \/\/ empty/);
+    assert.doesNotMatch(job, /terraform output -raw boat_base_snapshot/);
+  }
   assert.match(jobs.apply, /timeout-minutes: 90/);
 });

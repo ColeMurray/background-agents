@@ -96,6 +96,8 @@ export interface ProviderResumeAccessData {
  * their keys the same way.
  */
 export class SandboxRepository {
+  private accessRevision = 0;
+
   constructor(
     private readonly sql: SqlStorage,
     private readonly log: Logger,
@@ -385,6 +387,7 @@ export class SandboxRepository {
     access: ProviderResumeAccessData,
     expectedProviderObjectId?: string
   ): Promise<boolean> {
+    const accessRevision = this.accessRevision;
     const [codeServerUrl, codeServerPassword, vncUrl, vncPassword, ttydUrl, ttydToken, tunnelUrls] =
       await Promise.all([
         access.codeServer ? this.encrypt(access.codeServer.url) : null,
@@ -395,6 +398,7 @@ export class SandboxRepository {
         access.ttyd ? this.encrypt(access.ttyd.token) : null,
         access.tunnelUrls ? this.encrypt(JSON.stringify(access.tunnelUrls)) : null,
       ]);
+    if (accessRevision !== this.accessRevision) return false;
     const result = this.sql.exec(
       `UPDATE sandbox SET
          modal_object_id = ?,
@@ -538,10 +542,16 @@ export class SandboxRepository {
   /** Set one access artifact's URL and encrypted secret. */
   async updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): Promise<void> {
     const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
+    const accessRevision = this.accessRevision;
+    const [encryptedUrl, encryptedSecret] = await Promise.all([
+      this.encrypt(url),
+      this.encrypt(secret),
+    ]);
+    if (accessRevision !== this.accessRevision) return;
     this.sql.exec(
       `UPDATE sandbox SET ${urlColumn} = ?, ${secretColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      await this.encrypt(url),
-      await this.encrypt(secret)
+      encryptedUrl,
+      encryptedSecret
     );
   }
 
@@ -563,15 +573,22 @@ export class SandboxRepository {
     if (parsed && !parsed.success) {
       throw new SessionStorageIntegrityError("Malformed persisted sandbox tunnel URLs");
     }
-    return decryptStoredAccessValueOrPlaintext(
-      parsed?.data.secret ?? null,
+    const stored = parsed?.data.secret ?? null;
+    if (stored === null) return null;
+    const decrypted = await decryptStoredAccessValueOrPlaintext(
+      stored,
       this.encryptionKey,
       this.log
     );
+    if (decrypted === null) {
+      throw new SessionStorageIntegrityError("Failed to decrypt persisted sandbox tunnel URLs");
+    }
+    return decrypted;
   }
 
   /** Clear one access artifact's URL and secret. */
   clearSandboxAccess(kind: SandboxAccessKind): void {
+    this.accessRevision += 1;
     const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
       `UPDATE sandbox SET ${urlColumn} = NULL, ${secretColumn} = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
@@ -580,6 +597,7 @@ export class SandboxRepository {
 
   /** Clear one access artifact's URL while preserving its stored secret. */
   clearSandboxAccessUrl(kind: SandboxAccessKind): void {
+    this.accessRevision += 1;
     const { urlColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
       `UPDATE sandbox SET ${urlColumn} = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
@@ -587,13 +605,17 @@ export class SandboxRepository {
   }
 
   async updateSandboxTunnelUrls(urls: Record<string, string>): Promise<void> {
+    const accessRevision = this.accessRevision;
+    const encrypted = await this.encrypt(JSON.stringify(urls));
+    if (accessRevision !== this.accessRevision) return;
     this.sql.exec(
       `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      await this.encrypt(JSON.stringify(urls))
+      encrypted
     );
   }
 
   clearSandboxTunnelUrls(): void {
+    this.accessRevision += 1;
     this.sql.exec(
       `UPDATE sandbox SET tunnel_urls = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );

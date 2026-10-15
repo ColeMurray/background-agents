@@ -113,7 +113,7 @@ permission.
 - **Team/Account ID**: Settings → "Your ID" (even personal accounts have one, usually starts with
   `team_`)
 
-### Modal
+### Modal (Only If Selected In Phase 1)
 
 - **Token ID and Secret**: https://modal.com/settings or `modal token new`
 - **Workspace name**: Visible in Modal dashboard URL
@@ -385,11 +385,16 @@ From the repository root:
 
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
-curl "$(terraform -chdir=terraform/environments/production output -raw modal_health_url)"
 curl -I "$(terraform -chdir=terraform/environments/production output -raw web_app_url)"
 ```
 
-Run the Modal health command only for Modal or Modal VM. For Boat, confirm
+For Modal or Modal VM, also run:
+
+```bash
+curl "$(terraform -chdir=terraform/environments/production output -raw modal_health_url)"
+```
+
+For Boat, confirm
 `terraform -chdir=terraform/environments/production output -raw boat_base_snapshot`, then run the
 release canaries in `docs/BOAT_SANDBOX_PROVIDER.md`.
 

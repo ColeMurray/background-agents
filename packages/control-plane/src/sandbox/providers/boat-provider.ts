@@ -45,6 +45,7 @@ const BOAT_STATE_POLL_INTERVAL_MS = 1_000;
 const BOAT_STARTUP_POLL_MS = 180_000;
 const BOAT_STOP_POLL_MS = 120_000;
 const BOAT_ENTRYPOINT_COMMAND = "/home/user/openinspect/start-runtime";
+const BOAT_RUNTIME_ALREADY_RUNNING_EXIT_CODE = 75;
 const BOAT_TUNNEL_ENV_PATH = "/home/user/openinspect/workspace/.tunnels.env";
 const TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
@@ -433,9 +434,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         sandbox = await this.client.getSandbox(id, callerSignal);
       } catch (error) {
         if (callerSignal?.aborted) throw callerSignal.reason;
-        const retryable =
-          (error instanceof BoatApiError && (error.status === 429 || error.status >= 500)) ||
-          SandboxProviderError.isTransientNetworkError(error);
+        const retryable = isRetryableBoatError(error);
         if (!retryable || Date.now() >= deadline) throw error;
         await delay(BOAT_STATE_POLL_INTERVAL_MS, callerSignal);
         continue;
@@ -530,7 +529,10 @@ export class BoatSandboxProvider implements SandboxProvider {
       try {
         const started = await this.client.startDetachedCommand(id, BOAT_ENTRYPOINT_COMMAND);
         const status = await this.client.getCommandStatus(id, started.processId);
-        if (status.status === "lost" || (!status.running && status.exitCode !== 0)) {
+        if (
+          status.status === "lost" ||
+          (!status.running && status.exitCode !== BOAT_RUNTIME_ALREADY_RUNNING_EXIT_CODE)
+        ) {
           throw new SandboxProviderError(
             `Boat runtime launcher ${status.status} with exit code ${status.exitCode ?? "unknown"}`,
             "transient"
@@ -538,13 +540,11 @@ export class BoatSandboxProvider implements SandboxProvider {
         }
         return;
       } catch (error) {
-        const retryable =
-          (error instanceof BoatApiError &&
-            (error.status >= 500 ||
-              error.code === "boat_starting" ||
-              error.code === "sandbox_starting" ||
-              error.code === "sandbox_resuming")) ||
-          SandboxProviderError.isTransientNetworkError(error);
+        const retryable = isRetryableBoatError(error, [
+          "boat_starting",
+          "sandbox_starting",
+          "sandbox_resuming",
+        ]);
         if (!retryable || attempt === 3) throw error;
         await delay(BOAT_STATE_POLL_INTERVAL_MS);
       }
@@ -655,15 +655,23 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
 function classifyBoatError(message: string, error: unknown): SandboxProviderError {
   if (error instanceof SandboxProviderError) return error;
-  const transient =
-    (error instanceof BoatApiError &&
-      (error.status === 429 || error.status >= 500 || error.code === "idempotency_in_progress")) ||
-    SandboxProviderError.isTransientNetworkError(error);
+  const transient = isRetryableBoatError(error, ["idempotency_in_progress"]);
   return new SandboxProviderError(
     `${message}: ${error instanceof Error ? error.message : "unknown error"}`,
     transient ? "transient" : "permanent",
     error instanceof Error ? error : undefined
   );
+}
+
+function isRetryableBoatError(error: unknown, retryableCodes: readonly string[] = []): boolean {
+  if (error instanceof BoatApiError) {
+    return (
+      error.status === 429 ||
+      error.status >= 500 ||
+      (!!error.code && retryableCodes.includes(error.code))
+    );
+  }
+  return SandboxProviderError.isTransientNetworkError(error);
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

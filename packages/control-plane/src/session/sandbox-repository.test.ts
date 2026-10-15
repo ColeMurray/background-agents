@@ -160,4 +160,45 @@ describe("SandboxRepository completeProviderResume (SQLite)", () => {
       db.close();
     }
   });
+
+  it("rejects corrupt encrypted tunnel metadata", async () => {
+    const { db, repository, set } = createSqliteRepository();
+    try {
+      set("tunnel_urls = ?", "corrupt-ciphertext");
+
+      await expect(repository.getSandboxTunnelUrls()).rejects.toThrow(
+        "Failed to decrypt persisted sandbox tunnel URLs"
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("does not restore tunnel URLs when access is cleared during encryption", async () => {
+    const { db, repository } = createSqliteRepository();
+    const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+    let beginEncryption!: () => void;
+    let releaseEncryption!: () => void;
+    const encrypting = new Promise<void>((resolve) => (beginEncryption = resolve));
+    const gate = new Promise<void>((resolve) => (releaseEncryption = resolve));
+    const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args) => {
+      const encrypted = await encrypt(...args);
+      beginEncryption();
+      await gate;
+      return encrypted;
+    });
+    try {
+      const storing = repository.updateSandboxTunnelUrls({ "3000": "https://preview.test" });
+      await encrypting;
+      repository.clearSandboxTunnelUrls();
+      releaseEncryption();
+      await storing;
+
+      expect(repository.getSandbox()?.tunnel_urls).toBeNull();
+    } finally {
+      releaseEncryption();
+      spy.mockRestore();
+      db.close();
+    }
+  });
 });

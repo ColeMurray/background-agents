@@ -198,7 +198,8 @@ jobs:
       - name: Protect current Boat snapshot during plan
         run: |
           set -euo pipefail
-          previous="$(terraform output -raw boat_base_snapshot 2>/dev/null || true)"
+          outputs="$(terraform output -json)"
+          previous="$(printf '%s' "$outputs" | jq -r '.boat_base_snapshot.value // empty')"
           jq -n --arg previous "$previous" '{boat_previous_base_snapshot: $previous}' > boat-rollback.auto.tfvars.json
         working-directory: ${{ env.TF_WORKING_DIR }}
 
@@ -507,7 +508,8 @@ jobs:
       - name: Protect current Boat snapshot during rollout
         run: |
           set -euo pipefail
-          previous="$(terraform output -raw boat_base_snapshot 2>/dev/null || true)"
+          outputs="$(terraform output -json)"
+          previous="$(printf '%s' "$outputs" | jq -r '.boat_base_snapshot.value // empty')"
           jq -n --arg previous "$previous" '{boat_previous_base_snapshot: $previous}' > boat-rollback.auto.tfvars.json
         working-directory: ${{ env.TF_WORKING_DIR }}
 

@@ -227,6 +227,7 @@ def test_cleanup_without_an_explicit_previous_snapshot_keeps_the_newest_rollback
 def test_launcher_guards_preparation_and_marks_resumed_boots():
     launcher = (Path(__file__).parents[1] / "runtime-launcher.sh").read_text()
     assert launcher.index("flock -n 9") < launcher.index("mountpoint -q /app")
+    assert "flock -n 9 || exit 75" in launcher
     assert "mount --bind /home/user/openinspect/app /app" in launcher
     assert "sudo rm -rf /app" in launcher
     assert "runtime.pid" in launcher

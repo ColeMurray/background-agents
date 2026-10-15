@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  BoatApiError,
   BoatConflictError,
   BoatNotFoundError,
   type BoatRestClient,
@@ -176,6 +177,22 @@ describe("BoatSandboxProvider", () => {
     expect(client.getSandbox).toHaveBeenCalledTimes(2);
   });
 
+  it("does not retry permanent Boat HTTP errors that mention network failures", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () => {
+        throw new BoatApiError("network policy timeout", 400);
+      }),
+      deleteSandbox: vi.fn(async () => {
+        throw new BoatNotFoundError("gone");
+      }),
+    });
+
+    await expect(provider(client).createSandbox(baseConfig)).rejects.toMatchObject({
+      errorType: "permanent",
+    });
+    expect(client.getSandbox).toHaveBeenCalledOnce();
+  });
+
   it("maps CPU and memory requests to the smallest public machine type", () => {
     expect(resolveBoatSandboxType("default", undefined)).toBe("default");
     expect(resolveBoatSandboxType("default", { cpuCores: 1, memoryMib: 1024 })).toBe("small");
@@ -271,6 +288,44 @@ describe("BoatSandboxProvider", () => {
     });
     await expect(provider(client).createSandbox(baseConfig)).rejects.toThrow("launch failed");
     expect(client.deleteSandbox).toHaveBeenCalledWith(created.id, undefined);
+  });
+
+  it("rejects a runtime launcher that exits cleanly instead of remaining live", async () => {
+    const getSandbox = vi
+      .fn()
+      .mockResolvedValueOnce(ready)
+      .mockRejectedValueOnce(new BoatNotFoundError("gone"));
+    const client = mockClient({
+      getSandbox,
+      getCommandStatus: vi.fn(async () => ({
+        success: true,
+        processId: 42,
+        status: "exited" as const,
+        running: false,
+        exitCode: 0,
+      })),
+    });
+
+    await expect(provider(client).createSandbox(baseConfig)).rejects.toThrow(
+      "runtime launcher exited with exit code 0"
+    );
+    expect(client.deleteSandbox).toHaveBeenCalledWith(created.id, undefined);
+  });
+
+  it("accepts the launcher's explicit already-running exit code", async () => {
+    const client = mockClient({
+      getCommandStatus: vi.fn(async () => ({
+        success: true,
+        processId: 42,
+        status: "exited" as const,
+        running: false,
+        exitCode: 75,
+      })),
+    });
+
+    await expect(provider(client).createSandbox(baseConfig)).resolves.toMatchObject({
+      providerObjectId: created.id,
+    });
   });
 
   it("resumes a stopped sandbox, relaunches the runtime, and refreshes lifetime", async () => {
