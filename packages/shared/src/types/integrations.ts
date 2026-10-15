@@ -774,6 +774,18 @@ export interface McpServerMetadata {
   enabled: boolean;
 }
 
+/**
+ * Saved MCP server credentials, decrypted for the settings edit form.
+ * Only returned to callers with `mcp_servers.manage`.
+ */
+export interface McpServerCredentials {
+  id: string;
+  revision: number;
+  type: "local" | "remote";
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
 export const INTEGRATION_DEFINITIONS: {
   id: IntegrationId;
   name: string;

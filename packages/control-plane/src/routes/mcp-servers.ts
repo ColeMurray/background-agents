@@ -67,6 +67,27 @@ async function handleGetMcpServer(
   return json(server);
 }
 
+async function handleGetMcpServerCredentials(
+  _request: Request,
+  env: Env,
+  params: { id: string },
+  ctx: RequestContext
+): Promise<Response> {
+  const { id } = params;
+  if (!ctx.db) return error("Database not configured", 503);
+
+  const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+  const credentials = await store.getCredentials(id);
+  if (!credentials) return error("MCP server not found", 404);
+  logger.info("MCP server credentials retrieved", {
+    event: "mcp_server.credentials_get",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    id,
+  });
+  return json(credentials);
+}
+
 async function handleCreateMcpServer(
   request: Request,
   env: Env,
@@ -179,5 +200,15 @@ export const mcpServerRoutes = new Hono<ControlPlaneHonoEnv>();
 mcpServerRoutes.get("/mcp-servers", MCP_READ, (c) => dispatch(c, handleListMcpServers));
 mcpServerRoutes.post("/mcp-servers", MCP_MANAGE, (c) => dispatch(c, handleCreateMcpServer));
 mcpServerRoutes.get("/mcp-servers/:id", MCP_READ, (c) => dispatch(c, handleGetMcpServer));
+// Returns decrypted credentials so the edit form can show what is saved.
+mcpServerRoutes.get(
+  "/mcp-servers/:id/credentials",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("mcp_servers.manage"),
+    cacheControl: "private, no-store",
+  }),
+  (c) => dispatch(c, handleGetMcpServerCredentials)
+);
 mcpServerRoutes.put("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleUpdateMcpServer));
 mcpServerRoutes.delete("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleDeleteMcpServer));
