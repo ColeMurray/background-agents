@@ -38,9 +38,27 @@ export type LaunchPreferenceStorage = Pick<Storage, "getItem" | "setItem" | "rem
 
 // Resolve localStorage only in effects and event handlers, never during SSR.
 const browserStorage: LaunchPreferenceStorage = {
-  getItem: (key) => window.localStorage.getItem(key),
-  setItem: (key, value) => window.localStorage.setItem(key, value),
-  removeItem: (key) => window.localStorage.removeItem(key),
+  getItem: (key) => {
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key, value) => {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {
+      // Preferences continue in memory when storage is unavailable.
+    }
+  },
+  removeItem: (key) => {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // Storage is optional.
+    }
+  },
 };
 
 export interface LaunchPreferencesInput {
@@ -91,7 +109,14 @@ export function useLaunchPreferences(
             JSON.stringify(storedProviderSelections)
           );
         }
-        storage.removeItem(LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY);
+        // A best-effort write may fail silently; retain legacy pins until it is confirmed.
+        if (
+          !storedProviderSelections ||
+          storage.getItem(LAST_PROVIDER_SELECTIONS_STORAGE_KEY) ===
+            JSON.stringify(storedProviderSelections)
+        ) {
+          storage.removeItem(LEGACY_PROVIDER_SELECTIONS_STORAGE_KEY);
+        }
       } catch {
         // Storage migration must not block provider-selection hydration.
       }

@@ -8,11 +8,7 @@ import type {
   ModelProviderAccount,
   ModelProviderSelections,
 } from "@open-inspect/shared/types/provider-accounts";
-import {
-  useLaunchPreferences,
-  type LaunchPreferencesInput,
-  type LaunchPreferenceStorage,
-} from "./use-launch-preferences";
+import { useLaunchPreferences, type LaunchPreferencesInput } from "./use-launch-preferences";
 
 const MODEL_KEY = "open-inspect-last-selected-model";
 const HARNESS_KEY = "open-inspect-last-selected-harness";
@@ -53,6 +49,11 @@ const input: LaunchPreferencesInput = {
 function memoryStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
   return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    key: (index: number) => [...values.keys()][index] ?? null,
     getItem: vi.fn((key: string) => values.get(key) ?? null),
     setItem: vi.fn((key: string, value: string) => {
       values.set(key, value);
@@ -60,12 +61,87 @@ function memoryStorage(initial: Record<string, string> = {}) {
     removeItem: vi.fn((key: string) => {
       values.delete(key);
     }),
-  } satisfies LaunchPreferenceStorage;
+  } satisfies Storage;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("useLaunchPreferences", () => {
+  it.each(["access", "read"])("hydrates defaults when browser storage %s fails", (failure) => {
+    const storage = memoryStorage();
+    const unavailable = () => {
+      throw new DOMException("Storage is blocked", "SecurityError");
+    };
+    const access = vi.spyOn(window, "localStorage", "get");
+    if (failure === "access") {
+      access.mockImplementation(unavailable);
+    } else {
+      storage.getItem.mockImplementation(unavailable);
+      access.mockReturnValue(storage);
+    }
+
+    const { result } = renderHook(() => useLaunchPreferences(input));
+
+    expect(result.current).toMatchObject({
+      selectedModel: DEFAULT_MODEL,
+      harness: DEFAULT_HARNESS,
+      providerSelections: {},
+      providerReady: true,
+      ready: true,
+    });
+    act(() => result.current.handleHarnessChange("codex"));
+    act(() => result.current.handleReasoningEffortChange(undefined));
+    expect(result.current.harness).toBe("codex");
+  });
+
+  it("keeps reconciled and edited preferences in memory when browser writes and removals fail", () => {
+    const storage = memoryStorage({ [PROVIDER_KEY]: JSON.stringify(pin) });
+    storage.setItem.mockImplementation(() => {
+      throw new DOMException("Storage is full", "QuotaExceededError");
+    });
+    storage.removeItem.mockImplementation(() => {
+      throw new DOMException("Storage is blocked", "SecurityError");
+    });
+    vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+    const { result } = renderHook(() =>
+      useLaunchPreferences({ ...input, providerAccounts: { accounts: [], loading: false } })
+    );
+
+    expect(result.current.providerSelections).toEqual({});
+    expect(storage.setItem).toHaveBeenCalledWith(PROVIDER_KEY, "{}");
+    act(() => result.current.handleHarnessChange("codex"));
+    act(() => result.current.handleModelChange(OPENAI_MODEL));
+    act(() => result.current.handleReasoningEffortChange(undefined));
+    act(() => result.current.handleProviderSelectionChange("openai", { mode: "api_key" }));
+    expect(result.current).toMatchObject({
+      harness: "codex",
+      selectedModel: OPENAI_MODEL,
+      reasoningEffort: undefined,
+      providerSelections: { openai: { mode: "api_key" } },
+      ready: true,
+    });
+    expect(storage.removeItem).toHaveBeenCalledWith(EFFORT_KEY);
+  });
+
+  it("retains legacy pins when the browser adapter silently fails to write their replacement", () => {
+    const storage = memoryStorage({ [LEGACY_PROVIDER_KEY]: JSON.stringify(pin) });
+    storage.setItem.mockImplementation(() => {
+      throw new DOMException("Storage is full", "QuotaExceededError");
+    });
+    vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+
+    const { result } = renderHook(() => useLaunchPreferences(input));
+
+    expect(result.current.providerSelections).toEqual(pin);
+    expect(result.current.ready).toBe(true);
+    expect(storage.getItem(PROVIDER_KEY)).toBeNull();
+    expect(storage.getItem(LEGACY_PROVIDER_KEY)).toBe(JSON.stringify(pin));
+    expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+
   it("does not access storage or report readiness during server rendering", () => {
     const storage = memoryStorage();
     function Probe() {
