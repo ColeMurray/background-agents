@@ -49,6 +49,15 @@ GitHub tokens now cover only the session's repositories. See
 OpenAI classification models used by the Slack and Linear bots. Leaving it blank keeps the model
 default.
 
+### Fixed
+
+The session page reconnects on its own after a transient disconnect. It used to stop after ten
+attempts (about three minutes) and wait for a click on **Reconnect**, so a laptop that slept or lost
+its network came back to a dead page. Retries now continue at the capped backoff. A hidden tab or an
+offline browser makes no attempts and reconnects as soon as it is visible and online again, with a
+fresh backoff. A session-expired close (4002) also reconnects with a new credential instead of
+showing a banner.
+
 ## October 1, 2026
 
 **Brokered credentials for Modal restores.** Restored Modal sandboxes now fetch git credentials from
