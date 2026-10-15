@@ -14,12 +14,13 @@ import { AutomationStatusBadge } from "@/components/automations/automation-statu
 import { ConditionSummary } from "@/components/automations/condition-summary";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { BackIcon, PencilIcon } from "@/components/ui/icons";
+import { BackIcon, CopyIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -27,7 +28,8 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const { navigation } = useAutomationScope();
+  const { teamId, navigation } = useAutomationScope();
+  const { canCreate } = useCanCreateAutomation(teamId);
   const { automation, loading } = useAutomation(id);
   const { environments } = useEnvironments({ ownerTeamId: automation?.ownerTeamId });
   // "Load more" grows the fetch limit rather than paging by offset: the
@@ -133,6 +135,16 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                     <span className="flex items-center gap-1.5">
                       <PencilIcon className="w-3.5 h-3.5" />
                       Edit
+                    </span>
+                  </Button>
+                </Link>
+              )}
+              {canCreate && (
+                <Link href={navigation.duplicate(id)} className="w-full sm:w-auto">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
+                    <span className="flex items-center gap-1.5">
+                      <CopyIcon className="w-3.5 h-3.5" />
+                      Duplicate
                     </span>
                   </Button>
                 </Link>

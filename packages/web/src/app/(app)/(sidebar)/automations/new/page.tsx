@@ -7,6 +7,7 @@ import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
+import { automationToFormValues } from "@/components/automations/automation-form-policy";
 import { WebhookConfig } from "@/components/automations/webhook-config";
 import { automationTemplates } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,16 @@ import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
 import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
+import { useAutomation } from "@/hooks/use-automations";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
+
+const COPY_NAME_SUFFIX = " (copy)";
+
+/** The source name plus a copy suffix, trimmed to fit the server's name limit. */
+function copyName(name: string): string {
+  const base = name.slice(0, MAX_AUTOMATION_NAME_LENGTH - COPY_NAME_SUFFIX.length).trimEnd();
+  return `${base}${COPY_NAME_SUFFIX}`;
+}
 
 function NewAutomationContent() {
   const { isOpen } = useSidebarContext();
@@ -26,6 +37,9 @@ function NewAutomationContent() {
   const { teamId, navigation } = useAutomationScope();
   const swr = useSWRConfig();
   const { canCreate, loading: authorizationLoading } = useCanCreateAutomation(teamId);
+  // `?from=<id>` duplicates an existing automation into the create form.
+  const sourceId = searchParams.get("from") ?? undefined;
+  const { automation: source, loading: sourceLoading } = useAutomation(sourceId);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -42,15 +56,28 @@ function NewAutomationContent() {
 
   if (authorizationLoading || !canCreate) return null;
 
+  // The form reads initial values once on mount, so wait for the source.
+  if (sourceId && sourceLoading) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+      </div>
+    );
+  }
+
   // A template id (from the gallery) pre-fills the form. Repository is never
   // pre-filled, so the repo-required-at-creation invariant is untouched. The
   // form coerces a template's suggested model against the user's enabled set.
+  // A duplicate copies everything, owning team included, but per-automation
+  // credentials (webhook keys, Sentry client secret), which the server issues
+  // or the user re-enters.
   const templateId = searchParams.get("template");
-  const template = automationTemplates.find((candidate) => candidate.id === templateId);
-  const initialValues: Partial<AutomationFormValues> = {
-    ...template?.prefill,
-    teamId: teamId ?? null,
-  };
+  const template = sourceId
+    ? undefined
+    : automationTemplates.find((candidate) => candidate.id === templateId);
+  const initialValues: Partial<AutomationFormValues> = source
+    ? { ...automationToFormValues(source), name: copyName(source.name) }
+    : { ...template?.prefill, teamId: teamId ?? null };
 
   const handleSubmit = async (values: AutomationFormValues) => {
     setSubmitting(true);
@@ -170,6 +197,19 @@ function NewAutomationContent() {
             </ErrorBanner>
           )}
 
+          {sourceId && !source && (
+            <ErrorBanner className="mb-4" role="alert">
+              Couldn&apos;t load the automation to duplicate.
+            </ErrorBanner>
+          )}
+
+          {source && (
+            <div className="mb-4 rounded-md border border-border-muted bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Duplicating <span className="font-medium text-foreground">{source.name}</span>. Review
+              the details and create it.
+            </div>
+          )}
+
           {template && (
             <div className="mb-4 rounded-md border border-border-muted bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
               Prefilled from the{" "}
@@ -178,9 +218,10 @@ function NewAutomationContent() {
             </div>
           )}
 
-          {/* Remount when the query-selected team changes so the form's team follows the URL. */}
+          {/* Remount when the query-selected team or duplicate source changes, or the source finishes
+              loading after a failed lookup, so the form follows the URL. */}
           <AutomationForm
-            key={teamId ?? ""}
+            key={`${teamId ?? ""}:${sourceId ?? ""}:${source ? "loaded" : "missing"}`}
             mode="create"
             initialValues={initialValues}
             requireTeam={searchParams.get("requireTeam") === "true"}
