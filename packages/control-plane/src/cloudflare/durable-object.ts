@@ -8,6 +8,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { createD1SqlDatabase } from "./sql-database";
 import { initSchema } from "../session/schema";
 import type { Env } from "../types";
 import { createDurableObjectSessionPlatform } from "./session-platform";
@@ -38,7 +39,7 @@ export class SessionDO extends DurableObject<WorkerBindings> {
         "SessionDO requires the DB binding; sessions cannot run without the global store"
       );
     }
-    this.platform = createDurableObjectSessionPlatform(ctx, db);
+    this.platform = createDurableObjectSessionPlatform(ctx, createD1SqlDatabase(db));
     this.appEnv = createCloudflareEnv(env);
   }
 

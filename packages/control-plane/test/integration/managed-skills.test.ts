@@ -24,7 +24,8 @@ describe("managed skills persistence and resolution", () => {
   beforeEach(cleanD1Tables);
 
   it("creates immutable content, resolves assignments, and filters with an owned profile", async () => {
-    const skills = new SkillStore(env.DB);
+    const db = sqlDatabase(env.DB);
+    const skills = new SkillStore(db);
     const skill = await skills.create(
       {
         name: "acme-deploy",
@@ -62,9 +63,9 @@ describe("managed skills persistence and resolution", () => {
     expect(unchanged?.currentRevisionId).toBe(skill.currentRevisionId);
     expect(unchanged?.revisionNumber).toBe(1);
 
-    const profile = await new SkillProfileStore(env.DB).create("user_1", "Backend", [skill.id]);
+    const profile = await new SkillProfileStore(db).create("user_1", "Backend", [skill.id]);
     const manifest = await resolveManagedSkills(
-      env.DB,
+      db,
       {
         repositories: [{ repoOwner: "group/subgroup", repoName: "api" }],
         environmentId: null,
@@ -82,7 +83,7 @@ describe("managed skills persistence and resolution", () => {
 
     await expect(
       resolveManagedSkills(
-        env.DB,
+        db,
         { repositories: [], environmentId: null },
         { mode: "profile", profileId: profile.id },
         "user_2"
@@ -399,17 +400,21 @@ describe("managed skills persistence and resolution", () => {
 
   it("resolves and installs a manifest larger than D1's parameter limit", async () => {
     const catalog = await seedGlobalCatalog(101);
+    const db = sqlDatabase(env.DB);
+    const prepares = vi.spyOn(db, "prepare");
+    const batches = vi.spyOn(db, "batch");
 
     // No count cap: `all` selects the whole applicable set rather than 400ing.
     const manifest = await resolveManagedSkills(
-      env.DB,
+      db,
       { repositories: [], environmentId: null },
       { mode: "all" },
       "user_1"
     );
     expect(manifest.skills).toHaveLength(101);
+    expect(prepares).toHaveBeenCalledTimes(4);
 
-    const sessions = new SessionIndexStore(env.DB);
+    const sessions = new SessionIndexStore(db);
     await sessions.create({
       id: "wide",
       ownerTeamId: null,
@@ -426,32 +431,86 @@ describe("managed skills persistence and resolution", () => {
       managedSkills: resolvedPin(manifest),
     });
 
+    expect(batches.mock.calls[0][0]).toHaveLength(3);
+
     // The installation query is keyed by session id, so manifest width costs no
     // bound parameters. Passing revision IDs back in would cap the fail-closed
     // sandbox boot path at the engine's parameter ceiling.
     const installation = await new SessionSkillStore(env.DB).getSandboxInstallation("wide");
     expect(installation?.skills).toHaveLength(101);
     expect(installation?.skills.every((skill) => skill.files.length === 2)).toBe(true);
-    // Revisions are written in multi-row chunks, so prove `position` survives the
-    // chunk boundaries rather than only that the right number of rows landed.
+    // Prove explicit positions preserve resolver order through set expansion.
     expect(installation?.skills.map((skill) => skill.name)).toEqual(
       manifest.skills.map((skill) => skill.name)
     );
 
-    // validateSkillIds chunks the same way, and profiles no longer cap length.
-    const profiles = new SkillProfileStore(env.DB);
+    // Both validation and membership insertion use one set for this payload.
+    prepares.mockClear();
+    batches.mockClear();
+    const profiles = new SkillProfileStore(db);
     const profile = await profiles.create(
       "user_1",
       "Everything",
       catalog.map(({ id }) => id)
     );
     expect(profile.skillIds).toHaveLength(101);
+    expect(prepares).toHaveBeenCalledTimes(3);
+    expect(batches.mock.calls[0][0]).toHaveLength(3);
     // create() returns its own input, so read membership back to prove the
-    // chunked item inserts committed every row.
+    // set-based item insert committed every row.
     await expect(profiles.getOwned(profile.id, "user_1")).resolves.toMatchObject({
       skillIds: catalog.map(({ id }) => id).sort(),
     });
   });
+
+  it("preserves profile validation and atomic membership replacement with set operations", async () => {
+    const catalog = await seedGlobalCatalog(101);
+    const db = sqlDatabase(env.DB);
+    const profiles = new SkillProfileStore(db);
+    const ids = catalog.map(({ id }) => id);
+    const profile = await profiles.create("user_1", "Wide profile", ids);
+    await expect(
+      profiles.update(profile.id, "user_1", { skillIds: [...ids, "missing"] })
+    ).rejects.toThrow("One or more skills do not exist");
+    await expect(
+      profiles.update(profile.id, "user_1", { skillIds: [ids[0], ids[0]] })
+    ).rejects.toThrow("skillIds must be unique");
+    await env.DB.prepare("UPDATE skills SET deleted_at = 1 WHERE id = ?").bind(ids[100]).run();
+    await expect(profiles.update(profile.id, "user_1", { skillIds: ids })).rejects.toThrow(
+      "One or more skills do not exist"
+    );
+    expect((await profiles.getOwned(profile.id, "user_1"))?.skillIds).toEqual([...ids].sort());
+    const generation = await new SkillStore(db).catalogGeneration();
+    await profiles.update(profile.id, "user_1", { skillIds: [ids[0], ids[99]] });
+    expect((await profiles.getOwned(profile.id, "user_1"))?.skillIds).toEqual(
+      [ids[0], ids[99]].sort()
+    );
+    expect(await new SkillStore(db).catalogGeneration()).toBe(generation + 1);
+    await profiles.update(profile.id, "user_1", { skillIds: [] });
+    expect((await profiles.getOwned(profile.id, "user_1"))?.skillIds).toEqual([]);
+  });
+
+  it.each(["POST", "PATCH"])(
+    "returns 400 for an oversized escaped profile skill ID on %s",
+    async (method) => {
+      const originalResponse = await serviceFetch("https://test.local/skill-profiles", {
+        method: "POST",
+        body: JSON.stringify({ name: "Original", skillIds: [] }),
+      });
+      expect(originalResponse.status).toBe(201);
+      const { profile } = await originalResponse.json<{ profile: { id: string } }>();
+      const response = await serviceFetch(
+        `https://test.local/skill-profiles${method === "PATCH" ? `/${profile.id}` : ""}`,
+        { method, body: JSON.stringify({ name: "Changed", skillIds: ["\\".repeat(999_999)] }) }
+      );
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "One or more skills do not exist" });
+      const profiles = await serviceFetch("https://test.local/skill-profiles");
+      await expect(profiles.json()).resolves.toMatchObject({
+        profiles: [{ name: "Original", skillIds: [] }],
+      });
+    }
+  );
 
   it("pages the sandbox installation without changing the unpaged contract", async () => {
     await seedGlobalCatalog(101);

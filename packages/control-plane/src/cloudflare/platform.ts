@@ -1,13 +1,12 @@
 /**
  * The Worker's bindings and the platform ports built over them: where the
- * application meets Cloudflare's binding types. A binding whose type already
- * satisfies its port passes through unwrapped, so the assignments below are
- * also the compile-time proof that it does; a workers-types upgrade or a
- * port edit that breaks one fails typecheck here rather than at the stores.
+ * application meets Cloudflare's binding types. Adapters expose engine
+ * capabilities while retaining the binding's statement and batch semantics.
  */
 
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { Env, EnvConfig, Platform } from "../types";
+import { createD1SqlDatabase } from "./sql-database";
 import { createQueueJobs, type JobQueueBindings } from "./job-queue";
 import { R2ObjectStorage } from "./object-storage";
 import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
@@ -43,7 +42,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     ...config
   } = bindings;
   const platform: Platform = {
-    DB,
+    DB: DB ? createD1SqlDatabase(DB) : DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),

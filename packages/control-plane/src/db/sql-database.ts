@@ -2,9 +2,9 @@
  * Engine-neutral SQL port for the global data layer.
  *
  * The surface is exactly what the src/db stores use today — nothing more.
- * D1Database satisfies this interface structurally (the Cloudflare platform
- * passes the binding through unwrapped, see cloudflare/platform.ts), so no
- * wrapper object exists at runtime; the port is erased at build time.
+ * D1Database satisfies the required surface structurally. Engine adapters may
+ * additionally supply set operations; stores retain portable fallbacks when
+ * those capabilities are absent.
  *
  * Members use method syntax deliberately: method parameters are checked
  * bivariantly, which is what lets D1Database.batch(D1PreparedStatement[])
@@ -53,7 +53,25 @@ export interface SqlStatement {
   all<T = Record<string, unknown>>(): Promise<SqlResult<T>>;
 }
 
+/** A parameterized IN-list body: placeholders or a set-producing subquery. */
+export interface SqlBoundList {
+  sql: string;
+  values: readonly unknown[];
+}
+
 export interface SqlDatabase {
+  /**
+   * Optional engine-side expansion. Statements must belong to this database,
+   * stay batchable, and preserve input row order. Values are JSON scalars;
+   * columns/table are trusted identifiers supplied by store code.
+   */
+  bulkInsert?(
+    table: string,
+    columns: readonly string[],
+    rows: readonly (readonly unknown[])[]
+  ): SqlStatement[];
+  /** Optional engine-side string set expansion, bounded by payload bytes. */
+  idList?(ids: readonly string[]): SqlBoundList[];
   prepare(query: string): SqlStatement;
   /**
    * Execute the statements in order as a single atomic transaction: either

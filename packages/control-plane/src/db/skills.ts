@@ -19,6 +19,7 @@ import { buildValidatedSkillRevision } from "../skills/content-addressing";
 import { isUniqueConstraintError } from "./errors";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { idListBatches } from "./id-list";
 
 const RESERVED_SKILL_NAMES = new Set([
   "agent-browser",
@@ -714,18 +715,16 @@ export class SkillStore {
     for (const skillId of skillIds) assignments.set(skillId, []);
     if (skillIds.length === 0) return assignments;
     const rows: AssignmentRow[] = [];
-    for (let start = 0; start < skillIds.length; start += MAX_D1_QUERY_PARAMETERS) {
-      const chunk = skillIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
-      const placeholders = chunk.map(() => "?").join(", ");
+    for (const list of idListBatches(this.db, skillIds)) {
       const result = await this.db
         .prepare(
           `SELECT a.*, e.name AS environment_name
            FROM skill_assignments a
            LEFT JOIN environments e ON e.id = a.environment_id
-           WHERE a.skill_id IN (${placeholders})
+           WHERE a.skill_id IN (${list.sql})
            ORDER BY a.skill_id, a.scope_type, a.id`
         )
-        .bind(...chunk)
+        .bind(...list.values)
         .all<AssignmentRow>();
       rows.push(...(result.results ?? []));
     }

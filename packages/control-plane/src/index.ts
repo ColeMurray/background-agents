@@ -4,6 +4,7 @@
  * Cloudflare Workers entry point with Durable Objects for session management.
  */
 
+import { createD1SqlDatabase } from "./cloudflare/sql-database";
 import { handleControlPlaneHttp } from "./cloudflare/http-host";
 import { createLogger } from "./logger";
 import { consumeJobBatch } from "./cloudflare/job-queue";
@@ -37,7 +38,7 @@ export default {
     if (upgradeHeader?.toLowerCase() === "websocket") {
       const metrics = createRequestMetrics();
       // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
-      const db = instrumentSqlDatabase(bindings.DB, metrics);
+      const db = instrumentSqlDatabase(createD1SqlDatabase(bindings.DB), metrics);
       return handleWebSocket(request, bindings, url, db, metrics);
     }
 

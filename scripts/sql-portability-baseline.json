@@ -56,6 +56,12 @@
         "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER"],
         "reason": "Fence private team-default inserts and updates from the previous Worker between migration commit and deployment. New store validation cannot constrain old binaries; SQLite cannot narrow the existing CHECK in place, and rebuilding the referenced teams table risks deleting dependents. A Postgres migration would ALTER the CHECK instead."
       }
+    },
+    "packages/control-plane/src/db/sqlite-sets.ts": {
+      "json-function": {
+        "occurrences": ["json_extract(", "json_each(", "json_each("],
+        "reason": "SQLite adapter capability used by D1 and node:sqlite. Engine-specific JSON expansion lives here, behind optional SqlDatabase bulkInsert/idList methods; stores keep portable VALUES/IN fallbacks for other engines. Expanding serialized sets engine-side removes the per-row invocation-query cliff."
+      }
     }
   },
   "grandfatheredMigrations": [
