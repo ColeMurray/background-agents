@@ -24,6 +24,7 @@
     "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",
     "test:terraform-workflow-contract": "node --test scripts/terraform-workflow-contract.test.mjs scripts/terraform-plan-comment.test.mjs",
     "test:node-version-workflow-contract": "node --test scripts/node-version-workflow-contract.test.mjs",
+    "test:readme-translations": "node --test scripts/readme-translations.test.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:coverage-gate": "node --test scripts/check-coverage.test.mjs",
     "test:integration": "npm run test:integration --workspaces --if-present",

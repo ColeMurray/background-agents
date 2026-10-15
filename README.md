@@ -1,5 +1,7 @@
 # Background Agents: Open-Inspect
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 An open-source background agents coding system inspired by
 [Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-background-agent).
 
