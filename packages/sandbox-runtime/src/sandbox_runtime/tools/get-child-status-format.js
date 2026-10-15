@@ -101,7 +101,12 @@ function formatStoredFiles(files = [], indent = "  ") {
   return lines;
 }
 
-export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishedPrompt = false) {
+export function formatFinalResponse(
+  finalResponse,
+  includeResponse,
+  hasUnfinishedPrompt = false,
+  includeResponseText = true
+) {
   if (!finalResponse) {
     return includeResponse ? ["", "  Final response: not available yet"] : [];
   }
@@ -118,7 +123,11 @@ export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishe
     lines.push(`    Events: ${finalResponse.eventCount} (limit reached)`);
   }
   lines.push("    Text:");
-  lines.push(indentBlock(finalResponse.textContent || "(empty)", "      "));
+  lines.push(
+    includeResponseText
+      ? indentBlock(finalResponse.textContent || "(empty)", "      ")
+      : "      (see finalResponse.textContent)"
+  );
 
   if (finalResponse.toolCalls?.length) {
     lines.push("", "    Tool summary:");
@@ -196,7 +205,8 @@ export function formatChildDetail(detail, childId, options = {}) {
     ...formatFinalResponse(
       detail.finalResponse,
       Boolean(options.includeResponse),
-      hasUnfinishedPrompt
+      hasUnfinishedPrompt,
+      options.includeResponseText !== false
     )
   );
   lines.push(...formatTrajectory(detail.trajectory, options));
@@ -241,6 +251,7 @@ export function childStatusDetailOutput(detail, childId, options = {}) {
             : {}),
         }
       : null,
-    agentMessage: formatChildDetail(detail, childId, options),
+    // The response body is already present in the structured field above.
+    agentMessage: formatChildDetail(detail, childId, { ...options, includeResponseText: false }),
   });
 }

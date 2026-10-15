@@ -1,12 +1,14 @@
 """Shared sandbox tool definitions and vendor-neutral handlers."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
+from sandbox_runtime.event_size import MAX_EVENT_BYTES, event_size_bytes
 from sandbox_runtime.harness.tool_results import ToolResult
 from sandbox_runtime.harness.tools import (
     PULL_REQUEST_TIMEOUT_SECONDS,
@@ -15,6 +17,7 @@ from sandbox_runtime.harness.tools import (
     ToolServerConfig,
     build_tools,
 )
+from tests.event_forwarder_fakes import make_forwarder, open_ws, sent_events
 
 
 def _tools(tmp_path: Path, handler, **config_overrides):
@@ -149,7 +152,7 @@ async def test_get_child_status_detail_builds_the_include_query(tmp_path: Path) 
     assert "  Sandbox: stopped" in text
     assert "PR: https://gh/pr/7" in text
     assert "Final response:" in text
-    assert "done" in text
+    assert "(see finalResponse.textContent)" in text
     assert "Recent events:" in text and "token: hello" in text
     assert 'Re-run with trajectoryCursor="abc"' in text
 
@@ -527,3 +530,69 @@ async def test_child_status_empty_list_and_error_fallback(tmp_path: Path) -> Non
     result = await tools.get_child_status({"childId": "missing"})
     assert result.is_error
     assert 'Child "missing" not found' in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("producer", ["python", "opencode"])
+@pytest.mark.parametrize("response_chars", [MAX_EVENT_BYTES // 2, MAX_EVENT_BYTES - 20_000])
+async def test_child_status_near_limit_response_survives_forwarding(
+    tmp_path: Path, producer: str, response_chars: int
+) -> None:
+    text = "x" * response_chars
+    detail = {
+        "session": {"id": "c1", "title": "Large response", "status": "completed"},
+        "finalResponse": {"success": True, "textContent": text},
+    }
+    args = {"childId": "c1", "includeResponse": True}
+    if producer == "python":
+        tools, _ = _tools(tmp_path, lambda _r: httpx.Response(200, json=detail))
+        output = _text(await tools.get_child_status(args))
+        legacy_output = tools._format_child_detail(detail, "c1", args)
+    else:
+        formatter = (
+            Path(__file__).parents[1] / "src/sandbox_runtime/tools/get-child-status-format.js"
+        ).as_uri()
+        result = subprocess.run(
+            [
+                "node",
+                "--input-type=module",
+                "-e",
+                f"""
+                import {{ readFileSync }} from 'node:fs';
+                import {{ childStatusDetailOutput, formatChildDetail }} from {json.dumps(formatter)};
+                const detail = JSON.parse(readFileSync(0, 'utf8'));
+                process.stdout.write(JSON.stringify([
+                    childStatusDetailOutput(detail, 'c1', {{ includeResponse: true }}),
+                    formatChildDetail(detail, 'c1', {{ includeResponse: true }}),
+                ]));
+            """,
+            ],
+            input=json.dumps(detail),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        output, legacy_output = json.loads(result.stdout)
+
+    event = {
+        "type": "tool_call",
+        "tool": "get-child-status",
+        "args": args,
+        "messageId": "m1",
+        "callId": "call-1",
+        "status": "completed",
+        "output": output,
+    }
+    assert event_size_bytes({**event, "output": legacy_output}) < MAX_EVENT_BYTES
+    assert event_size_bytes(event) < MAX_EVENT_BYTES
+    envelope = json.loads(output)
+    assert envelope["finalResponse"]["textContent"] == text
+    assert text not in envelope["agentMessage"]
+
+    forwarder = make_forwarder()
+    ws = open_ws()
+    await forwarder.bind(ws)
+    assert await forwarder.send(event)
+    forwarded = sent_events(ws)[0]
+    assert "truncated" not in forwarded
+    assert json.loads(forwarded["output"])["finalResponse"]["textContent"] == text

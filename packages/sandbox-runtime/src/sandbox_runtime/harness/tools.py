@@ -420,13 +420,19 @@ class OpenInspectTools:
         detail = response.json()
         return text_result(
             child_status_detail_output(
-                detail, child_id, self._format_child_detail(detail, child_id, args)
+                detail,
+                child_id,
+                self._format_child_detail(detail, child_id, args, include_response_text=False),
             )
         )
 
     @staticmethod
     def _format_child_detail(
-        detail: Mapping[str, Any], child_id: str, args: Mapping[str, Any]
+        detail: Mapping[str, Any],
+        child_id: str,
+        args: Mapping[str, Any],
+        *,
+        include_response_text: bool = True,
     ) -> str:
         # ``ChildSessionDetail``: the session row sits under ``session``;
         # sandbox, artifacts, responses and events sit beside it.
@@ -469,7 +475,12 @@ class OpenInspectTools:
             if final.get("error"):
                 lines.append(f"    Error: {final['error']}")
             lines.append("    Text:")
-            text = str(final.get("textContent") or "(empty)")
+            # The envelope carries the response body once in finalResponse.textContent.
+            text = (
+                str(final.get("textContent") or "(empty)")
+                if include_response_text
+                else "(see finalResponse.textContent)"
+            )
             lines.extend(f"      {line}" for line in text.split("\n"))
             calls = final.get("toolCalls") or []
             if calls:
