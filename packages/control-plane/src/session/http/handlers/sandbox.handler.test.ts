@@ -388,9 +388,13 @@ describe("SandboxHandler", () => {
     }
   );
 
-  it.each(["authentication", "body parsing"])(
-    "accepts a fatal report from a failed sandbox that reconnects during %s",
-    async (suspendedAt) => {
+  it.each(
+    (["failed", "stopped", "stale"] as const).flatMap((initialStatus) =>
+      ["authentication", "body parsing"].map((suspendedAt) => ({ initialStatus, suspendedAt }))
+    )
+  )(
+    "handles a fatal report from a $initialStatus sandbox that reconnects during $suspendedAt",
+    async ({ initialStatus, suspendedAt }) => {
       const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
       const credentials = {
         id: "sandbox-row-1",
@@ -398,7 +402,7 @@ describe("SandboxHandler", () => {
         auth_token_hash: "token-hash-1",
         auth_token: null,
       };
-      const sandbox = { ...credentials, status: "failed" } as SandboxRow;
+      const sandbox = { ...credentials, status: initialStatus, created_at: 1000 } as SandboxRow;
       getSandbox.mockReturnValue(sandbox);
       isValidSandboxToken.mockResolvedValue(true);
       const report = { error: "OpenCode crashed repeatedly, giving up", fatal: true };
@@ -412,8 +416,12 @@ describe("SandboxHandler", () => {
         body: JSON.stringify(report),
       });
       const reconnect = () => {
-        // Same generation and credentials, now live while its fatal report is in flight.
-        getSandbox.mockReturnValue({ ...credentials, status: "ready" } as SandboxRow);
+        // A failed bridge reconnects in the same generation; a resume starts a new one.
+        getSandbox.mockReturnValue({
+          ...sandbox,
+          status: "ready",
+          created_at: initialStatus === "failed" ? sandbox.created_at : sandbox.created_at + 1,
+        } as SandboxRow);
       };
       if (suspendedAt === "authentication") {
         isValidSandboxToken.mockImplementation(async () => {
@@ -430,43 +438,72 @@ describe("SandboxHandler", () => {
       const response = await handler.sandboxError(request);
 
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({ status: "ok" });
+      const shouldFail = initialStatus === "failed";
+      await expect(response.json()).resolves.toEqual({ status: shouldFail ? "ok" : "ignored" });
       expect(isValidSandboxToken).toHaveBeenCalledWith("sandbox-token", sandbox);
-      expect(failSandbox).toHaveBeenCalledExactlyOnceWith(report.error);
+      if (shouldFail) {
+        expect(failSandbox).toHaveBeenCalledExactlyOnceWith(report.error);
+      } else {
+        expect(failSandbox).not.toHaveBeenCalled();
+      }
     }
   );
 
-  it("rejects a sandbox generation replaced while its token is being hashed", async () => {
-    const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
-    const originalSandbox = {
-      id: "sandbox-row-1",
-      modal_sandbox_id: "sandbox-1",
-      auth_token_hash: "token-hash-1",
-      auth_token: null,
-    } as SandboxRow;
-    const replacementSandbox = {
-      ...originalSandbox,
-      modal_sandbox_id: "sandbox-2",
-      auth_token_hash: "token-hash-2",
-    };
-    getSandbox.mockReturnValueOnce(originalSandbox).mockReturnValue(replacementSandbox);
-    isValidSandboxToken.mockResolvedValue(true);
-
-    const response = await handler.sandboxError(
-      new Request("http://internal/internal/sandbox-error", {
+  it.each(
+    [
+      {
+        change: "credentials",
+        replacement: { modal_sandbox_id: "sandbox-2", auth_token_hash: "token-hash-2" },
+      },
+      { change: "resume timestamp", replacement: { created_at: 2000 } },
+    ].flatMap((replacement) =>
+      ["authentication", "body parsing"].map((suspendedAt) => ({ ...replacement, suspendedAt }))
+    )
+  )(
+    "rejects a generation with changed $change during $suspendedAt",
+    async ({ replacement, suspendedAt }) => {
+      const { handler, getSandbox, isValidSandboxToken, failSandbox } = createHandler();
+      const originalSandbox = {
+        id: "sandbox-row-1",
+        modal_sandbox_id: "sandbox-1",
+        auth_token_hash: "token-hash-1",
+        auth_token: null,
+        status: "ready",
+        created_at: 1000,
+      } as SandboxRow;
+      getSandbox.mockReturnValue(originalSandbox);
+      isValidSandboxToken.mockResolvedValue(true);
+      const report = { error: "Old sandbox failed" };
+      const request = new Request("http://internal/internal/sandbox-error", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           Authorization: "Bearer old-token",
           "X-Sandbox-ID": "sandbox-1",
         },
-        body: JSON.stringify({ error: "Old sandbox failed" }),
-      })
-    );
+        body: JSON.stringify(report),
+      });
+      const replace = () => {
+        getSandbox.mockReturnValue({ ...originalSandbox, ...replacement, status: "connecting" });
+      };
+      if (suspendedAt === "authentication") {
+        isValidSandboxToken.mockImplementation(async () => {
+          replace();
+          return true;
+        });
+      } else {
+        vi.spyOn(request, "json").mockImplementation(async () => {
+          replace();
+          return report;
+        });
+      }
 
-    expect(response.status).toBe(403);
-    expect(failSandbox).not.toHaveBeenCalled();
-  });
+      const response = await handler.sandboxError(request);
+
+      expect(response.status).toBe(403);
+      expect(failSandbox).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects malformed sandbox events", async () => {
     const { handler, processSandboxEvent } = createHandler();

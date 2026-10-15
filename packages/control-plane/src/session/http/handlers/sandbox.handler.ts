@@ -105,6 +105,7 @@ export class SandboxHandler {
     if (sandbox.modal_sandbox_id && sandboxId !== sandbox.modal_sandbox_id) {
       return Response.json({ error: "Wrong sandbox" }, { status: 403 });
     }
+    const wasStoppedOrStale = isSandboxReconnectBlockedStatus(sandbox.status);
     if (!(await this.isValidSandboxToken(token, sandbox))) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -128,10 +129,10 @@ export class SandboxHandler {
     ) {
       return Response.json({ error: "Sandbox credentials changed" }, { status: 403 });
     }
-    // Ignore reports only while the current generation is still dead. A
+    // Reports observed while stopped/stale stay stale across an in-place resume. A
     // watchdog-failed generation can reconnect with the same credentials during
     // authentication or body parsing; once live, its fatal report must fail it.
-    if (isDeadSandboxStatus(currentSandbox.status)) {
+    if (wasStoppedOrStale || isDeadSandboxStatus(currentSandbox.status)) {
       log.warn("Ignoring fatal report from a sandbox that is no longer live", {
         event: "sandbox.error_ignored",
         sandbox_status: currentSandbox.status,
@@ -139,6 +140,10 @@ export class SandboxHandler {
         error: result.data.error,
       });
       return Response.json({ status: "ignored" });
+    }
+    // Resume keeps the ID and credentials but starts a new generation.
+    if (currentSandbox.created_at !== sandbox.created_at) {
+      return Response.json({ error: "Sandbox generation changed" }, { status: 403 });
     }
 
     // The HTTP report is the reliable carrier of the failed phase: the
