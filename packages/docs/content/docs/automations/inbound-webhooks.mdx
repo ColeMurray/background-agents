@@ -182,17 +182,17 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 
 ### Error responses
 
-| Status | Meaning                                                                                                                                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid JSON body, a `sessionKey` that is not a non-empty string of at most 256 characters, or a `sessionTitle` that is not one of at most 120         |
-| `401`  | Missing or invalid API key                                                                                                                             |
-| `404`  | Automation not found, or not an Inbound Webhook automation                                                                                             |
-| `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED` |
-| `413`  | Body larger than 64 KB                                                                                                                                 |
-| `415`  | `Content-Type` was not `application/json`                                                                                                              |
-| `422`  | A `sessionKey` follow-up the session rejected for another reason; a retry is rejected the same way                                                     |
-| `429`  | A `sessionKey` follow-up whose session queue is full (`PROMPT_QUEUE_FULL`)                                                                             |
-| `503`  | A `sessionKey` follow-up whose session could not be reached (`SESSION_UNAVAILABLE`). Retrying with the same `idempotencyKey` is safe                   |
+| Status | Meaning                                                                                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid JSON body, a `sessionKey` that is not a non-empty string of at most 256 characters, or a `sessionTitle` that is empty or longer than 120 characters after trimming |
+| `401`  | Missing or invalid API key                                                                                                                                                 |
+| `404`  | Automation not found, or not an Inbound Webhook automation                                                                                                                 |
+| `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED`                     |
+| `413`  | Body larger than 64 KB                                                                                                                                                     |
+| `415`  | `Content-Type` was not `application/json`                                                                                                                                  |
+| `422`  | A `sessionKey` follow-up the session rejected for another reason; a retry is rejected the same way                                                                         |
+| `429`  | A `sessionKey` follow-up whose session queue is full (`PROMPT_QUEUE_FULL`)                                                                                                 |
+| `503`  | A `sessionKey` follow-up whose session could not be reached (`SESSION_UNAVAILABLE`). Retrying with the same `idempotencyKey` is safe                                       |
 
 A refused follow-up returns `{ "error": "…", "code": "…", "invocationId": "…" }`, where `invocationId` is the run whose session refused it. Nothing new starts. To start over in a new session, send a different `sessionKey`.
 

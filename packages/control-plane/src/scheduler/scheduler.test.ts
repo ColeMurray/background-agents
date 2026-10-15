@@ -312,6 +312,7 @@ function createMockSessionStub({ firstPromptQueued = false } = {}): SessionStub 
       if (path === "/internal/prompt")
         return Response.json({ messageId: "msg-1", status: "queued" });
       if (path === "/internal/prompt-request") return Response.json({ queued: firstPromptQueued });
+      if (path === "/internal/update-title") return Response.json({ title: "renamed" });
       return new Response("Not Found", { status: 404 });
     }),
   } as never;
