@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@/types/session";
 import { SessionTimeline } from "./session-timeline";
 
+vi.mock("next-themes", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
+
 vi.mock("@/lib/mermaid-renderer", () => ({
   renderMermaid: async () => ({
     src: "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20200%20100'%3E%3C/svg%3E",

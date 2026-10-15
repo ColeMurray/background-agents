@@ -7,10 +7,16 @@ import mermaid from "mermaid";
 import { EventItem } from "./session-timeline";
 import { SafeMarkdown } from "./safe-markdown";
 
-const theme = vi.hoisted(() => ({ resolvedTheme: "light" }));
+const theme = vi.hoisted(() => ({ resolvedTheme: "light" as string | undefined }));
 const svg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><text>Start to Finish</text></svg>';
-vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), render: vi.fn() } }));
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(),
+    mermaidAPI: { getDiagramFromText: vi.fn(async () => ({ db: {} })) },
+  },
+}));
 vi.mock("next-themes", () => ({ useTheme: () => theme }));
 
 beforeEach(() => {
@@ -73,6 +79,7 @@ describe("timeline Mermaid fences", () => {
       "const"
     );
     expect(container.querySelector("pre")).toHaveClass("not-prose", "overflow-x-auto");
+    expect(container.querySelector("pre")).not.toHaveAttribute("tabindex");
     expect(container.querySelector("code.font-mono")).toHaveTextContent("mermaid");
     expect(mermaid.render).not.toHaveBeenCalled();
   });
@@ -126,6 +133,19 @@ describe("timeline Mermaid fences", () => {
     render(<SafeMarkdown content={content} renderMermaid />);
     expect(screen.getByRole("img")).toHaveAttribute("src", src);
     expect(mermaid.render).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the resolved theme before loading a diagram", async () => {
+    theme.resolvedTheme = undefined;
+    const content = fence("sequenceDiagram\n Hydration->>Dark: Ready");
+    const { rerender } = render(<SafeMarkdown content={content} renderMermaid />);
+    await act(async () => {});
+    expect(mermaid.render).not.toHaveBeenCalled();
+    theme.resolvedTheme = "dark";
+    rerender(<SafeMarkdown content={content} renderMermaid />);
+    expect(await diagram()).toBeInTheDocument();
+    expect(mermaid.render).toHaveBeenCalledOnce();
+    expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({ theme: "dark" }));
   });
 
   it("updates the theme without blanking the current diagram", async () => {

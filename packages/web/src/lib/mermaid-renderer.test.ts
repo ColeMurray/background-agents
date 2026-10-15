@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import mermaid from "mermaid";
 import { MAX_MERMAID_SOURCE_LENGTH, renderMermaid } from "./mermaid-renderer";
 
-vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), render: vi.fn() } }));
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(),
+    mermaidAPI: { getDiagramFromText: vi.fn(async () => ({ db: {} })) },
+  },
+}));
 const svg =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><text>Diagram</text></svg>';
 beforeEach(() => {
@@ -15,6 +21,8 @@ describe("Mermaid security boundary", () => {
   it.each([
     '%%{init: {"securityLevel": "loose"}}%%\nflowchart LR\n A --> B',
     "---\nconfig:\n  securityLevel: loose\n---\nflowchart LR\n A --> B",
+    "flowchart LR\n A-->B\n classDef default fill:url(https://evil.test/x)",
+    'flowchart LR\n A-->B\n classDef default background-image:image-set("https://evil.test/x" 1x)',
     "flowchart LR\n" + "A".repeat(MAX_MERMAID_SOURCE_LENGTH),
   ])("rejects untrusted configuration and oversized input without rendering", async (source) => {
     expect(await renderMermaid(source, false)).toBeNull();
@@ -25,8 +33,9 @@ describe("Mermaid security boundary", () => {
     vi.mocked(mermaid.render).mockResolvedValueOnce({
       diagramType: "flowchart-v2",
       svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" onload="alert(1)">
-    <script>alert(1)</script><foreignObject><div>HTML</div></foreignObject>
-    <a href="javascript:alert(1)"><text>click</text></a><image href="https://evil.test/x" />
+    <script>alert(1)</script>
+    <a href="javascript:alert(1)"><text>click</text></a>
+    <animateMotion dur="1s" /><animateColor attributeName="fill" />
     <animate attributeName="href" values="javascript:alert(1)" /><text onclick="alert(1)">safe</text>
     <style>text { fill: red; }</style></svg>`,
     });
@@ -47,6 +56,17 @@ describe("Mermaid security boundary", () => {
       })
     );
   });
+
+  it.each(["foreignObject", "image"])(
+    "falls back when sanitization removes %s content",
+    async (tag) => {
+      vi.mocked(mermaid.render).mockResolvedValueOnce({
+        diagramType: "sequence",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><${tag}>Meaningful content</${tag}></svg>`,
+      });
+      expect(await renderMermaid("sequenceDiagram\n A->>B: Label", false)).toBeNull();
+    }
+  );
 
   it("serializes theme initialization and cleans failed render hosts", async () => {
     const order: string[] = [];

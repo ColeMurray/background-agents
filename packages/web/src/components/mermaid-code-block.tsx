@@ -1,7 +1,7 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { cloneElement, createContext, useContext, useEffect, useState } from "react";
+import type { ComponentPropsWithoutRef, ReactElement } from "react";
 import type { ExtraProps } from "react-markdown";
 import { useTheme } from "next-themes";
 import type { MermaidImage } from "@/lib/mermaid-renderer";
@@ -10,55 +10,56 @@ export const MermaidMarkdownContext = createContext({ enabled: false, content: "
 const CODE_BLOCK_CLASS = "not-prose max-w-full overflow-x-auto text-sm leading-relaxed rounded";
 const MAX_CACHED_DIAGRAMS = 32;
 
-interface CachedDiagram {
-  image?: MermaidImage | null;
-  pending: Promise<MermaidImage | null>;
-}
-
-// Cache promises as well as results so virtual rows can remount without duplicate work.
-// Bounded to avoid retaining every source and SVG from a long-running session.
-const diagrams = new Map<string, CachedDiagram>();
+// Completed-image eviction must not lose ownership of a still-pending request.
+const diagrams = new Map<string, MermaidImage | null>();
+const pendingDiagrams = new Map<string, Promise<MermaidImage | null>>();
 function diagramKey(source: string, dark: boolean) {
   return JSON.stringify([dark, source]);
 }
-function loadDiagram(source: string, dark: boolean): CachedDiagram {
+function loadDiagram(source: string, dark: boolean): Promise<MermaidImage | null> {
   const key = diagramKey(source, dark);
-  const cached = diagrams.get(key);
-  if (cached) return cached;
-  const entry: CachedDiagram = {
-    pending: import("@/lib/mermaid-renderer")
-      .then(({ renderMermaid }) => renderMermaid(source, dark))
-      .catch(() => null)
-      .then((image) => {
-        entry.image = image;
-        return image;
-      }),
-  };
-  diagrams.set(key, entry);
-  if (diagrams.size > MAX_CACHED_DIAGRAMS) diagrams.delete(diagrams.keys().next().value!);
-  return entry;
+  if (diagrams.has(key)) return Promise.resolve(diagrams.get(key)!);
+  const pending = pendingDiagrams.get(key);
+  if (pending) return pending;
+  const request = import("@/lib/mermaid-renderer")
+    .then(({ renderMermaid }) => renderMermaid(source, dark))
+    .catch(() => null)
+    .then((image) => {
+      pendingDiagrams.delete(key);
+      diagrams.set(key, image);
+      if (diagrams.size > MAX_CACHED_DIAGRAMS) diagrams.delete(diagrams.keys().next().value!);
+      return image;
+    });
+  pendingDiagrams.set(key, request);
+  return request;
 }
 
-function MermaidDiagram({ source, fallback }: { source: string; fallback: ReactNode }) {
+function MermaidDiagram({
+  source,
+  fallback,
+}: {
+  source: string;
+  fallback: ReactElement<ComponentPropsWithoutRef<"pre">>;
+}) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
   const key = diagramKey(source, dark);
   const [result, setResult] = useState(() => ({
     source,
-    image: diagrams.get(key)?.image,
+    image: diagrams.get(key),
   }));
   const [failedImage, setFailedImage] = useState<string>();
 
   useEffect(() => {
+    if (resolvedTheme !== "light" && resolvedTheme !== "dark") return;
     let cancelled = false;
-    const entry = loadDiagram(source, dark);
-    void entry.pending.then((image) => {
+    void loadDiagram(source, dark).then((image) => {
       if (!cancelled) setResult({ source, image });
     });
     return () => {
       cancelled = true;
     };
-  }, [source, dark]);
+  }, [source, dark, resolvedTheme]);
 
   // Keep the last diagram during a theme change, but never show an old source's image.
   const image = result.source === source ? result.image : undefined;
@@ -84,7 +85,7 @@ function MermaidDiagram({ source, fallback }: { source: string; fallback: ReactN
         <summary className="cursor-pointer text-xs text-muted-foreground">
           View diagram source
         </summary>
-        {fallback}
+        {cloneElement(fallback, { tabIndex: 0 })}
       </details>
     </figure>
   );
@@ -98,7 +99,7 @@ export function MarkdownPre({
 }: ComponentPropsWithoutRef<"pre"> & ExtraProps) {
   const { enabled, content } = useContext(MermaidMarkdownContext);
   const fallback = (
-    <pre className={CODE_BLOCK_CLASS} tabIndex={0} {...props}>
+    <pre className={CODE_BLOCK_CLASS} {...props}>
       {children}
     </pre>
   );
