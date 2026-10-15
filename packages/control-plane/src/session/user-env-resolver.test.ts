@@ -355,6 +355,23 @@ describe("UserEnvResolver", () => {
     });
   });
 
+  describe("harness-scoped sandbox env", () => {
+    it("drops OpenAI endpoint overrides for a Codex session but keeps the API key", async () => {
+      const h = makeHarness({ session: sessionRow({ harness: "codex" }) });
+      h.db.providerAuthRows = providerAuthRows(API_KEY_MODES);
+      h.db.globalSecretRows = await secretRows({
+        OPENAI_API_KEY: "sk-user",
+        OPENAI_BASE_URL: "https://proxy.example",
+        KEEP: "1",
+      });
+
+      await expect(h.resolver.getUserEnvVars()).resolves.toEqual({
+        OPENAI_API_KEY: "sk-user",
+        KEEP: "1",
+      });
+    });
+  });
+
   describe("session-target secret fold", () => {
     it("loads team secrets from current D1 ownership without advertising team-only OAuth", async () => {
       const h = makeHarness();

@@ -8,7 +8,9 @@ import {
   memoryActionBodySchemas,
   memoryPreferencesSchema,
   memoryPreviewSchema,
+  memoryListSearchSchema,
   memoryScopeFromSearchParams,
+  memorySearchTerms,
   memoryStatusSchema,
   reviseMemorySchema,
   type MemoryAction,
@@ -88,6 +90,8 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   });
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
+  const search = memoryListSearchSchema.safeParse(query.get("search") ?? "");
+  if (!search.success) return error("Invalid memory search", 400);
   const access = await createMemoryManagementPolicy(ctx, env).authorizeScope(scope, "read");
   if (access.kind === "denied") return memoryDenialResponse(access.denial);
   const store = new MemoryRecordStore(ctx.db);
@@ -96,6 +100,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
     status: status.data,
     offset,
     limit: limit + 1,
+    terms: memorySearchTerms(search.data),
   });
   const page = records.slice(0, limit);
   const supersededBy = await store.supersededByIds(page.map((record) => record.id));

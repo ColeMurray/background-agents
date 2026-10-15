@@ -20,12 +20,22 @@ export interface SanitizeResult {
 
 const TRUNCATION_MARKER = "… (truncated)";
 
-const BROADCAST_MENTION_RE = /<!(?:channel|here|everyone|subteam\^[A-Z0-9]+(?:\|[^>]*)?)>/g;
+const BROADCAST_MENTION_RE = /<!(?:channel|here|everyone|subteam\^[A-Za-z0-9]+)(?:\|[^>]*)?>/g;
 const URL_LINK_RE = /<(https?:\/\/[^|>\s]+|mailto:[^|>\s]+)(?:\|[^>]*)?>/g;
 const USER_MENTION_RE = /<@([A-Z0-9]+)(?:\|[^>]*)?>/g;
 
+/**
+ * Remove Slack broadcast tokens, including labelled forms (`<!here|here>`). Repeats
+ * until nothing changes: removing one token can join its neighbours into a new one
+ * (`<!<!here>here>` becomes `<!here>` after a single pass).
+ */
 export function stripBroadcastMentions(text: string): string {
-  return text.replace(BROADCAST_MENTION_RE, "");
+  let current = text;
+  for (;;) {
+    const next = current.replace(BROADCAST_MENTION_RE, "");
+    if (next === current) return current;
+    current = next;
+  }
 }
 
 /**
@@ -63,15 +73,24 @@ export function truncateForSlack(
 }
 
 export function sanitizeAgentText(text: string, opts: SanitizeOptions): SanitizeResult {
-  const afterBroadcasts = stripBroadcastMentions(text);
-  const strippedBroadcasts = afterBroadcasts !== text;
+  let current = text;
+  let strippedBroadcasts = false;
+  let mentionsModified = false;
 
-  const afterLinks = sanitizeLinks(afterBroadcasts);
+  // Repeat until nothing changes: each removal can join its neighbours into a new
+  // token of another kind (`<!<@U1>here>` becomes `<!here>`, `<@<!here>U1>` becomes
+  // `<@U1>`). Every step only shortens the text, so this terminates.
+  for (;;) {
+    const afterLinks = sanitizeLinks(current);
+    const afterMentions = applyMentionPolicy(afterLinks, opts.mentionsPolicy);
+    const afterBroadcasts = stripBroadcastMentions(afterMentions);
+    mentionsModified ||= afterMentions !== afterLinks;
+    strippedBroadcasts ||= afterBroadcasts !== afterMentions;
+    if (afterBroadcasts === current) break;
+    current = afterBroadcasts;
+  }
 
-  const afterMentions = applyMentionPolicy(afterLinks, opts.mentionsPolicy);
-  const mentionsModified = afterMentions !== afterLinks;
-
-  const truncated = truncateForSlack(afterMentions, opts.maxLength);
+  const truncated = truncateForSlack(current, opts.maxLength);
 
   return {
     text: truncated.text,

@@ -7,10 +7,9 @@ import {
   resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
-import {
-  userPreferencesSchema,
-  type UserPreferences,
-} from "@open-inspect/shared/types/session-api";
+import { DEFAULT_HARNESS, harnessIdSchema, type HarnessId } from "@open-inspect/shared/harnesses";
+import { userPreferencesSchema } from "@open-inspect/shared/types/session-api";
+import type { z } from "zod";
 import type { Env } from "./types";
 import {
   getValidatedBranch,
@@ -21,10 +20,19 @@ import { createLogger } from "./logger";
 
 const log = createLogger("user-preferences");
 
+const slackUserPreferencesSchema = userPreferencesSchema.extend({
+  /** Absent means the workspace's Slack harness; an unknown id reads as absent. */
+  harness: harnessIdSchema.optional().catch(undefined),
+});
+
+type UserPreferences = z.infer<typeof slackUserPreferencesSchema>;
+
 export interface ResolvedUserPreferences {
   model: string;
   reasoningEffort: string | undefined;
   branch: string | undefined;
+  /** The user's App Home harness, else the workspace's Slack harness. */
+  harness: HarnessId;
 }
 
 type UserPreferencesPatch = Partial<ResolvedUserPreferences>;
@@ -48,6 +56,7 @@ function normalizeResolvedPreferences(
     model: string | undefined | null;
     reasoningEffort?: string;
     branch?: string;
+    harness: HarnessId;
   },
   defaultModel: string | undefined,
   options: { validateBranch?: boolean; enabledModels?: string[] } = {}
@@ -70,6 +79,7 @@ function normalizeResolvedPreferences(
     model,
     reasoningEffort,
     branch,
+    harness: preferences.harness,
   };
 }
 
@@ -98,6 +108,7 @@ function mergeUserPreferencesPatch(
   const branch = hasPreferenceField(patch, "branch")
     ? normalizeBranchPreference(patch.branch)
     : normalizeBranchPreference(current?.branch);
+  const harness = hasPreferenceField(patch, "harness") ? patch.harness : current?.harness;
 
   if (branch && !isValidBranchName(branch)) {
     log.warn("slack.branch_pref.invalid", {
@@ -120,19 +131,22 @@ function mergeUserPreferencesPatch(
   if (model) prefs.model = model;
   if (reasoningEffort) prefs.reasoningEffort = reasoningEffort;
   if (branch) prefs.branch = branch;
+  if (harness) prefs.harness = harness;
   return prefs;
 }
 
 export function resolveUserPreferences(
   prefs: UserPreferences | null | undefined,
   defaultModel: string | undefined,
-  enabledModels?: string[]
+  enabledModels?: string[],
+  defaultHarness: HarnessId = DEFAULT_HARNESS
 ): ResolvedUserPreferences {
   return normalizeResolvedPreferences(
     {
       model: prefs?.model ?? defaultModel ?? DEFAULT_MODEL,
       reasoningEffort: prefs?.reasoningEffort,
       branch: prefs?.branch,
+      harness: prefs?.harness ?? defaultHarness,
     },
     defaultModel,
     { enabledModels }
@@ -142,6 +156,8 @@ export function resolveUserPreferences(
 export interface UserPreferenceResolutionOptions {
   defaultModel?: string;
   enabledModels?: string[];
+  /** The workspace's Slack harness, used when the user has not chosen one. */
+  defaultHarness?: HarnessId;
 }
 
 export async function getUserPreferences(
@@ -151,7 +167,7 @@ export async function getUserPreferences(
   try {
     const key = getUserPreferencesKey(userId);
     const data = await createKvCacheStore(env.SLACK_KV).get(key, "json");
-    const parsed = userPreferencesSchema.safeParse(data);
+    const parsed = slackUserPreferencesSchema.safeParse(data);
     return parsed.success ? parsed.data : null;
   } catch (e) {
     log.error("kv.get", {
@@ -172,7 +188,8 @@ export async function getResolvedUserPreferences(
   return resolveUserPreferences(
     prefs,
     options.defaultModel ?? env.DEFAULT_MODEL,
-    options.enabledModels
+    options.enabledModels,
+    options.defaultHarness
   );
 }
 
@@ -206,6 +223,7 @@ async function saveUserPreferences(
     if (model) prefs.model = model;
     if (reasoningEffort) prefs.reasoningEffort = reasoningEffort;
     if (branch) prefs.branch = branch;
+    if (preferences.harness) prefs.harness = preferences.harness;
 
     await createKvCacheStore(env.SLACK_KV).put(
       getUserPreferencesKey(userId),
@@ -232,7 +250,8 @@ export async function updateUserPreferences(
   const resolvedCurrent = resolveUserPreferences(
     current,
     options.defaultModel ?? env.DEFAULT_MODEL,
-    options.enabledModels
+    options.enabledModels,
+    options.defaultHarness
   );
   const patch =
     typeof patchOrUpdater === "function" ? patchOrUpdater(resolvedCurrent) : patchOrUpdater;

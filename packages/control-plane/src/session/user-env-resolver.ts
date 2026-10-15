@@ -219,6 +219,7 @@ export class UserEnvResolver {
     );
     const managedSecrets = mergeSecretSources(managedSources).merged;
     const sandboxEnv = prepareManagedProviderEnv({
+      harness: session.harness,
       exposedSecrets: merge.merged,
       brokerSecrets: managedSecrets,
       providerAuthModes,

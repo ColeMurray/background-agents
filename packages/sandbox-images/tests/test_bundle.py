@@ -44,6 +44,17 @@ def test_binary_checksum_and_minimum_tool_version_are_required():
         validate_toolchain(tools)
 
 
+def test_codex_pin_matches_protocol_and_requires_checksum():
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    source = (
+        REPO_ROOT / "packages/sandbox-runtime/src/sandbox_runtime/harness/codex/env.py"
+    ).read_text()
+    assert f'CODEX_VERSION = "{tools["codex"]["version"]}"' in source
+    tools["codex"]["sha256"] = "invalid"
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_toolchain(tools)
+
+
 def test_debian_installs_disable_recommended_packages():
     script = (REPO_ROOT / "packages/sandbox-images/install/os/debian.sh").read_text()
     install_commands = [line for line in script.splitlines() if line.startswith("apt-get install ")]

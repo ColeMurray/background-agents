@@ -30,6 +30,7 @@ import { createLogger } from "../logger";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
   buildWorkingMessage,
+  formatHarnessModelRefusal,
   formatSessionDefaultsNotice,
   scheduleStartingStatus,
 } from "../messages/blocks";
@@ -316,6 +317,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     // An image-only follow-up that lost every image sends no prompt; the
     // user was already told inside deliverPrompt.
     if (promptResult.reason === "no_images_delivered") return;
+    if (promptResult.reason === "harness_model_incompatible") {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        formatHarnessModelRefusal(promptResult.message),
+        { thread_ts: threadTs }
+      );
+      return;
+    }
     if (promptResult.reason === "transient") {
       await postMessage(
         env.SLACK_BOT_TOKEN,

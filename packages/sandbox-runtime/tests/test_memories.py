@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from sandbox_runtime.harness.claude_tools import (
+from sandbox_runtime.harness.tools import (
     ControlPlaneToolClient,
     ToolServerConfig,
     build_tools,
@@ -159,7 +159,7 @@ def test_memory_is_disabled_without_a_control_plane_session(tmp_path: Path) -> N
     log.info.assert_called_once_with("memory.disabled", reason="no_control_plane_session")
 
 
-async def test_claude_memory_tools_are_the_generated_specs(tmp_path: Path) -> None:
+async def test_shared_memory_tools_are_the_generated_specs(tmp_path: Path) -> None:
     client = tool_client(tmp_path, lambda _: httpx.Response(200))
     try:
         tools = build_tools(client)
@@ -179,7 +179,7 @@ async def test_claude_memory_tools_are_the_generated_specs(tmp_path: Path) -> No
         {"scopeType": "repository", "repoOwner": "group/subgroup", "repoName": "api"},
     ],
 )
-async def test_claude_write_sends_flat_arguments_without_caller_identity(
+async def test_shared_write_sends_flat_arguments_without_caller_identity(
     tmp_path: Path, selector: dict
 ) -> None:
     content = {
@@ -212,11 +212,11 @@ async def test_claude_write_sends_flat_arguments_without_caller_identity(
     finally:
         await client.aclose()
     assert sent == [{**selector, **content}]
-    assert "is_error" not in result
-    assert json.loads(result["content"][0]["text"]) == {"status": "proposed"}
+    assert result.is_error is False
+    assert json.loads(result.text) == {"status": "proposed"}
 
 
-async def test_claude_read_fills_the_encoded_path_parameter(tmp_path: Path) -> None:
+async def test_shared_read_fills_the_encoded_path_parameter(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.raw_path == b"/sessions/session/sandbox-memory/mem%2Fa"
@@ -229,10 +229,10 @@ async def test_claude_read_fills_the_encoded_path_parameter(tmp_path: Path) -> N
         result = await read.handler({"memoryId": "mem/a"})
     finally:
         await client.aclose()
-    assert json.loads(result["content"][0]["text"]) == {"content": "Fact body"}
+    assert json.loads(result.text) == {"content": "Fact body"}
 
 
-async def test_claude_search_strips_caller_identity(tmp_path: Path) -> None:
+async def test_shared_search_strips_caller_identity(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.raw_path == b"/sessions/session/sandbox-memory/search"
         assert json.loads(request.content) == {"query": "billing webhook", "limit": 5}
@@ -252,11 +252,11 @@ async def test_claude_search_strips_caller_identity(tmp_path: Path) -> None:
         )
     finally:
         await client.aclose()
-    assert json.loads(result["content"][0]["text"]) == {"results": [], "hasMore": False}
+    assert json.loads(result.text) == {"results": [], "hasMore": False}
 
 
 @pytest.mark.parametrize("unavailable", [False, True])
-async def test_claude_memory_tool_reports_failures(tmp_path: Path, unavailable: bool) -> None:
+async def test_shared_memory_tool_reports_failures(tmp_path: Path, unavailable: bool) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if unavailable:
             raise httpx.ConnectError("private transport details", request=request)
@@ -268,8 +268,8 @@ async def test_claude_memory_tool_reports_failures(tmp_path: Path, unavailable: 
         result = await read.handler({"memoryId": "mem_denied"})
     finally:
         await client.aclose()
-    assert result["is_error"] is True
-    assert result["content"][0]["text"] == (
+    assert result.is_error is True
+    assert result.text == (
         "memory_read failed (unavailable)"
         if unavailable
         else "memory_read failed (403): Personal memory is excluded from this session"
@@ -319,7 +319,7 @@ async def test_both_harnesses_receive_exact_memory_and_empty_parity(tmp_path, mo
             "sandbox_runtime.harness.ClaudeHarnessHandoff.read",
             return_value=ClaudeHarnessHandoff(tmp_path, config_dir, False),
         ),
-        patch("sandbox_runtime.harness.ClaudeHarness") as claude,
+        patch("sandbox_runtime.harness.claude.ClaudeHarness") as claude,
     ):
         build_agent_harness(
             HarnessId.CLAUDE,

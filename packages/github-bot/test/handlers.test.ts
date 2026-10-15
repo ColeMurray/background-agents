@@ -20,6 +20,7 @@ vi.mock("../src/github-auth", async (importOriginal) => ({
 vi.mock("../src/utils/integration-config", () => ({
   getGitHubConfig: vi.fn().mockResolvedValue({
     model: "anthropic/claude-haiku-4-5",
+    harness: "opencode",
     reasoningEffort: null,
     autoReviewOnOpen: true,
     enabledRepos: null,
@@ -31,6 +32,7 @@ vi.mock("../src/utils/integration-config", () => ({
 
 const defaultConfig: ResolvedGitHubConfig = {
   model: "anthropic/claude-haiku-4-5",
+  harness: "opencode",
   reasoningEffort: null,
   autoReviewOnOpen: true,
   enabledRepos: null,
@@ -566,6 +568,7 @@ describe.each([
     expect(new Headers(modelPreferencesCall[1].headers).has("X-OpenInspect-Actor")).toBe(false);
     expect(sessionCreateBody(cpFetch)).toMatchObject({
       model: "openai/gpt-5.6-sol",
+      harness: "opencode",
       reasoningEffort: "xhigh",
     });
     const prompt = promptSendBody(cpFetch).content;
@@ -576,6 +579,27 @@ describe.each([
       "session.created",
       expect.objectContaining({ model: "openai/gpt-5.6-sol", inline_model_override: true })
     );
+  });
+
+  it("refuses an incompatible inline model without switching harnesses or sending a prompt", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig, harness: "claude" });
+    const env = createMockEnv();
+    const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(await run(env, createMockLogger(), "@test-bot[bot] !model:gpt-5.6-sol fix it")).toEqual({
+      outcome: "skipped",
+      skip_reason: "harness_model_incompatible",
+    });
+    expect(modelPreferencesFetched(env)).toBe(true);
+    expect(getControlPlaneFetch(env).mock.calls).toHaveLength(1);
+    expect(postReaction).not.toHaveBeenCalled();
+    expect(githubFetch).toHaveBeenCalledTimes(1);
+    const comment = JSON.parse(githubFetch.mock.calls[0][1].body).body;
+    expect(comment).toContain('Model "openai/gpt-5.6-sol" cannot run on the Claude Agent harness.');
+    expect(comment).toContain("`!model`");
+    expect(comment).toContain("default model");
+    expect(comment).toContain("GitHub integration harness");
   });
 
   it("applies a reasoning-only flag to the configured model without loading enabled models", async () => {
@@ -1314,11 +1338,156 @@ describe("integration config", () => {
     expect(sessionBody.reasoningEffort).toBe("low");
   });
 
+  it("always sends a harness, defaulting to the built-in one when unconfigured", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-no-harness");
+
+    const sessionBody = sessionCreateBody(getControlPlaneFetch(env));
+    expect(sessionBody.harness).toBe("opencode");
+  });
+
+  it("sends the configured harness for every session-creating trigger", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "anthropic/claude-opus-4-6",
+      harness: "claude",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    await handleReviewRequested(env, log, reviewRequestedPayload, "trace-harness-1");
+    expect(sessionCreateBody(getControlPlaneFetch(env)).harness).toBe("claude");
+
+    const env2 = createMockEnv();
+    await handlePullRequestOpened(
+      env2,
+      createMockLogger(),
+      pullRequestOpenedPayload,
+      "trace-harness-2"
+    );
+    expect(sessionCreateBody(getControlPlaneFetch(env2)).harness).toBe("claude");
+
+    const env3 = createMockEnv();
+    await handleIssueComment(env3, createMockLogger(), issueCommentPayload, "trace-harness-3");
+    expect(sessionCreateBody(getControlPlaneFetch(env3)).harness).toBe("claude");
+
+    const env4 = createMockEnv();
+    await handleReviewComment(env4, createMockLogger(), reviewCommentPayload, "trace-harness-4");
+    expect(sessionCreateBody(getControlPlaneFetch(env4)).harness).toBe("claude");
+  });
+
+  it("launches Codex with its max reasoning effort", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.6-sol",
+      harness: "codex",
+      reasoningEffort: "max",
+    });
+    const env = createMockEnv();
+
+    await handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-codex-max");
+
+    expect(sessionCreateBody(getControlPlaneFetch(env))).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      harness: "codex",
+      reasoningEffort: "max",
+    });
+  });
+
+  it("refuses Codex none reasoning before session creation", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.6-sol",
+      harness: "codex",
+      reasoningEffort: "none",
+    });
+    const env = createMockEnv();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 201 })));
+
+    expect(
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-codex-none"
+      )
+    ).toEqual({ outcome: "skipped", skip_reason: "harness_model_incompatible" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+  });
+
+  it("refuses a Codex-only configured effort inherited by OpenCode", async () => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.6-sol",
+      harness: "opencode",
+      reasoningEffort: "max",
+    });
+    const env = createMockEnv();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 201 })));
+
+    expect(
+      await handleReviewRequested(
+        env,
+        createMockLogger(),
+        reviewRequestedPayload,
+        "trace-opencode-max"
+      )
+    ).toEqual({ outcome: "skipped", skip_reason: "harness_model_incompatible" });
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalledWith(
+      "https://internal/sessions",
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ...routedHandlers,
+    {
+      name: "pull request opened",
+      run: (env: Env, log: Logger) =>
+        handlePullRequestOpened(env, log, pullRequestOpenedPayload, "trace-mismatch"),
+    },
+  ])("refuses a harness/model mismatch for $name", async ({ run }) => {
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      model: "openai/gpt-5.4",
+      harness: "claude",
+    });
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const githubFetch = vi.fn().mockResolvedValue(new Response("", { status: 201 }));
+    vi.stubGlobal("fetch", githubFetch);
+
+    expect(await run(env, log)).toEqual({
+      outcome: "skipped",
+      skip_reason: "harness_model_incompatible",
+    });
+
+    expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
+    expect(postReaction).not.toHaveBeenCalled();
+    expect(githubFetch).toHaveBeenCalledTimes(1);
+    expect(githubFetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/widgets/issues/42/comments",
+      expect.objectContaining({ method: "POST" })
+    );
+    const comment = JSON.parse(githubFetch.mock.calls[0][1].body).body;
+    expect(comment).toContain('Model "openai/gpt-5.4" cannot run on the Claude Agent harness.');
+    expect(comment).toContain("`!model`");
+    expect(comment).toContain("default model");
+    expect(comment).toContain("GitHub integration harness");
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it("fail-closed config skips webhook (empty enabledRepos)", async () => {
     // Fail-closed defaults (enabledRepos: [], autoReviewOnOpen: false) cause the
     // handler to return early — no session created, no webhook processed.
     vi.mocked(getGitHubConfig).mockResolvedValue({
       model: "anthropic/claude-haiku-4-5",
+      harness: "opencode",
       reasoningEffort: null,
       autoReviewOnOpen: false,
       enabledRepos: [],

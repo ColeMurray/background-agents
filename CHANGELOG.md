@@ -2,6 +2,16 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 8, 2026
+
+**Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
+**Settings > Integrations > Slack**, and let each user override it in the Slack app's **Home** tab.
+OpenCode stays the default. Claude Agent requires a Slack default model it can run. A request whose
+model the harness cannot run is refused with advice in the thread instead of starting a session. On
+Claude Agent, Slack sessions follow the Claude **Automated authentication** setting, so they can use
+a connected Claude subscription. Existing threads keep their harness. See
+[Claude Agent](docs/CLAUDE_AGENT.md#slack-sessions).
+
 ## October 4, 2026
 
 **GitHub model overrides.** Start a GitHub `@mention` with `!model` or `!reasoning`, the same flags

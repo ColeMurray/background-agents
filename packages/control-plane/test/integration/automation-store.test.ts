@@ -65,6 +65,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     repo_id: null,
     base_branch: null,
     environment_id: null,
+    first_prompt_pending: 0,
     ...overrides,
   };
 }
@@ -89,6 +90,16 @@ async function seedRunForKey(
     .bind(invocationId, automationId, concurrencyKey, run.created_at ?? now, now)
     .run();
   await seedRun(makeRun(automationId, { ...run, invocation_id: invocationId }));
+}
+
+async function seedSessionRow(id: string, updatedAt = Date.now()): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO sessions (id, title, owner_team_id, visibility, user_id, status,
+       spawn_source, created_at, updated_at)
+     VALUES (?, 'Thread', NULL, 'private', 'user-1', 'completed', 'automation', ?, ?)`
+  )
+    .bind(id, updatedAt, updatedAt)
+    .run();
 }
 
 describe("AutomationStore (D1 integration)", () => {
@@ -1034,9 +1045,10 @@ describe("AutomationStore (D1 integration)", () => {
       expect(active!.id).toBe("run-ck3");
     });
 
-    it("getLatestSteerableRunForThread finds a completed run with a session (any status)", async () => {
+    it("getLatestContinuableRun finds a completed run with a session (any status)", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer1" }));
+      const sessionUpdatedAt = Date.now() - 60_000;
 
       await seedRunForKey("auto-steer1", "slack:C1:t1", {
         id: "run-steer1",
@@ -1044,44 +1056,90 @@ describe("AutomationStore (D1 integration)", () => {
         session_id: "sess-1",
         completed_at: Date.now(),
       });
+      await seedSessionRow("sess-1", sessionUpdatedAt);
 
-      const run = await store.getLatestSteerableRunForThread("auto-steer1", "slack:C1:t1", 0);
-      expect(run).not.toBeNull();
-      expect(run!.id).toBe("run-steer1");
+      const run = await store.getLatestContinuableRun("auto-steer1", "slack:C1:t1");
+      expect(run).toMatchObject({
+        id: "run-steer1",
+        first_prompt_pending: 0,
+        last_activity_at: sessionUpdatedAt,
+      });
     });
 
-    it("getLatestSteerableRunForThread excludes runs without a session", async () => {
+    it("getLatestContinuableRun ignores a session a failed launch claimed but never created", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-steer7" }));
+
+      await seedRunForKey("auto-steer7", "slack:C1:t7", {
+        id: "run-steer7-older",
+        status: "completed",
+        session_id: "sess-steer7",
+        scheduled_at: Date.now() - 60_000,
+        created_at: Date.now() - 60_000,
+      });
+      await seedSessionRow("sess-steer7");
+      await seedRunForKey("auto-steer7", "slack:C1:t7", {
+        id: "run-steer7-failed",
+        status: "failed",
+        session_id: "sess-never-created",
+      });
+
+      expect(await store.getLatestContinuableRun("auto-steer7", "slack:C1:t7")).toMatchObject({
+        id: "run-steer7-older",
+      });
+    });
+
+    it("getLatestContinuableRun excludes runs that never got a session", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer2" }));
 
-      // A skip/starting row (session_id null) must not shadow the thread session.
+      // A skipped row (session_id null) must not shadow the thread session.
       await seedRunForKey("auto-steer2", "slack:C1:t2", {
         id: "run-steer2-skip",
         status: "skipped",
         session_id: null,
       });
 
-      const run = await store.getLatestSteerableRunForThread("auto-steer2", "slack:C1:t2", 0);
-      expect(run).toBeNull();
+      expect(await store.getLatestContinuableRun("auto-steer2", "slack:C1:t2")).toBeNull();
     });
 
-    it("getLatestSteerableRunForThread excludes runs created before the window", async () => {
+    it("getLatestContinuableRun includes a run that is still launching", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer3" }));
 
       await seedRunForKey("auto-steer3", "slack:C1:t3", {
-        id: "run-steer3-old",
-        status: "completed",
-        session_id: "sess-old",
-        created_at: Date.now() - 48 * 60 * 60 * 1000,
+        id: "run-steer3-starting",
+        status: "starting",
+        session_id: null,
       });
 
-      const sinceMs = Date.now() - 24 * 60 * 60 * 1000;
-      const run = await store.getLatestSteerableRunForThread("auto-steer3", "slack:C1:t3", sinceMs);
-      expect(run).toBeNull();
+      expect(await store.getLatestContinuableRun("auto-steer3", "slack:C1:t3")).toMatchObject({
+        id: "run-steer3-starting",
+        status: "starting",
+      });
     });
 
-    it("getLatestSteerableRunForThread returns the most recent session run for the key", async () => {
+    it("getLatestContinuableRun measures activity from the session's latest update", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-steer6" }));
+      const runCreatedAt = Date.now() - 10 * 24 * 60 * 60 * 1000;
+      const sessionUpdatedAt = Date.now() - 60_000;
+
+      await seedRunForKey("auto-steer6", "slack:C1:t6", {
+        id: "run-steer6",
+        status: "completed",
+        session_id: "sess-steer6",
+        created_at: runCreatedAt,
+      });
+      await seedSessionRow("sess-steer6", sessionUpdatedAt);
+
+      expect(await store.getLatestContinuableRun("auto-steer6", "slack:C1:t6")).toMatchObject({
+        id: "run-steer6",
+        last_activity_at: sessionUpdatedAt,
+      });
+    });
+
+    it("getLatestContinuableRun returns the most recent run for the key", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer4" }));
 
@@ -1099,16 +1157,134 @@ describe("AutomationStore (D1 integration)", () => {
         scheduled_at: Date.now(),
         created_at: Date.now(),
       });
+      await seedSessionRow("sess-older");
+      await seedSessionRow("sess-newer");
 
-      const run = await store.getLatestSteerableRunForThread("auto-steer4", "slack:C1:t4", 0);
+      const run = await store.getLatestContinuableRun("auto-steer4", "slack:C1:t4");
       expect(run!.id).toBe("run-steer4-newer");
     });
 
-    it("getLatestSteerableRunForThread returns null for a null concurrency key", async () => {
+    it("getLatestContinuableRun returns null for a null concurrency key", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-steer5" }));
-      const run = await store.getLatestSteerableRunForThread("auto-steer5", null, 0);
-      expect(run).toBeNull();
+      expect(await store.getLatestContinuableRun("auto-steer5", null)).toBeNull();
     });
+  });
+});
+
+describe("AutomationStore held continuity prompts", () => {
+  beforeEach(cleanD1Tables);
+
+  function heldPrompt(runId: string, id: string, createdAt = Date.now(), clientRequestId = id) {
+    return {
+      id,
+      run_id: runId,
+      actor_user_id: "user-1",
+      actor_author_id: "user-1",
+      client_request_id: clientRequestId,
+      prompt: JSON.stringify({ content: id, authorId: "user-1", source: "automation" }),
+      request_id: `req-${id}`,
+      created_at: createdAt,
+      retry_at: createdAt,
+    };
+  }
+
+  it("holds prompts from the run's creation until its first prompt is queued and the held ones drain", async () => {
+    const store = new AutomationStore(env.DB);
+    await store.create(makeAutomation({ id: "auto-hold1" }));
+    await seedRunForKey("auto-hold1", "webhook:session:k", { id: "run-hold1", status: "starting" });
+
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h1"))).toBe("held");
+
+    expect(
+      await store.claimRunSession("run-hold1", "sess-hold1", Date.now(), Date.now() + 60_000)
+    ).toBe(true);
+    expect(await store.getLatestContinuableRun("auto-hold1", "webhook:session:k")).toMatchObject({
+      status: "running",
+      first_prompt_pending: 1,
+      has_held_prompts: 1,
+    });
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h2"))).toBe("held");
+
+    // The first prompt is queued, but h1 and h2 are not released yet: h3 queues behind them.
+    await store.markRunFirstPromptQueued("run-hold1");
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h3"))).toBe("held");
+    expect((await store.getHeldPrompts("run-hold1")).map((held) => held.id)).toEqual([
+      "h1",
+      "h2",
+      "h3",
+    ]);
+
+    for (const id of ["h1", "h2", "h3"]) await store.deleteHeldPrompt(id);
+    await seedSessionRow("sess-hold1");
+    expect(await store.getLatestContinuableRun("auto-hold1", "webhook:session:k")).toMatchObject({
+      first_prompt_pending: 0,
+      has_held_prompts: 0,
+    });
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold1", "h4"))).toBe(
+      "not_holding"
+    );
+  });
+
+  it("holds a retried follow-up once", async () => {
+    const store = new AutomationStore(env.DB);
+    await store.create(makeAutomation({ id: "auto-hold4" }));
+    await seedRunForKey("auto-hold4", "webhook:session:k", { id: "run-hold4", status: "starting" });
+
+    expect(
+      await store.holdPromptForLaunchingRun(heldPrompt("run-hold4", "h1", Date.now(), "webhook:r"))
+    ).toBe("held");
+    expect(
+      await store.holdPromptForLaunchingRun(heldPrompt("run-hold4", "h2", Date.now(), "webhook:r"))
+    ).toBe("duplicate");
+    expect((await store.getHeldPrompts("run-hold4")).map((held) => held.id)).toEqual(["h1"]);
+  });
+
+  it("does not hold prompts for a run that ended", async () => {
+    const store = new AutomationStore(env.DB);
+    await store.create(makeAutomation({ id: "auto-hold2" }));
+    await seedRunForKey("auto-hold2", "webhook:session:k", {
+      id: "run-hold2",
+      status: "failed",
+      session_id: null,
+    });
+
+    expect(await store.holdPromptForLaunchingRun(heldPrompt("run-hold2", "h1"))).toBe(
+      "not_holding"
+    );
+  });
+
+  it("selects runs whose held prompts are due, longest-waiting first, and defers them", async () => {
+    const store = new AutomationStore(env.DB);
+    await store.create(makeAutomation({ id: "auto-hold3" }));
+    const now = Date.now();
+    for (const [runId, retryAt] of [
+      ["run-due-late", now - 1],
+      ["run-due-early", now - 60_000],
+      ["run-not-due", now + 60_000],
+    ] as const) {
+      await seedRunForKey("auto-hold3", `webhook:session:${runId}`, {
+        id: runId,
+        status: "starting",
+      });
+      await store.holdPromptForLaunchingRun(heldPrompt(runId, `h-${runId}`, retryAt));
+    }
+
+    expect((await store.getRunsWithDueHeldPrompts(now, 10)).map((run) => run.id)).toEqual([
+      "run-due-early",
+      "run-due-late",
+    ]);
+    expect((await store.getRunsWithDueHeldPrompts(now, 1)).map((run) => run.id)).toEqual([
+      "run-due-early",
+    ]);
+
+    // A run the sweep could not settle moves behind the others.
+    await store.deferHeldPrompts("run-due-early", now + 120_000);
+    expect((await store.getRunsWithDueHeldPrompts(now, 1)).map((run) => run.id)).toEqual([
+      "run-due-late",
+    ]);
+
+    expect(await store.deleteHeldPromptsForRun("run-due-late")).toBe(1);
+    expect(await store.getRunsWithDueHeldPrompts(now, 10)).toEqual([]);
   });
 });

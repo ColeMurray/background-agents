@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo, useCallback, useEffect, useState } from "react";
+import { useMemo, useCallback, useEffect, useState, type ReactNode } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -20,6 +20,7 @@ import { PRIMARY_APP_DESTINATIONS, SETTINGS_DESTINATION } from "@/components/app
 import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
+import { MarkAllReadButton } from "@/components/mark-all-read-button";
 import { UserMenu } from "@/components/sidebar-user-menu";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { buildSessionsHref } from "@/lib/session-discovery";
@@ -90,7 +91,7 @@ export function SessionSidebar({
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
-  const { activeTeamId, scope } = useActiveTeam();
+  const { activeTeamId, scope, teams } = useActiveTeam();
   const teamQuery = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
@@ -118,6 +119,7 @@ export function SessionSidebar({
 
   const {
     needsAttention,
+    attentionUnreadCount,
     inProgress,
     finished,
     childrenMap,
@@ -129,7 +131,17 @@ export function SessionSidebar({
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
+    handleMarkAllAttentionRead,
   } = useSidebarSessions();
+  const activeTeamName = teams.find((team) => team.id === activeTeamId)?.name;
+  const attentionScopeLabel =
+    [
+      sessionCreatorFilter === "mine" ? "Mine" : null,
+      activeTeamName ??
+        (scope === "workspace" ? "Workspace" : scope === "all" ? "All teams" : null),
+    ]
+      .filter(Boolean)
+      .join(" · ") || undefined;
 
   // Archiving the session on screen leaves nothing to show, so fall back to the home page.
   const handleArchivedSession = useCallback(
@@ -173,7 +185,8 @@ export function SessionSidebar({
       error?: unknown;
       retry: () => Promise<unknown>;
     },
-    emphasize = false
+    emphasize = false,
+    headerAction?: ReactNode
   ) => {
     if (groupSessions.length === 0 && !pagination.error) return null;
 
@@ -183,40 +196,45 @@ export function SessionSidebar({
 
     return (
       <section aria-labelledby={headingId}>
-        <h2 id={headingId}>
-          <button
-            type="button"
-            aria-expanded={expanded}
-            aria-controls={contentId}
-            className={`flex min-h-10 w-full items-center gap-1.5 px-4 text-left text-xs font-medium uppercase tracking-wider transition-colors hover:bg-muted hover:text-foreground ${
-              emphasize ? "text-foreground" : "text-secondary-foreground"
-            }`}
-            onClick={() => {
-              const nextExpanded = !expanded;
-              setExpandedGroups((previous) => ({
-                ...previous,
-                [groupId]: nextExpanded,
-              }));
-              try {
-                localStorage.setItem(
-                  `${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}${groupId}`,
-                  String(nextExpanded)
-                );
-              } catch {
-                // Continue with the in-memory preference when storage is unavailable.
-              }
-            }}
-          >
-            <span aria-hidden="true">
-              {expanded ? (
-                <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              )}
-            </span>
-            {title}
-          </button>
-        </h2>
+        <div className="group relative transition-colors hover:bg-muted">
+          <h2 id={headingId}>
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={contentId}
+              className={`flex min-h-10 w-full items-center gap-1.5 px-4 text-left text-xs font-medium uppercase tracking-wider transition-colors hover:text-foreground ${
+                emphasize ? "text-foreground" : "text-secondary-foreground"
+              } ${headerAction ? "pr-12" : ""}`}
+              onClick={() => {
+                const nextExpanded = !expanded;
+                setExpandedGroups((previous) => ({
+                  ...previous,
+                  [groupId]: nextExpanded,
+                }));
+                try {
+                  localStorage.setItem(
+                    `${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}${groupId}`,
+                    String(nextExpanded)
+                  );
+                } catch {
+                  // Continue with the in-memory preference when storage is unavailable.
+                }
+              }}
+            >
+              <span aria-hidden="true">
+                {expanded ? (
+                  <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+              </span>
+              {title}
+            </button>
+          </h2>
+          {headerAction && (
+            <div className="absolute inset-y-0 right-3 flex items-center">{headerAction}</div>
+          )}
+        </div>
         <div id={contentId}>
           {expanded && (
             <>
@@ -380,7 +398,14 @@ export function SessionSidebar({
                   "Needs attention",
                   needsAttention,
                   sectionPagination.needsAttention,
-                  true
+                  true,
+                  needsAttention.length > 0 && (
+                    <MarkAllReadButton
+                      count={sectionPagination.needsAttention.hasMore ? null : attentionUnreadCount}
+                      scopeLabel={attentionScopeLabel}
+                      onConfirm={handleMarkAllAttentionRead}
+                    />
+                  )
                 )}
                 {renderSessionGroup(
                   "in-progress",

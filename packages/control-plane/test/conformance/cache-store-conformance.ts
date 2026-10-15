@@ -6,18 +6,19 @@
  * interchangeable, so each case pins a semantic one of them could otherwise
  * drift on.
  *
- * Expiry is the one case KV cannot run: its clock is the runtime's, and it
- * rejects a TTL under a minute, so an honest test would sleep for one. The
- * suite runs it against the implementations whose clock the caller owns and
- * asserts on KV only that an entry with a TTL is readable before it passes —
- * which is what the port promises and all a caller can observe either way.
+ * Expiry is the one case KV cannot run: its clock is the runtime's, and the
+ * port rejects a TTL under `CACHE_STORE_MIN_TTL_MS`, so an honest test would
+ * sleep for that long. The suite runs it against the implementations whose
+ * clock the caller owns and asserts on KV only that an entry with a TTL is
+ * readable before it passes — which is what the port promises and all a
+ * caller can observe either way.
  */
 
 import { describe, expect, it } from "vitest";
-import type { CacheStore } from "@open-inspect/shared/cache-store";
-
-/** The shortest TTL Cloudflare KV accepts; the suite writes no shorter one. */
-const MIN_TTL_SECONDS = 60;
+import {
+  CACHE_STORE_MIN_TTL_MS as MIN_TTL_MS,
+  type CacheStore,
+} from "@open-inspect/shared/cache-store";
 
 export interface CacheStoreUnderTest {
   store: CacheStore;
@@ -88,13 +89,13 @@ export function registerCacheStoreConformanceSuite(
 
     it("replaces the value and the TTL of a key written twice", async () => {
       await withKey("overwrite", async ({ store, advance }, key) => {
-        await store.put(key, "first", { expirationTtl: MIN_TTL_SECONDS });
+        await store.put(key, "first", { ttlMs: MIN_TTL_MS });
         await store.put(key, "second");
         expect(await store.get(key)).toBe("second");
         // The second write cleared the first's expiry rather than inheriting
         // it. Only an implementation whose clock we own can be carried past
         // that expiry to prove it; on KV the assertion above is the whole case.
-        advance?.(MIN_TTL_SECONDS * 1000 + 1);
+        advance?.(MIN_TTL_MS + 1);
         expect(await store.get(key)).toBe("second");
       });
     });
@@ -108,9 +109,19 @@ export function registerCacheStoreConformanceSuite(
       });
     });
 
+    it.each([MIN_TTL_MS - 1, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+      "rejects a ttlMs of %s and writes nothing",
+      async (ttlMs) => {
+        await withKey("ttl-invalid", async ({ store }, key) => {
+          await expect(store.put(key, "a value", { ttlMs })).rejects.toThrow(RangeError);
+          expect(await store.get(key)).toBeNull();
+        });
+      }
+    );
+
     it("serves an entry that still has time left on its TTL", async () => {
       await withKey("ttl-live", async ({ store }, key) => {
-        await store.put(key, "a value", { expirationTtl: MIN_TTL_SECONDS });
+        await store.put(key, "a value", { ttlMs: MIN_TTL_MS });
         expect(await store.get(key)).toBe("a value");
       });
     });
@@ -118,8 +129,8 @@ export function registerCacheStoreConformanceSuite(
     it.skipIf(!capabilities.controllableClock)("reads null once the TTL has passed", async () => {
       await withKey("ttl-expired", async ({ store, advance }, key) => {
         if (!advance) throw new Error("A controllable clock was declared but none was supplied");
-        await store.put(key, "a value", { expirationTtl: MIN_TTL_SECONDS });
-        advance(MIN_TTL_SECONDS * 1000 + 1);
+        await store.put(key, "a value", { ttlMs: MIN_TTL_MS });
+        advance(MIN_TTL_MS + 1);
         expect(await store.get(key)).toBeNull();
         expect(await store.get(key, "json")).toBeNull();
       });
@@ -128,7 +139,7 @@ export function registerCacheStoreConformanceSuite(
     it("keeps an entry written without a TTL past when a TTL would have expired", async () => {
       await withKey("no-ttl", async ({ store, advance }, key) => {
         await store.put(key, "a value");
-        advance?.(MIN_TTL_SECONDS * 1000 + 1);
+        advance?.(MIN_TTL_MS + 1);
         expect(await store.get(key)).toBe("a value");
       });
     });

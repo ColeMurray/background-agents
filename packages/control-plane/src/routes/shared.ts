@@ -30,9 +30,10 @@ export interface ServiceActorProfileClaims {
 }
 
 /**
- * Outcome of preparing a route's actor claims before identity is finalized.
- * A rejected body ends admission with the route's own response, so no user,
- * identity, or assignment is written for a request the handler would refuse.
+ * Outcome of preparing a route's actor claims. For an unknown actor a rejected
+ * body ends admission with the route's own response, so no user, identity, or
+ * assignment is written for a request the handler would refuse; a known
+ * actor's request continues to the handler with nothing written.
  */
 export type ServiceActorClaimsResult =
   { kind: "claims"; claims: ServiceActorProfileClaims } | { kind: "rejected"; response: Response };
@@ -346,8 +347,9 @@ export interface RouteAdmissionPolicy extends RoutePolicy {
   /**
    * Extract profile claims asserted by the trusted service that owns this
    * route. Authentication has already verified the exact request body before
-   * this hook runs. Invalid route input returns the route's own rejection so
-   * admission stops before any identity is written.
+   * this hook runs. Claims enroll an unknown actor and fill the missing profile
+   * of a known one. Invalid route input returns the route's own rejection so
+   * nothing is written.
    */
   serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
 }

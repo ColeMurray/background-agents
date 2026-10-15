@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { MemoryDto, MemoryRevision } from "@open-inspect/shared/types/memories";
 import { MemoriesSettings, SharedMemoriesSettings } from ".";
 
@@ -18,8 +18,21 @@ const mocks = vi.hoisted(() => ({
   nextOffset: null as number | null,
   collection: vi.fn(),
   canManageOwn: true,
+  replaceState: vi.fn(),
+  environments: [] as { id: string; name: string }[],
 }));
-vi.mock("next/navigation", () => ({ useSearchParams: () => mocks.params }));
+// Like Next, native history writes re-render readers of useSearchParams.
+const urlListeners = new Set<() => void>();
+vi.mock("next/navigation", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    urlListeners.add(listener);
+    return () => urlListeners.delete(listener);
+  };
+  return {
+    useSearchParams: () => useSyncExternalStore(subscribe, () => mocks.params),
+  };
+});
 vi.mock("@/hooks/use-memories", () => ({
   createMemory: mocks.createMemory,
   reviseMemory: mocks.reviseMemory,
@@ -51,12 +64,15 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 }));
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
-    repos: [{ id: 1, owner: "acme", name: "web", fullName: "acme/web" }],
+    repos: [
+      { id: 1, owner: "acme", name: "web", fullName: "acme/web" },
+      { id: 2, owner: "acme", name: "api", fullName: "acme/api" },
+    ],
     loading: false,
   }),
 }));
 vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: () => ({ environments: [], loading: false }),
+  useEnvironments: () => ({ environments: mocks.environments, loading: false }),
 }));
 
 const record: MemoryDto = {
@@ -96,17 +112,32 @@ const firstRevision: MemoryRevision = {
   createdAt: 1,
 };
 
+/** Navigate: the address bar and useSearchParams both show the new query. */
+function setParams(init: Record<string, string>) {
+  mocks.params = new URLSearchParams(init);
+  window.history.pushState(null, "", `/settings?${mocks.params}`);
+}
+
 describe("memory management", () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
     mocks.params = new URLSearchParams();
+    window.history.pushState(null, "", "/settings");
+    const realReplaceState = History.prototype.replaceState;
+    vi.spyOn(window.history, "replaceState").mockImplementation((state, unused, href) => {
+      realReplaceState.call(window.history, state, unused, href);
+      mocks.replaceState(String(href));
+      mocks.params = new URLSearchParams(String(href).split("?")[1] ?? "");
+      act(() => urlListeners.forEach((listener) => listener()));
+    });
     mocks.records = [];
     mocks.focused = undefined;
     mocks.revisions = [];
     mocks.canCreate = true;
     mocks.nextOffset = null;
     mocks.canManageOwn = true;
+    mocks.environments = [];
     for (const mutation of [mocks.createMemory, mocks.reviseMemory, mocks.applyMemoryAction]) {
       mutation.mockResolvedValue(record);
     }
@@ -130,9 +161,9 @@ describe("memory management", () => {
     mocks.nextOffset = 50;
     render(<MemoriesSettings />);
     fireEvent.click(screen.getByText("Next page"));
-    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 50);
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 50, "");
     fireEvent.click(screen.getByRole("radio", { name: "Archived" }));
-    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "archived", 0);
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "archived", 0, "");
   });
 
   it("validates a new record and creates it in the collection's scope", async () => {
@@ -262,7 +293,117 @@ describe("memory management", () => {
     expect(mocks.collection).toHaveBeenLastCalledWith(
       { type: "repository", repoOwner: "acme", repoName: "web" },
       "active",
-      0
+      0,
+      ""
+    );
+  });
+
+  it("filters by a debounced search kept in the URL and returns to the first page", async () => {
+    mocks.nextOffset = 50;
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByText("Next page"));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search memories" }), {
+      target: { value: "  rspec  " },
+    });
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
+    );
+    expect(mocks.replaceState).toHaveBeenLastCalledWith("/settings?search=rspec");
+    expect(screen.getByText("No active memories match “rspec”.")).toBeTruthy();
+  });
+
+  it("returns to the first page when a search is cleared", async () => {
+    mocks.nextOffset = 50;
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByText("Next page"));
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 50, "");
+    const box = screen.getByRole("searchbox", { name: "Search memories" });
+    fireEvent.change(box, { target: { value: "rspec" } });
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
+    );
+    fireEvent.change(box, { target: { value: "" } });
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "")
+    );
+  });
+
+  it("follows a search changed by navigation instead of restoring the old one", async () => {
+    setParams({ search: "docker" });
+    const { rerender } = render(<MemoriesSettings />);
+    setParams({ search: "rspec" });
+    rerender(<MemoriesSettings />);
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
+    );
+    expect(
+      (screen.getByRole("searchbox", { name: "Search memories" }) as HTMLInputElement).value
+    ).toBe("rspec");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mocks.replaceState).not.toHaveBeenCalled();
+  });
+
+  it("explains a search with too many terms instead of requesting it", async () => {
+    render(<MemoriesSettings />);
+    const box = screen.getByRole("searchbox", { name: "Search memories" });
+    fireEvent.change(box, { target: { value: "rspec" } });
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec")
+    );
+    fireEvent.change(box, { target: { value: "a1 b2 c3 d4 e5 f6 g7 h8 i9" } });
+    expect(await screen.findByText("Use at most 8 search terms.")).toBeTruthy();
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "rspec");
+    expect(mocks.collection).not.toHaveBeenCalledWith(
+      { type: "personal" },
+      "active",
+      0,
+      "a1 b2 c3 d4 e5 f6 g7 h8 i9"
+    );
+  });
+
+  it("does not filter on a single character", async () => {
+    render(<MemoriesSettings />);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search memories" }), {
+      target: { value: "r" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a one-character edit after the URL echo", async () => {
+    setParams({ search: "rspec" });
+    render(<MemoriesSettings />);
+    const box = screen.getByRole("searchbox", { name: "Search memories" }) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "r" } });
+    await waitFor(() => expect(mocks.replaceState).toHaveBeenLastCalledWith("/settings"));
+    expect(box.value).toBe("r");
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "");
+  });
+
+  it("starts from a search already in the URL", () => {
+    setParams({ search: "docker" });
+    render(<MemoriesSettings />);
+    expect(mocks.collection).toHaveBeenLastCalledWith({ type: "personal" }, "active", 0, "docker");
+    expect(
+      (screen.getByRole("searchbox", { name: "Search memories" }) as HTMLInputElement).value
+    ).toBe("docker");
+  });
+
+  it("narrows the scope picker as you type and opens the chosen scope", async () => {
+    mocks.environments = [{ id: "env_taskiq", name: "TaskIQ Factory" }];
+    render(<SharedMemoriesSettings />);
+    fireEvent.click(screen.getByRole("button", { name: /Memory scope/ }));
+    fireEvent.change(screen.getByPlaceholderText("Search repositories and environments..."), {
+      target: { value: "taskiq" },
+    });
+    expect(screen.queryByText("acme/web")).toBeNull();
+    fireEvent.click(screen.getByText("TaskIQ Factory"));
+    expect(mocks.collection).toHaveBeenLastCalledWith(
+      { type: "environment", environmentId: "env_taskiq" },
+      "active",
+      0,
+      ""
     );
   });
 });

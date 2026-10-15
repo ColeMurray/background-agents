@@ -8,6 +8,10 @@ import {
   type SessionReadResult,
   type SessionReadState,
 } from "@open-inspect/shared/types/sessions";
+import {
+  sessionInboxMarkReadResponseSchema,
+  type SessionInboxMarkReadRequest,
+} from "@open-inspect/shared/types/session-inbox";
 import { z } from "zod";
 
 export const sessionReadStateClientSchema = z.preprocess((data) => {
@@ -84,6 +88,34 @@ export function markLatestMessageRead(sessionId: string): Promise<SessionReadRes
   return patchSessionReadState(sessionId, {
     action: "mark_latest_message_read",
   });
+}
+
+type SessionInboxMarkedReadListener = () => Promise<unknown> | unknown;
+const inboxMarkedReadListeners = new Set<SessionInboxMarkedReadListener>();
+
+/** Notifies every mounted inbox view after a bulk read, whichever view started it. */
+export function subscribeSessionInboxMarkedRead(
+  listener: SessionInboxMarkedReadListener
+): () => void {
+  inboxMarkedReadListeners.add(listener);
+  return () => inboxMarkedReadListeners.delete(listener);
+}
+
+/**
+ * Marks every unread session the inbox lists under these filters as read,
+ * including pages the client has not loaded. Returns the number of sessions
+ * whose read state changed.
+ */
+export async function markSessionInboxRead(filters: SessionInboxMarkReadRequest): Promise<number> {
+  const response = await browserApiFetch("/api/sessions/inbox/read-state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(filters),
+  });
+  if (!response.ok) throw new SessionReadRequestError(response.status);
+  const { markedCount } = sessionInboxMarkReadResponseSchema.parse(await response.json());
+  await Promise.allSettled([...inboxMarkedReadListeners].map((listener) => listener()));
+  return markedCount;
 }
 
 function readStateFromResult(result: SessionReadResult): SessionReadState {

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  MEMORY_SEARCH_LIMITS,
   MEMORY_STATUSES,
   type MemoryContent,
   type MemoryDto,
@@ -10,10 +11,13 @@ import {
 import { applyMemoryAction, createMemory, reviseMemory } from "@/hooks/use-memories";
 import { errorMessage, MEMORY_STATUS_LABELS } from "@/lib/memories";
 import { Button } from "@/components/ui/button";
+import { SearchIcon } from "@/components/ui/icons";
+import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { MemoryCard } from "./memory-card";
 import { MemoryEditor } from "./memory-editor";
 import { useMemoryCollection } from "./use-memory-collection";
+import { useMemorySearch } from "./use-memory-search";
 
 /**
  * The one open panel in a collection. Card-local panels key on the record ID so actions use the
@@ -34,7 +38,8 @@ const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
 
 /** Manage a paginated scope using server capabilities and revision-fenced mutations. */
 export function MemoryCollection({ scope }: { scope: MemoryScope }) {
-  const collection = useMemoryCollection(scope);
+  const search = useMemorySearch();
+  const collection = useMemoryCollection(scope, search.search);
   const [panel, setPanel] = useState<MemoryPanel>(() =>
     collection.focusedId ? { kind: "history", memoryId: collection.focusedId } : NO_PANEL
   );
@@ -89,6 +94,28 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           </Button>
         )}
       </div>
+      <div className="relative">
+        <SearchIcon
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          type="search"
+          aria-label="Search memories"
+          placeholder="Search title, description or content"
+          value={search.text}
+          maxLength={MEMORY_SEARCH_LIMITS.query}
+          onChange={(event) => search.setText(event.target.value)}
+          aria-invalid={search.problem ? true : undefined}
+          aria-describedby={search.problem ? "memory-search-problem" : undefined}
+          className="pl-9"
+        />
+      </div>
+      {search.problem && (
+        <p id="memory-search-problem" role="alert" className="text-sm text-destructive">
+          {search.problem}
+        </p>
+      )}
       <nav className="flex gap-2" aria-label="Memory pages">
         <Button
           type="button"
@@ -130,7 +157,8 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
       {collection.loading && <p className="text-sm text-muted-foreground">Loading memories…</p>}
       {!collection.loading && !collection.error && collection.records.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No {MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories for this scope.
+          No {MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories{" "}
+          {search.search ? `match “${search.search}”.` : "for this scope."}
         </p>
       )}
       {collection.records.map((record) => (

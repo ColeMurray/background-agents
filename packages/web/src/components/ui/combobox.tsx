@@ -3,6 +3,10 @@
 import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from "react";
 import { CheckIcon } from "@/components/ui/icons";
 
+/** Trigger style for a full-width field picker in settings forms, so those pickers stay alike. */
+export const FIELD_COMBOBOX_TRIGGER_CLASS =
+  "w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition";
+
 export interface ComboboxOption<T = string> {
   value: T;
   label: string;

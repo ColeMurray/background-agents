@@ -11,7 +11,7 @@
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
-import type { CacheStore } from "@open-inspect/shared/cache-store";
+import { CACHE_STORE_MIN_TTL_MS, type CacheStore } from "@open-inspect/shared/cache-store";
 import { sha256Hex } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 import {
@@ -32,9 +32,6 @@ export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 
 /** Maximum distinct token scopes retained in the process cache. */
 export const INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES = 128;
-
-/** Upper bound for KV cache TTL (seconds). */
-const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
 
 const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v2";
 
@@ -371,20 +368,16 @@ async function writeInstallationTokenToCache(
     return;
   }
 
-  const nowEpochMs = Date.now();
-  const remainingLifetimeMs = cached.expiresAtEpochMs - nowEpochMs;
-  if (remainingLifetimeMs <= 0) {
+  const remainingLifetimeMs = cached.expiresAtEpochMs - Date.now();
+  const ttlMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
+  // Under the store's shortest TTL. Such a token is already inside
+  // INSTALLATION_TOKEN_MIN_REMAINING_MS, so no cache read would serve it.
+  if (ttlMs < CACHE_STORE_MIN_TTL_MS) {
     return;
   }
 
-  const cacheBoundLifetimeMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
-  const ttlSeconds = Math.max(
-    1,
-    Math.min(INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS, Math.floor(cacheBoundLifetimeMs / 1000))
-  );
-
   try {
-    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { expirationTtl: ttlSeconds });
+    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { ttlMs });
   } catch {
     // Cache failures are non-fatal.
   }

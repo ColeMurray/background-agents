@@ -1,4 +1,6 @@
 import { parseBody } from "./body";
+import { readBoundedBytes } from "../http/bounded-body";
+import { withinProviderAccessDeadline } from "../auth/provider-access-deadline";
 import {
   MODEL_PROVIDER_ACCOUNT_ID_PATTERN,
   PROVIDER_DEVICE_AUTHORIZATION_ID_PATTERN,
@@ -533,11 +535,93 @@ async function handleLegacyProviderAccess(
   });
 }
 
+const PROVIDER_ACCESS_CALLBACK_TIMEOUT_MS = 7_000;
+
+const accessRequestSchema = z
+  .object({
+    reason: z.literal("unauthorized").optional(),
+    rejectedCredentialVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  })
+  .strict()
+  .refine(
+    (value) => (value.reason === undefined) === (value.rejectedCredentialVersion === undefined)
+  );
+
 async function handleProviderAccess(
-  _request: Request,
+  request: Request,
   env: Env,
   params: { id: string; provider: string },
   ctx: SandboxRouteContext
+): Promise<Response> {
+  const deadlineHeader = request.headers.get("X-Provider-Deadline-Ms");
+  if (
+    deadlineHeader !== null &&
+    (!/^\d+$/.test(deadlineHeader) || !Number.isSafeInteger(Number(deadlineHeader)))
+  )
+    return error("Invalid provider access deadline", 400);
+  const headerDeadline =
+    deadlineHeader === null
+      ? undefined
+      : Math.min(Date.now() + PROVIDER_ACCESS_CALLBACK_TIMEOUT_MS, Number(deadlineHeader));
+  if (headerDeadline !== undefined && headerDeadline <= Date.now())
+    return error("Provider access deadline exceeded", 504);
+  let raw: unknown;
+  try {
+    const body = await withinProviderAccessDeadline(
+      readBoundedBytes(request.body, 1024, request.headers.get("content-length")),
+      headerDeadline
+    );
+    if (!body.ok) return error("Invalid provider access request", 400);
+    const text = new TextDecoder().decode(body.bytes);
+    raw = text.trim() ? JSON.parse(text) : {};
+  } catch (cause) {
+    if (cause instanceof ModelProviderAccountBrokerError && cause.code === "deadline_exceeded")
+      return error("Provider access deadline exceeded", 504);
+    return error("Invalid provider access request", 400);
+  }
+  const parsed = accessRequestSchema.safeParse(raw);
+  if (!parsed.success) return error("Invalid provider access request", 400);
+  // Legacy/OpenCode callers without a callback deadline retain their existing
+  // exchange wait. Native Codex's client also enforces its own total 8s budget.
+  const deadlineAt =
+    headerDeadline ??
+    (parsed.data.reason ? Date.now() + PROVIDER_ACCESS_CALLBACK_TIMEOUT_MS : undefined);
+  if (deadlineAt !== undefined && deadlineAt <= Date.now())
+    return error("Provider access deadline exceeded", 504);
+  const operation = handleProviderAccessWork(
+    env,
+    params,
+    ctx,
+    parsed.data.rejectedCredentialVersion,
+    deadlineAt
+  );
+  // The caller may time out after the provider rotates. Keep the persistence/fence
+  // alive in Workers as well as Node; never abandon or blindly repeat that grant.
+  if (deadlineAt !== undefined) {
+    ctx.executionCtx.submit(
+      () =>
+        operation.then(
+          () => undefined,
+          () => undefined
+        ),
+      { name: "provider-access-settlement" }
+    );
+  }
+  try {
+    return await withinProviderAccessDeadline(operation, deadlineAt);
+  } catch (cause) {
+    return cause instanceof ModelProviderAccountBrokerError && cause.code === "deadline_exceeded"
+      ? error("Provider access deadline exceeded", 504)
+      : error("Provider access unavailable", 503);
+  }
+}
+
+async function handleProviderAccessWork(
+  env: Env,
+  params: { id: string; provider: string },
+  ctx: SandboxRouteContext,
+  rejectedCredentialVersion?: number,
+  deadlineAt?: number
 ): Promise<Response> {
   const sessionId = params.id;
   const parsedProvider = provider(params.provider);
@@ -561,6 +645,8 @@ async function handleProviderAccess(
   }
   if (!binding) return error("Session provider account is not configured", 404);
   if (binding.authMode === "legacy_scoped_oauth") {
+    if (rejectedCredentialVersion !== undefined)
+      return error("Rejected-version refresh requires a connected account", 409);
     return handleLegacyProviderAccess(env, ctx, sessionId, parsedProvider);
   }
   if (binding.authMode === "api_key") {
@@ -590,12 +676,29 @@ async function handleProviderAccess(
     { now: () => Date.now(), createOwner: () => generateId() }
   );
   try {
-    return json(await broker.getAccess(binding.providerAccountId, parsedProvider));
+    return json(
+      await broker.getAccess(binding.providerAccountId, parsedProvider, {
+        rejectedCredentialVersion,
+        deadlineAt,
+      })
+    );
   } catch (cause) {
     if (cause instanceof ModelProviderAccountBrokerError) {
       const status =
-        cause.code === "account_not_found" ? 404 : cause.code === "upstream_retry_safe" ? 502 : 409;
-      return error(cause.message, status);
+        cause.code === "deadline_exceeded"
+          ? 504
+          : cause.code === "account_not_found"
+            ? 404
+            : cause.code === "upstream_retry_safe"
+              ? 502
+              : 409;
+      return json(
+        {
+          error: cause.message,
+          ...(cause.code === "exchange_busy" ? { retryable: true } : {}),
+        },
+        status
+      );
     }
     return error("Provider access unavailable", 503);
   }

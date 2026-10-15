@@ -1,3 +1,9 @@
+import {
+  HARNESS_IDS,
+  getHarnessLabel,
+  harnessSupportsModel,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { getDefaultReasoningEffort, getReasoningConfig } from "@open-inspect/shared/models";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { CLEAR_REPO_BRANCH_ACTION_ID, REPO_BRANCH_SELECTOR_ACTION_ID } from "../branch-preferences";
@@ -5,8 +11,10 @@ import {
   CLEAR_BRANCH_PREFERENCE_ACTION_ID,
   MAX_RENDERED_REPO_OVERRIDES,
   OPEN_BRANCH_MODAL_ACTION_ID,
+  SELECT_HARNESS_ACTION_ID,
   SELECT_MODEL_ACTION_ID,
   SELECT_REASONING_EFFORT_ACTION_ID,
+  WORKSPACE_HARNESS_OPTION_VALUE,
 } from "./constants";
 import type { AppHomeBlock, AppHomeView, ModelOption } from "./slack-types";
 import type { SlackSelectOption } from "../slack-blocks";
@@ -15,6 +23,9 @@ import { plainTextOption } from "../slack-options";
 export interface AppHomeViewState {
   appName: string;
   availableModels: ModelOption[];
+  /** The harness the user chose; undefined follows the workspace harness. */
+  userHarness: HarnessId | undefined;
+  workspaceHarness: HarnessId;
   currentModel: string;
   currentEffort: string | undefined;
   currentBranch: string | undefined;
@@ -52,10 +63,64 @@ function toSelectOption(model: ModelOption): SlackSelectOption {
   };
 }
 
+function buildHarnessBlocks(
+  userHarness: HarnessId | undefined,
+  workspaceHarness: HarnessId
+): AppHomeBlock[] {
+  const workspaceOption: SlackSelectOption = {
+    text: plainTextOption(`Workspace default (${getHarnessLabel(workspaceHarness)})`),
+    value: WORKSPACE_HARNESS_OPTION_VALUE,
+  };
+  const harnessOptions = HARNESS_IDS.map((harness) => ({
+    text: plainTextOption(getHarnessLabel(harness)),
+    value: harness,
+  }));
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*Agent harness*\nChoose the agent that runs your new Slack sessions:",
+      },
+    },
+    {
+      type: "actions",
+      block_id: "harness_selection",
+      elements: [
+        {
+          type: "static_select",
+          action_id: SELECT_HARNESS_ACTION_ID,
+          initial_option:
+            harnessOptions.find((option) => option.value === userHarness) ?? workspaceOption,
+          options: [workspaceOption, ...harnessOptions],
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * The model picker lists only models the harness can run. A current model it
+ * cannot run is left unselected with a warning, because launches refuse it.
+ */
 function buildModelBlocks(
-  currentModelInfo: ModelOption,
+  harness: HarnessId,
+  currentModel: string,
+  currentModelInfo: ModelOption | undefined,
   modelOptions: ModelOption[]
 ): AppHomeBlock[] {
+  const harnessLabel = getHarnessLabel(harness);
+  if (modelOptions.length === 0) {
+    return [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Model*\nNo enabled model can run on ${harnessLabel}. Choose another agent harness, or ask an admin to enable a model it can run.`,
+        },
+      },
+    ];
+  }
   return [
     {
       type: "section",
@@ -71,11 +136,26 @@ function buildModelBlocks(
         {
           type: "static_select",
           action_id: SELECT_MODEL_ACTION_ID,
-          initial_option: toSelectOption(currentModelInfo),
+          ...(currentModelInfo
+            ? { initial_option: toSelectOption(currentModelInfo) }
+            : { placeholder: { type: "plain_text" as const, text: "Choose a model" } }),
           options: modelOptions.map(toSelectOption),
         },
       ],
     },
+    ...(currentModelInfo
+      ? []
+      : [
+          {
+            type: "context" as const,
+            elements: [
+              {
+                type: "mrkdwn" as const,
+                text: `Your model \`${currentModel}\` can't run on ${harnessLabel}, so new requests are refused until you choose a model above.`,
+              },
+            ],
+          },
+        ]),
   ];
 }
 
@@ -280,36 +360,42 @@ function buildRepoBranchBlocks(
 }
 
 function buildSummaryBlock(
-  currentModelInfo: ModelOption,
+  harness: HarnessId,
+  currentModelInfo: ModelOption | undefined,
   effectiveEffort: string | undefined,
   currentBranch: string | undefined
 ): AppHomeBlock {
+  const parts = [
+    currentModelInfo ? `*${currentModelInfo.label}*` : "*no model it can run*",
+    ...(currentModelInfo && effectiveEffort ? [effectiveEffort] : []),
+    ...(currentBranch ? [`branch:${currentBranch}`] : []),
+    getHarnessLabel(harness),
+  ];
   return {
     type: "context",
-    elements: [
-      {
-        type: "mrkdwn",
-        text: `Currently using: *${currentModelInfo.label}*${effectiveEffort ? ` · ${effectiveEffort}` : ""}${currentBranch ? ` · branch:${currentBranch}` : ""}`,
-      },
-    ],
+    elements: [{ type: "mrkdwn", text: `Currently using: ${parts.join(" · ")}` }],
   };
 }
 
 export function buildAppHomeView({
   appName,
   availableModels,
+  userHarness,
+  workspaceHarness,
   currentModel,
   currentEffort,
   currentBranch,
   repos,
   repoBranchPreferences,
 }: AppHomeViewState): AppHomeView {
-  const currentModelInfo = availableModels.find((model) => model.value === currentModel) ??
-    availableModels[0] ?? {
-      label: currentModel,
-      value: currentModel,
-    };
-  const modelOptions = availableModels.length > 0 ? availableModels : [currentModelInfo];
+  const harness = userHarness ?? workspaceHarness;
+  const modelOptions = availableModels.filter((model) =>
+    harnessSupportsModel(harness, model.value)
+  );
+  const currentModelInfo = harnessSupportsModel(harness, currentModel)
+    ? (modelOptions.find((model) => model.value === currentModel) ??
+      modelOptions[0] ?? { label: currentModel, value: currentModel })
+    : undefined;
   const effectiveEffort = currentEffort ?? getDefaultReasoningEffort(currentModel);
 
   return {
@@ -327,11 +413,12 @@ export function buildAppHomeView({
         },
       },
       { type: "divider" },
-      ...buildModelBlocks(currentModelInfo, modelOptions),
-      ...buildReasoningBlocks(currentModel, effectiveEffort),
+      ...buildHarnessBlocks(userHarness, workspaceHarness),
+      ...buildModelBlocks(harness, currentModel, currentModelInfo, modelOptions),
+      ...(currentModelInfo ? buildReasoningBlocks(currentModel, effectiveEffort) : []),
       ...buildGlobalBranchBlocks(currentBranch),
       ...buildRepoBranchBlocks(repos, repoBranchPreferences),
-      buildSummaryBlock(currentModelInfo, effectiveEffort, currentBranch),
+      buildSummaryBlock(harness, currentModelInfo, effectiveEffort, currentBranch),
     ],
   };
 }

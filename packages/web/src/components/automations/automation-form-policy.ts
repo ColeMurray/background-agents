@@ -12,7 +12,8 @@ import {
   validateAutomationTargetCounts,
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
-import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
+import { isValidHarnessReasoningEffort } from "@open-inspect/shared/harnesses";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import {
   getValidHarnessOrDefault,
   reconcileProviderSelectionsForHarness,
@@ -233,6 +234,21 @@ function findInvalidEvaluation({
   return null;
 }
 
+/**
+ * The effort the form shows and submits: the draft's choice when the harness can
+ * run it on the model, else "" (use the model default). One rule for display,
+ * harness/model changes and submission.
+ */
+export function effectiveReasoningEffort(
+  harness: HarnessId,
+  model: string,
+  reasoningEffort: string
+): string {
+  return reasoningEffort && isValidHarnessReasoningEffort(harness, model, reasoningEffort)
+    ? reasoningEffort
+    : "";
+}
+
 function buildSubmissionValues({
   mode,
   draft,
@@ -254,10 +270,8 @@ function buildSubmissionValues({
     harness: draft.agent.harness,
     model: resolvedModel,
     reasoningEffort:
-      draft.agent.reasoningEffort &&
-      isValidReasoningEffort(resolvedModel, draft.agent.reasoningEffort)
-        ? draft.agent.reasoningEffort
-        : null,
+      effectiveReasoningEffort(draft.agent.harness, resolvedModel, draft.agent.reasoningEffort) ||
+      null,
     instructions: draft.instructions.trim(),
     triggerType: draft.trigger.type,
     providerSelections: draft.providerSelections,

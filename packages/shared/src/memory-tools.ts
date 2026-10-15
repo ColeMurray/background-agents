@@ -63,6 +63,9 @@ export function harnessMemoryToolName(harness: HarnessId, tool: MemoryToolName):
     case "claude":
       // Claude receives runtime tools through the in-process `oi` MCP server.
       return `mcp__oi__${tool}`;
+    case "codex":
+      // Codex receives the same tools in the `oi` dynamic-tool namespace.
+      return tool;
     default: {
       const exhaustive: never = harness;
       throw new Error(`Unknown harness: ${String(exhaustive)}`);

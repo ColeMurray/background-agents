@@ -5,7 +5,6 @@ import {
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
-  resolveEnabledModel,
   type ReasoningEffort,
   type ValidModel,
 } from "@open-inspect/shared/models";
@@ -56,20 +55,15 @@ export const resolvedTurnPlanSchema = z
 export type ResolvedTurnPlan = z.infer<typeof resolvedTurnPlanSchema>;
 
 /**
- * What a session launch does with model settings, which is not the same
- * question a single turn answers: `sessionDefaults` is persisted and inherited
- * by every later follow-up, while `promptOverrides` applies to the opening
- * prompt alone. Callers express intent here; the launcher is the authority
- * that checks it against the models enabled at launch time.
+ * The model settings a session launch asked for. `sessionDefaults` is
+ * persisted and inherited by every later follow-up; the opening prompt runs
+ * on it too. Callers express intent here; the launcher is the authority that
+ * checks it against the models enabled at launch time. Records saved before
+ * opening-prompt overrides were removed may still carry `promptOverrides`;
+ * parsing drops it.
  */
 export const sessionLaunchPlanSchema = z.object({
   sessionDefaults: modelSelectionSchema,
-  promptOverrides: z
-    .object({
-      model: validModelSchema.optional(),
-      reasoningEffort: reasoningEffortSchema.optional(),
-    })
-    .optional(),
 });
 
 export type SessionLaunchPlan = z.infer<typeof sessionLaunchPlanSchema>;
@@ -93,9 +87,12 @@ export function normalizeModelSelection(defaults: {
   reasoningEffort?: string;
 }): ModelSelection {
   const model = getValidModelOrDefault(defaults.model);
+  const parsedReasoningEffort = defaults.reasoningEffort
+    ? reasoningEffortSchema.safeParse(defaults.reasoningEffort)
+    : null;
   const reasoningEffort =
-    defaults.reasoningEffort && isValidReasoningEffort(model, defaults.reasoningEffort)
-      ? (defaults.reasoningEffort as ReasoningEffort)
+    parsedReasoningEffort?.success && isValidReasoningEffort(model, parsedReasoningEffort.data)
+      ? parsedReasoningEffort.data
       : getDefaultReasoningEffort(model);
   return { model, reasoningEffort };
 }
@@ -104,7 +101,11 @@ export function sameModelSelection(a: ModelSelection, b: ModelSelection): boolea
   return a.model === b.model && a.reasoningEffort === b.reasoningEffort;
 }
 
-/** Resolve one-turn overrides against the session defaults and enabled model list. */
+/**
+ * Resolve one-turn overrides against the session defaults and enabled model
+ * list. Only an explicit `!model` must be enabled; the session defaults are
+ * kept as given, so a launch reconciles them with the enabled models first.
+ */
 export function resolveInlinePromptOptions(
   options: InlinePromptOptions,
   defaults: { model: string; reasoningEffort?: string },
@@ -114,20 +115,25 @@ export function resolveInlinePromptOptions(
     normalizeModelSelection(defaults);
   let modelOverride: ValidModel | undefined;
   if (options.model) {
-    if (!isValidModel(options.model)) {
+    const parsedModel = validModelSchema.safeParse(normalizeModelId(options.model));
+    if (!parsedModel.success) {
       return { ok: false, error: `Unknown model "${escapeMrkdwnText(options.model)}".` };
     }
-    modelOverride = normalizeModelId(options.model) as ValidModel;
+    modelOverride = parsedModel.data;
     if (!enabledModels.includes(modelOverride)) {
       return { ok: false, error: `Model "${modelOverride}" is not enabled.` };
     }
-  } else {
-    const enabledSessionModel = resolveEnabledModel({ model: sessionModel, enabledModels });
-    if (enabledSessionModel !== sessionModel) modelOverride = enabledSessionModel;
   }
 
   const effectiveModel = modelOverride ?? sessionModel;
-  if (options.reasoningEffort && !isValidReasoningEffort(effectiveModel, options.reasoningEffort)) {
+  const parsedReasoningEffort = options.reasoningEffort
+    ? reasoningEffortSchema.safeParse(options.reasoningEffort)
+    : null;
+  if (
+    options.reasoningEffort &&
+    (!parsedReasoningEffort?.success ||
+      !isValidReasoningEffort(effectiveModel, parsedReasoningEffort.data))
+  ) {
     const efforts = getReasoningConfig(effectiveModel)?.efforts;
     const suffix = efforts?.length
       ? ` Supported values: ${efforts.join(", ")}.`
@@ -138,7 +144,7 @@ export function resolveInlinePromptOptions(
     };
   }
 
-  const reasoningOverride = options.reasoningEffort as ReasoningEffort | undefined;
+  const reasoningOverride = parsedReasoningEffort?.success ? parsedReasoningEffort.data : undefined;
   const effectiveReasoningEffort = reasoningOverride
     ? reasoningOverride
     : modelOverride

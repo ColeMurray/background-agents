@@ -1,11 +1,12 @@
 {
-  "runtimeVersion": "v75-child-output-discovery",
-  "generation": 75,
+  "runtimeVersion": "v76-child-output-discovery",
+  "generation": 76,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 75,
+  "minimumRebuildGeneration": 76,
   "harnessMinimumGeneration": {
-    "claude": 75,
-    "opencode": 75
+    "claude": 76,
+    "opencode": 76,
+    "codex": 76
   }
 }

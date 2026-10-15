@@ -45,8 +45,8 @@ from .claude_env import (
     write_clean_env_wrapper,
 )
 from .claude_logging import ClaudeTrajectoryLogger
-from .claude_tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
 from .claude_translate import ClaudeTranslator, ClaudeTurnState
+from .tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
 
 if TYPE_CHECKING:
     from pathlib import Path

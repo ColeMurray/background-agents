@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   diffState: null as SessionDiffState | null,
   snapshot: null as SessionSnapshot | null,
   mobile: false,
+  enabledModels: [] as string[],
 }));
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -54,7 +55,11 @@ vi.mock("@/hooks/use-session-rename", () => ({
   useSessionRename: () => ({ optimisticTitle: null, renameSession: vi.fn() }),
 }));
 vi.mock("@/hooks/use-enabled-models", () => ({
-  useEnabledModels: () => ({ enabledModels: [], enabledModelOptions: [], loading: false }),
+  useEnabledModels: () => ({
+    enabledModels: mocks.enabledModels,
+    enabledModelOptions: [],
+    loading: false,
+  }),
 }));
 vi.mock("@/hooks/use-session-diffs", () => ({
   useSessionDiffs: () => ({ state: mocks.diffState, isLoading: false }),
@@ -111,6 +116,7 @@ vi.mock("@/components/session-changes-panel", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.mobile = false;
+  mocks.enabledModels = [];
   mocks.diffState = null;
   mocks.snapshot = {
     session: {
@@ -203,6 +209,29 @@ it("renders the existing not-found path before cached session content or action 
   expect(mocks.prompt).not.toHaveBeenCalled();
 });
 
+it.each([undefined, "high"])(
+  "uses Codex fallback without overwriting explicit effort %s",
+  (effort) => {
+    mocks.enabledModels = ["openai/gpt-5.6-sol", "openai/gpt-6.1-sol"];
+    Object.assign(mocks.snapshot!.session, {
+      harness: "codex",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: effort,
+    });
+    mocks.socket.mockReturnValue({
+      ...mocks.socket(),
+      capabilities: { ...mocks.socket().capabilities, collaborate: true },
+    });
+    render(<SessionPage />);
+    expect(mocks.prompt.mock.lastCall?.[4]).toBe(effort ?? "low");
+    act(() => mocks.composer.mock.lastCall?.[0].model.onModelChange("openai/gpt-6.1-sol"));
+    expect(mocks.prompt.mock.lastCall?.[3]).toBe("openai/gpt-6.1-sol");
+    expect(mocks.prompt.mock.lastCall?.[4]).toBe("low");
+    act(() => mocks.composer.mock.lastCall?.[0].model.onReasoningEffortChange("max"));
+    expect(mocks.prompt.mock.lastCall?.[4]).toBe("max");
+  }
+);
+
 it("opens phone media on Info without replacing the remembered inspector tab", async () => {
   localStorage.setItem("open-inspect-session-inspector-tab", "changes");
   mocks.mobile = true;
@@ -249,7 +278,7 @@ it("keeps desktop actions available without collaboration and refreshes sidebar 
 
 // Memoized like the timeline's EventItem, so page re-renders keep the rendered link.
 const AssistantMessage = memo(function AssistantMessage() {
-  return <SafeMarkdown content="Updated [src/app.ts](src/app.ts)." linkRepositoryFiles />;
+  return <SafeMarkdown content="Updated [src/app.ts](src/app.ts)." linkMode="repositoryFiles" />;
 });
 
 it.each([

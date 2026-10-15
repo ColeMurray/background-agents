@@ -34,7 +34,7 @@ function memory(content: Partial<MemoryContent> = {}, extra: Partial<NewMemory> 
     ...extra,
   };
 }
-const page = { status: "active" as const, offset: 0, limit: 50 };
+const page = { status: "active" as const, offset: 0, limit: 50, terms: [] };
 
 describe("memory persistence", () => {
   beforeEach(async () => {
@@ -48,6 +48,8 @@ describe("memory persistence", () => {
       ],
     });
   });
+  // Seeds 350 records through the real create path (each its own guarded batch);
+  // under the parallel coverage run that exceeds vitest's 5s default.
   it("bounds candidate queries, omits fact bodies, and counts every omitted record", async () => {
     const store = new MemoryRecordStore(env.DB);
     for (let i = 0; i < 230; i++)
@@ -73,7 +75,7 @@ describe("memory persistence", () => {
     });
     expect(manifest.items).toHaveLength(300);
     expect(manifest.omittedCount).toBe(50);
-  });
+  }, 30_000);
   it("revises without replacing provenance and rejects concurrent stale edits", async () => {
     const store = new MemoryRecordStore(env.DB);
     const record = await store.create(memory(), agent, AUTO_SAVE);

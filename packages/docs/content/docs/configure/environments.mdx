@@ -4,7 +4,7 @@ description: Save a named, ordered set of repositories with its own secrets, pre
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-08"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/IMAGE_PREBUILD.md
@@ -162,7 +162,7 @@ An edit does affect new sessions and the prebuilt image, as described above.
 | [GitHub](/integrations/github) | A repository can carry a default environment. When the GitHub bot starts a session for that repository and the default environment contains it, the session launches the environment instead of the single repository.                                                                                                   |
 | [Linear](/integrations/linear) | Team and project mappings can point at an environment by its stable `env_…` id, optionally filtered by label. A mapping whose environment was deleted is skipped and resolution falls through to the next target.                                                                                                        |
 
-Sessions started by integrations run on the OpenCode harness.
+Sessions started by Slack, GitHub, and Linear run on the harness chosen in their integration settings (OpenCode by default). Slack users can also choose their own harness in the Slack app's Home tab.
 
 An integration mapping does not bypass environment access or ownership checks. Team environments require a session owned by the same team; an unbound bot's workspace session cannot use one.
 

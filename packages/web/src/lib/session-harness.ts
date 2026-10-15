@@ -1,4 +1,5 @@
 import {
+  DEFAULT_HARNESS,
   filterModelsForHarness,
   getHarnessLabel,
   harnessSupportsModel,
@@ -18,6 +19,17 @@ export function filterModelOptionsForHarness(
       models: group.models.filter((model) => harnessSupportsModel(harness, model.id)),
     }))
     .filter((group) => group.models.length > 0);
+}
+
+/**
+ * Whether picking a harness must clear the current model (+effort): a set
+ * model the new effective harness cannot run. Shared by the integration
+ * settings forms (GitHub and Linear global and repo rows, Slack global) so the
+ * picker can never silently produce a pair the harness cannot run — mirroring
+ * the composer behavior. An unset harness means the built-in default.
+ */
+export function shouldClearModelForHarness(harness: HarnessId | undefined, model: string): boolean {
+  return model !== "" && !harnessSupportsModel(harness ?? DEFAULT_HARNESS, model);
 }
 
 export type HarnessModelAvailability =
@@ -54,7 +66,11 @@ export function resolveHarnessModelSelection({
 }): HarnessModelSelection {
   const options = filterModelOptionsForHarness(harness, enabledModelOptions);
   if (loading) {
-    return { availability: { status: "loading" }, options, ...resolveModelPreference(preference) };
+    return {
+      availability: { status: "loading" },
+      options,
+      ...resolveModelPreference(preference, undefined, harness),
+    };
   }
   const models = filterModelsForHarness(harness, enabledModels);
   if (models.length === 0) {
@@ -64,12 +80,12 @@ export function resolveHarnessModelSelection({
         message: `No enabled models can run on ${getHarnessLabel(harness)}.`,
       },
       options,
-      ...resolveModelPreference(preference),
+      ...resolveModelPreference(preference, undefined, harness),
     };
   }
   return {
     availability: { status: "available" },
     options,
-    ...resolveModelPreference(preference, models),
+    ...resolveModelPreference(preference, models, harness),
   };
 }

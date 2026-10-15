@@ -4,14 +4,20 @@ import {
   type ParseInlinePromptFlagsResult,
 } from "@open-inspect/shared/inline-prompt-flags";
 import {
-  getReasoningConfig,
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
   normalizeModelId,
   normalizeValidModels,
   type ValidModel,
 } from "@open-inspect/shared/models";
+import {
+  checkHarnessCompatibility,
+  DEFAULT_HARNESS,
+  getHarnessReasoningConfig,
+  HARNESS_IDS,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Logger } from "./logger";
@@ -19,6 +25,7 @@ import type { Env } from "./types";
 
 export interface ModelSelection {
   model: string;
+  harness: HarnessId;
   reasoningEffort: string | null;
 }
 
@@ -26,7 +33,8 @@ export type ModelSelectionResult =
   | { ok: true; selection: ModelSelection; overridden: boolean }
   | {
       ok: false;
-      reason: "invalid_inline_flags" | "model_preferences_unavailable";
+      reason:
+        "invalid_inline_flags" | "model_preferences_unavailable" | "harness_model_incompatible";
       message: string;
     };
 
@@ -85,9 +93,10 @@ async function getEnabledModels(
  */
 export function applyInlineModelOverrides(
   options: InlinePromptOptions,
-  defaults: ModelSelection,
-  enabledModels: readonly ValidModel[]
-): { ok: true; selection: ModelSelection } | { ok: false; message: string } {
+  defaults: Omit<ModelSelection, "harness">,
+  enabledModels: readonly ValidModel[],
+  harness: HarnessId
+): { ok: true; selection: Omit<ModelSelection, "harness"> } | { ok: false; message: string } {
   let model = getValidModelOrDefault(defaults.model);
   if (options.model) {
     if (!isValidModel(options.model)) {
@@ -103,8 +112,8 @@ export function applyInlineModelOverrides(
   }
 
   if (options.reasoningEffort) {
-    if (!isValidReasoningEffort(model, options.reasoningEffort)) {
-      const efforts = getReasoningConfig(model)?.efforts;
+    if (!isValidHarnessReasoningEffort(harness, model, options.reasoningEffort)) {
+      const efforts = getHarnessReasoningConfig(harness, model)?.efforts;
       const suffix = efforts?.length
         ? ` Supported values: ${efforts.map(inlineCode).join(", ")}.`
         : " This model does not support reasoning controls.";
@@ -116,16 +125,25 @@ export function applyInlineModelOverrides(
     return { ok: true, selection: { model, reasoningEffort: options.reasoningEffort } };
   }
 
+  // Keep recognized configured efforts for launch admission to validate against
+  // the resolved harness; malformed values retain the existing null fallback.
+  const configuredEffort = defaults.reasoningEffort;
   const reasoningEffort =
-    defaults.reasoningEffort && isValidReasoningEffort(model, defaults.reasoningEffort)
-      ? defaults.reasoningEffort
+    configuredEffort &&
+    (options.model
+      ? isValidHarnessReasoningEffort(harness, model, configuredEffort)
+      : HARNESS_IDS.some((candidate) =>
+          isValidHarnessReasoningEffort(candidate, model, configuredEffort)
+        ))
+      ? configuredEffort
       : null;
   return { ok: true, selection: { model, reasoningEffort } };
 }
 
 /**
  * Resolve the model settings for a new session from the configured defaults
- * and any flags that lead the triggering comment.
+ * and any flags that lead the triggering comment. Check the configured harness
+ * against the canonical model rather than switching harnesses at launch.
  */
 export async function resolveModelSelection(
   env: Env,
@@ -134,17 +152,14 @@ export async function resolveModelSelection(
   defaults: ModelSelection,
   flags: ParseInlinePromptFlagsResult | undefined
 ): Promise<ModelSelectionResult> {
-  if (!flags || (flags.ok && !hasInlinePromptOptions(flags.options))) {
-    return { ok: true, selection: defaults, overridden: false };
-  }
-  if (!flags.ok) {
+  if (flags && !flags.ok) {
     return { ok: false, reason: "invalid_inline_flags", message: invalidFlagsMessage(flags.error) };
   }
 
   // Only a model override needs the enabled list; a reasoning-only override
   // keeps the configured model.
   let enabledModels: ValidModel[] = [];
-  if (flags.options.model) {
+  if (flags?.options.model) {
     const fetched = await getEnabledModels(env, log, traceId);
     if (!fetched) {
       return {
@@ -156,7 +171,8 @@ export async function resolveModelSelection(
     enabledModels = fetched;
   }
 
-  const applied = applyInlineModelOverrides(flags.options, defaults, enabledModels);
+  const harness = defaults.harness ?? DEFAULT_HARNESS;
+  const applied = applyInlineModelOverrides(flags?.options ?? {}, defaults, enabledModels, harness);
   if (!applied.ok) {
     return {
       ok: false,
@@ -164,5 +180,24 @@ export async function resolveModelSelection(
       message: invalidFlagsMessage(applied.message),
     };
   }
-  return { ok: true, selection: applied.selection, overridden: true };
+
+  const { selection } = applied;
+  const compatibilityError = checkHarnessCompatibility(
+    harness,
+    selection.model,
+    undefined,
+    selection.reasoningEffort
+  );
+  if (compatibilityError) {
+    return {
+      ok: false,
+      reason: "harness_model_incompatible",
+      message: `I couldn't start a session. ${compatibilityError.message} Choose a compatible model with \`!model\`, update the default model, or change the GitHub integration harness, then try again.`,
+    };
+  }
+  return {
+    ok: true,
+    selection: { ...selection, harness },
+    overridden: flags ? hasInlinePromptOptions(flags.options) : false,
+  };
 }

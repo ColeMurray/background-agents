@@ -4,10 +4,17 @@
 
 import type {
   AutomationInvocation,
+  WebhookFollowUpRefusedResponse,
   WebhookInvocationStatusResponse,
   WebhookTriggerResponse,
 } from "@open-inspect/shared";
-import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
+import { z } from "zod";
+import {
+  normalizeWebhookEvent,
+  WEBHOOK_SESSION_KEY_MAX_LENGTH,
+  webhookSessionKeySchema,
+  type WebhookDeliveryOptions,
+} from "@open-inspect/shared/triggers";
 import { AutomationStore, type AutomationRow } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
 import { Hono } from "hono";
@@ -21,17 +28,53 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
-import { Scheduler } from "../scheduler/scheduler";
+import { Scheduler, SessionFollowUpRefusedError } from "../scheduler/scheduler";
 
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
 
-export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
-  if (!body || typeof body !== "object" || Array.isArray(body) || !("idempotencyKey" in body)) {
-    return undefined;
-  }
+const webhookDeliveryFieldsSchema = z.object({
+  idempotencyKey: z.string().optional().catch(undefined),
+  sessionKey: webhookSessionKeySchema.optional(),
+});
 
-  return typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
+type ParsedWebhookDeliveryFields =
+  { ok: true; fields: WebhookDeliveryOptions } | { ok: false; error: string };
+
+/** Read the delivery fields a webhook body may carry; a non-string idempotencyKey is ignored. */
+export function parseWebhookDeliveryFields(body: unknown): ParsedWebhookDeliveryFields {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: true, fields: {} };
+
+  const parsed = webhookDeliveryFieldsSchema.safeParse(body);
+  return parsed.success
+    ? { ok: true, fields: parsed.data }
+    : {
+        ok: false,
+        error: `sessionKey must be a non-empty string of at most ${WEBHOOK_SESSION_KEY_MAX_LENGTH} characters`,
+      };
+}
+
+/**
+ * The sender sees a follow-up its session would not take, rather than the delivery
+ * starting over in a fresh session: 409 when the session cannot take prompts, 429 when
+ * its queue is full, 503 when it could not be reached or failed, which is safe to retry
+ * with the same idempotencyKey, and 422 for any other refusal, which a retry repeats.
+ */
+export function followUpRefusedResponse(refusal: SessionFollowUpRefusedError): Response {
+  const status =
+    refusal.status === 409 || refusal.status === 429
+      ? refusal.status
+      : refusal.status === null || refusal.status >= 500
+        ? 503
+        : 422;
+  return json(
+    {
+      error: refusal.message,
+      code: refusal.code ?? (status === 503 ? "SESSION_UNAVAILABLE" : "FOLLOW_UP_REJECTED"),
+      invocationId: refusal.invocationId,
+    } satisfies WebhookFollowUpRefusedResponse,
+    status
+  );
 }
 
 type WebhookAuthentication =
@@ -95,14 +138,22 @@ async function handleAutomationWebhook(
     return error("Invalid JSON body", 400);
   }
 
-  const idempotencyKey = parseWebhookIdempotencyKey(body);
+  const delivery = parseWebhookDeliveryFields(body);
+  if (!delivery.ok) {
+    return error(delivery.error, 400);
+  }
 
   // 4. Normalize and process the event. A webhook event targets exactly one
   // automation, so it has at most one invocation.
-  const event = normalizeWebhookEvent(automationId, body, idempotencyKey);
-  const { invocationIds, ...counts } = await new Scheduler(ctx.db, env, ctx.executionCtx).event(
-    event
-  );
+  const event = normalizeWebhookEvent(automationId, body, delivery.fields);
+  let result;
+  try {
+    result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+  } catch (e) {
+    if (e instanceof SessionFollowUpRefusedError) return followUpRefusedResponse(e);
+    throw e;
+  }
+  const { invocationIds, ...counts } = result;
   return json({
     ok: true,
     ...counts,

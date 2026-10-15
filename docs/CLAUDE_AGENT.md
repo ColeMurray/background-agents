@@ -18,9 +18,13 @@ sign in inside a sandbox.
 
 Every session runs on exactly one harness, chosen when the session is created and fixed for its
 lifetime (like the base branch). Child sessions inherit their parent's harness. Automations carry a
-harness for the sessions they create. The Linear integration has a harness setting (global and per
-repository, OpenCode by default); see [Linear sessions](#linear-sessions). Slack and GitHub sessions
-run on OpenCode.
+harness for the sessions they create. The Linear and GitHub integrations have a harness setting
+(global and per repository, OpenCode by default); see [Linear sessions](#linear-sessions) and
+[GitHub settings](integrations/GITHUB.md#models-and-instructions). The Slack integration has a
+workspace setting (global only, OpenCode by default) and a per-user choice in App Home; see
+[Slack sessions](#slack-sessions). All three preserve the selected harness: if it cannot run the
+resolved model, the bot replies with an explanation and creates no session instead of falling back
+to OpenCode.
 
 | Harness          | Models                | Anthropic authentication                   | Notes                                 |
 | ---------------- | --------------------- | ------------------------------------------ | ------------------------------------- |
@@ -38,25 +42,95 @@ sessions that cannot use it.
 ### Linear sessions
 
 **Settings > Integrations > Linear** has an **Agent harness** setting, globally and per repository
-override; a repository override wins, and unset means OpenCode. The setting is a preference that
-follows the model: Linear resolves the model first (`model:*` label, user preference, repository or
-global default, deployment `DEFAULT_MODEL`), then runs the session on the configured harness when it
-can run that model and on OpenCode otherwise. So with Claude Agent selected, an Anthropic model runs
-on Claude Agent and a `model:gpt-*` label (or a non-Anthropic default) runs on OpenCode instead of
-failing. The Linear activity names the harness:
-`Creating coding session on <target> (agent: Claude Agent, model: …)`. To keep every Linear session
-on Claude Agent, choose an Anthropic default model, keep any repository override's model Anthropic,
-and turn off **Allow user model preferences** and **Allow model labels**.
+override; a repository harness override wins, otherwise it inherits the global harness, with
+OpenCode used when neither sets one. Linear resolves the model (`model:*` label, user preference,
+repository or global default, deployment `DEFAULT_MODEL`) without changing that harness. With Claude
+Agent selected, a non-Anthropic model is refused: the bot posts an error activity in Linear and
+creates no coding session. Choose a compatible `model:*` label, user preference, or default model,
+or change the Linear integration harness, then delegate again. Labels and user preferences apply
+only when allowed. For successful launches, the Linear activity names the harness:
+`Creating coding session on <target> (agent: Claude Agent, model: …)`.
 
-Saving a harness and an incompatible model at the same level (for example Claude Agent with an
-OpenAI model) is rejected, and the settings form only lists models the harness can run. A repository
-override that sets only one of the two can still combine with the other level's value; the fallback
-above covers it.
+For both GitHub and Linear, explicitly selecting a restricted harness such as Claude Agent requires
+a compatible default model at that same settings level (global or repository). A repository harness
+override cannot use an inherited model to satisfy this requirement. Saving an incompatible pair at
+the same level is rejected. Omitted repository harness and model fields still inherit individually
+from the global settings. Save validation checks each explicit level, not the merged result;
+cross-level mismatches are refused at launch rather than switched to OpenCode.
+
+Existing GitHub and Linear settings that select Claude Agent without a default model are not
+automatically migrated. They remain readable, and a rejected save leaves the stored settings
+unchanged. Before saving any edits, including unrelated settings, an administrator must open
+**Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model
+at every global or repository level that explicitly selects Claude Agent. Setting only a global
+model does not repair a repository's explicit Claude Agent selection. Alternatively, switch that
+level to OpenCode, or remove the repository harness override to inherit the global settings.
 
 Linear sessions are unattended, so on Claude Agent they follow the **Automated authentication**
 policy: with a default Claude account and that policy on **Use default**, Linear usage draws on the
 connected subscription; otherwise it uses `ANTHROPIC_API_KEY`. Switching the setting affects only
 new sessions; follow-ups on an existing issue session keep the harness it was created with.
+
+### Slack sessions
+
+A Slack session runs on the user's **Agent harness** choice in the Slack app's **Home** tab
+(**Workspace default**, **OpenCode**, or **Claude Agent**), else on the **Agent harness** setting
+under **Settings > Integrations > Slack**. That setting is global only, and unset means OpenCode.
+The bot resolves the model as before: `!model` and `!reasoning` flags on the request that starts the
+session, the user's App Home model and reasoning effort, the Slack **Default model**, deployment
+`DEFAULT_MODEL`.
+
+Slack does not fall back to OpenCode. If the session's harness cannot run the resolved model, the
+bot creates no session and, after its "Starting work..." message, replies in the thread:
+
+> Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with `!model`
+> and a model Claude Agent can run, or change your model or agent harness in the Slack app's Home
+> tab.
+
+App Home lists only models the user's harness can run. If the user's current model cannot run on it,
+the model picker shows "Choose a model" with no selection and says new requests are refused until a
+model is chosen. The App Home "Currently using" summary names the harness. The "Starting work..."
+acknowledgement never names the harness; it names the model and reasoning effort only when they
+differ from the user's App Home defaults.
+
+When the workspace **Agent harness** is Claude Agent, a Slack **Default model** is required. The
+settings form disables **Save** until one is chosen, and the control plane rejects saving Claude
+Agent without one. "Use system default" is not offered for Claude Agent, because the settings page
+cannot see the deployment default model, which may be one Claude Agent cannot run. As for Linear,
+saving a harness with a model it cannot run is rejected, and the form only lists models the harness
+can run.
+
+A thread keeps the harness its session was created with, so switching the setting affects only new
+sessions. The control plane rejects a follow-up `!model` that the thread's harness cannot run, and
+the bot posts that explanation in the thread with advice:
+
+> Model "openai/gpt-5.4" cannot run on the Claude Agent harness. A thread keeps the harness its
+> session started on. Reply without `!model`, or start a new thread to use that model.
+
+A `!reasoning`-only follow-up keeps the thread's session model, as a follow-up without flags does,
+even if an administrator has since disabled that model. The thread's harness was chosen to run that
+model, so the follow-up always runs.
+
+Slack sessions are unattended, so on Claude Agent they follow the **Automated authentication**
+policy. With a default Claude account and that policy on **Use default**, Slack usage draws on the
+connected subscription. With **No account (API key)**, it uses `ANTHROPIC_API_KEY`. This also
+applies when a user picks Claude Agent in App Home while the workspace harness is OpenCode, so set
+**No account (API key)** to keep all Slack sessions on the key.
+
+If the bot cannot read the Slack settings, it treats the workspace harness as OpenCode; a user's App
+Home harness choice still applies. An Anthropic model on OpenCode needs `ANTHROPIC_API_KEY`, so a
+deployment that relies only on a connected Claude account sees those sessions fail.
+
+On Claude Agent, a Slack session loads the target repository's `CLAUDE.md` and `.claude/` settings
+and hooks, and code the agent runs inherits the Anthropic credential (see
+[How the credential reaches the sandbox](#how-the-credential-reaches-the-sandbox)). Slack users
+choose the branch through App Home, so let Slack channels reach only repositories whose `.claude/`
+configuration you trust on every branch.
+
+A Claude Agent session skips prebuilt images older than the Claude image floor
+(`harnessMinimumGeneration` in the runtime manifest). After switching, a repository whose image
+predates that floor starts its first Claude Agent sessions without it, so they are slower until the
+image is rebuilt.
 
 ---
 

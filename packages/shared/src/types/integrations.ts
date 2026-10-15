@@ -58,6 +58,7 @@ export const GITHUB_AUTOFIX_DEFAULTS: ResolvedGitHubAutofixSettings = {
 export const githubBotSettingsSchema = z.strictObject({
   autoReviewOnOpen: z.boolean().optional(),
   model: z.string().optional(),
+  harness: harnessIdSchema.optional(),
   reasoningEffort: z.string().optional(),
   allowedTriggerUsers: z.array(z.string()).optional(),
   codeReviewInstructions: z.string().optional(),
@@ -520,6 +521,8 @@ export type SlackRepoSettings = z.infer<typeof slackRepoSettingsSchema>;
 
 /** Global Slack defaults: per-repo fields plus workspace-wide policy controls. */
 export const slackGlobalSettingsSchema = slackRepoSettingsSchema.extend({
+  /** Preferred harness for new sessions; see `resolveHarnessForModel`. */
+  harness: harnessIdSchema.optional(),
   model: z.string().optional(),
   mentionsPolicy: z.enum(["allow", "escape", "strip"]).optional(),
   /** Ownership policy for Slack channels without a Team binding (global-only). */

@@ -388,6 +388,35 @@ export function memorySearchTerms(query: string): string[] {
   return [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
 }
 
+/** A literal search query: one set of bounds for agent search and the management list. */
+export const memorySearchQuerySchema = z
+  .string()
+  .trim()
+  .min(MEMORY_SEARCH_LIMITS.queryMin, `Use at least ${MEMORY_SEARCH_LIMITS.queryMin} characters.`)
+  .max(MEMORY_SEARCH_LIMITS.query, `Use at most ${MEMORY_SEARCH_LIMITS.query} characters.`)
+  .refine(
+    (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
+    `Use at most ${MEMORY_SEARCH_LIMITS.terms} search terms.`
+  );
+
+/** Management-list text filter (`GET /memories?search=`): blank means no filter. */
+export const memoryListSearchSchema = z
+  .string()
+  .trim()
+  .pipe(z.literal("").or(memorySearchQuerySchema));
+
+/**
+ * What a search box applies for the text typed so far. Under the minimum length is not a search
+ * yet (no filter, so the list stays put while typing); a query over a limit is explained instead
+ * of sent, since the server would reject it.
+ */
+export function memoryListSearchFromInput(raw: string): { search: string } | { problem: string } {
+  const trimmed = raw.trim();
+  if (trimmed.length < MEMORY_SEARCH_LIMITS.queryMin) return { search: "" };
+  const parsed = memorySearchQuerySchema.safeParse(trimmed);
+  return parsed.success ? { search: parsed.data } : { problem: parsed.error.issues[0].message };
+}
+
 /** Optional `repoOwner`/`repoName` selector shared by agent search and write inputs. */
 const repositorySelectorShape = {
   repoOwner: repositoryPairInputSchema.shape.repoOwner
@@ -410,16 +439,7 @@ function checkRepositorySelector(
 /** Repository filters select session members; environment and personal identity are server-derived. */
 export const memorySearchSchema = z
   .object({
-    query: z
-      .string()
-      .trim()
-      .min(MEMORY_SEARCH_LIMITS.queryMin)
-      .max(MEMORY_SEARCH_LIMITS.query)
-      .refine(
-        (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
-        "Too many search terms"
-      )
-      .describe("Short literal keywords; every term must match"),
+    query: memorySearchQuerySchema.describe("Short literal keywords; every term must match"),
     scopeType: memoryScopeTypeSchema
       .optional()
       .describe("Restrict to one scope type; omit to search every permitted session scope"),
