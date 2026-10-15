@@ -1879,7 +1879,14 @@ export class SandboxLifecycleManager
     const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
     if (!this.storage.markSandboxReady(generation)) return false;
     this.vmStartup.resolvePendingBridge(generation);
-    this.log.info("sandbox.ready", { event: "sandbox.ready", harness: harness ?? null });
+    this.log.info("sandbox.ready", {
+      event: "sandbox.ready",
+      harness: harness ?? null,
+      sandbox_id: generation.sandboxId,
+      generation_created_at_ms: generation.createdAt,
+      // Both boundaries belong to this control plane, never the runtime clock.
+      generation_to_ready_ms: timestamp - generation.createdAt,
+    });
     this.updateLastActivity(timestamp);
     this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
     return true;

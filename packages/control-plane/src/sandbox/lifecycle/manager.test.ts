@@ -54,6 +54,48 @@ vi.mock("../../auth/crypto", async (importOriginal) => {
 });
 
 describe("SandboxLifecycleManager", () => {
+  describe("readiness timing", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("logs the generation-to-receipt boundary only after the readiness commit", () => {
+      const output = vi.spyOn(console, "log").mockImplementation(() => {});
+      const sandbox = createMockSandbox({ status: "connecting", created_at: 1_000 });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      vi.mocked(storage.markSandboxReady).mockReturnValueOnce(true).mockReturnValue(false);
+      const manager = createTestLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        { ...createTestConfig(), getSessionId: () => "session-123" }
+      );
+
+      expect(manager.onRuntimeReady(1_750, "opencode")).toBe(true);
+      // Replay/reconnect or a rejected generation must not emit another sample.
+      expect(manager.onRuntimeReady(9_000, "opencode")).toBe(false);
+      const events = output.mock.calls
+        .map(([line]) => JSON.parse(String(line)))
+        .filter((event) => event.msg === "sandbox.ready");
+      expect(events).toEqual([
+        expect.objectContaining({
+          session_id: "session-123",
+          sandbox_id: sandbox.modal_sandbox_id,
+          generation_created_at_ms: 1_000,
+          generation_to_ready_ms: 750,
+          harness: "opencode",
+        }),
+      ]);
+      expect(storage.markSandboxReady).toHaveBeenCalledWith({
+        sandboxId: sandbox.modal_sandbox_id,
+        createdAt: 1_000,
+      });
+    });
+  });
+
   describe("spawnSandbox", () => {
     it.each([
       ["spawn", "public-session-name"],

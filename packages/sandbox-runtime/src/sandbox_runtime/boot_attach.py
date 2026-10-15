@@ -211,20 +211,36 @@ class BootAttach:
 
     async def _attach_harness(self) -> None:
         """Build, open, resume and initialize signing before announcing readiness."""
-        harness = self._harness_factory()
-        await self._open_harness(harness)
+        started_seconds = time.monotonic()
+        outcome = "error"
+        ready_sent = False
+        harness = None
         try:
-            await self._load_session_id(harness)
-            await self._initialize_signing_for_attach()
-        except BaseException:
-            # The harness has not been published, so bridge cleanup cannot see it.
-            with contextlib.suppress(Exception):
-                await harness.close()
+            harness = self._harness_factory()
+            await self._open_harness(harness)
+            try:
+                await self._load_session_id(harness)
+                await self._initialize_signing_for_attach()
+            except BaseException:
+                # The harness has not been published, so bridge cleanup cannot see it.
+                with contextlib.suppress(Exception):
+                    await harness.close()
+                raise
+            self.harness = harness
+            ready_sent = await self._send_event(self._build_ready_event())
+            self._boot_ready.set()
+            outcome = "success"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
             raise
-        self.harness = harness
-        await self._send_event(self._build_ready_event())
-        self._boot_ready.set()
-        self.log.info("bridge.harness_attached", harness=harness.id.value)
+        finally:
+            self.log.info(
+                "bridge.harness_attach",
+                harness=harness.id.value if harness is not None else None,
+                outcome=outcome,
+                duration_seconds=time.monotonic() - started_seconds,
+                ready_sent=ready_sent,
+            )
 
     async def _open_harness(self, harness: AgentHarness) -> None:
         try:
