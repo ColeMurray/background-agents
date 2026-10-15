@@ -1,6 +1,7 @@
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { ParticipantRow } from "./types";
+import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 
 export interface PromptMessageData {
   clientRequestId?: string;
@@ -20,8 +21,11 @@ export interface EnqueuePromptCoreData {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
   clientRequestId?: string;
+  canonicalUserId?: EnqueuePromptRequest["canonicalUserId"];
+  scmEnrichment?: EnqueuePromptRequest["scmEnrichment"];
 }
 
+/** Admission receipt; execution may still be pending or may already have finished on retry. */
 export interface EnqueuedPrompt {
   messageId: string;
   position: number | null;

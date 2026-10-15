@@ -123,7 +123,7 @@ describe("rejected provider allocation", () => {
           (message) => "type" in message && message.type === "sandbox_error"
         )
       ).toEqual([{ type: "sandbox_error", error: expect.any(String) }]);
-      expect(fixture.manager.mayProcessQueuedWork()).toBe(false);
+      expect(fixture.manager.allowsQueueProcessing()).toBe(false);
     } finally {
       finishStop();
       await spawning;

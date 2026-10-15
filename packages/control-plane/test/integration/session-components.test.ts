@@ -8,6 +8,7 @@ import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session
 import { SandboxLifecycleManager } from "../../src/sandbox/lifecycle/manager";
 import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import { SessionMessageQueue } from "../../src/session/message-queue";
+import { SessionPromptAdmission } from "../../src/session/prompt-admission";
 import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
@@ -70,6 +71,7 @@ describe("createSessionRuntime", () => {
         SandboxLifecycleManager.prototype,
         SandboxShutdownCoordinator.prototype,
         SessionMessageQueue.prototype,
+        SessionPromptAdmission.prototype,
         SessionMessengerImpl.prototype,
         SessionStatusService.prototype,
         SessionWebSocketManagerImpl.prototype,

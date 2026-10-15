@@ -5,7 +5,7 @@ import {
   PromptQueueFullError,
   SandboxPromptBlockedError,
   SessionNotPromptableError,
-} from "../../message-queue";
+} from "../../prompt-admission";
 import type { ParticipantRow, SessionRow } from "../../types";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";

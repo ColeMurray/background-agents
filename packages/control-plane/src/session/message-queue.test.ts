@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
-import { fingerprintWebPrompt, SessionMessageQueue } from "./message-queue";
+import { SessionMessageQueue } from "./message-queue";
+import { fingerprintWebPrompt, SessionPromptAdmission } from "./prompt-admission";
+import { SessionClientCommandFacade } from "./client-command-facade";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
+import type { ParticipantRepository } from "./participant-repository";
+import type { ParticipantService } from "./participant-service";
+import type { SessionIndexStore } from "../db/session-index";
 import {
   serverMessageSchema,
   type ServerMessage,
@@ -12,10 +17,8 @@ import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
-import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
-import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
@@ -119,23 +122,6 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 const EXECUTION_TIMEOUT_MS = 60_000;
 
-it("creates a canonical SHA-256 web prompt fingerprint", async () => {
-  const fingerprint = await fingerprintWebPrompt("part-1", {
-    content: "hello",
-    model: "anthropic/claude-haiku-4-5",
-    attachments: [{ name: "ignored-name.png", attachmentId: "up-1" }],
-  });
-
-  expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
-  await expect(
-    fingerprintWebPrompt("part-1", {
-      content: "hello",
-      model: "anthropic/claude-haiku-4-5",
-      attachments: [{ name: "different-name.png", attachmentId: "up-1" }],
-    })
-  ).resolves.toBe(fingerprint);
-});
-
 function buildQueue(
   mayDispatch: () => boolean = () => true,
   getSandboxPromptBlockReason: () => string | null = () => null
@@ -152,8 +138,16 @@ function buildQueue(
     error: vi.fn(),
     child: vi.fn(),
   };
-  const repository = {
+  const sessionRepository = {
+    getSession: vi.fn(() => createSession()),
     transaction: vi.fn((closure: () => unknown) => closure()),
+  };
+  const participantRepository = {
+    getParticipantById: vi.fn((_id: string) => createParticipant()),
+    updateParticipantCoalesce: vi.fn(),
+    updateParticipantIdentity: vi.fn(),
+  };
+  const repository = {
     createMessageWithAttachments: vi.fn(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
@@ -182,10 +176,6 @@ function buildQueue(
     startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
-    getParticipantById: vi.fn((_id: string) => createParticipant()),
-    getSession: vi.fn(() => createSession()),
-    updateParticipantCoalesce: vi.fn(),
-    updateParticipantIdentity: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => ({
       messageId: event.messageId,
       messageCreatedAt: 1000,
@@ -211,7 +201,7 @@ function buildQueue(
       const socket = wsManager.getSandboxSocket();
       return socket ? { kind: "dispatch", socket } : { kind: "unavailable" };
     }),
-    send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
+    send: vi.fn<SessionWebSocketManager["send"]>(() => true),
   };
 
   const participantService = {
@@ -232,6 +222,7 @@ function buildQueue(
     reconcileAfterQueueRemoval: vi.fn(async () => {}),
   };
   const sandboxLifecycle = {
+    allowsQueueProcessing: mayDispatch,
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     onPromptDispatched: vi.fn(() => {}),
@@ -258,6 +249,20 @@ function buildQueue(
   const getProviderAuthenticationError = vi.fn(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
+  const policy = { getProviderAuthenticationError, getSandboxPromptBlockReason };
+  const admission = new SessionPromptAdmission(
+    backgroundTasks,
+    log,
+    sessionRepository as unknown as SessionCoreRepository,
+    repository as unknown as MessageRepository,
+    participantRepository as unknown as ParticipantRepository,
+    attachmentRepository as unknown as SessionAttachmentRepository,
+    participantService as unknown as ParticipantService,
+    sessionStatus as unknown as SessionStatusService,
+    messenger,
+    sessionIndex as unknown as SessionIndexStore,
+    policy
+  );
 
   const alarmScheduler = createEarliestAlarmScheduler(
     { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
@@ -273,7 +278,7 @@ function buildQueue(
   );
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
-    repository as unknown as SessionCoreRepository,
+    sessionRepository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
     wsManager as unknown as SessionWebSocketManager,
     messenger,
@@ -288,30 +293,39 @@ function buildQueue(
   const queue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
-    repository as unknown as SessionCoreRepository,
+    sessionRepository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
-    repository as unknown as ParticipantRepository,
-    attachmentRepository as unknown as SessionAttachmentRepository,
+    participantRepository as unknown as ParticipantRepository,
     wsManager as unknown as SessionWebSocketManager,
     messenger,
     participantService as unknown as ParticipantService,
     callbackService as unknown as CallbackNotificationService,
     sessionStatus as unknown as SessionStatusService,
-    getProviderAuthenticationError,
+    policy,
     messageFailures,
     sandboxLifecycle,
-    sessionIndex,
     "github",
     alarmScheduler,
     executionStop,
-    () => executionTimeoutMs,
-    mayDispatch,
-    getSandboxPromptBlockReason
+    () => executionTimeoutMs
+  );
+  const clientCommands = new SessionClientCommandFacade(
+    {} as never,
+    queue,
+    admission,
+    wsManager as unknown as SessionWebSocketManager,
+    () => executionStop.stop(),
+    {} as never,
+    {} as never
   );
 
   return {
     queue,
+    admission,
+    clientCommands,
     executionStop,
+    sessionRepository,
+    participantRepository,
     repository,
     attachmentRepository,
     wsManager,
@@ -337,12 +351,12 @@ function buildQueue(
 describe("SessionMessageQueue", () => {
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
-    h.repository.getSession.mockReturnValue(
+    h.sessionRepository.getSession.mockReturnValue(
       createSession({ harness: "codex", model: "openai/gpt-6.1-sol" })
     );
     h.getProviderAuthenticationError.mockResolvedValue("This model has been disabled.");
     await expect(
-      h.queue.enqueuePromptFromApi({ content: "next", authorId: "user-1", source: "agent" })
+      h.admission.enqueueFromApi({ content: "next", authorId: "user-1", source: "agent" })
     ).rejects.toThrow("disabled");
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
     h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
@@ -359,12 +373,13 @@ describe("SessionMessageQueue", () => {
     const ws = {} as WebSocket;
     h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
-    await h.queue.handlePromptMessage(ws, createClientInfo(), {
+    await h.clientCommands.submitPrompt(ws, createClientInfo(), {
+      type: "prompt",
       content: "Continue",
       clientRequestId: "request-1",
     });
     await expect(
-      h.queue.enqueuePromptFromApi({ content: "Continue", authorId: "user-1", source: "agent" })
+      h.admission.enqueueFromApi({ content: "Continue", authorId: "user-1", source: "agent" })
     ).rejects.toMatchObject({ name: "SandboxPromptBlockedError" });
 
     expect(h.wsManager.send).toHaveBeenCalledWith(
@@ -388,7 +403,8 @@ describe("SessionMessageQueue", () => {
       () => (held ? "Sandbox recovery required" : null)
     );
     const ws = {} as WebSocket;
-    const handling = h.queue.handlePromptMessage(ws, createClientInfo(), {
+    const handling = h.clientCommands.submitPrompt(ws, createClientInfo(), {
+      type: "prompt",
       content: "Continue",
       clientRequestId: "request-1",
     });
@@ -404,7 +420,7 @@ describe("SessionMessageQueue", () => {
   it("cannot dispatch while final-cost settlement waits for terminal projection", async () => {
     const h = buildQueue();
     const session = createSession({ total_cost: 9, max_cost_usd: 10 });
-    h.repository.getSession.mockReturnValue(session);
+    h.sessionRepository.getSession.mockReturnValue(session);
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-finishing" });
     h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => {
       h.repository.getProcessingMessage.mockReturnValue(null);
@@ -500,7 +516,7 @@ describe("SessionMessageQueue", () => {
       messageId: "msg-autofix",
     });
     expect(h.participantService.getByUserId).toHaveBeenCalledWith("github:7");
-    expect(h.repository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+    expect(h.participantRepository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
       scmUserId: "7",
       scmLogin: "alice",
       scmName: "alice",
@@ -572,7 +588,7 @@ describe("SessionMessageQueue", () => {
 
   it("passes closed-session state into atomic Autofix admission", async () => {
     const h = buildQueue();
-    h.repository.getSession.mockReturnValue(createSession({ status: "archived" }));
+    h.sessionRepository.getSession.mockReturnValue(createSession({ status: "archived" }));
     h.repository.admitAutofixMessage.mockReturnValue({
       kind: "rejected",
       reason: "session_closed",
@@ -598,7 +614,7 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.sessionStatus.transition).not.toHaveBeenCalled();
     expect(h.participantService.getByUserId).not.toHaveBeenCalled();
-    expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+    expect(h.participantRepository.updateParticipantCoalesce).not.toHaveBeenCalled();
   });
 
   it("queues Autofix feedback during a recovery hold and dispatches only after it lifts", async () => {
@@ -688,7 +704,7 @@ describe("SessionMessageQueue", () => {
 
   it("returns a duplicate without re-driving it in a closed session", async () => {
     const h = buildQueue();
-    h.repository.getSession.mockReturnValue(createSession({ status: "archived" }));
+    h.sessionRepository.getSession.mockReturnValue(createSession({ status: "archived" }));
     h.repository.admitAutofixMessage.mockReturnValue({
       kind: "duplicate",
       messageId: "msg-existing",
@@ -736,7 +752,8 @@ describe("SessionMessageQueue", () => {
     h.repository.cancelPendingMessage.mockReturnValue(true);
     const ws = {} as WebSocket;
 
-    await h.queue.cancelQueuedPrompt(ws, {
+    await h.clientCommands.cancelPrompt(ws, {
+      type: "cancel_prompt",
       messageId: "msg-1",
       clientRequestId: "request-1",
     });
@@ -749,13 +766,23 @@ describe("SessionMessageQueue", () => {
     });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
     expect(h.sessionStatus.reconcileAfterQueueRemoval).toHaveBeenCalledOnce();
+    expect(h.repository.cancelPendingMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      h.wsManager.send.mock.invocationCallOrder[0]
+    );
+    expect(h.wsManager.send.mock.invocationCallOrder[0]).toBeLessThan(
+      h.broadcast.mock.invocationCallOrder[0]
+    );
+    expect(h.wsManager.send.mock.invocationCallOrder[0]).toBeLessThan(
+      h.sessionStatus.reconcileAfterQueueRemoval.mock.invocationCallOrder[0]
+    );
   });
 
   it("rejects cancellation after a prompt leaves pending state", async () => {
     const h = buildQueue();
     const ws = {} as WebSocket;
 
-    await h.queue.cancelQueuedPrompt(ws, {
+    await h.clientCommands.cancelPrompt(ws, {
+      type: "cancel_prompt",
       messageId: "msg-1",
       clientRequestId: "request-1",
     });
@@ -773,7 +800,8 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     h.repository.cancelPendingMessage.mockReturnValue(true);
 
-    await h.queue.cancelQueuedPrompt({} as WebSocket, {
+    await h.clientCommands.cancelPrompt({} as WebSocket, {
+      type: "cancel_prompt",
       messageId: "msg-1",
       clientRequestId: "request-1",
     });
@@ -797,7 +825,7 @@ describe("SessionMessageQueue", () => {
 
   it("does not spawn or dispatch while the session budget is exhausted", async () => {
     const h = buildQueue();
-    h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+    h.sessionRepository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
 
     await h.queue.processMessageQueue();
@@ -814,7 +842,7 @@ describe("SessionMessageQueue", () => {
       h.wsManager.getSandboxSocket.mockReturnValue(ready);
       h.repository.getNextPendingMessage.mockReturnValue(createMessage());
       h.getProviderAuthenticationError.mockImplementationOnce(async () => {
-        h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+        h.sessionRepository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
         return authenticationError;
       });
 
@@ -830,7 +858,7 @@ describe("SessionMessageQueue", () => {
     "does not dispatch queued work for a %s session",
     async (status) => {
       const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ status }));
+      h.sessionRepository.getSession.mockReturnValue(createSession({ status }));
       h.repository.getNextPendingMessage.mockReturnValue(createMessage());
 
       await h.queue.processMessageQueue();
@@ -844,7 +872,7 @@ describe("SessionMessageQueue", () => {
   it("does not spawn a sandbox for a prompt cancelled during the provider-auth lookup", async () => {
     const h = buildQueue();
     const session = createSession();
-    h.repository.getSession.mockImplementation(() => session);
+    h.sessionRepository.getSession.mockImplementation(() => session);
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
     h.wsManager.getSandboxSocket.mockReturnValue(null);
     h.getProviderAuthenticationError.mockImplementation(async () => {
@@ -906,7 +934,7 @@ describe("SessionMessageQueue", () => {
   it("dispatches the next prompt when only the head was cancelled during the provider-auth lookup", async () => {
     const h = buildQueue();
     const session = createSession();
-    h.repository.getSession.mockImplementation(() => session);
+    h.sessionRepository.getSession.mockImplementation(() => session);
     h.repository.getNextPendingMessage
       .mockReturnValueOnce(createMessage({ id: "msg-a" }))
       .mockReturnValueOnce(createMessage({ id: "msg-b" }))
@@ -973,11 +1001,12 @@ describe("SessionMessageQueue", () => {
   it("rejects a prompt whose session closed while its fingerprint was being hashed", async () => {
     const h = buildQueue();
     const session = createSession();
-    h.repository.getSession.mockImplementation(() => session);
+    h.sessionRepository.getSession.mockImplementation(() => session);
     const ws = {} as WebSocket;
 
     // The fingerprint hash is the first await; the cancel lands there.
-    const handled = h.queue.handlePromptMessage(ws, createClientInfo(), {
+    const handled = h.clientCommands.submitPrompt(ws, createClientInfo(), {
+      type: "prompt",
       content: "hello",
       clientRequestId: "req-1",
     });
@@ -994,10 +1023,24 @@ describe("SessionMessageQueue", () => {
 
   it("marks session active when a prompt is enqueued", async () => {
     const h = buildQueue();
+    const processMessageQueue = vi.spyOn(h.queue, "processMessageQueue");
+    const ws = {} as WebSocket;
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), { content: "hello" });
+    await h.clientCommands.submitPrompt(ws, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
+      content: "hello",
+    });
 
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      ws,
+      expect.objectContaining({ type: "prompt_queued", messageId: expect.any(String) })
+    );
+    expect(processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.wsManager.send.mock.invocationCallOrder[0]).toBeLessThan(
+      processMessageQueue.mock.invocationCallOrder[0]
+    );
   });
 
   it("deduplicates a correlated web prompt before attachment lookup or mutation", async () => {
@@ -1015,7 +1058,8 @@ describe("SessionMessageQueue", () => {
       })
     );
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
       clientRequestId: "request-1",
       content: "same",
       model: "anthropic/claude-haiku-4-5",
@@ -1046,9 +1090,10 @@ describe("SessionMessageQueue", () => {
 
   it("rejects a new websocket prompt when the session budget is exhausted", async () => {
     const h = buildQueue();
-    h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+    h.sessionRepository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
       clientRequestId: "request-budget",
       content: "continue",
     });
@@ -1067,7 +1112,8 @@ describe("SessionMessageQueue", () => {
   it("touches the session index when a prompt is queued", async () => {
     const h = buildQueue();
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
       clientRequestId: "request-touch",
       content: "hello",
     });
@@ -1082,7 +1128,7 @@ describe("SessionMessageQueue", () => {
   it("touches the session index when an API prompt is queued", async () => {
     const h = buildQueue();
 
-    await h.queue.enqueuePromptFromApi({
+    await h.admission.enqueueFromApi({
       content: "follow-up",
       authorId: "user-1",
       source: "automation",
@@ -1104,7 +1150,8 @@ describe("SessionMessageQueue", () => {
     );
     h.repository.getUnfinishedMessagePosition.mockReturnValue(null);
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
       clientRequestId: "request-complete",
       content: "same",
     });
@@ -1126,7 +1173,8 @@ describe("SessionMessageQueue", () => {
       })
     );
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
       clientRequestId: "request-1",
       content: "changed",
     });
@@ -1146,7 +1194,8 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
       clientRequestId: "request-full",
       content: "queued",
       attachments: [{ name: "shot.png", attachmentId: "up-1" }],
@@ -1186,7 +1235,9 @@ describe("SessionMessageQueue", () => {
       },
     ]);
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
       content: "look at this",
       attachments: [
         {
@@ -1210,7 +1261,9 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
       content: "queued follow-up",
     });
 
@@ -1239,7 +1292,9 @@ describe("SessionMessageQueue", () => {
       throw new AttachmentClaimConflictError("already claimed");
     });
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
       content: "look",
       attachments: [{ name: "shot.png", attachmentId: "up-1" }],
     });
@@ -1255,7 +1310,9 @@ describe("SessionMessageQueue", () => {
   it("rejects upload references that cannot be claimed", async () => {
     const h = buildQueue();
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
       content: "look",
       attachments: [{ name: "missing.png", attachmentId: "missing" }],
     });
@@ -1274,7 +1331,9 @@ describe("SessionMessageQueue", () => {
     });
 
     await expect(
-      h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+        type: "prompt",
+        clientRequestId: "request-1",
         content: "look",
         attachments: [{ name: "shot.png", attachmentId: "up-1" }],
       })
@@ -1300,7 +1359,9 @@ describe("SessionMessageQueue", () => {
       },
     ]);
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
       content: "watch this",
       attachments: [{ name: "document.pdf", attachmentId: "up-invalid" }],
     });
@@ -1342,7 +1403,7 @@ describe("SessionMessageQueue", () => {
     "dispatches a resumed %s session through the OpenAI replacement",
     async (model) => {
       const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ model }));
+      h.sessionRepository.getSession.mockReturnValue(createSession({ model }));
       h.repository.getNextPendingMessage.mockReturnValue(createMessage());
       h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
 
@@ -1364,7 +1425,7 @@ describe("SessionMessageQueue", () => {
     "preserves valid Autofix origin on the canonical dispatch-time user event: %j",
     async (fields) => {
       const h = buildQueue();
-      h.repository.getParticipantById.mockReturnValue(
+      h.participantRepository.getParticipantById.mockReturnValue(
         createParticipant({ scm_user_id: "255062780", scm_login: "open-inspect[bot]" })
       );
       const origin = {
@@ -1482,7 +1543,7 @@ describe("SessionMessageQueue", () => {
       canonical_user_id: "user-pat",
     });
 
-    h.repository.getParticipantById.mockReturnValue(participant);
+    h.participantRepository.getParticipantById.mockReturnValue(participant);
     h.repository.getNextPendingMessage.mockReturnValue(
       createMessage({ author_id: participant.id, source: "slack" })
     );
@@ -1587,9 +1648,16 @@ describe("SessionMessageQueue", () => {
 
   it("records enqueue depth before and after without prompt content", async () => {
     const h = buildQueue();
-    h.repository.getPendingOrProcessingCount.mockReturnValueOnce(2).mockReturnValueOnce(3);
+    h.repository.getPendingOrProcessingCount
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(2)
+      .mockReturnValueOnce(3);
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), { content: "secret" });
+    await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+      type: "prompt",
+      clientRequestId: "request-1",
+      content: "secret",
+    });
 
     const enqueueLog = h.log.info.mock.calls.find(([event]) => event === "prompt.enqueue")?.[1];
     expect(enqueueLog).toEqual(
@@ -1602,7 +1670,7 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());
-    h.repository.getSession.mockReturnValue(
+    h.sessionRepository.getSession.mockReturnValue(
       createSession({ model: "xai/grok-build-0.1", reasoning_effort: "high" })
     );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
@@ -1622,7 +1690,7 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-agent-only" }));
-    h.repository.getParticipantById.mockReturnValue(
+    h.participantRepository.getParticipantById.mockReturnValue(
       createParticipant({
         scm_user_id: null,
         scm_login: "octocat",
@@ -1652,7 +1720,7 @@ describe("SessionMessageQueue", () => {
     h.repository.getNextPendingMessage
       .mockReturnValueOnce(createMessage({ id: "msg-ada", author_id: "part-ada" }))
       .mockReturnValueOnce(createMessage({ id: "msg-grace", author_id: "part-grace" }));
-    h.repository.getParticipantById
+    h.participantRepository.getParticipantById
       .mockReturnValueOnce(
         createParticipant({
           id: "part-ada",
@@ -2344,7 +2412,7 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
   });
 
-  describe("enqueuePromptFromApi", () => {
+  describe("API admission", () => {
     it("returns the prompt it already queued for a client request id it has seen", async () => {
       const h = buildQueue();
       h.repository.getMessageByClientRequestId.mockReturnValue(
@@ -2355,7 +2423,7 @@ describe("SessionMessageQueue", () => {
         })
       );
 
-      const queued = await h.queue.enqueuePromptFromApi({
+      const queued = await h.admission.enqueueFromApi({
         content: "same",
         authorId: "user-1",
         source: "automation",
@@ -2373,7 +2441,7 @@ describe("SessionMessageQueue", () => {
       "returns the prompt it already queued for a seen client request id despite $limit",
       async ({ session, queueDepth }) => {
         const h = buildQueue();
-        h.repository.getSession.mockReturnValue(createSession(session));
+        h.sessionRepository.getSession.mockReturnValue(createSession(session));
         h.repository.getPendingOrProcessingCount.mockReturnValue(queueDepth);
         h.repository.getMessageByClientRequestId.mockReturnValue(
           createMessage({
@@ -2383,7 +2451,7 @@ describe("SessionMessageQueue", () => {
           })
         );
 
-        const queued = await h.queue.enqueuePromptFromApi({
+        const queued = await h.admission.enqueueFromApi({
           content: "same",
           authorId: "user-1",
           source: "automation",
@@ -2402,7 +2470,7 @@ describe("SessionMessageQueue", () => {
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
       await expect(
-        h.queue.enqueuePromptFromApi({
+        h.admission.enqueueFromApi({
           content: "Continue",
           authorId: "new-user",
           source: "automation",
@@ -2423,7 +2491,7 @@ describe("SessionMessageQueue", () => {
       );
 
       await expect(
-        h.queue.enqueuePromptFromApi({
+        h.admission.enqueueFromApi({
           content: "changed",
           authorId: "user-1",
           source: "automation",
@@ -2435,12 +2503,12 @@ describe("SessionMessageQueue", () => {
 
     it("rejects exhaustion before capacity checks or participant mutations", async () => {
       const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
+      h.sessionRepository.getSession.mockReturnValue(createSession({ budget_exhausted: 1 }));
       h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
       await expect(
-        h.queue.enqueuePromptFromApi({
+        h.admission.enqueueFromApi({
           content: "Continue",
           authorId: "new-user",
           source: "agent",
@@ -2457,7 +2525,7 @@ describe("SessionMessageQueue", () => {
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
       await expect(
-        h.queue.enqueuePromptFromApi({
+        h.admission.enqueueFromApi({
           content: "Continue",
           authorId: "new-user",
           source: "agent",
@@ -2465,17 +2533,21 @@ describe("SessionMessageQueue", () => {
       ).rejects.toMatchObject({ name: "PromptQueueFullError" });
 
       expect(h.participantService.create).not.toHaveBeenCalled();
-      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.participantRepository.updateParticipantCoalesce).not.toHaveBeenCalled();
     });
 
     it("rejects a full queue on the WebSocket path before creating a participant", async () => {
       const h = buildQueue();
       h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
-      h.repository.getParticipantById.mockReturnValue(null as unknown as ParticipantRow);
+      h.participantRepository.getParticipantById.mockReturnValue(null as unknown as ParticipantRow);
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
       const ws = {} as WebSocket;
 
-      await h.queue.handlePromptMessage(ws, createClientInfo(), { content: "Continue" });
+      await h.clientCommands.submitPrompt(ws, createClientInfo(), {
+        type: "prompt",
+        clientRequestId: "request-1",
+        content: "Continue",
+      });
 
       expect(h.participantService.create).not.toHaveBeenCalled();
       expect(h.wsManager.send).toHaveBeenCalledWith(
@@ -2488,11 +2560,11 @@ describe("SessionMessageQueue", () => {
       "rejects prompts for a %s session before inserting a message",
       async (status) => {
         const h = buildQueue();
-        h.repository.getSession.mockReturnValue(createSession({ status }));
+        h.sessionRepository.getSession.mockReturnValue(createSession({ status }));
         h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
         await expect(
-          h.queue.enqueuePromptFromApi({
+          h.admission.enqueueFromApi({
             content: "Continue",
             authorId: "user-1",
             source: "agent",
@@ -2501,16 +2573,18 @@ describe("SessionMessageQueue", () => {
 
         expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
         expect(h.participantService.create).not.toHaveBeenCalled();
-        expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+        expect(h.participantRepository.updateParticipantCoalesce).not.toHaveBeenCalled();
       }
     );
 
     it("rejects a websocket prompt before creating a participant", async () => {
       const h = buildQueue();
-      h.repository.getSession.mockReturnValue(createSession({ status: "cancelled" }));
+      h.sessionRepository.getSession.mockReturnValue(createSession({ status: "cancelled" }));
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
-      await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      await h.clientCommands.submitPrompt({} as WebSocket, createClientInfo(), {
+        type: "prompt",
+        clientRequestId: "request-1",
         content: "Continue",
       });
 
@@ -2525,7 +2599,7 @@ describe("SessionMessageQueue", () => {
       const h = buildQueue();
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
-      await h.queue.enqueuePromptFromApi({
+      await h.admission.enqueueFromApi({
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
@@ -2544,7 +2618,7 @@ describe("SessionMessageQueue", () => {
       const h = buildQueue();
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
 
-      await h.queue.enqueuePromptFromApi({
+      await h.admission.enqueueFromApi({
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
@@ -2556,7 +2630,7 @@ describe("SessionMessageQueue", () => {
     it("updates stored SCM identity after successful enrichment", async () => {
       const h = buildQueue();
 
-      await h.queue.enqueuePromptFromApi({
+      await h.admission.enqueueFromApi({
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
@@ -2568,7 +2642,7 @@ describe("SessionMessageQueue", () => {
         },
       });
 
-      expect(h.repository.updateParticipantIdentity).toHaveBeenCalledWith("part-1", {
+      expect(h.participantRepository.updateParticipantIdentity).toHaveBeenCalledWith("part-1", {
         canonicalUserId: null,
         scmName: "Trusted Octo Cat",
         scmEmail: "1001+octocat@users.noreply.github.com",
@@ -2580,14 +2654,14 @@ describe("SessionMessageQueue", () => {
     it("leaves stored enrichment unchanged when no snapshot is provided", async () => {
       const h = buildQueue();
 
-      await h.queue.enqueuePromptFromApi({
+      await h.admission.enqueueFromApi({
         content: "Fix bug",
         authorId: "github:1001",
         source: "github",
       });
 
-      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
-      expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
+      expect(h.participantRepository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.participantRepository.updateParticipantIdentity).not.toHaveBeenCalled();
     });
   });
 });

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
 import type { MessageRepository } from "../message-repository";
 import type { SessionMessageQueue } from "../message-queue";
+import type { SessionPromptAdmission } from "../prompt-admission";
+import type { EnqueuedPrompt } from "../prompt-admission-types";
 import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
 import type { UsageRepository } from "../usage-repository";
@@ -23,8 +25,11 @@ function createService() {
   } as unknown as UsageRepository;
 
   const messageQueue = {
-    enqueuePromptFromApi: vi.fn(),
-  } as unknown as SessionMessageQueue;
+    processMessageQueue: vi.fn<SessionMessageQueue["processMessageQueue"]>(),
+  };
+  const promptAdmission = {
+    enqueueFromApi: vi.fn<SessionPromptAdmission["enqueueFromApi"]>(),
+  };
 
   const stopExecution = vi.fn();
   const parseArtifactMetadata = vi.fn();
@@ -35,7 +40,8 @@ function createService() {
       eventRepository,
       artifactRepository,
       usageRepository,
-      messageQueue,
+      messageQueue: messageQueue as unknown as SessionMessageQueue,
+      promptAdmission: promptAdmission as unknown as SessionPromptAdmission,
       stopExecution,
       parseArtifactMetadata,
       transaction: (closure) => closure(),
@@ -45,32 +51,77 @@ function createService() {
     artifactRepository,
     usageRepository,
     messageQueue,
+    promptAdmission,
     stopExecution,
     parseArtifactMetadata,
   };
 }
 
 describe("MessageService", () => {
-  it("delegates enqueuePrompt to SessionMessageQueue", async () => {
-    const { service, messageQueue } = createService();
-    vi.mocked(messageQueue.enqueuePromptFromApi).mockResolvedValue({
+  const request = {
+    content: "hello",
+    authorId: "user-1",
+    source: "web" as const,
+  };
+
+  it.each([false, true])(
+    "awaits admission and dispatch before returning, deduplicated=%s",
+    async (deduplicated) => {
+      const { service, messageQueue, promptAdmission } = createService();
+      let admit!: (receipt: EnqueuedPrompt) => void;
+      let finishDispatch!: () => void;
+      promptAdmission.enqueueFromApi.mockReturnValue(
+        new Promise((resolve) => {
+          admit = resolve;
+        })
+      );
+      messageQueue.processMessageQueue.mockReturnValue(
+        new Promise((resolve) => {
+          finishDispatch = resolve;
+        })
+      );
+      let returned = false;
+      const pending = service.enqueuePrompt(request).then((result) => {
+        returned = true;
+        return result;
+      });
+
+      expect(promptAdmission.enqueueFromApi).toHaveBeenCalledExactlyOnceWith(request);
+      expect(messageQueue.processMessageQueue).not.toHaveBeenCalled();
+      admit({ messageId: "msg-1", position: deduplicated ? null : 1, deduplicated });
+      await vi.waitFor(() => expect(messageQueue.processMessageQueue).toHaveBeenCalledOnce());
+      expect(returned).toBe(false);
+
+      finishDispatch();
+      await expect(pending).resolves.toEqual({
+        messageId: "msg-1",
+        status: "queued",
+        deduplicated,
+      });
+    }
+  );
+
+  it.each([false, true])("propagates dispatch failure, deduplicated=%s", async (deduplicated) => {
+    const { service, messageQueue, promptAdmission } = createService();
+    promptAdmission.enqueueFromApi.mockResolvedValue({
       messageId: "msg-1",
-      status: "queued",
-      deduplicated: false,
+      position: 1,
+      deduplicated,
     });
+    const failure = new Error("Dispatch failed");
+    messageQueue.processMessageQueue.mockRejectedValue(failure);
 
-    const result = await service.enqueuePrompt({
-      content: "hello",
-      authorId: "user-1",
-      source: "web",
-    });
+    await expect(service.enqueuePrompt(request)).rejects.toBe(failure);
+    expect(messageQueue.processMessageQueue).toHaveBeenCalledOnce();
+  });
 
-    expect(result).toEqual({ messageId: "msg-1", status: "queued", deduplicated: false });
-    expect(messageQueue.enqueuePromptFromApi).toHaveBeenCalledWith({
-      content: "hello",
-      authorId: "user-1",
-      source: "web",
-    });
+  it("propagates admission failure without dispatching", async () => {
+    const { service, messageQueue, promptAdmission } = createService();
+    const failure = new Error("Admission failed");
+    promptAdmission.enqueueFromApi.mockRejectedValue(failure);
+
+    await expect(service.enqueuePrompt(request)).rejects.toBe(failure);
+    expect(messageQueue.processMessageQueue).not.toHaveBeenCalled();
   });
 
   it("stops execution and returns stopping status", async () => {

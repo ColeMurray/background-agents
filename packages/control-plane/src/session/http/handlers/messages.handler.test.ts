@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
 import { MessagesHandler } from "./messages.handler";
-import { SandboxPromptBlockedError } from "../../message-queue";
+import { SandboxPromptBlockedError } from "../../prompt-admission";
 import type { MessageService } from "../../services/message.service";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 

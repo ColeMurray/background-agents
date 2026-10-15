@@ -288,7 +288,7 @@ describe("status writes after a provider await (COL-99)", () => {
       await vi.waitFor(() => expect(createSandbox).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 1);
       await expect(manager.handleAlarm()).resolves.toBe("sandbox_terminated");
-      expect(manager.mayProcessQueuedWork()).toBe(false);
+      expect(manager.allowsQueueProcessing()).toBe(false);
       expect(resumeQueuedWork).not.toHaveBeenCalled();
 
       resolveCreate({

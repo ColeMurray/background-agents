@@ -50,6 +50,52 @@ describe("POST /sessions/:id/prompt", () => {
 });
 
 describe("POST /internal/prompt", () => {
+  it("does not overwrite newer participant identity when retrying an accepted request", async () => {
+    const { stub } = await initSession();
+    const original = {
+      content: "Fix the bug",
+      authorId: "github:1001",
+      source: "github",
+      clientRequestId: "original-request",
+      canonicalUserId: "old-user",
+      scmEnrichment: { userId: "1001", login: "old-login", name: "Old Name", email: null },
+    };
+    const enqueue = (body: typeof original) =>
+      stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const first = await enqueue(original);
+    expect(first.status).toBe(200);
+    const receipt = await first.json<{ messageId: string }>();
+    const newer = await enqueue({
+      ...original,
+      clientRequestId: "newer-request",
+      canonicalUserId: "current-user",
+      scmEnrichment: { ...original.scmEnrichment, login: "current-login", name: "Current Name" },
+    });
+    expect(newer.status).toBe(200);
+
+    const retry = await enqueue(original);
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toEqual({
+      messageId: receipt.messageId,
+      status: "queued",
+      deduplicated: true,
+    });
+    expect(
+      await queryDO(
+        stub,
+        "SELECT canonical_user_id, scm_login, scm_name FROM participants WHERE user_id = ?",
+        original.authorId
+      )
+    ).toEqual([
+      { canonical_user_id: "current-user", scm_login: "current-login", scm_name: "Current Name" },
+    ]);
+    expect(await queryDO(stub, "SELECT id FROM messages")).toHaveLength(2);
+  });
+
   it("enqueues prompt and returns messageId", async () => {
     const { stub } = await initSession();
 

@@ -6,8 +6,7 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { inheritReasoningEffort } from "../harness-admission";
-import { generateId, hashToken } from "../auth/crypto";
-import type { SessionIndexStore } from "../db/session-index";
+import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
@@ -16,49 +15,30 @@ import type {
   GitHubAutofixSessionResponse,
 } from "@open-inspect/shared";
 import { githubAutofixOriginSchema } from "@open-inspect/shared";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  isValidModel,
-} from "@open-inspect/shared/models";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
-import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
-import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
-import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
+import type { ParticipantRow, PromptGitIdentity, SandboxCommand } from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
-import {
-  AttachmentClaimConflictError,
-  type SessionAttachmentRepository,
-} from "./session-attachment-repository";
 import type { SessionMessenger } from "./messenger";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
-import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
-import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
+import type { AlarmScheduler, BackgroundTasks } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
-import {
-  parseStoredSessionAttachments,
-  SessionAttachmentError,
-  resolveSessionAttachments,
-} from "./session-attachment-resolver";
-import type {
-  EnqueuedPrompt,
-  EnqueuePromptCoreData,
-  PromptMessageData,
-} from "./message-queue-types";
+import { parseStoredSessionAttachments } from "./session-attachment-resolver";
+import type { PromptPolicy } from "./prompt-admission";
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
@@ -72,65 +52,6 @@ type LookupAutofixResponse = Extract<GitHubAutofixSessionResponse, { kind: "foun
 type UserMessageEventWithOrigin = Extract<SandboxEvent, { type: "user_message" }> & {
   origin?: GitHubAutofixOrigin;
 };
-
-export class SessionNotPromptableError extends Error {
-  constructor(readonly sessionStatus: SessionRow["status"]) {
-    super(`Cannot prompt a ${sessionStatus} session`);
-    this.name = "SessionNotPromptableError";
-  }
-}
-
-export class SandboxPromptBlockedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SandboxPromptBlockedError";
-  }
-}
-
-export class BudgetExhaustedError extends Error {
-  constructor() {
-    super(
-      "Session cost limit reached. The session owner must raise or remove the limit to continue."
-    );
-    this.name = "BudgetExhaustedError";
-  }
-}
-
-export class PromptQueueFullError extends Error {
-  constructor() {
-    super(`A session may have at most ${MAX_UNFINISHED_PROMPTS} unfinished prompts`);
-    this.name = "PromptQueueFullError";
-  }
-}
-
-export class PromptRequestConflictError extends Error {
-  constructor() {
-    super("clientRequestId was already used for a different prompt");
-    this.name = "PromptRequestConflictError";
-  }
-}
-
-/** A per-prompt model override the session's harness cannot run. */
-export class HarnessModelIncompatibleError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "HarnessModelIncompatibleError";
-  }
-}
-
-export async function fingerprintWebPrompt(
-  participantId: string,
-  data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments">
-): Promise<string> {
-  const canonicalRequest = JSON.stringify({
-    participantId,
-    content: data.content,
-    model: data.model ?? null,
-    reasoningEffort: data.reasoningEffort ?? null,
-    attachmentIds: data.attachments?.map((attachment) => attachment.attachmentId) ?? [],
-  });
-  return hashToken(canonicalRequest);
-}
 
 function resolveParticipantGitIdentity(
   participant: ParticipantRow | null,
@@ -152,6 +73,7 @@ function resolveParticipantGitIdentity(
     : { mode: "agent-only" };
 }
 
+/** Dispatch and recovery over the durable queue, including Autofix's held-work redrive. */
 export class SessionMessageQueue {
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
@@ -159,23 +81,19 @@ export class SessionMessageQueue {
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
-    private readonly attachmentRepository: SessionAttachmentRepository,
     private readonly wsManager: SessionWebSocketManager,
     private readonly messenger: SessionMessenger,
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
-    private readonly getProviderAuthenticationError: (model: string) => Promise<string | null>,
+    private readonly policy: PromptPolicy,
     private readonly messageFailures: MessageFailureService,
     private readonly sandboxLifecycle: SandboxLifecycle,
-    private readonly sessionIndex: Pick<SessionIndexStore, "touchUpdatedAt">,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly executionStop: ExecutionStopCoordinator,
     /** Resolved per use so it honors settings persisted after construction. */
-    private readonly getExecutionTimeoutMs: () => number,
-    private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getExecutionTimeoutMs: () => number
   ) {}
 
   async enqueueAutofix(
@@ -186,10 +104,11 @@ export class SessionMessageQueue {
     const harness = getValidHarnessOrDefault(session?.harness);
     const selectionError =
       getHarnessCapabilities(harness).selectionPolicy === "strict"
-        ? await this.getProviderAuthenticationError(session?.model ?? DEFAULT_MODEL)
+        ? await this.policy.getProviderAuthenticationError(session?.model ?? DEFAULT_MODEL)
         : null;
     const currentSession = this.repository.getSession();
-    const recoveryHold = this.getSandboxPromptBlockReason() !== null || selectionError !== null;
+    const recoveryHold =
+      this.policy.getSandboxPromptBlockReason() !== null || selectionError !== null;
     const now = Date.now();
     const admission = this.messageRepository.admitAutofixMessage({
       message: {
@@ -265,145 +184,27 @@ export class SessionMessageQueue {
 
     // Retry pending-work status projection even while recovery prevents dispatch.
     await this.sessionStatus.transition("active");
-    if (this.getSandboxPromptBlockReason()) return;
+    if (this.policy.getSandboxPromptBlockReason()) return;
     await this.processMessageQueue();
   }
 
-  async handlePromptMessage(
-    ws: SessionWebSocket,
-    client: ClientInfo,
-    data: PromptMessageData
-  ): Promise<void> {
-    let enqueued: EnqueuedPrompt;
-    try {
-      this.assertPromptableSession();
-      this.assertSandboxAcceptingPrompts();
-      let participant = this.participantRepository.getParticipantById(client.participantId);
-      participant ??= this.participantService.getByUserId(client.userId);
-      if (!participant) {
-        this.assertBudgetAvailable();
-        this.assertQueueCapacity();
-        participant = this.participantService.create(client.userId, client.name);
-      }
-      enqueued = await this.enqueuePromptCore({
-        participant,
-        userId: client.userId,
-        content: data.content,
-        source: "web",
-        model: data.model,
-        reasoningEffort: data.reasoningEffort,
-        attachments: data.attachments,
-        clientRequestId: data.clientRequestId,
-      });
-    } catch (error) {
-      if (error instanceof SessionAttachmentError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "INVALID_ATTACHMENTS",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      if (error instanceof SessionNotPromptableError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "SESSION_NOT_PROMPTABLE",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      if (error instanceof SandboxPromptBlockedError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "SANDBOX_RECOVERY_REQUIRED",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      if (error instanceof PromptQueueFullError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "PROMPT_QUEUE_FULL",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      if (error instanceof PromptRequestConflictError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "PROMPT_REQUEST_CONFLICT",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      if (error instanceof BudgetExhaustedError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "BUDGET_EXHAUSTED",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      if (error instanceof HarnessModelIncompatibleError) {
-        this.wsManager.send(ws, {
-          type: "error",
-          code: "HARNESS_MODEL_INCOMPATIBLE",
-          message: error.message,
-          clientRequestId: data.clientRequestId,
-        });
-        return;
-      }
-      throw error;
-    }
+  /** Notify synchronously after durable cancellation, before broadcasts or status reconciliation. */
+  async cancelQueuedPrompt(messageId: string, onCancelled: () => void): Promise<boolean> {
+    if (!this.messageRepository.cancelPendingMessage(messageId)) return false;
 
-    this.touchSessionActivity();
-
-    this.wsManager.send(ws, {
-      type: "prompt_queued",
-      clientRequestId: data.clientRequestId,
-      messageId: enqueued.messageId,
-      position: enqueued.position,
-    });
-
-    await this.processMessageQueue();
-  }
-
-  async cancelQueuedPrompt(
-    ws: SessionWebSocket,
-    data: { messageId: string; clientRequestId: string }
-  ): Promise<void> {
-    if (!this.messageRepository.cancelPendingMessage(data.messageId)) {
-      this.wsManager.send(ws, {
-        type: "error",
-        code: "PROMPT_NOT_CANCELLABLE",
-        message: "This prompt is no longer pending and cannot be removed",
-        clientRequestId: data.clientRequestId,
-      });
-      return;
-    }
-
-    this.wsManager.send(ws, {
-      type: "prompt_cancelled",
-      clientRequestId: data.clientRequestId,
-      messageId: data.messageId,
-    });
+    onCancelled();
     this.broadcastPromptQueue();
     this.log.info("prompt.cancelled", {
       event: "prompt.cancelled",
-      message_id: data.messageId,
+      message_id: messageId,
     });
 
     await this.sessionStatus.reconcileAfterQueueRemoval();
+    return true;
   }
 
   async processMessageQueue(): Promise<void> {
-    if (!this.mayDispatch()) return;
+    if (!this.sandboxLifecycle.allowsQueueProcessing()) return;
     const currentSession = this.repository.getSession();
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
@@ -447,8 +248,9 @@ export class SessionMessageQueue {
       message.reasoning_effort ?? inheritedReasoningEffort
     );
     const authenticationError =
-      harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
-    if (!this.mayDispatch()) return;
+      harnessIncompatibility?.message ??
+      (await this.policy.getProviderAuthenticationError(resolvedModel));
+    if (!this.sandboxLifecycle.allowsQueueProcessing()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
       this.log.error("provider_auth.unavailable", {
@@ -566,7 +368,7 @@ export class SessionMessageQueue {
       ),
     };
 
-    if (!this.mayDispatch()) return;
+    if (!this.sandboxLifecycle.allowsQueueProcessing()) return;
     const claimed = this.messageRepository.startMessageProcessing(
       message.id,
       now,
@@ -721,249 +523,6 @@ export class SessionMessageQueue {
     };
   }
 
-  async enqueuePromptFromApi(
-    data: EnqueuePromptRequest
-  ): Promise<{ messageId: string; status: "queued"; deduplicated: boolean }> {
-    this.assertPromptableSession();
-    this.assertSandboxAcceptingPrompts();
-    // A request id naming a prompt already queued is answered by enqueuePromptCore's
-    // idempotency lookup, whatever the budget or capacity is now. New work is refused
-    // here, before any participant changes.
-    if (
-      !data.clientRequestId ||
-      !this.messageRepository.getMessageByClientRequestId(data.clientRequestId)
-    ) {
-      this.assertBudgetAvailable();
-      this.assertQueueCapacity();
-    }
-    let participant = this.participantService.getByUserId(data.authorId);
-    if (!participant) {
-      const name = data.scmEnrichment?.name || data.authorId;
-      participant = data.canonicalUserId
-        ? this.participantService.create(data.authorId, name, data.canonicalUserId)
-        : this.participantService.create(data.authorId, name);
-    }
-
-    if (data.canonicalUserId) {
-      this.participantRepository.updateParticipantCoalesce(participant.id, {
-        canonicalUserId: data.canonicalUserId,
-      });
-      participant = this.participantRepository.getParticipantById(participant.id) ?? {
-        ...participant,
-        canonical_user_id: data.canonicalUserId,
-      };
-    }
-
-    if (data.scmEnrichment !== undefined) {
-      const enrichment = data.scmEnrichment;
-      this.participantRepository.updateParticipantIdentity(participant.id, {
-        canonicalUserId: data.canonicalUserId ?? participant.canonical_user_id ?? null,
-        scmName: enrichment.name,
-        scmEmail: enrichment.email,
-        scmLogin: enrichment.login,
-        scmUserId: enrichment.userId,
-      });
-      participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
-    }
-
-    const enqueued = await this.enqueuePromptCore({
-      participant,
-      userId: data.authorId,
-      content: data.content,
-      source: data.source,
-      model: data.model,
-      reasoningEffort: data.reasoningEffort,
-      attachments: data.attachments,
-      callbackContext: data.callbackContext,
-      clientRequestId: data.clientRequestId,
-    });
-
-    // An already-active session keeps its index timestamp through the status sync, so
-    // record the activity here: session continuity measures its window from it.
-    this.touchSessionActivity();
-    await this.processMessageQueue();
-
-    return { messageId: enqueued.messageId, status: "queued", deduplicated: enqueued.deduplicated };
-  }
-
-  /** The original message for a retried clientRequestId, or a conflict if the request differs. */
-  private findDuplicatePrompt(
-    data: EnqueuePromptCoreData,
-    requestFingerprint: string | undefined
-  ): EnqueuedPrompt | null {
-    if (!data.clientRequestId) return null;
-    const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
-    const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
-    if (existing) {
-      if (
-        existing.author_id !== data.participant.id ||
-        existing.request_fingerprint !== requestFingerprint
-      ) {
-        this.log.warn("prompt.enqueue", {
-          event: "prompt.enqueue",
-          outcome: "conflict",
-          source: data.source,
-          queue_depth_before: queueDepthBefore,
-          queue_depth_after: queueDepthBefore,
-        });
-        throw new PromptRequestConflictError();
-      }
-      this.log.info("prompt.enqueue", {
-        event: "prompt.enqueue",
-        outcome: "deduplicated",
-        source: data.source,
-        queue_depth_before: queueDepthBefore,
-        queue_depth_after: queueDepthBefore,
-      });
-      return {
-        messageId: existing.id,
-        position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
-        deduplicated: true,
-      };
-    }
-    return null;
-  }
-
-  private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
-    const session = this.repository.getSession();
-    const harness = getValidHarnessOrDefault(session?.harness);
-    const strictSelection = getHarnessCapabilities(harness).selectionPolicy === "strict";
-    let requestFingerprint: string | undefined;
-    if (data.clientRequestId) {
-      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
-    }
-    if (strictSelection) {
-      // A retry of an accepted request returns its original message before the
-      // mutable model/auth policy is consulted: it is not new work.
-      const duplicate = this.findDuplicatePrompt(data, requestFingerprint);
-      if (duplicate) return duplicate;
-      const modelError = await this.getProviderAuthenticationError(
-        data.model || session?.model || DEFAULT_MODEL
-      );
-      if (modelError) throw new HarnessModelIncompatibleError(modelError);
-    }
-
-    // Keep the promptability check, idempotency lookup, budget and capacity
-    // checks, and insert in one synchronous turn so concurrent requests cannot
-    // race between them. The fingerprint hash above is a non-storage await: a
-    // cancel or archive can land while this request is suspended, so the
-    // session is read after it, not before.
-    this.assertPromptableSession();
-    this.assertSandboxAcceptingPrompts();
-    const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
-    // Also rechecked after the policy await: a concurrent identical request may
-    // have been inserted while this one was suspended.
-    const raced = this.findDuplicatePrompt(data, requestFingerprint);
-    if (raced) return raced;
-    this.assertBudgetAvailable();
-    this.assertQueueCapacity(queueDepthBefore);
-    const resolvedAttachments = resolveSessionAttachments(
-      data.attachments,
-      this.attachmentRepository
-    );
-    const attachments = resolvedAttachments?.attachments;
-    const messageId = generateId();
-    const now = Date.now();
-
-    let messageModel: string | null = null;
-    if (data.model) {
-      if (strictSelection || isValidModel(data.model)) {
-        // Preserve strict overrides so compatibility rejects them below,
-        // rather than silently substituting the session's model.
-        messageModel = data.model;
-      } else {
-        this.log.warn("Invalid message model, ignoring override", { model: data.model });
-      }
-    }
-
-    const effectiveModelForEffort =
-      messageModel || this.repository.getSession()?.model || DEFAULT_MODEL;
-    const incompatibility = checkHarnessPromptCompatibility(
-      harness,
-      effectiveModelForEffort,
-      data.reasoningEffort ??
-        inheritReasoningEffort(
-          harness,
-          effectiveModelForEffort,
-          this.repository.getSession()?.reasoning_effort
-        )
-    );
-    if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
-    const messageReasoningEffort = validateReasoningEffort(
-      effectiveModelForEffort,
-      data.reasoningEffort,
-      this.log,
-      getValidHarnessOrDefault(this.repository.getSession()?.harness)
-    );
-    try {
-      this.messageRepository.createMessageWithAttachments(
-        {
-          id: messageId,
-          authorId: data.participant.id,
-          content: data.content,
-          source: data.source,
-          model: messageModel,
-          reasoningEffort: messageReasoningEffort,
-          attachments: attachments ? JSON.stringify(attachments) : null,
-          callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
-          clientRequestId: data.clientRequestId ?? null,
-          requestFingerprint: requestFingerprint ?? null,
-          status: "pending",
-          createdAt: now,
-        },
-        resolvedAttachments?.attachmentIds ?? []
-      );
-    } catch (error) {
-      if (error instanceof AttachmentClaimConflictError) {
-        throw new SessionAttachmentError(
-          "One or more attachments are missing, expired, or already used"
-        );
-      }
-      throw error;
-    }
-
-    await this.sessionStatus.transition("active");
-    this.broadcastPromptQueue();
-
-    const position = this.messageRepository.getPendingOrProcessingCount();
-    this.log.info("prompt.enqueue", {
-      event: "prompt.enqueue",
-      outcome: "enqueued",
-      message_id: messageId,
-      source: data.source,
-      author_id: data.participant.id,
-      user_id: data.userId,
-      model: messageModel,
-      reasoning_effort: messageReasoningEffort,
-      content_length: data.content.length,
-      has_attachments: !!attachments?.length,
-      attachments_count: attachments?.length ?? 0,
-      has_callback_context: !!data.callbackContext,
-      queue_position: position,
-      queue_depth_before: queueDepthBefore,
-      queue_depth_after: position,
-    });
-
-    return { messageId, position, deduplicated: false };
-  }
-
-  /** Refresh the session index's activity timestamp in the background. */
-  private touchSessionActivity(): void {
-    const session = this.repository.getSession();
-    const sessionId = session?.session_name || session?.id;
-    if (!sessionId) return;
-    this.backgroundTasks.submit(() => this.sessionIndex.touchUpdatedAt(sessionId), {
-      name: "session_index.touch_updated_at",
-      context: { session_id: sessionId },
-    });
-  }
-
-  private assertBudgetAvailable(): void {
-    if (this.repository.getSession()?.budget_exhausted === 1) {
-      throw new BudgetExhaustedError();
-    }
-  }
-
   /**
    * Whether `messageId` is still pending in a session that still accepts
    * work. Read in the caller's continuation, so the decision it feeds is made
@@ -976,33 +535,6 @@ export class SessionMessageQueue {
       isSessionPromptable(session.status) &&
       this.messageRepository.getMessageStatus(messageId) === "pending"
     );
-  }
-
-  private assertPromptableSession(): void {
-    const session = this.repository.getSession();
-    if (session && !isSessionPromptable(session.status)) {
-      throw new SessionNotPromptableError(session.status);
-    }
-  }
-
-  private assertSandboxAcceptingPrompts(): void {
-    const reason = this.getSandboxPromptBlockReason();
-    if (reason) throw new SandboxPromptBlockedError(reason);
-  }
-
-  private assertQueueCapacity(
-    queueDepth = this.messageRepository.getPendingOrProcessingCount()
-  ): void {
-    if (queueDepth >= MAX_UNFINISHED_PROMPTS) {
-      this.log.warn("prompt.enqueue", {
-        event: "prompt.enqueue",
-        outcome: "rejected",
-        reason: "queue_full",
-        queue_depth_before: queueDepth,
-        queue_depth_after: queueDepth,
-      });
-      throw new PromptQueueFullError();
-    }
   }
 
   broadcastPromptQueue(): void {
