@@ -10,7 +10,7 @@ import type {
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
 import { useSidebarSessions } from "./use-sidebar-sessions";
-import { useSessionRename } from "./use-session-rename";
+import { item, page, snapshot } from "@/test/session-inbox-fixtures";
 import { reconcileSessionReadState } from "@/lib/session-read-state";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { updateSessionScope } from "@/lib/session-scope";
@@ -42,26 +42,6 @@ vi.mock("@/lib/session-read-state", async (importOriginal) => {
   };
 });
 
-function item(id: string) {
-  return {
-    rootSession: {
-      id,
-      title: id,
-      repoOwner: null,
-      repoName: null,
-      baseBranch: null,
-      status: "active" as const,
-      parentSessionId: null,
-      spawnSource: "user" as const,
-      environmentId: null,
-      createdAt: 1,
-      updatedAt: 2,
-      readState: { latestMessageId: null, version: 0, unread: false as const },
-    },
-    descendantSessions: [],
-  };
-}
-
 function unreadItem(id: string): SessionInboxItem {
   const base = item(id);
   return {
@@ -69,26 +49,6 @@ function unreadItem(id: string): SessionInboxItem {
     rootSession: {
       ...base.rootSession,
       readState: { latestMessageId: "msg-1", version: 1, unread: true },
-    },
-  };
-}
-
-function page(ids: string[], nextCursor: string | null = null): SessionInboxPage {
-  const items = ids.map(item);
-  return nextCursor === null
-    ? { items, hasMore: false, nextCursor: null }
-    : { items, hasMore: true, nextCursor };
-}
-
-function snapshot(
-  overrides: Partial<SessionInboxSnapshot["categories"]> = {}
-): SessionInboxSnapshot {
-  return {
-    categories: {
-      needs_attention: page(["attention"]),
-      in_progress: page(["running"]),
-      finished: page(["finished"]),
-      ...overrides,
     },
   };
 }
@@ -116,12 +76,10 @@ function setVisibility(value: DocumentVisibilityState) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+  const promise = new Promise<T>((resolvePromise) => {
     resolve = resolvePromise;
-    reject = rejectPromise;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -137,115 +95,6 @@ afterEach(() => {
 });
 
 describe("useSidebarSessions", () => {
-  it.each(
-    [
-      { initiator: "header", descendant: false, settlement: "HTTP-first" },
-      { initiator: "row", descendant: false, settlement: "HTTP-first" },
-      { initiator: "header", descendant: true, settlement: "HTTP-first" },
-      { initiator: "row", descendant: true, settlement: "HTTP-first" },
-      { initiator: "row", descendant: false, settlement: "socket-first" },
-      { initiator: "header", descendant: true, settlement: "lost-response" },
-      { initiator: "header", descendant: false, settlement: "superseded" },
-      { initiator: "row", descendant: true, settlement: "failed" },
-      { initiator: "row", descendant: false, settlement: "no-detail" },
-    ].flatMap((scenario) => [false, true].map((pendingPage) => ({ ...scenario, pendingPage })))
-  )(
-    "retains a confirmed $initiator rename in a loaded page ($settlement, descendant: $descendant, pending: $pendingPage)",
-    async ({ initiator, descendant, settlement, pendingPage }) => {
-      const sessionId = "rename-tail";
-      const tailItem = item(descendant ? "tail-parent" : sessionId);
-      const renamedSession = { ...item(sessionId).rootSession, title: "Original" };
-      const tailPage: SessionInboxPage = {
-        items: [
-          descendant
-            ? {
-                ...tailItem,
-                descendantSessions: [{ ...renamedSession, parentSessionId: "tail-parent" }],
-              }
-            : { ...tailItem, rootSession: renamedSession },
-        ],
-        hasMore: false,
-        nextCursor: null,
-      };
-      const cursorResponse = deferred<SessionInboxPage>();
-      const fetcher = vi.fn(async (key: string) =>
-        key.includes("category=")
-          ? cursorResponse.promise
-          : snapshot({ needs_attention: page(["head"], "next") })
-      );
-      const renameResponse = deferred<Response>();
-      vi.mocked(browserApiFetch).mockReturnValue(renameResponse.promise);
-      const { result, rerender } = renderHook(
-        ({ authoritativeTitle }) => {
-          const sidebar = useSidebarSessions();
-          const session = descendant
-            ? sidebar.childrenMap.get("tail-parent")?.[0]
-            : sidebar.needsAttention.find(({ id }) => id === sessionId);
-          const header = useSessionRename({
-            sessionId,
-            currentTitle: authoritativeTitle,
-            authoritativeTitle: settlement === "no-detail" ? undefined : authoritativeTitle,
-            awaitAuthoritativeTitle: settlement !== "no-detail",
-          });
-          const row = useSessionRename({
-            sessionId,
-            currentTitle: session?.title ?? "Original",
-          });
-          return {
-            sidebar,
-            header,
-            row,
-            session,
-            displayTitle: row.optimisticTitle ?? session?.title,
-          };
-        },
-        { initialProps: { authoritativeTitle: "Original" }, wrapper: wrapper(fetcher) }
-      );
-      await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
-      act(() => result.current.sidebar.sectionPagination.needsAttention.loadMore());
-      await waitFor(() => expect(fetcher).toHaveBeenCalledWith(expect.stringContaining("cursor=")));
-      if (!pendingPage) {
-        await act(async () => cursorResponse.resolve(tailPage));
-        await waitFor(() => expect(result.current.displayTitle).toBe("Original"));
-      }
-
-      let rename!: Promise<boolean>;
-      act(() => {
-        const caller = initiator === "header" ? result.current.header : result.current.row;
-        rename = caller.renameSession("Renamed");
-      });
-      expect(result.current.displayTitle).toBe("Renamed");
-      const expectedTitle =
-        settlement === "superseded"
-          ? "Newer title"
-          : settlement === "failed"
-            ? "Original"
-            : "Renamed";
-      if (["socket-first", "lost-response", "superseded"].includes(settlement)) {
-        rerender({ authoritativeTitle: expectedTitle });
-        if (!pendingPage) expect(result.current.displayTitle).toBe(expectedTitle);
-      }
-      await act(async () => {
-        if (settlement === "lost-response") {
-          renameResponse.reject(new TypeError("Response connection lost"));
-        } else {
-          renameResponse.resolve(
-            new Response(null, { status: settlement === "failed" ? 500 : 204 })
-          );
-        }
-        expect(await rename).toBe(settlement !== "failed");
-      });
-      if (settlement === "HTTP-first") rerender({ authoritativeTitle: "Renamed" });
-      expect(result.current.header.optimisticTitle).toBeUndefined();
-      if (pendingPage) await act(async () => cursorResponse.resolve(tailPage));
-      await waitFor(() => expect(result.current.displayTitle).toBe(expectedTitle));
-      expect(result.current.session?.title).toBe(expectedTitle);
-      // The loaded page never refetches, and its fetched response remains untouched.
-      expect(fetcher.mock.calls.filter(([key]) => key.includes("category="))).toHaveLength(1);
-      expect(renamedSession.title).toBe("Original");
-    }
-  );
-
   it("uses the selected team for snapshot and cursor requests and drops retained pages on switches", async () => {
     teamContext.activeTeamId = "team_alpha";
     const fetcher = vi.fn(async (key: string) =>
