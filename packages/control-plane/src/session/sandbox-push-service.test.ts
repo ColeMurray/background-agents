@@ -175,6 +175,35 @@ describe("SandboxPushService", () => {
   });
 
   describe("resolver keying", () => {
+    it("rejects a same-key concurrent push after the sandbox disconnects", async () => {
+      const h = createService();
+      const pushSpec = createPushSpec("acme", "web", "feature/test");
+      const firstResult = vi.fn();
+      const first = h.service.pushBranchToRemote(pushSpec).then(firstResult);
+
+      try {
+        h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "unavailable" });
+
+        await expect(h.service.pushBranchToRemote(pushSpec)).resolves.toEqual({
+          success: false,
+          error: expect.stringContaining("Push already in flight"),
+        });
+        expect(h.wsManager.send).toHaveBeenCalledTimes(1);
+        expect(firstResult).not.toHaveBeenCalled();
+      } finally {
+        h.service.settlePush({
+          type: "push_complete",
+          branchName: pushSpec.targetBranch,
+          repoOwner: pushSpec.repoOwner,
+          repoName: pushSpec.repoName,
+          timestamp: 1000,
+        });
+        await first;
+      }
+
+      expect(firstResult).toHaveBeenCalledWith({ success: true });
+    });
+
     it.each(["push_complete", "push_error", "timeout"] as const)(
       "rejects a same-key concurrent push and preserves the first caller through %s",
       async (outcome) => {
