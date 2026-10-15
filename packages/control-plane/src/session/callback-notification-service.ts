@@ -135,6 +135,7 @@ export class CallbackNotificationService {
    * refresh, never a missed one.
    */
   private _lastSlackActivityAt = 0;
+  private readonly slackActivityRefreshes = new Map<string, Promise<void>>();
   private readonly notifiedCallIds = new Set<string>();
 
   constructor(deps: CallbackServiceDeps) {
@@ -310,6 +311,13 @@ export class CallbackNotificationService {
         isRecord(rawContext) && rawContext.source === "automation"
           ? "automation"
           : (message.source ?? null);
+
+      const refresh = this.slackActivityRefreshes.get(messageId);
+      if (source === "slack" && refresh) {
+        // The message is terminal before this notification is submitted. Drain
+        // any refresh already in flight so it cannot follow the final reply.
+        await Promise.allSettled([refresh]);
+      }
 
       // Route automation callbacks to the scheduler's completion function.
       if (source === "automation") {
@@ -519,11 +527,23 @@ export class CallbackNotificationService {
    * calls keeps the indicator alive through `notifyToolCall` and never reaches
    * delivery here.
    *
-   * Best-effort: the bot acknowledges the callback before it calls Slack, so a
-   * delivered refresh is not proof the indicator was set. It is only proof the
-   * next one is a minute away.
+   * Best-effort: the bot waits for its Slack attempt before acknowledging, but
+   * still acknowledges a failed status write. Completion drains this request
+   * before publishing the final reply.
    */
-  async refreshSlackActivity(messageId: string, now: number): Promise<void> {
+  refreshSlackActivity(messageId: string, now: number): Promise<void> {
+    const pending = this.slackActivityRefreshes.get(messageId);
+    if (pending) return pending;
+
+    // Register before signing or authorization can yield to a completion.
+    const refresh = this.sendSlackActivityRefresh(messageId, now).finally(() => {
+      this.slackActivityRefreshes.delete(messageId);
+    });
+    this.slackActivityRefreshes.set(messageId, refresh);
+    return refresh;
+  }
+
+  private async sendSlackActivityRefresh(messageId: string, now: number): Promise<void> {
     if (now - this._lastSlackActivityAt < SLACK_ACTIVITY_REFRESH_INTERVAL_MS) return;
 
     // Web, Linear, automation and agent turns have no Slack indicator to hold
