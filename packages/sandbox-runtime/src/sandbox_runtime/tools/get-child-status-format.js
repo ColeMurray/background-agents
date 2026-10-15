@@ -204,3 +204,43 @@ export function formatChildDetail(detail, childId, options = {}) {
 
   return lines.join("\n");
 }
+
+// Keep the wire contract symmetric with @open-inspect/shared/child-status-tool
+// and harness/child_status_format.py. Select display fields to avoid serializing
+// private retrieval metadata from the control-plane response.
+function displaySession(session) {
+  const { id, title, status, repoOwner, repoName, branchName, model, createdAt, updatedAt } =
+    session;
+  return { id, title, status, repoOwner, repoName, branchName, model, createdAt, updatedAt };
+}
+
+export function childStatusListOutput(children, agentMessage) {
+  return JSON.stringify({
+    version: 1,
+    kind: "list",
+    children: children.map(displaySession),
+    agentMessage,
+  });
+}
+
+export function childStatusDetailOutput(detail, childId, options = {}) {
+  const final = detail.finalResponse;
+  return JSON.stringify({
+    version: 1,
+    kind: "detail",
+    session: displaySession({ ...detail.session, id: detail.session?.id || childId }),
+    hasUnfinishedPrompt: detail.hasUnfinishedPrompt === true,
+    finalResponse: final
+      ? {
+          success: Boolean(final.success),
+          textContent: final.textContent || "",
+          ...(final.error ? { error: final.error } : {}),
+          ...(final.eventCount != null ? { eventCount: final.eventCount } : {}),
+          ...(final.eventLimitReached != null
+            ? { eventLimitReached: final.eventLimitReached }
+            : {}),
+        }
+      : null,
+    agentMessage: formatChildDetail(detail, childId, options),
+  });
+}

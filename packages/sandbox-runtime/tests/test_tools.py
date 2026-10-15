@@ -84,7 +84,11 @@ async def test_get_child_status_lists_children(tmp_path: Path) -> None:
             },
         ),
     )
-    text = _text(await tools.get_child_status({}))
+    envelope = json.loads(_text(await tools.get_child_status({})))
+    assert envelope["version"] == 1
+    assert envelope["kind"] == "list"
+    assert [child["id"] for child in envelope["children"]] == ["c1", "c2"]
+    text = envelope["agentMessage"]
     assert text.startswith("2 child session(s): 1 running, 0 pending, 1 done, 0 failed")
     assert "[RUNNING] c1" in text
     assert "(untitled)" in text
@@ -129,6 +133,13 @@ async def test_get_child_status_detail_builds_the_include_query(tmp_path: Path) 
             }
         )
     )
+    envelope = json.loads(text)
+    assert envelope["version"] == 1
+    assert envelope["kind"] == "detail"
+    assert envelope["session"]["repoOwner"] == "acme"
+    assert envelope["finalResponse"] == {"success": True, "textContent": "done"}
+    assert envelope["hasUnfinishedPrompt"] is False
+    text = envelope["agentMessage"]
     assert seen[0].url.raw_path.startswith(b"/sessions/s1/children/c%201")
     assert seen[0].url.params["include"] == "result,trajectory"
     assert seen[0].url.params["trajectoryLimit"] == "5"
@@ -165,7 +176,7 @@ async def test_get_child_status_detail_forwards_the_cursor_and_ends_when_none_re
         )
     )
     assert seen[0].url.params["trajectoryCursor"] == "abc"
-    assert "Trajectory (1 events):" in text
+    assert "Trajectory (1 events):" in json.loads(text)["agentMessage"]
     assert "trajectoryCursor=" not in text
 
 
@@ -464,3 +475,55 @@ def test_child_formatter_renders_ordinary_output_summary():
     )
     for text in ["shot-1", "screenshot", "Dashboard", "csv-1", "report.csv"]:
         assert text in output
+
+
+@pytest.mark.asyncio
+async def test_child_status_envelope_omits_private_metadata(tmp_path: Path) -> None:
+    detail = {
+        "session": {"id": "c1", "status": "active", "secret": "private"},
+        "hasUnfinishedPrompt": True,
+        "finalResponse": {
+            "success": False,
+            "textContent": "## Result",
+            "error": "Tests failed",
+            "eventCount": 1000,
+            "eventLimitReached": True,
+            "fileArtifacts": [
+                {
+                    "id": "f1",
+                    "type": "file",
+                    "available": True,
+                    "metadata": {"filename": "result.csv", "objectKey": "sessions/private/output"},
+                }
+            ],
+        },
+    }
+    tools, _ = _tools(tmp_path, lambda _r: httpx.Response(200, json=detail))
+    raw = _text(await tools.get_child_status({"childId": "c1", "includeResponse": True}))
+    envelope = json.loads(raw)
+    assert envelope["hasUnfinishedPrompt"] is True
+    assert envelope["finalResponse"] == {
+        "success": False,
+        "textContent": "## Result",
+        "error": "Tests failed",
+        "eventCount": 1000,
+        "eventLimitReached": True,
+    }
+    assert "Latest completed response" in envelope["agentMessage"]
+    assert "result.csv" in envelope["agentMessage"]
+    assert "objectKey" not in raw and "sessions/private" not in raw and "secret" not in raw
+
+
+@pytest.mark.asyncio
+async def test_child_status_empty_list_and_error_fallback(tmp_path: Path) -> None:
+    tools, _ = _tools(tmp_path, lambda _r: httpx.Response(200, json={"children": []}))
+    assert json.loads(_text(await tools.get_child_status({}))) == {
+        "version": 1,
+        "kind": "list",
+        "children": [],
+        "agentMessage": "No child sessions found.",
+    }
+    tools, _ = _tools(tmp_path, lambda _r: httpx.Response(404, json={"error": "not found"}))
+    result = await tools.get_child_status({"childId": "missing"})
+    assert result.is_error
+    assert 'Child "missing" not found' in result.text
