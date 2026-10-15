@@ -240,7 +240,9 @@ export function resolveSandboxSettingsDraft({
     // Explicit resource nulls mask inheritance, rather than falling through it.
     const current = field.format(prior !== undefined ? prior : baseDefaults?.[key]);
     const edit = draft[field.draftKey] as
-      SandboxSettingsDraftValues[DraftKey<K>] | typeof INHERIT_SANDBOX_SETTING | undefined;
+      | SandboxSettingsDraftValues[DraftKey<K>]
+      | typeof INHERIT_SANDBOX_SETTING
+      | undefined;
     const value =
       edit === INHERIT_SANDBOX_SETTING ? field.format(baseDefaults?.[key]) : (edit ?? current);
     values[field.draftKey] = value;

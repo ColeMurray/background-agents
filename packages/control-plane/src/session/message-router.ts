@@ -31,7 +31,8 @@ type BoundarySchema<T> = {
 
 // Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
 type ParsedMessage<T> =
-  { valid: true; data: T } | { valid: false; raw?: unknown; error?: ZodError };
+  | { valid: true; data: T }
+  | { valid: false; raw?: unknown; error?: ZodError };
 
 export interface SessionClientCommands<Connection, Client extends ConnectedClient> {
   subscribe: (connection: Connection, message: ClientSubscribe) => Promise<void>;

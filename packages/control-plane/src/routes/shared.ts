@@ -36,7 +36,8 @@ export interface ServiceActorProfileClaims {
  * actor's request continues to the handler with nothing written.
  */
 export type ServiceActorClaimsResult =
-  { kind: "claims"; claims: ServiceActorProfileClaims } | { kind: "rejected"; response: Response };
+  | { kind: "claims"; claims: ServiceActorProfileClaims }
+  | { kind: "rejected"; response: Response };
 
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =

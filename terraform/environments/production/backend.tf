@@ -23,6 +23,8 @@ terraform {
     key    = "production/terraform.tfstate"
     region = "auto"
 
+    use_lockfile = true
+
     # All sensitive/account-specific values passed via -backend-config
     # endpoints = { s3 = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com" }
     # access_key = "..."

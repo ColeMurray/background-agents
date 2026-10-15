@@ -20,10 +20,12 @@ function createService(admission: () => SandboxPushAdmission = () => "unmanaged"
   const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
   const wsManager = {
     getSandboxSocket: vi.fn(() => sandboxWs as WebSocket | null),
-    getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => ({
-      kind: "dispatch",
-      socket: sandboxWs,
-    })),
+    getSandboxCommandTarget: vi.fn(
+      (): SandboxCommandTarget => ({
+        kind: "dispatch",
+        socket: sandboxWs,
+      })
+    ),
     send: vi.fn(() => true),
   };
   const log = {

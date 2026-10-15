@@ -71,7 +71,10 @@ export interface SelectedImageBuild {
 }
 
 type ImageBuildMissReason =
-  "no_ready_image" | "missing_artifact" | "runtime_below_floor" | "fingerprint_mismatch";
+  | "no_ready_image"
+  | "missing_artifact"
+  | "runtime_below_floor"
+  | "fingerprint_mismatch";
 
 export type ImageBuildSelectionResult =
   | { outcome: "selected"; image: SelectedImageBuild }

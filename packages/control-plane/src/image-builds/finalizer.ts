@@ -34,7 +34,8 @@ const LEASE_EXPIRY_HEADROOM_MS = 5_000;
  * settles, so that retry is the one worth republishing with a fresh budget.
  */
 export type ImageBuildFinalizationResult =
-  { type: "completed" } | { type: "retry"; delayMs: number; reason?: "pending_operation" };
+  | { type: "completed" }
+  | { type: "retry"; delayMs: number; reason?: "pending_operation" };
 
 const completed = (): ImageBuildFinalizationResult => ({ type: "completed" });
 const retrySoon = (): ImageBuildFinalizationResult => ({

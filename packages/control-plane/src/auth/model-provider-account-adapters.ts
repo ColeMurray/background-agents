@@ -147,7 +147,9 @@ export class ProviderIdentityError extends Error {}
  * control plane learning the result; only a fresh authorization is safe.
  */
 export type ProviderAuthorizationCodeExchangeClassification =
-  "rejected" | "retry_safe" | "ambiguous";
+  | "rejected"
+  | "retry_safe"
+  | "ambiguous";
 
 export class ProviderAuthorizationCodeExchangeError extends Error {
   constructor(

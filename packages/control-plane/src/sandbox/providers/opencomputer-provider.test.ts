@@ -46,15 +46,19 @@ function createMockClient(overrides: Partial<OpenComputerRestClient> = {}): Open
     deleteSandbox: vi.fn(async (): Promise<void> => undefined),
     deleteCheckpoint: vi.fn(async (): Promise<void> => undefined),
     restoreCheckpoint: vi.fn(async (): Promise<void> => undefined),
-    getSandbox: vi.fn(async (): Promise<OpenComputerSandboxResponse> => ({
-      id: "oc-sandbox-1",
-      state: "running",
-      endAt: "2032-03-04T05:06:07.000Z",
-    })),
-    wakeSandbox: vi.fn(async (): Promise<OpenComputerSandboxResponse> => ({
-      id: "oc-sandbox-1",
-      state: "running",
-    })),
+    getSandbox: vi.fn(
+      async (): Promise<OpenComputerSandboxResponse> => ({
+        id: "oc-sandbox-1",
+        state: "running",
+        endAt: "2032-03-04T05:06:07.000Z",
+      })
+    ),
+    wakeSandbox: vi.fn(
+      async (): Promise<OpenComputerSandboxResponse> => ({
+        id: "oc-sandbox-1",
+        state: "running",
+      })
+    ),
     hibernateSandbox: vi.fn(async (): Promise<void> => undefined),
     setSandboxTimeout: vi.fn(async (): Promise<void> => undefined),
     startRuntime: vi.fn(async (): Promise<void> => undefined),

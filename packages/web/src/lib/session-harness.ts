@@ -33,7 +33,9 @@ export function shouldClearModelForHarness(harness: HarnessId | undefined, model
 }
 
 export type HarnessModelAvailability =
-  { status: "loading" } | { status: "available" } | { status: "unavailable"; message: string };
+  | { status: "loading" }
+  | { status: "available" }
+  | { status: "unavailable"; message: string };
 
 export interface HarnessModelSelection {
   /** Whether `model` may be submitted; anything else holds submission. */

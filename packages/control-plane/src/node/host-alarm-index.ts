@@ -265,7 +265,8 @@ export function openHostAlarmIndex(dataDir: string): HostAlarmIndex {
     claim: (sessionId, leaseUntil) => {
       const token = crypto.randomUUID();
       const row = claimRow.get(token, leaseUntil, sessionId) as
-        { in_flight: number; failures: number } | undefined;
+        | { in_flight: number; failures: number }
+        | undefined;
       return row === undefined ? null : { deadline: row.in_flight, failures: row.failures, token };
     },
     complete: (sessionId, token) => {

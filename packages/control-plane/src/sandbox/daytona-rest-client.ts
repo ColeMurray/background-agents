@@ -759,7 +759,9 @@ function trimTrailingSlashes(url: string): string {
 
 /** Which of the three toolbox URL sources a refusal is about. */
 type ToolboxUrlSource =
-  "configured toolbox URL" | "sandbox-reported toolbox proxy URL" | "toolbox proxy lookup";
+  | "configured toolbox URL"
+  | "sandbox-reported toolbox proxy URL"
+  | "toolbox proxy lookup";
 
 /** Hosts a toolbox URL may address over plain HTTP: a runner on this machine. */
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);

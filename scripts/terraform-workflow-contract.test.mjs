@@ -2,38 +2,28 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+// terraform.yml's plan and apply jobs both call this, so one occurrence here
+// is what used to be one occurrence in each of them. Asserting exactly one
+// still catches the duplicate a careless edit would reintroduce.
 const workflow = await readFile(
-  new URL("../.github/workflows/terraform.yml", import.meta.url),
+  new URL("../.github/workflows/terraform-run.yml", import.meta.url),
   "utf8"
 );
 
-function assertInPlanAndApply(assignment, label) {
-  const planStart = workflow.indexOf("\n  plan:\n");
-  const applyStart = workflow.indexOf("\n  apply:\n");
-
-  assert.notEqual(planStart, -1, "expected the Terraform plan job");
-  assert.notEqual(applyStart, -1, "expected the Terraform apply job");
-
-  const jobs = {
-    plan: workflow.slice(planStart, applyStart),
-    apply: workflow.slice(applyStart),
-  };
-
-  for (const [name, job] of Object.entries(jobs)) {
-    const occurrences = job.split(assignment).length - 1;
-    assert.equal(occurrences, 1, `expected one ${label} input in the ${name} job`);
-  }
+function assertReachesTerraform(assignment, label) {
+  const occurrences = workflow.split(assignment).length - 1;
+  assert.equal(occurrences, 1, `expected one ${label} input in terraform-run.yml`);
 }
 
-test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
-  assertInPlanAndApply(
+test("Daytona base snapshot memory reaches Terraform", () => {
+  assertReachesTerraform(
     "TF_VAR_daytona_base_snapshot_memory_gib: \"${{ vars.DAYTONA_BASE_SNAPSHOT_MEMORY_GIB || '2' }}\"",
     "Daytona memory"
   );
 });
 
-test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
-  assertInPlanAndApply(
+test("Classifier-only Anthropic key reaches Terraform", () => {
+  assertReachesTerraform(
     "TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}",
     "classifier Anthropic key"
   );
@@ -51,7 +41,7 @@ const NOT_FROM_ENVIRONMENT = new Set([
   "project_root",
 ]);
 
-test("Every production Terraform variable reaches plan and apply", async () => {
+test("Every production Terraform variable reaches Terraform", async () => {
   const variables = await readFile(
     new URL("../terraform/environments/production/variables.tf", import.meta.url),
     "utf8"
@@ -62,11 +52,15 @@ test("Every production Terraform variable reaches plan and apply", async () => {
   const missing = declared.filter((name) => {
     if (NOT_FROM_ENVIRONMENT.has(name)) return false;
     try {
-      assertInPlanAndApply(`TF_VAR_${name}:`, name);
+      assertReachesTerraform(`TF_VAR_${name}:`, name);
       return false;
     } catch {
       return true;
     }
   });
-  assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
+  assert.deepEqual(
+    missing,
+    [],
+    "each variable needs exactly one TF_VAR_ input in terraform-run.yml"
+  );
 });

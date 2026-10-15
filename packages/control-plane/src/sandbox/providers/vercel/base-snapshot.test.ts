@@ -45,10 +45,12 @@ function createMockClient(
     createSandbox: vi.fn(async () => createSessionResponse()),
     runCommandAndWait: vi.fn(async () => ({ commandId: "cmd-1", exitCode: 0 })),
     writeFileArchive: vi.fn(async () => {}),
-    snapshotSession: vi.fn(async (): Promise<VercelSnapshotResponse> => ({
-      snapshot: { id: "snap-base-1", status: "created", createdAt: 456 },
-      session: createSessionResponse().session,
-    })),
+    snapshotSession: vi.fn(
+      async (): Promise<VercelSnapshotResponse> => ({
+        snapshot: { id: "snap-base-1", status: "created", createdAt: 456 },
+        session: createSessionResponse().session,
+      })
+    ),
     stopSession: vi.fn(async () => {}),
     ...overrides,
   } as unknown as VercelSandboxClient;

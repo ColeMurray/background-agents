@@ -17,7 +17,12 @@ import { isCanonicalUserId } from "../user-id";
 
 /** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
 export type AutomationRunStatus =
-  "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized";
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "unauthorized";
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 

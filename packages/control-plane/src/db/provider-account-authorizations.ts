@@ -120,7 +120,9 @@ export type ProviderAuthorization =
   | TerminalProviderAuthorization;
 
 export type ProviderAuthorizationLive =
-  InitiatingProviderAuthorization | PendingProviderAuthorization | ProcessingProviderAuthorization;
+  | InitiatingProviderAuthorization
+  | PendingProviderAuthorization
+  | ProcessingProviderAuthorization;
 
 function requiredString(value: string | null, field: string): string {
   if (!value) throw new Error(`Invalid provider authorization ${field}`);

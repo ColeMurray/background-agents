@@ -78,7 +78,8 @@ export function followUpRefusedResponse(refusal: SessionFollowUpRefusedError): R
 }
 
 type WebhookAuthentication =
-  { ok: true; automation: AutomationRow } | { ok: false; response: Response };
+  | { ok: true; automation: AutomationRow }
+  | { ok: false; response: Response };
 
 /** Resolve the webhook automation and verify the request's Bearer key against it. */
 async function authenticateWebhook(
