@@ -226,11 +226,25 @@ function ConditionEditor({
       );
     case "label":
       return (
-        <TagInput
-          values={condition.value}
-          onChange={(value) => onChange({ ...condition, value })}
-          placeholder="Add label..."
-        />
+        <div className="space-y-2">
+          <Select
+            value={condition.operator}
+            onValueChange={(v) => onChange({ ...condition, operator: v as "any_of" | "none_of" })}
+          >
+            <SelectTrigger className="w-32 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="any_of">any of</SelectItem>
+              <SelectItem value="none_of">none of</SelectItem>
+            </SelectContent>
+          </Select>
+          <TagInput
+            values={condition.value}
+            onChange={(value) => onChange({ ...condition, value })}
+            placeholder="Add label..."
+          />
+        </div>
       );
     case "path_glob":
       return (
