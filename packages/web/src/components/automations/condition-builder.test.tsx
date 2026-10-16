@@ -131,6 +131,21 @@ describe("ConditionBuilder — GitHub pull request editors", () => {
 
     expect(screen.getAllByRole("combobox")[0]).toHaveTextContent("Not draft");
   });
+
+  it("switches a label condition to none of", () => {
+    const onChange = renderBuilder(
+      [{ type: "label", operator: "any_of", value: ["translations"] }],
+      "github",
+      "pull_request.opened"
+    );
+
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(screen.getByRole("option", { name: "none of" }));
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { type: "label", operator: "none_of", value: ["translations"] },
+    ]);
+  });
 });
 
 describe("ConditionBuilder — GitHub workflow editors", () => {
