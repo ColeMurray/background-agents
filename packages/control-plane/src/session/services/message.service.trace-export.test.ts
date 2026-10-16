@@ -56,6 +56,7 @@ describe("MessageService.exportTrace", () => {
       artifactRepository: new ArtifactRepository(storage.sql),
       usageRepository: usage,
       messageQueue: {} as SessionMessageQueue,
+      applyTitle: vi.fn(),
       stopExecution: vi.fn(),
       parseArtifactMetadata: vi.fn(),
       transaction,

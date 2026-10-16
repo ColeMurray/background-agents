@@ -583,6 +583,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     artifactRepository,
     usageRepository,
     messageQueue,
+    applyTitle: (title) => {
+      const result = titleService.applySessionTitleUpdate(title);
+      if (!result.ok) {
+        log.warn("Did not apply the title a prompt carried", {
+          event: "session.prompt_title_rejected",
+          reason: result.reason,
+        });
+      }
+    },
     stopExecution: () => executionStop.stop(),
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
     transaction,

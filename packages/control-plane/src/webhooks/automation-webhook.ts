@@ -12,7 +12,9 @@ import { z } from "zod";
 import {
   normalizeWebhookEvent,
   WEBHOOK_SESSION_KEY_MAX_LENGTH,
+  WEBHOOK_SESSION_TITLE_MAX_LENGTH,
   webhookSessionKeySchema,
+  webhookSessionTitleSchema,
   type WebhookDeliveryOptions,
 } from "@open-inspect/shared/triggers";
 import { AutomationStore, type AutomationRow } from "../db/automation-store";
@@ -36,6 +38,7 @@ const MAX_PAYLOAD_SIZE = 64 * 1024;
 const webhookDeliveryFieldsSchema = z.object({
   idempotencyKey: z.string().optional().catch(undefined),
   sessionKey: webhookSessionKeySchema.optional(),
+  sessionTitle: webhookSessionTitleSchema.optional(),
 });
 
 type ParsedWebhookDeliveryFields =
@@ -46,12 +49,13 @@ export function parseWebhookDeliveryFields(body: unknown): ParsedWebhookDelivery
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: true, fields: {} };
 
   const parsed = webhookDeliveryFieldsSchema.safeParse(body);
-  return parsed.success
-    ? { ok: true, fields: parsed.data }
-    : {
-        ok: false,
-        error: `sessionKey must be a non-empty string of at most ${WEBHOOK_SESSION_KEY_MAX_LENGTH} characters`,
-      };
+  if (parsed.success) return { ok: true, fields: parsed.data };
+
+  const [field, max] =
+    parsed.error.issues[0]?.path[0] === "sessionTitle"
+      ? ["sessionTitle", WEBHOOK_SESSION_TITLE_MAX_LENGTH]
+      : ["sessionKey", WEBHOOK_SESSION_KEY_MAX_LENGTH];
+  return { ok: false, error: `${field} must be a non-empty string of at most ${max} characters` };
 }
 
 /**

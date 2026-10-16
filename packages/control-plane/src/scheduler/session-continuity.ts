@@ -55,6 +55,7 @@ export interface SteeringActor {
 export interface ContinuationPolicy {
   source: "slack" | "webhook";
   logFields?: Record<string, unknown>;
+  sessionTitle?: string;
   acceptDelivery?(run: AutomationRunRow): Promise<void>;
   releaseDelivery?(): Promise<void>;
   resolveActor(): Promise<SteeringActor | null>;
@@ -297,11 +298,25 @@ async function continueRunSession(
     return blocked(deps, policy, fields);
   }
 
+  let title: string | undefined;
+  try {
+    title = await permittedTitle(deps, actor, sessionId, policy.sessionTitle, fields);
+  } catch (error) {
+    logAuthorizationFailure(deps, policy, fields, error);
+    await policy.releaseDelivery?.();
+    return { kind: "refused", invocationId: run.invocation_id, status: null, code: null };
+  }
+
   // Outside the try: a follow-up that cannot be attributed must fail, not fall through to a new run.
   const { body, ctx } = await policy.buildPrompt(run, actor);
   let outcome: SessionPromptOutcome;
   try {
-    outcome = await enqueueSessionPrompt(deps.env, sessionId, body, ctx);
+    outcome = await enqueueSessionPrompt(
+      deps.env,
+      sessionId,
+      title ? { ...body, title } : body,
+      ctx
+    );
   } catch (error) {
     deps.log.warn("Failed to reach the session for a follow-up", {
       event: `scheduler.${policy.source}_steer_failed`,
@@ -343,6 +358,23 @@ async function continueRunSession(
   }
 }
 
+async function permittedTitle(
+  deps: SessionContinuityDeps,
+  actor: SteeringActor,
+  sessionId: string,
+  title: string | undefined,
+  fields: Record<string, unknown>
+): Promise<string | undefined> {
+  if (!title) return undefined;
+  if (await mayRename(deps.env, actor, sessionId)) return title;
+
+  deps.log.warn("Kept the session's title for an actor who may not rename it", {
+    event: "scheduler.webhook_retitle_unauthorized",
+    ...fields,
+  });
+  return undefined;
+}
+
 /**
  * Hold a follow-up for a launching run. Its session may not exist yet, so session
  * admission waits for the release; the actor's own authority is checked now. Returns
@@ -377,7 +409,7 @@ async function holdFollowUp(
     actor_user_id: actor.userId,
     actor_author_id: actor.authorId,
     client_request_id: clientRequestId,
-    prompt: JSON.stringify({ ...body, clientRequestId }),
+    prompt: JSON.stringify({ ...body, clientRequestId, title: policy.sessionTitle }),
     request_id: ctx.request_id,
     created_at: Date.now(),
     retry_at: Date.now() + HELD_PROMPT_RETRY_MS,
@@ -416,7 +448,12 @@ async function releaseHeldPrompt(
         ...fields,
       });
     } else {
-      const outcome = await enqueueSerializedSessionPrompt(deps.env, sessionId, held.prompt, ctx);
+      const outcome = await enqueueSerializedSessionPrompt(
+        deps.env,
+        sessionId,
+        await heldPromptFor(deps, actor, sessionId, held, fields),
+        ctx
+      );
       // A full queue or a failing session may take it later; the sender was told it was steered.
       if (outcome.kind === "rejected" && (outcome.status === 429 || outcome.status >= 500)) {
         deps.log.warn("Session could not take a held follow-up yet; the sweep retries it", {
@@ -471,6 +508,35 @@ async function mayCollaborate(env: Env, actor: SteeringActor, sessionId: string)
     null
   );
   return admission.kind === "allowed";
+}
+
+async function mayRename(env: Env, actor: SteeringActor, sessionId: string): Promise<boolean> {
+  const admission = await evaluateSessionAdmission(
+    actor.context,
+    env,
+    sessionId,
+    "lifecycle",
+    null
+  );
+  if (admission.kind !== "allowed") return false;
+  return (
+    admission.legacyPermission === null ||
+    (actor.context.authorization?.permissions.includes(admission.legacyPermission) ?? false)
+  );
+}
+
+async function heldPromptFor(
+  deps: SessionContinuityDeps,
+  actor: SteeringActor,
+  sessionId: string,
+  held: HeldPromptRow,
+  fields: Record<string, unknown>
+): Promise<string> {
+  const prompt = JSON.parse(held.prompt) as SchedulerPromptRequest;
+  if (!prompt.title || (await permittedTitle(deps, actor, sessionId, prompt.title, fields))) {
+    return held.prompt;
+  }
+  return JSON.stringify({ ...prompt, title: undefined });
 }
 
 function blocked(

@@ -731,7 +731,8 @@ export class SessionMessageQueue {
   }
 
   async enqueuePromptFromApi(
-    data: EnqueuePromptRequest
+    data: EnqueuePromptRequest,
+    onQueued?: () => void
   ): Promise<{ messageId: string; status: "queued"; deduplicated: boolean }> {
     this.assertPromptableSession();
     this.assertSandboxAcceptingPrompts();
@@ -786,6 +787,7 @@ export class SessionMessageQueue {
       callbackContext: data.callbackContext,
       clientRequestId: data.clientRequestId,
     });
+    if (!enqueued.deduplicated) onQueued?.();
 
     // An already-active session keeps its index timestamp through the status sync, so
     // record the activity here: session continuity measures its window from it.

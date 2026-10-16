@@ -332,6 +332,7 @@ interface StartInvocationParams {
    * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
+  sessionTitle?: string;
 }
 
 interface WebhookFollowUpClaim {
@@ -369,6 +370,10 @@ const AUTOMATION_CONTEXT_GUARDRAIL =
  * them when the event-specific context changes, then reassert the trust boundary
  * after that untrusted context.
  */
+function automationSessionTitle(name: string): string {
+  return `[Auto] ${name}`;
+}
+
 export function composeAutomationPrompt(contextBlock: string, instructions: string): string {
   return `${instructions}\n---\n\n${contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`;
 }
@@ -780,7 +785,8 @@ export class Scheduler {
             authorization,
             target:
               targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
-          }
+          },
+          params.sessionTitle
         );
         await this.sendPromptToSession(
           sessionId,
@@ -1463,6 +1469,7 @@ export class Scheduler {
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
         instructionsOverride,
+        sessionTitle: event.source === "webhook" ? event.sessionTitle : undefined,
         ...(event.source === "slack"
           ? {
               instructionsOverrideFactory: async () =>
@@ -1943,7 +1950,8 @@ export class Scheduler {
     executionPrincipal: ExecutionPrincipal,
     /** The instant the run claimed this session — what its deadline measures from. */
     startedAt: number,
-    admission: LaunchAdmission
+    admission: LaunchAdmission,
+    sessionTitle?: string
   ): Promise<void> {
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -2018,7 +2026,7 @@ export class Scheduler {
       visibility: team?.defaultVisibility ?? "workspace",
       sessionId,
       ...target,
-      title: `[Auto] ${automation.name}`,
+      title: automationSessionTitle(sessionTitle ?? automation.name),
       harness: getValidHarnessOrDefault(automation.harness),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
@@ -2210,6 +2218,7 @@ export class Scheduler {
     const clientRequestId = requestId ?? `webhook:${await hashToken(event.triggerKey)}`;
     return {
       source: "webhook",
+      sessionTitle: event.sessionTitle && automationSessionTitle(event.sessionTitle),
       acceptDelivery: claim
         ? async (run) => {
             await store.acceptFollowUpReceipt(

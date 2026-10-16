@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { WEBHOOK_SESSION_KEY_MAX_LENGTH } from "@open-inspect/shared/triggers";
+import {
+  WEBHOOK_SESSION_KEY_MAX_LENGTH,
+  WEBHOOK_SESSION_TITLE_MAX_LENGTH,
+} from "@open-inspect/shared/triggers";
 import { followUpRefusedResponse, parseWebhookDeliveryFields } from "./automation-webhook";
 import { SessionFollowUpRefusedError } from "../scheduler/scheduler";
 
@@ -41,6 +44,23 @@ describe("parseWebhookDeliveryFields", () => {
       fields: { sessionKey },
     });
   });
+
+  it("reads a sessionTitle without its surrounding whitespace", () => {
+    expect(parseWebhookDeliveryFields({ sessionTitle: "  #8161 Mentions in Comments " })).toEqual({
+      ok: true,
+      fields: { sessionTitle: "#8161 Mentions in Comments" },
+    });
+  });
+
+  it.each(["", "   ", 42, "t".repeat(WEBHOOK_SESSION_TITLE_MAX_LENGTH + 1)])(
+    "rejects a sessionTitle of %j",
+    (sessionTitle) => {
+      expect(parseWebhookDeliveryFields({ sessionKey: "card-42", sessionTitle })).toEqual({
+        ok: false,
+        error: `sessionTitle must be a non-empty string of at most ${WEBHOOK_SESSION_TITLE_MAX_LENGTH} characters`,
+      });
+    }
+  );
 });
 
 describe("followUpRefusedResponse", () => {
