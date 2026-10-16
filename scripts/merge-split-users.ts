@@ -15,7 +15,7 @@
  * graph mutation as one result-bearing D1 batch.
  *
  * Usage:
- *   node --experimental-transform-types scripts/merge-split-users.ts \
+ *   node --experimental-strip-types scripts/merge-split-users.ts \
  *     --database <d1-database-name> --survivor <user-id> --loser <user-id>
  *     [--execute]
  *
@@ -121,12 +121,24 @@ function inlineParams(sql: string, params: unknown[]): string {
 }
 
 export class WranglerD1Database implements SqlDatabase {
+  // Plain fields rather than parameter properties: Node only strips types, it doesn't transform
+  // them, and parameter properties need a transform.
+  private readonly databaseName: string;
+  private readonly remote: boolean;
+  private readonly verbose: boolean;
+  private readonly runner: WranglerRunner;
+
   constructor(
-    private readonly databaseName: string,
-    private readonly remote: boolean,
-    private readonly verbose: boolean,
-    private readonly runner: WranglerRunner = runWrangler
-  ) {}
+    databaseName: string,
+    remote: boolean,
+    verbose: boolean,
+    runner: WranglerRunner = runWrangler
+  ) {
+    this.databaseName = databaseName;
+    this.remote = remote;
+    this.verbose = verbose;
+    this.runner = runner;
+  }
 
   prepare(query: string): SqlStatement {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
