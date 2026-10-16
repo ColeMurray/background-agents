@@ -19,8 +19,8 @@
     "test:lint-sandbox-boundaries": "node --test scripts/lint-sandbox-boundaries.test.mjs",
     "test:lint-sql-portability": "node --test scripts/lint-sql-portability.test.mjs",
     "test:deploy-aws": "node --test scripts/deploy-aws.test.mjs",
-    "test:rbac-bootstrap-owner": "node --experimental-transform-types --test scripts/bootstrap-workspace-owner.test.ts",
-    "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
+    "test:rbac-bootstrap-owner": "node --experimental-strip-types --test scripts/bootstrap-workspace-owner.test.ts",
+    "test:user-merge-cli": "node --experimental-strip-types --test scripts/merge-split-users.test.ts",
     "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",
     "test:terraform-workflow-contract": "node --test scripts/terraform-workflow-contract.test.mjs scripts/terraform-plan-comment.test.mjs",
     "test:node-version-workflow-contract": "node --test scripts/node-version-workflow-contract.test.mjs",
@@ -31,7 +31,7 @@
     "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
     "knip": "knip",
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
-    "rbac:bootstrap-owner": "node --experimental-transform-types scripts/bootstrap-workspace-owner.ts",
+    "rbac:bootstrap-owner": "node --experimental-strip-types scripts/bootstrap-workspace-owner.ts",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },
   "devDependencies": {
