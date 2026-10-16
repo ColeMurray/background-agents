@@ -245,6 +245,12 @@ interface StopCommand {
   type: "stop";
 }
 
+interface SteerCommand {
+  type: "steer";
+  messageId: string;
+  content: string;
+}
+
 interface SnapshotCommand {
   type: "snapshot";
 }
@@ -278,6 +284,7 @@ export type SandboxCommand =
     }
   | PromptCommand
   | StopCommand
+  | SteerCommand
   | SnapshotCommand
   | ShutdownCommand
   | AckCommand

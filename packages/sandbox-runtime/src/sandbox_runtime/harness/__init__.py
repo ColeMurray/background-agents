@@ -22,6 +22,7 @@ from .base import (
     HarnessPrompt,
     HarnessStartError,
     PromptLimits,
+    SteerableHarness,
     TurnOutcome,
     parse_harness_id,
 )
@@ -196,6 +197,7 @@ __all__ = [
     "HarnessPrompt",
     "HarnessStartError",
     "PromptLimits",
+    "SteerableHarness",
     "TurnOutcome",
     "build_agent_harness",
     "parse_harness_id",

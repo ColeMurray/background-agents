@@ -19,6 +19,7 @@ export const enqueuePromptRequestSchema = z
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
     clientRequestId: clientRequestIdSchema.optional(),
+    steer: z.boolean().optional(),
     // Authoritative SCM snapshot resolved by the router at prompt time.
     // Explicit null fields clear stored attribution; absence leaves it unchanged.
     scmEnrichment: z

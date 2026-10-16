@@ -632,7 +632,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-    }
+    },
+    (messageId, now) => messageQueue.settleSteer(messageId, now)
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,

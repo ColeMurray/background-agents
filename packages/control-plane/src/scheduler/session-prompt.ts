@@ -11,7 +11,13 @@ import type { Env } from "../types";
 
 export type SchedulerPromptRequest = Pick<
   EnqueuePromptRequest,
-  "content" | "authorId" | "canonicalUserId" | "source" | "scmEnrichment" | "clientRequestId"
+  | "content"
+  | "authorId"
+  | "canonicalUserId"
+  | "source"
+  | "scmEnrichment"
+  | "clientRequestId"
+  | "steer"
 > & {
   callbackContext?: AutomationCallbackContext | SlackCallbackContext;
 };

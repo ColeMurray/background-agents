@@ -554,6 +554,216 @@ class TestTranslation:
         assert len([e for e in events if e["type"] == "step_finish"]) == 1
 
 
+def _echo(text: str) -> UserMessage:
+    return UserMessage(content=[TextBlock(text)], origin={"kind": "human"})
+
+
+class TestSteering:
+    @pytest.mark.asyncio
+    async def test_a_steered_message_joins_the_running_turn(self, tmp_path: Path) -> None:
+        steered: list[bool] = []
+        h: Harness
+
+        async def steer() -> None:
+            steered.append(await h.harness.steer(HarnessPrompt(message_id="m2", text="and this")))
+
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    _echo("hi"),
+                    AssistantMessage(
+                        content=[ToolUseBlock(id="tu_1", name="Bash", input={"command": "ls"})],
+                        model="claude-sonnet-4-6",
+                        message_id="msg_1",
+                    ),
+                    steer,
+                    UserMessage(content=[ToolResultBlock(tool_use_id="tu_1", content="a.txt")]),
+                    _echo("and this"),
+                    AssistantMessage(
+                        content=[TextBlock("Done, and this too.")],
+                        model="claude-sonnet-4-6",
+                        message_id="msg_2",
+                    ),
+                    _result(0.2),
+                ]
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+
+        assert steered == [True]
+        assert outcome.success
+        assert [q[0]["message"]["content"][0]["text"] for q in h.client.queries] == [
+            "hi",
+            "and this",
+        ]
+        assert not await h.harness.steer(HarnessPrompt(message_id="m3", text="too late"))
+
+    @pytest.mark.asyncio
+    async def test_a_message_steered_after_the_last_tool_call_ends_the_prompt_after_its_own_turn(
+        self, tmp_path: Path
+    ) -> None:
+        h: Harness
+
+        async def steer() -> None:
+            assert await h.harness.steer(HarnessPrompt(message_id="m2", text="one more"))
+
+        h = Harness(
+            tmp_path,
+            turns=[
+                [
+                    _echo("hi"),
+                    steer,
+                    _result(0.1),
+                    _echo("one more"),
+                    AssistantMessage(
+                        content=[TextBlock("Paris")], model="claude-sonnet-4-6", message_id="msg_2"
+                    ),
+                    _result(0.3),
+                ],
+                [_result(0.4)],
+            ],
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+
+        assert outcome.success
+        assert outcome.message_cost_usd == pytest.approx(0.3)
+        _, next_outcome = await _run(h.harness, HarnessPrompt(message_id="m3", text="next"))
+        assert next_outcome.message_cost_usd == pytest.approx(0.1)
+
+    @pytest.mark.asyncio
+    async def test_a_result_that_lands_while_a_steer_is_being_sent_waits_for_it(
+        self, tmp_path: Path
+    ) -> None:
+        gate = asyncio.Event()
+        steering: list[asyncio.Task[bool]] = []
+        h: Harness
+
+        async def steer() -> None:
+            prompt = HarnessPrompt(message_id="m2", text="late")
+            steering.append(asyncio.create_task(h.harness.steer(prompt)))
+            await asyncio.sleep(0)
+
+        async def release() -> None:
+            gate.set()
+            await asyncio.sleep(0)
+
+        h = Harness(
+            tmp_path,
+            turns=[[_echo("hi"), steer, _result(0.1), release, _echo("late"), _result(0.3)]],
+            client_kwargs={"query_gate": gate},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await _run(h.harness)
+        gate.set()
+
+        assert await asyncio.wait_for(steering[0], 1)
+        assert outcome.message_cost_usd == pytest.approx(0.3)
+
+    @pytest.mark.asyncio
+    async def test_a_steer_still_being_sent_at_the_turn_deadline_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        gate = asyncio.Event()
+        steering: list[asyncio.Task[bool]] = []
+        h: Harness
+
+        async def steer() -> None:
+            prompt = HarnessPrompt(message_id="m2", text="stuck")
+            steering.append(asyncio.create_task(h.harness.steer(prompt)))
+            await asyncio.sleep(0)
+
+        async def hang() -> None:
+            await asyncio.Event().wait()
+
+        limits = PromptLimits(
+            inactivity_timeout_seconds=5.0,
+            prompt_max_duration_seconds=0.2,
+            prompt_cleanup_timeout_seconds=0.05,
+        )
+        h = Harness(
+            tmp_path,
+            turns=[[_echo("hi"), steer, hang]],
+            limits=limits,
+            client_kwargs={"query_gate": gate},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        _, outcome = await asyncio.wait_for(_run(h.harness), timeout=2.0)
+
+        assert await asyncio.wait_for(steering[0], 1) is False
+        assert "max duration" in (outcome.error or "")
+        assert len(h.client.queries) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_steer_whose_turn_closes_while_it_is_sent_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        gate = asyncio.Event()
+        steering: list[asyncio.Task[bool]] = []
+        h: Harness
+
+        async def steer() -> None:
+            prompt = HarnessPrompt(message_id="m2", text="late")
+            steering.append(asyncio.create_task(h.harness.steer(prompt)))
+            await asyncio.sleep(0)
+
+        async def stop() -> None:
+            await h.harness.abort()
+
+        h = Harness(
+            tmp_path,
+            turns=[[_echo("hi"), steer, stop, _result(0.1)], [_result(0.2)]],
+            client_kwargs={"query_gate": gate},
+        )
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+        gate.set()
+
+        assert await asyncio.wait_for(steering[0], 1) is False
+        assert [q[0]["message"]["content"][0]["text"] for q in h.clients[0].queries] == [
+            "hi",
+            "late",
+        ]
+        await _run(h.harness, HarnessPrompt(message_id="m3", text="next"))
+        assert len(h.clients) == 2
+
+    @pytest.mark.asyncio
+    async def test_steering_is_refused_without_a_turn_or_before_the_cli_echoes_its_prompt(
+        self, tmp_path: Path
+    ) -> None:
+        refused: list[bool] = []
+        h: Harness
+
+        async def steer() -> None:
+            refused.append(await h.harness.steer(HarnessPrompt(message_id="m2", text="early")))
+
+        h = Harness(tmp_path, turns=[[steer, _result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        assert not await h.harness.steer(HarnessPrompt(message_id="m0", text="idle"))
+        _, outcome = await _run(h.harness)
+
+        assert refused == [False]
+        assert outcome.success
+        assert len(h.client.queries) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_cli_echoes_user_messages(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path, turns=[[_result(0.1)]])
+        await h.harness.open()
+        await h.harness.create_session()
+        await _run(h.harness)
+
+        assert h.client.options["extra_args"] == {"replay-user-messages": None}
+
+
 class TestCostBaseline:
     """§5.3: messageCostUsd = running total at turn end - baseline."""
 

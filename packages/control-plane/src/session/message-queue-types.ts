@@ -8,6 +8,7 @@ export interface PromptMessageData {
   model?: string;
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
+  steer?: boolean;
 }
 
 export interface EnqueuePromptCoreData {

@@ -67,7 +67,7 @@ export function usePromptInput(
     retryRequestRef.current = null;
   }, [selectedModel, reasoningEffort, attachmentDraftSignature]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, steer = false) => {
     e.preventDefault();
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (
@@ -117,7 +117,8 @@ export function usePromptInput(
         selectedModel,
         reasoningEffort,
         attachments,
-        requestIdentity.clientRequestId
+        requestIdentity.clientRequestId,
+        { steer }
       );
       if (!result.ok) {
         setSubmitError(
@@ -191,6 +192,7 @@ export function usePromptInput(
     submitError,
     setSubmitError,
     handleSubmit,
+    handleSteer: (e: React.FormEvent) => handleSubmit(e, true),
     handleInputChange,
     handleInputValueChange,
     handleKeyDown,
