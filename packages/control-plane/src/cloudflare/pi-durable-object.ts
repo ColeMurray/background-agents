@@ -219,7 +219,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const stream = await this.harness.session(ROOT_SESSION).events(BACKGROUND_CONTEXT);
     const state = { text: "" };
     stream.start(async (events) => {
-      const work = (this.eventRelayWork.get(operationId) ?? Promise.resolve()).then(async () => {
+      const previous = (this.eventRelayWork.get(operationId) ?? Promise.resolve()).catch(() => {});
+      const work = previous.then(async () => {
         const translated = translatePiEvents(events, state, {
           sessionId,
           operationId,

@@ -208,10 +208,11 @@ export default function Home() {
   } = warmSession;
 
   useEffect(() => {
-    if (!warmRequested || !warmIdentity) return;
+    if (!warmRequested) return;
     setWarmRequested(false);
+    if (harness === "pi" || !warmIdentity) return;
     void createSessionForWarming();
-  }, [warmRequested, warmIdentity, createSessionForWarming]);
+  }, [harness, warmRequested, warmIdentity, createSessionForWarming]);
 
   const hasAttachments = sessionAttachments.attachments.length > 0;
   const launch = useFirstPromptLaunch(

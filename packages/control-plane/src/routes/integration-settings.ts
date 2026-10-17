@@ -51,7 +51,9 @@ function repositoryIntegrationHarnessError(
   id: IntegrationId,
   settings: Record<string, unknown>
 ): Response | null {
-  return (id === "github" || id === "linear") && settings.harness === "pi"
+  const defaults = isRecord(settings.defaults) ? settings.defaults : null;
+  return (id === "github" || id === "linear") &&
+    (settings.harness === "pi" || defaults?.harness === "pi")
     ? error("Pi Durable is unavailable for repository-backed integrations", 400)
     : null;
 }

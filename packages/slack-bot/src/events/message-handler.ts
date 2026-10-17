@@ -266,8 +266,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     const interimContext = interimHistory
       ? formatInterimThreadContext(interimHistory.messages)
       : "";
-    const followUpImages = imageOnly ? images : [...images, ...(interimHistory?.images ?? [])];
-    if (existingSession.harness === "pi" && followUpImages.length > 0) {
+    if (existingSession.harness === "pi" && images.length > 0) {
       await postMessage(
         env.SLACK_BOT_TOKEN,
         channel,
@@ -286,7 +285,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       attachments: await preparePromptImageAttachments(
         env,
         images,
-        imageOnly ? [] : (interimHistory?.images ?? []),
+        imageOnly || existingSession.harness === "pi" ? [] : (interimHistory?.images ?? []),
         traceId
       ),
       imageOnly,
