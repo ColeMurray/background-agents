@@ -1,9 +1,13 @@
 # First-class Pi Durable coding agent: ledger
 
-Spec folder: `features/pi-first-class/`  
-Workspace: repository root @ `feat/pi-first-class`  
-Base: `d1ffd951` (`feat/pi-durable-harness`)  
-Started: 2026-10-18  
+Spec folder: `features/pi-first-class/`
+
+Workspace: repository root @ `feat/pi-first-class`
+
+Base: `d1ffd951` (`feat/pi-durable-harness`)
+
+Started: 2026-10-18
+
 Rule: tick only with evidence on the same line.
 
 ## Phase 1: Understand
@@ -50,7 +54,7 @@ Rule: tick only with evidence on the same line.
       CPU requirement, and brittle Terraform regex checks
 - [x] Narrow validation green — build/typecheck/lint/format, 6 module tests, 76 production tests,
       README translations, clean `npm ci`
-- [ ] Committed
+- [x] Committed — `ea447fda` (`feat: add isolated Pi Code Mode sandbox`)
 - [x] Slice report — `features/pi-first-class/SLICE-1.md`
 
 ### Slice 2: durable Computer VFS workspace
