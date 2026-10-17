@@ -890,6 +890,33 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
   }
 
+  async readFile(
+    config: GetRepositoryConfig & { commitSha: string; path: string; maxBytes: number },
+    scope: CredentialScope
+  ): Promise<Uint8Array | null> {
+    const encodedPath = config.path.split("/").map(encodeURIComponent).join("/");
+    try {
+      const response = await this.appFetch(
+        `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/contents/${encodedPath}?ref=${encodeURIComponent(config.commitSha)}`,
+        scope,
+        "read repository file",
+        "application/vnd.github.raw"
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) throw await githubResponseError(response, "read repository file");
+      return await readResponseBytesWithinLimit(response, config.maxBytes, config.path);
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to read repository file: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
   /** Issue an installation-authenticated GitHub API request. */
   private async appFetch(
     path: string,

@@ -15,7 +15,7 @@ function harness() {
     ],
     truncated: false,
   }));
-  const readBlob = vi.fn(async () => new TextEncoder().encode("hello world\n"));
+  const readFile = vi.fn(async () => new TextEncoder().encode("hello world\n"));
   const tools = new PiRepositoryTools({
     repositories: () => [
       {
@@ -26,9 +26,9 @@ function harness() {
       },
     ],
     resolveCredentialScope: vi.fn(async () => ({ kind: "all" as const })),
-    provider: () => ({ resolveCommit, listTree, readBlob }),
+    provider: () => ({ resolveCommit, listTree, readFile }),
   });
-  return { tools, resolveCommit, listTree, readBlob };
+  return { tools, resolveCommit, listTree, readFile };
 }
 
 describe("PiRepositoryTools", () => {
@@ -82,14 +82,17 @@ describe("PiRepositoryTools", () => {
       totalBytes: 12,
       truncated: false,
     });
-    expect(h.readBlob).toHaveBeenCalledWith(
-      { owner: "acme", name: "widgets", blobId: "blob-1", maxBytes: 262_144 },
+    expect(h.readFile).toHaveBeenCalledWith(
+      {
+        owner: "acme",
+        name: "widgets",
+        commitSha: "abc123",
+        path: "src/index.ts",
+        maxBytes: 262_144,
+      },
       { kind: "all" }
     );
-    expect(h.listTree).toHaveBeenCalledWith(
-      { owner: "acme", name: "widgets", commitSha: "abc123", path: "src" },
-      { kind: "all" }
-    );
+    expect(h.listTree).not.toHaveBeenCalled();
   });
 
   it.each(["/etc/passwd", "../secret", "src/../../secret", "src\\index.ts"])(
@@ -135,7 +138,7 @@ describe("PiRepositoryTools", () => {
 
   it("rejects binary files", async () => {
     const h = harness();
-    h.readBlob.mockResolvedValueOnce(new Uint8Array([0, 1, 2]));
+    h.readFile.mockResolvedValueOnce(new Uint8Array([0, 1, 2]));
     await expect(h.tools.read({ path: "src/index.ts" })).rejects.toThrow("not UTF-8 text");
   });
 });

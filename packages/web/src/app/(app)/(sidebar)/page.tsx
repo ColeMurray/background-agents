@@ -210,6 +210,10 @@ export default function Home() {
   }, [harness, warmRequested, warmIdentity, createSessionForWarming]);
 
   const hasAttachments = sessionAttachments.attachments.length > 0;
+  const piProviderError =
+    harness === "pi" && !providerAccounts.loading && !preferences.providerReady
+      ? "Pi Durable requires an active connected OpenAI account"
+      : null;
   const launch = useFirstPromptLaunch(
     {
       prompt,
@@ -222,17 +226,16 @@ export default function Home() {
         sessionAttachments.isUploading ||
         models.loading,
       validationError:
-        harness === "pi" && !providerAccounts.loading && !preferences.providerReady
-          ? "Pi Durable requires an active connected OpenAI account"
-          : harness === "pi" && hasAttachments
-            ? "Pi Durable does not support attachments yet"
-            : preferences.modelAvailability.status === "unavailable"
-              ? preferences.modelAvailability.message
-              : !isLaunchable
-                ? sessionTarget?.kind === "repos"
-                  ? "Select at least one repository"
-                  : "Please select a repository or environment"
-                : null,
+        piProviderError ??
+        (harness === "pi" && hasAttachments
+          ? "Pi Durable does not support attachments yet"
+          : preferences.modelAvailability.status === "unavailable"
+            ? preferences.modelAvailability.message
+            : !isLaunchable
+              ? sessionTarget?.kind === "repos"
+                ? "Select at least one repository"
+                : "Please select a repository or environment"
+              : null),
     },
     {
       sessions: warmSession,
@@ -309,7 +312,7 @@ export default function Home() {
         submitting: launch.submitting,
         warming: warmSession.isWarming,
         sendDisabled,
-        error: creationError?.message ?? launch.error,
+        error: piProviderError ?? creationError?.message ?? launch.error,
         onSubmit: (event) => {
           event.preventDefault();
           void launch.submit();

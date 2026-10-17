@@ -23,6 +23,7 @@ function stubProvider(
     getBranchHead: () => notUsedHere("getBranchHead"),
     resolveCommit: () => notUsedHere("resolveCommit"),
     listTree: () => notUsedHere("listTree"),
+    readFile: () => notUsedHere("readFile"),
     readBlob: () => notUsedHere("readBlob"),
     getPullRequest: () => notUsedHere("getPullRequest"),
     generatePushAuth: () => notUsedHere("generatePushAuth"),

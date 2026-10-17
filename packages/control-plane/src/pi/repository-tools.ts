@@ -21,7 +21,7 @@ export interface PiPinnedRepository extends PiRepository {
 interface PiRepositoryToolsOptions {
   repositories(): readonly PiRepository[];
   resolveCredentialScope(): Promise<CredentialScope>;
-  provider(): Pick<SourceControlProvider, "resolveCommit" | "listTree" | "readBlob">;
+  provider(): Pick<SourceControlProvider, "resolveCommit" | "listTree" | "readFile">;
 }
 
 interface RepositoryTargetInput {
@@ -103,27 +103,17 @@ export class PiRepositoryTools {
     const path = repositoryPath(input.path, false);
     const scope = await this.options.resolveCredentialScope();
     const commitSha = await this.targetCommit(repository, input.commitSha, scope);
-    const tree = await this.options.provider().listTree(
+    const bytes = await this.options.provider().readFile(
       {
         owner: repository.repoOwner,
         name: repository.repoName,
         commitSha,
-        path: parentPath(path),
-      },
-      scope
-    );
-    if (tree.truncated) throw new Error("The repository tree is truncated");
-    const entry = tree.entries.find((candidate) => candidate.path === path);
-    if (!entry || entry.type !== "file") throw new Error(`Repository file not found: ${path}`);
-    const bytes = await this.options.provider().readBlob(
-      {
-        owner: repository.repoOwner,
-        name: repository.repoName,
-        blobId: entry.blobId,
+        path,
         maxBytes: MAX_REPOSITORY_FILE_BYTES,
       },
       scope
     );
+    if (!bytes) throw new Error(`Repository file not found: ${path}`);
     if (bytes.byteLength > MAX_REPOSITORY_FILE_BYTES) {
       throw new Error(`Repository file exceeds ${MAX_REPOSITORY_FILE_BYTES} bytes`);
     }
@@ -190,11 +180,6 @@ export class PiRepositoryTools {
     }
     return this.resolveCommit(repository, undefined, scope);
   }
-}
-
-function parentPath(path: string): string | null {
-  const separator = path.lastIndexOf("/");
-  return separator < 0 ? null : path.slice(0, separator);
 }
 
 function repositoryPath(value: string, allowEmpty: boolean): string {
