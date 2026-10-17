@@ -15,6 +15,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/pi-codemode-sandbox/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
@@ -55,6 +56,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/pi-codemode-sandbox/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/opencomputer-infra/**"
@@ -258,6 +260,12 @@ jobs:
       # test-cp-integration; a session repository or migration has to pass both.
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
+
+      - name: Build isolated Pi Code Mode Worker and QuickJS WASM
+        run: npm run build -w @open-inspect/pi-codemode-sandbox
+
+      - name: Run Pi Code Mode sandbox infrastructure contracts
+        run: npm test -w @open-inspect/pi-codemode-sandbox
 
   test-cp-integration:
     name: Test (control-plane integration ${{ matrix.shard }})

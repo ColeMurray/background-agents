@@ -418,8 +418,10 @@ variables.
 
 ### Worker deployment fails
 
-1. Build workers first: `npm run build -w @open-inspect/control-plane`
-2. Check script exists: `ls packages/control-plane/dist/index.js`
+1. Build workers first:
+   `npm run build -w @open-inspect/control-plane -w @open-inspect/pi-codemode-sandbox`
+2. Check artifacts exist:
+   `ls packages/control-plane/dist/index.js packages/pi-codemode-sandbox/dist/{index.js,index.js.map,quickjs.wasm}`
 3. Verify Cloudflare API token permissions:
    - `Workers Scripts: Edit`
    - `Workers KV Storage: Edit`

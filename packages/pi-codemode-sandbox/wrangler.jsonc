@@ -1,0 +1,14 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "open-inspect-pi-codemode-sandbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-18",
+  "workers_dev": false,
+  "preview_urls": false,
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CodemodeSandbox"],
+    },
+  ],
+}

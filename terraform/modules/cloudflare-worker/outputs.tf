@@ -19,8 +19,8 @@ output "deployment_id" {
 }
 
 output "worker_url" {
-  description = "The workers.dev URL for the worker: https://<worker_name>.<worker_subdomain>.workers.dev"
-  value       = "https://${cloudflare_worker.this.name}.${var.worker_subdomain}.workers.dev"
+  description = "The workers.dev URL for the worker, or null when workers.dev is disabled"
+  value       = var.workers_dev_enabled ? "https://${cloudflare_worker.this.name}.${var.worker_subdomain}.workers.dev" : null
 }
 
 output "custom_domain" {
@@ -41,4 +41,9 @@ output "plain_text_bindings" {
 output "secret_binding_names" {
   description = "Names of configured secret bindings; secret values are not exposed."
   value       = nonsensitive(keys(var.secrets))
+}
+
+output "binding_names" {
+  description = "Names of all bindings enabled on the current Worker version."
+  value       = sort(nonsensitive(local.binding_names))
 }

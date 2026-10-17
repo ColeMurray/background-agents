@@ -621,7 +621,7 @@ enable_service_bindings        = false
 
 ```bash
 # From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/pi-codemode-sandbox -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
 ```
 
 Then run:
@@ -643,7 +643,12 @@ After Phase 1 succeeds, update your `terraform.tfvars`:
 ```hcl
 enable_durable_object_bindings = true
 enable_service_bindings        = true
+pi_codemode_sandbox_migration_applied = true
 ```
+
+The Code Mode setting records that its private Worker's `v1` class migration succeeded; it does not
+expose a public endpoint or add a self-binding. The GitHub Terraform workflow derives this setting
+from the deployed sandbox Worker automatically.
 
 Then run:
 
@@ -1669,10 +1674,11 @@ Terraform references the built worker bundles. Build them before running `terraf
 npm run build -w @open-inspect/shared
 
 # Build workers (required before Terraform)
-npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/pi-codemode-sandbox -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
 
 # Verify bundles exist
 ls packages/control-plane/dist/index.js
+ls packages/pi-codemode-sandbox/dist/index.js packages/pi-codemode-sandbox/dist/quickjs.wasm
 ls packages/slack-bot/dist/index.js
 ls packages/github-bot/dist/index.js  # Only if enable_github_bot = true
 ls packages/linear-bot/dist/index.js  # Only if enable_linear_bot = true

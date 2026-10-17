@@ -765,6 +765,23 @@ variable "pi_durable_binding_enabled" {
   default     = false
 }
 
+variable "pi_codemode_sandbox_migration_applied" {
+  description = "Record that the Pi Code Mode sandbox v1 class migration has been deployed so later versions omit it"
+  type        = bool
+  default     = false
+}
+
+variable "pi_codemode_sandbox_cpu_ms" {
+  description = "Optional paid-plan CPU limit for each Pi Code Mode sandbox invocation, in milliseconds"
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.pi_codemode_sandbox_cpu_ms == null || var.pi_codemode_sandbox_cpu_ms > 0
+    error_message = "pi_codemode_sandbox_cpu_ms must be null or greater than zero."
+  }
+}
+
 variable "sandbox_boot_timeout_ms" {
   description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
   type        = number

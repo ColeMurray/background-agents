@@ -36,16 +36,17 @@ it at build time.
 
 ## Package Overview
 
-| Package         | Lang / Framework                   | Purpose                                                     |
-| --------------- | ---------------------------------- | ----------------------------------------------------------- |
-| `shared`        | TypeScript                         | Shared types, auth utilities, model definitions             |
-| `control-plane` | TypeScript / CF Workers + DO       | Session management, WebSocket streaming, GitHub integration |
-| `web`           | TypeScript / Next.js 16 + React 19 | User-facing dashboard, OAuth, real-time UI                  |
-| `docs`          | TypeScript / Next.js 16 + Fumadocs | Public user documentation at docs.backgroundagents.dev      |
-| `slack-bot`     | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
-| `github-bot`    | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
-| `linear-bot`    | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
-| `modal-infra`   | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
+| Package               | Lang / Framework                   | Purpose                                                     |
+| --------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `shared`              | TypeScript                         | Shared types, auth utilities, model definitions             |
+| `control-plane`       | TypeScript / CF Workers + DO       | Session management, WebSocket streaming, GitHub integration |
+| `web`                 | TypeScript / Next.js 16 + React 19 | User-facing dashboard, OAuth, real-time UI                  |
+| `docs`                | TypeScript / Next.js 16 + Fumadocs | Public user documentation at docs.backgroundagents.dev      |
+| `slack-bot`           | TypeScript / CF Workers + Hono     | Slack event handler, session creation                       |
+| `github-bot`          | TypeScript / CF Workers + Hono     | PR review and @mention webhook handler                      |
+| `linear-bot`          | TypeScript / CF Workers + Hono     | Linear agent webhook handler                                |
+| `pi-codemode-sandbox` | TypeScript / CF Workers + QuickJS  | Isolated Pi Code Mode execution Worker                      |
+| `modal-infra`         | Python 3.12 / Modal + FastAPI      | Sandbox lifecycle, WebSocket bridge to control plane        |
 
 ## Common Commands
 
@@ -54,6 +55,7 @@ it at build time.
 npm install
 npm run build                                    # all packages
 npm run build -w @open-inspect/shared            # shared only (build first!)
+npm run build -w @open-inspect/pi-codemode-sandbox # compile Worker + QuickJS WASM
 
 # Lint & format
 npm run lint:fix                                 # ESLint + Prettier fix
@@ -69,6 +71,7 @@ npm run build -w @open-inspect/docs
 npm test -w @open-inspect/github-bot
 npm test -w @open-inspect/slack-bot
 npm test -w @open-inspect/linear-bot
+npm test -w @open-inspect/pi-codemode-sandbox
 
 # Tests — Python (pytest)
 cd packages/modal-infra && pytest tests/ -v
@@ -79,7 +82,8 @@ cd packages/modal-infra && ruff check --fix && ruff format
 
 ## Testing
 
-All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
+Most TypeScript packages use **Vitest**; the Pi Code Mode sandbox uses Node contract tests, and
+Python uses **pytest** + pytest-asyncio.
 
 ### Test file locations
 
@@ -88,6 +92,8 @@ All TypeScript packages use **Vitest**; Python uses **pytest** + pytest-asyncio.
   `@cloudflare/vitest-pool-workers` with real D1 bindings
 - **web, slack-bot, linear-bot**: co-located `src/**/*.test.ts`
 - **github-bot**: separate `test/*.test.ts`
+- **pi-codemode-sandbox**: `scripts/pi-codemode-sandbox-contract.test.mjs` plus Wrangler dry-run
+  build
 - **modal-infra**: `tests/test_*.py`
 
 ### Control-plane integration tests

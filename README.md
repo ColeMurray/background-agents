@@ -133,19 +133,20 @@ ownership, bots, and member suspension.
 
 ## Packages
 
-| Package                                           | Description                                 |
-| ------------------------------------------------- | ------------------------------------------- |
-| [control-plane](packages/control-plane)           | Cloudflare Workers + Durable Objects        |
-| [web](packages/web)                               | Next.js web client                          |
-| [sandbox-runtime](packages/sandbox-runtime)       | Shared in-sandbox agent runtime             |
-| [modal-infra](packages/modal-infra)               | Modal sandbox infrastructure                |
-| [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
-| [e2b-infra](packages/e2b-infra)                   | E2B sandbox template infrastructure         |
-| [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
-| [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
-| [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
-| [linear-bot](packages/linear-bot)                 | Linear integration (issue → coding session) |
-| [shared](packages/shared)                         | Shared types and utilities                  |
+| Package                                             | Description                                 |
+| --------------------------------------------------- | ------------------------------------------- |
+| [control-plane](packages/control-plane)             | Cloudflare Workers + Durable Objects        |
+| [web](packages/web)                                 | Next.js web client                          |
+| [sandbox-runtime](packages/sandbox-runtime)         | Shared in-sandbox agent runtime             |
+| [modal-infra](packages/modal-infra)                 | Modal sandbox infrastructure                |
+| [daytona-infra](packages/daytona-infra)             | Daytona snapshot infrastructure             |
+| [e2b-infra](packages/e2b-infra)                     | E2B sandbox template infrastructure         |
+| [opencomputer-infra](packages/opencomputer-infra)   | OpenComputer template infrastructure        |
+| [pi-codemode-sandbox](packages/pi-codemode-sandbox) | Isolated QuickJS runtime for Pi Code Mode   |
+| [slack-bot](packages/slack-bot)                     | Slack integration (sessions from messages)  |
+| [github-bot](packages/github-bot)                   | GitHub integration (auto-review, @mention)  |
+| [linear-bot](packages/linear-bot)                   | Linear integration (issue → coding session) |
+| [shared](packages/shared)                           | Shared types and utilities                  |
 
 ## Getting Started
 

@@ -51,6 +51,9 @@ const NOT_FROM_ENVIRONMENT = new Set([
   // Derived by migration staging. An environment value would override the
   // auto tfvars that preserve the binding after admission is disabled.
   "pi_durable_binding_enabled",
+  "pi_codemode_sandbox_migration_applied",
+  // Validated and written as numeric JSON by the migration staging step.
+  "pi_codemode_sandbox_cpu_ms",
   "project_root",
 ]);
 
@@ -101,4 +104,35 @@ test("incremental Durable Object migration preserves existing bindings", async (
     /if !contains\(var\.new_sqlite_classes, binding\.class_name\)/,
     "phase one must withhold only newly introduced classes"
   );
+});
+
+test("Pi Code Mode sandbox migration completion follows a deployed version", () => {
+  assertInPlanAndApply(
+    'select(.module == "module.pi_codemode_sandbox_worker" and .type == "cloudflare_workers_deployment"',
+    "Code Mode sandbox deployed-version state lookup"
+  );
+  assertInPlanAndApply(
+    '"pi_codemode_sandbox_migration_applied":true',
+    "Code Mode sandbox migration completion"
+  );
+});
+
+test("Pi Code Mode sandbox CPU limit is staged as optional numeric JSON", () => {
+  assertInPlanAndApply("PI_CODEMODE_SANDBOX_CPU_MS:", "Code Mode sandbox CPU input");
+  assertInPlanAndApply(
+    "PI_CODEMODE_SANDBOX_CPU_MS must be a positive integer",
+    "Code Mode sandbox CPU validation"
+  );
+  assertInPlanAndApply("pi-codemode-sandbox-cpu.auto.tfvars.json", "Code Mode sandbox CPU tfvars");
+});
+
+test("Terraform runs when root npm deployment inputs change", () => {
+  const triggers = workflow.slice(0, workflow.indexOf("\npermissions:\n"));
+  for (const path of ['- "package.json"', '- "package-lock.json"']) {
+    assert.equal(
+      triggers.split(path).length - 1,
+      2,
+      `expected ${path} in push and pull request path filters`
+    );
+  }
 });

@@ -120,8 +120,11 @@ locals {
   docs_custom_domain_url = local.docs_custom_domain != null ? "https://${local.docs_custom_domain}" : null
 
   # Worker script paths (deterministic output locations)
-  control_plane_script_path = "${var.project_root}/packages/control-plane/dist/index.js"
-  slack_bot_script_path     = "${var.project_root}/packages/slack-bot/dist/index.js"
-  linear_bot_script_path    = "${var.project_root}/packages/linear-bot/dist/index.js"
-  github_bot_script_path    = "${var.project_root}/packages/github-bot/dist/index.js"
+  control_plane_script_path       = "${var.project_root}/packages/control-plane/dist/index.js"
+  slack_bot_script_path           = "${var.project_root}/packages/slack-bot/dist/index.js"
+  linear_bot_script_path          = "${var.project_root}/packages/linear-bot/dist/index.js"
+  github_bot_script_path          = "${var.project_root}/packages/github-bot/dist/index.js"
+  pi_codemode_sandbox_script_path = "${var.project_root}/packages/pi-codemode-sandbox/dist/index.js"
+  pi_codemode_sandbox_map_path    = "${var.project_root}/packages/pi-codemode-sandbox/dist/index.js.map"
+  pi_codemode_sandbox_wasm_path   = "${var.project_root}/packages/pi-codemode-sandbox/dist/quickjs.wasm"
 }

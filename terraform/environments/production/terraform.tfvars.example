@@ -316,6 +316,10 @@ nextauth_secret = ""
 # Select "modal-vm" for Docker-capable VMs (deployment-wide; see docs/MODAL_DOCKER.md).
 sandbox_provider = "modal"
 
+# Optional paid-plan CPU limit for Pi Code Mode's isolated QuickJS Worker.
+# Leave unset on Workers Free. Set to 60000 before enabling Code Mode on a paid plan.
+# pi_codemode_sandbox_cpu_ms = 60000
+
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
 # - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)

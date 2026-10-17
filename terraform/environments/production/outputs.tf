@@ -34,6 +34,11 @@ output "control_plane_worker_name" {
   value       = module.control_plane_worker.worker_name
 }
 
+output "pi_codemode_sandbox_worker_name" {
+  description = "Private Worker hosting the Pi Code Mode QuickJS Durable Object"
+  value       = module.pi_codemode_sandbox_worker.worker_name
+}
+
 output "slack_bot_worker_name" {
   description = "Slack bot worker name"
   value       = var.enable_slack_bot ? module.slack_bot_worker[0].worker_name : null

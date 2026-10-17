@@ -1,0 +1,173 @@
+# First-class Pi Durable coding agent: ledger
+
+Spec folder: `features/pi-first-class/`  
+Workspace: repository root @ `feat/pi-first-class`  
+Base: `d1ffd951` (`feat/pi-durable-harness`)  
+Started: 2026-10-18  
+Rule: tick only with evidence on the same line.
+
+## Phase 1: Understand
+
+- [x] Intentional stacked worktree created from the audited Pi foundation — `git status -sb`; base
+      `d1ffd951`
+- [x] Source set read — Pi Durable Technical Manual 1.0.3; Pi Durable 1.3
+      README/changelog/source/examples; Pi coding-agent SDK docs; Cloudflare Agents
+      PiHarness/extensions/example; Pi Codemode Cloudflare example; Agents MCP docs/source;
+      Open-Inspect AGENTS/docs/current Pi PR
+- [x] Existing code mapped — `docs/plans/pi-durable-harness.md`, `packages/control-plane/src/pi/`,
+      `pi-durable-object.ts`, SessionDO internal handlers, Terraform Worker module
+- [x] Terms translated — `SPEC-MAP.md` distinguishes Pi coding agent, Pi Durable, Cloudflare
+      PiHarness, Computer workspace, Code Mode sandbox, and traditional sandbox
+- [x] `SPEC-MAP.md`: requirements classified — `features/pi-first-class/SPEC-MAP.md`
+- [x] Product decisions answered — use PiHarness + Pi Durable; no nested coding-agent SDK; no inline
+      QuickJS; D1 remains credential authority; traditional sandbox only by explicit escalation
+
+## Phase 2: Plan
+
+- [x] Slices, blast radius, tests, and pitfalls documented — `SPEC-MAP.md#delivery-slices`
+- [x] Simplicity pass — VFS before exec; no Computer Git; no direct MCP in PiSessionDO; no
+      browser/attachments until core gates pass
+- [x] Adversarial review — independent Code Mode, MCP/OAuth, manual coverage, security,
+      product-surface, and efficiency audits incorporated
+- [x] User approved the direction — `/goal` on 2026-10-18
+
+## Phase 3: Slices
+
+### Slice 1: isolated Code Mode sandbox infrastructure
+
+- [x] Tests pinning existing behavior — RED: missing package/Worker/Terraform contracts failed
+      before implementation; module defaults preserve existing workers.dev and nullable preview
+      behavior
+- [x] Terraform/module contracts — 6 module tests + 1 production-root test; migration-only class,
+      external DO, WASM, privacy, retained bindings, traversal rejection
+- [x] Sandbox Worker implemented — `packages/pi-codemode-sandbox/`; Wrangler dry bundle contains
+      `index.js`, `index.js.map`, and `quickjs.wasm`
+- [x] Unit/build/deployment-contract tests — sandbox contract 1/1; workflow contracts 28/28;
+      production Terraform 76/76
+- [x] Deep audit — independent Pi API, Terraform, repository integration, threat-model, Cloudflare,
+      security, CI, migration, and final provider reviews; all concrete findings resolved
+- [x] `/simplify` — removed unused self-binding, separate runner, test-only outputs, premature hard
+      CPU requirement, and brittle Terraform regex checks
+- [x] Narrow validation green — build/typecheck/lint/format, 6 module tests, 76 production tests,
+      README translations, clean `npm ci`
+- [ ] Committed
+- [x] Slice report — `features/pi-first-class/SLICE-1.md`
+
+### Slice 2: durable Computer VFS workspace
+
+- [ ] Tests pinning existing behavior
+- [ ] Workspace/tool contract
+- [ ] VFS tools implemented without exec/Git/network
+- [ ] Unit + workerd tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+### Slice 3: permission and audit extension
+
+- [ ] Existing mutation behavior pinned
+- [ ] Approval/document/audit contract
+- [ ] `beforeTool`/`afterTool` policy implemented
+- [ ] Role/denial/replay tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+### Slice 4: Pi Durable Code Mode integration
+
+- [ ] Existing tool exposure pinned
+- [ ] Remote sandbox/runtime contract
+- [ ] Native `createCodemodeExtension()` integration
+- [ ] Nested replay/abort/fingerprint/event tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+### Slice 5: Pi-native inbox, conversation, and event fidelity
+
+- [ ] Existing queue behavior pinned
+- [ ] Runtime/API contracts
+- [ ] steer/follow-up/reset/handoff/fork/compact/task graph implemented
+- [ ] Event/subagent/recovery tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+### Slice 6: encrypted MCP connection broker
+
+- [ ] Existing MCP behavior pinned
+- [ ] D1/DO/RBAC/stable-identity contracts
+- [ ] Static-header broker + SSRF controls implemented
+- [ ] Encryption/isolation/catalog tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+### Slice 7: MCP OAuth, approvals, elicitation, and executor grants
+
+- [ ] Existing provider/automation authority pinned
+- [ ] OAuth/interaction/execution-ledger contracts
+- [ ] OAuth UI and broker flows implemented
+- [ ] Owner/executor/replay/indeterminate tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+### Slice 8: optional integrations and explicit escalation
+
+- [ ] Browser/memory/attachment/escalation scope tests
+- [ ] Contracts
+- [ ] Authorized capabilities implemented
+- [ ] E2E/security tests
+- [ ] Deep audit
+- [ ] `/simplify`
+- [ ] Narrow validation green
+- [ ] Committed
+- [ ] Slice report
+
+## Phase 4: Whole-feature audit
+
+- [ ] Per-commit trace vs spec/manual/examples
+- [ ] Parallel reviewer round 1 reconciled
+- [ ] Round 2+ finds no real issues
+- [ ] Every real bug has cause and regression guard
+
+## Phase 5: End to end
+
+- [ ] `JOURNEYS.md` written
+- [ ] Browser journeys completed
+- [ ] Durable state checked after key actions
+- [ ] Accessibility pass
+- [ ] E2E tests added
+- [ ] Bugs fixed and smoke tests rerun
+- [ ] Cleanup complete
+
+## Phase 6: Finish
+
+- [ ] Docs, invariants, and runbooks updated
+- [ ] 10-minute user test checklist written
+- [ ] Rebased on current upstream after foundation merge
+- [ ] Git state verified
+- [ ] Final report given
+
+## Done / skipped on purpose / left
+
+| Requirement                   | Status             | Evidence or reason                                             |
+| ----------------------------- | ------------------ | -------------------------------------------------------------- |
+| Pi durable runtime foundation | Done in base       | PR #2431, base `d1ffd951`                                      |
+| Writable workspace            | Left               | Slice 2                                                        |
+| Durable Code Mode             | Left               | Slices 1 and 4                                                 |
+| MCP/OAuth                     | Left               | Slices 6 and 7; requires guarded restore support in Agents SDK |
+| Native Linux builds           | Skipped by default | Explicit linked sandbox escalation only                        |

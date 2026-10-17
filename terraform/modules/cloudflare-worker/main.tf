@@ -58,7 +58,25 @@ locals {
       name       = binding_name
       class_name = binding.class_name
       } if !contains(var.new_sqlite_classes, binding.class_name)
-    ] : []
+    ] : [],
+    # Durable Objects owned by another Worker never participate in this
+    # Worker's class migrations.
+    [for binding_name, binding in var.external_durable_objects : {
+      type        = "durable_object_namespace"
+      name        = binding_name
+      class_name  = binding.class_name
+      script_name = binding.script_name
+      environment = binding.environment
+    }]
+  )
+
+  binding_names = [for binding in local.bindings : binding.name]
+
+  migration_new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (
+    length(var.deleted_classes) > 0 ? [] : [for binding in var.durable_objects : binding.class_name]
+  )
+  emit_durable_object_migration = var.emit_durable_object_migration != null ? var.emit_durable_object_migration : (
+    !var.enable_durable_object_bindings || length(var.deleted_classes) > 0
   )
 }
 
@@ -70,9 +88,9 @@ resource "cloudflare_worker" "this" {
   account_id = var.account_id
   name       = var.worker_name
 
-  # Enable workers.dev subdomain for direct access
   subdomain = {
-    enabled = true
+    enabled          = var.workers_dev_enabled
+    previews_enabled = var.preview_urls_enabled
   }
 
   observability = {
@@ -98,26 +116,36 @@ resource "cloudflare_worker_version" "this" {
 
   main_module = "index.js"
 
-  modules = [
-    {
+  modules = concat(
+    [{
       name         = "index.js"
       content_type = "application/javascript+module"
       content_file = var.script_path
-    }
-  ]
+    }],
+    [for name in sort(keys(var.additional_modules)) : {
+      name         = name
+      content_type = var.additional_modules[name].content_type
+      content_file = var.additional_modules[name].content_file
+    }]
+  )
 
   bindings = local.bindings
 
+  limits = var.cpu_ms == null ? null : {
+    cpu_ms = var.cpu_ms
+  }
+
   # Durable Object migrations
-  # Initial class creation uses bindings disabled for phase 1. Class deletion
-  # emits a migration with surviving bindings still enabled.
+  # Initial class creation normally uses bindings disabled for phase 1. A
+  # migration-only Worker can override emission without creating a self-binding.
+  # Class deletion emits a migration with surviving bindings still enabled.
   # Note: Free plans require new_sqlite_classes instead of new_classes
   # When new_sqlite_classes is set, only those classes are declared as new (incremental migration).
   # When empty, all DO classes are declared as new (fresh deployment).
-  migrations = (length(var.durable_objects) > 0 || length(var.deleted_classes) > 0) && (!var.enable_durable_object_bindings || length(var.deleted_classes) > 0) ? {
+  migrations = (length(local.migration_new_sqlite_classes) > 0 || length(var.deleted_classes) > 0) && local.emit_durable_object_migration ? {
     old_tag            = var.migration_old_tag
     new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : (length(var.deleted_classes) > 0 ? [] : [for binding in var.durable_objects : binding.class_name])
+    new_sqlite_classes = local.migration_new_sqlite_classes
     deleted_classes    = var.deleted_classes
   } : null
 
@@ -128,8 +156,13 @@ resource "cloudflare_worker_version" "this" {
     # retire the deleted class and ship a control plane with no SESSION
     # binding. Fail at plan time instead of deploying that.
     precondition {
-      condition     = length(var.deleted_classes) == 0 || var.enable_durable_object_bindings
-      error_message = "Durable Object class deletion requires enable_durable_object_bindings = true, otherwise the same version drops every surviving DO binding."
+      condition     = length(var.deleted_classes) == 0 || (var.enable_durable_object_bindings && local.emit_durable_object_migration)
+      error_message = "Durable Object class deletion requires bindings and migration emission to remain enabled."
+    }
+
+    precondition {
+      condition     = length(local.binding_names) == length(toset(local.binding_names))
+      error_message = "Worker binding names must be unique across every binding type."
     }
   }
 }
