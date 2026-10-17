@@ -7,7 +7,8 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { Environment } from "@open-inspect/shared/types/environments";
-import { HARNESS_IDS, getHarnessLabel } from "@open-inspect/shared/harnesses";
+import { getHarnessLabel } from "@open-inspect/shared/harnesses";
+import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
 import {
   MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
@@ -944,7 +945,7 @@ describe("SlackIntegrationSettings harness", () => {
 
     expect(harness).toHaveTextContent("OpenCode");
     expect(harness).toHaveAttribute("aria-describedby", "slack-harness-help");
-    expect(await optionNames(user, harness)).toEqual(HARNESS_IDS.map(getHarnessLabel));
+    expect(await optionNames(user, harness)).toEqual(AVAILABLE_HARNESS_IDS.map(getHarnessLabel));
     expect(await optionNames(user, model)).toEqual(["Claude Sonnet 4.6", "GPT 5.4"]);
 
     await user.click(harness);

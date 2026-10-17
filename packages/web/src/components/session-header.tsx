@@ -50,6 +50,7 @@ const GRACEFUL_STOP_PHASES: ReadonlySet<SandboxShutdownState["phase"]> = new Set
 function displayedSandboxStatus(
   sessionState: SessionSocketState["sessionState"]
 ): SandboxStatusValue | undefined {
+  if (sessionState?.executionBackend === "durable") return undefined;
   const status = sessionState?.sandboxStatus;
   const phase = sessionState?.sandboxPreservation?.phase;
   return status === "ready" && phase && GRACEFUL_STOP_PHASES.has(phase) ? "snapshotting" : status;

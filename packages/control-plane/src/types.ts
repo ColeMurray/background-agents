@@ -8,6 +8,7 @@ import type { Jobs } from "./jobs";
 import type { FetchClient, QueueMetricsSource } from "./platform-ports";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
+import type { PiRuntimeDispatch } from "./pi/runtime-contract";
 
 /**
  * The deployment's configuration: variables and secrets, every one a string,
@@ -99,6 +100,7 @@ export interface EnvConfig {
   EXECUTION_TIMEOUT_MS?: string; // Max processing time for one message before auto-fail, for sessions and for the automation runs watching them; overridden per session by sandboxTimeoutMs, and falls back to DEFAULT_SANDBOX_TIMEOUT_SECONDS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
   TEAMS_ENFORCEMENT?: string; // "off" | "shadow" (default) | "on"
+  PI_DURABLE_ENABLED?: string; // "true" enables the optional PiSessionDO runtime
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
@@ -115,6 +117,8 @@ export interface Platform {
   DB: SqlDatabase;
   /** Delivery to session runtimes, addressed by session id. */
   SESSION: SessionRuntimeDispatch;
+  /** Optional sandbox-free Pi Durable runtime. Absent unless explicitly deployed. */
+  PI_SESSION?: PiRuntimeDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
   /** Media artifacts: screenshots, uploads, session media. */

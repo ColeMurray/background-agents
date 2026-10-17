@@ -179,7 +179,10 @@ jobs:
             -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-      - name: Stage SchedulerDO deletion migration
+      - name: Stage Durable Object migration
+        env:
+          PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
+          ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
         run: |
           set -euo pipefail
           # Read state and parse it as separate steps: piping straight into jq
@@ -188,7 +191,31 @@ jobs:
           # retired. An absent or empty state is still a valid "not v2" answer.
           state="$(terraform state pull)"
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
-          if [ "$current_tag" = "v2" ]; then
+          pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
+          if [ "$pi_enabled" = "true" ]; then
+            if [ "$bindings_enabled" = "false" ]; then
+              case "$current_tag" in
+                "")
+                  printf '%s\n' '{"control_plane_migration_tag":"v4","control_plane_new_sqlite_classes":["SessionDO","PiSessionDO"]}' > pi-session-do.auto.tfvars.json
+                  ;;
+                v1|v3)
+                  printf '%s\n' "{\"control_plane_migration_tag\":\"v4\",\"control_plane_migration_old_tag\":\"$current_tag\",\"control_plane_new_sqlite_classes\":[\"PiSessionDO\"]}" > pi-session-do.auto.tfvars.json
+                  ;;
+                v2)
+                  echo "Retire SchedulerDO with PI_DURABLE_ENABLED=false before adding PiSessionDO" >&2
+                  exit 1
+                  ;;
+                *)
+                  echo "Cannot stage PiSessionDO migration from tag '$current_tag'" >&2
+                  exit 1
+                  ;;
+              esac
+            elif [ "$current_tag" != "v4" ]; then
+              echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
+              exit 1
+            fi
+          elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -266,6 +293,7 @@ jobs:
           TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
           TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
+          TF_VAR_pi_durable_enabled: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
@@ -472,7 +500,10 @@ jobs:
             -backend-config="endpoints={s3=\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-      - name: Stage SchedulerDO deletion migration
+      - name: Stage Durable Object migration
+        env:
+          PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
+          ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
         run: |
           set -euo pipefail
           # Read state and parse it as separate steps: piping straight into jq
@@ -481,7 +512,31 @@ jobs:
           # retired. An absent or empty state is still a valid "not v2" answer.
           state="$(terraform state pull)"
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
-          if [ "$current_tag" = "v2" ]; then
+          pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
+          if [ "$pi_enabled" = "true" ]; then
+            if [ "$bindings_enabled" = "false" ]; then
+              case "$current_tag" in
+                "")
+                  printf '%s\n' '{"control_plane_migration_tag":"v4","control_plane_new_sqlite_classes":["SessionDO","PiSessionDO"]}' > pi-session-do.auto.tfvars.json
+                  ;;
+                v1|v3)
+                  printf '%s\n' "{\"control_plane_migration_tag\":\"v4\",\"control_plane_migration_old_tag\":\"$current_tag\",\"control_plane_new_sqlite_classes\":[\"PiSessionDO\"]}" > pi-session-do.auto.tfvars.json
+                  ;;
+                v2)
+                  echo "Retire SchedulerDO with PI_DURABLE_ENABLED=false before adding PiSessionDO" >&2
+                  exit 1
+                  ;;
+                *)
+                  echo "Cannot stage PiSessionDO migration from tag '$current_tag'" >&2
+                  exit 1
+                  ;;
+              esac
+            elif [ "$current_tag" != "v4" ]; then
+              echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
+              exit 1
+            fi
+          elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -550,6 +605,7 @@ jobs:
           TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
           TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
+          TF_VAR_pi_durable_enabled: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}

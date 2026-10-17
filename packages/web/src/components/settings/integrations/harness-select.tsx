@@ -1,11 +1,7 @@
 "use client";
 
-import {
-  HARNESS_IDS,
-  getHarnessLabel,
-  isValidHarness,
-  type HarnessId,
-} from "@open-inspect/shared/harnesses";
+import { getHarnessLabel, isValidHarness, type HarnessId } from "@open-inspect/shared/harnesses";
+import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
 import {
   Select,
   SelectContent,
@@ -57,7 +53,7 @@ export function HarnessSelect({
       </SelectTrigger>
       <SelectContent>
         {inheritLabel && <SelectItem value={INHERIT_VALUE}>{inheritLabel}</SelectItem>}
-        {HARNESS_IDS.map((harness) => (
+        {AVAILABLE_HARNESS_IDS.map((harness) => (
           <SelectItem key={harness} value={harness}>
             {getHarnessLabel(harness)}
           </SelectItem>

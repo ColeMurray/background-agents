@@ -203,3 +203,25 @@ describe("Codex admission", () => {
     expect(getEnabledModels).not.toHaveBeenCalled();
   });
 });
+
+describe("Pi Durable admission", () => {
+  it("rejects Pi when the deployment has not enabled its Durable Object runtime", () => {
+    expect(getHarnessAdmissionError({}, "pi")).toEqual({
+      code: "harness_runtime_unavailable",
+      message: "Pi Durable is not enabled for this deployment.",
+    });
+    expect(getHarnessAdmissionError({ PI_DURABLE_ENABLED: "false" }, "pi")?.code).toBe(
+      "harness_runtime_unavailable"
+    );
+  });
+
+  it.each(["true", "1", " TRUE "])("admits Pi when enabled with %s", (PI_DURABLE_ENABLED) => {
+    expect(getHarnessAdmissionError({ PI_DURABLE_ENABLED, PI_SESSION: {} }, "pi")).toBeNull();
+  });
+
+  it("selects a qualified enabled Codex subscription model", async () => {
+    await expect(
+      resolveHarnessSelection(db, { PI_DURABLE_ENABLED: "true", PI_SESSION: {} }, { harness: "pi" })
+    ).resolves.toEqual({ model: "openai/gpt-6.1-sol", reasoningEffort: "low" });
+  });
+});

@@ -8,6 +8,7 @@ import { getSlackSettings } from "../slack-settings";
 import { getUserPreferences, resolveUserPreferences } from "../user-preferences";
 import { getAvailableModels } from "./models";
 import { buildAppHomeView } from "./view";
+import { availableHarnessIds } from "@open-inspect/shared/harnesses";
 
 const log = createLogger("app-home");
 
@@ -29,6 +30,7 @@ export async function publishAppHome(env: Env, userId: string): Promise<void> {
     availableModels,
     userHarness: prefs?.harness,
     workspaceHarness: slackConfig.harness,
+    availableHarnesses: availableHarnessIds(env.PI_DURABLE_ENABLED),
     currentModel: current.model,
     currentEffort: current.reasoningEffort,
     currentBranch: current.branch,

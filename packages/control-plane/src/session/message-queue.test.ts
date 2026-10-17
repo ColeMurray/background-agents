@@ -258,6 +258,14 @@ function buildQueue(
   const getProviderAuthenticationError = vi.fn(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
+  const piRuntime = {
+    initialize: vi.fn(async () => {}),
+    submit: vi.fn(async () => ({ operationId: "msg-1", accepted: true })),
+    wait: vi.fn(async () => ({ operationId: "msg-1", status: "done" as const, text: "Hi" })),
+    prompt: vi.fn(),
+    abort: vi.fn(async () => true),
+    status: vi.fn(async () => ({ busy: false, pending: 0 })),
+  };
 
   const alarmScheduler = createEarliestAlarmScheduler(
     { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
@@ -306,7 +314,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    piRuntime
   );
 
   return {
@@ -327,6 +336,7 @@ function buildQueue(
     callbackService,
     getProviderAuthenticationError,
     projectTerminalMessage,
+    piRuntime,
     log,
     setExecutionTimeoutMs(value: number) {
       executionTimeoutMs = value;
@@ -335,6 +345,49 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it("dispatches Pi prompts without consulting, spawning, or sending to a sandbox", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({
+        harness: "pi",
+        model: "openai/gpt-5.6-sol",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+    expect(h.piRuntime.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s1",
+        messageId: "msg-1",
+        content: "hello",
+        model: "openai/gpt-5.6-sol",
+      })
+    );
+    expect(h.piRuntime.wait).not.toHaveBeenCalled();
+    expect(h.wsManager.getSandboxCommandTarget).not.toHaveBeenCalled();
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
+  it("aborts Pi directly instead of sending a sandbox stop command", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+
+    h.queue.cancelExecution();
+    await h.backgroundTasks.settle();
+
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1");
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

@@ -28,12 +28,13 @@ export function BudgetSection({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (harness === "codex") {
+  if (harness === "codex" || harness === "pi") {
     return (
       <PropertyRow label="Cost">
         <span>{formatSessionCost(0)}</span>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          Codex dollar costs are not tracked. Token usage is recorded; dollar limits do not apply.
+          {harness === "pi" ? "Pi Durable" : "Codex"} dollar costs are not tracked; dollar limits do
+          not apply.
         </p>
       </PropertyRow>
     );

@@ -40,8 +40,8 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
 });
 
 // Inputs the workflow deliberately does not take from the environment:
-// control_plane_* values are staged per migration (the "Stage SchedulerDO
-// deletion migration" step writes them to an auto.tfvars.json file), and
+// control_plane_* values are staged per migration (the "Stage Durable Object
+// migration" step writes them to an auto.tfvars.json file), and
 // project_root is a path inside the checkout.
 const NOT_FROM_ENVIRONMENT = new Set([
   "control_plane_migration_tag",
@@ -69,4 +69,16 @@ test("Every production Terraform variable reaches plan and apply", async () => {
     }
   });
   assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
+});
+
+test("PiSessionDO migration is staged and guarded in plan and apply", () => {
+  assertInPlanAndApply('"control_plane_migration_tag":"v4"', "Pi migration tag");
+  assertInPlanAndApply(
+    '\\"control_plane_new_sqlite_classes\\":[\\"PiSessionDO\\"]',
+    "Pi SQLite class"
+  );
+  assertInPlanAndApply(
+    "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first",
+    "Pi migration phase guard"
+  );
 });

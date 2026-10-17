@@ -11,6 +11,7 @@ import { hashToken } from "../../src/auth/crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 
 /**
  * The test D1 binding viewed through the engine-neutral interface, so tests
@@ -239,6 +240,7 @@ export async function initSession(overrides?: {
   environmentId?: string | null;
   title?: string;
   model?: string;
+  harness?: HarnessId;
   reasoningEffort?: string;
   sandboxSettings?: SandboxSettings;
   userId?: string;
@@ -266,6 +268,7 @@ export async function initSession(overrides?: {
     repoOwner: defaults.repoOwner,
     repoName: defaults.repoName,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    harness: defaults.harness ?? "opencode",
     reasoningEffort: defaults.reasoningEffort ?? null,
     baseBranch: defaults.defaultBranch ?? "main",
     repositories: defaults.repositories ?? [

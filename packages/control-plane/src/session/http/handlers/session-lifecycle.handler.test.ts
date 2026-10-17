@@ -7,12 +7,12 @@ import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
 
-function createHandler() {
+function createHandler(harness: "opencode" | "pi" = "opencode") {
   const beginTransition = vi.fn<SessionStatusService["beginTransition"]>();
   const confirmIndexStatus = vi.fn<SessionStatusService["confirmIndexStatus"]>();
   const preserveForArchive = vi.fn(async () => undefined);
   const handler = new SessionLifecycleHandler(
-    { getSession: () => createMockSession() } as SessionCoreRepository,
+    { getSession: () => createMockSession({ harness }) } as SessionCoreRepository,
     {} as SandboxStateReader,
     { getPendingOrProcessingCount: () => 0 } as MessageRepository,
     { beginTransition, confirmIndexStatus } as unknown as SessionStatusService,
@@ -50,5 +50,13 @@ describe("SessionLifecycleHandler.archive", () => {
 
     expect(preserveForArchive).not.toHaveBeenCalled();
     expect(confirmIndexStatus).not.toHaveBeenCalled();
+  });
+
+  it("archives Pi Durable sessions without sandbox preservation", async () => {
+    const { handler, beginTransition, preserveForArchive } = createHandler("pi");
+    beginTransition.mockResolvedValue(true);
+
+    expect((await handler.archive()).status).toBe(200);
+    expect(preserveForArchive).not.toHaveBeenCalled();
   });
 });

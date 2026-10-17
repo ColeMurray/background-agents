@@ -68,6 +68,7 @@ module "slack_bot_worker" {
       DEPLOYMENT_NAME      = { value = var.deployment_name }
       APP_NAME             = { value = var.app_name }
       DEFAULT_MODEL        = { value = var.slack_bot_default_model }
+      PI_DURABLE_ENABLED   = { value = tostring(local.pi_durable_available) }
       CLASSIFICATION_MODEL = { value = var.classification_model }
     },
     local.classifier_reasoning_effort_bindings

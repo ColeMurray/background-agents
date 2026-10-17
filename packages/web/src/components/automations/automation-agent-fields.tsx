@@ -3,10 +3,10 @@
 import { type ModelCategory } from "@open-inspect/shared/models";
 import {
   getHarnessLabel,
-  HARNESS_IDS,
   getHarnessReasoningConfig,
   isValidHarness,
 } from "@open-inspect/shared/harnesses";
+import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -89,7 +89,7 @@ export function AutomationAgentFields({
             <SelectValue>{getHarnessLabel(value.harness)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {HARNESS_IDS.map((harness) => (
+            {AVAILABLE_HARNESS_IDS.map((harness) => (
               <SelectItem key={harness} value={harness}>
                 {getHarnessLabel(harness)}
               </SelectItem>

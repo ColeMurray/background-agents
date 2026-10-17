@@ -34,6 +34,7 @@ export interface Env {
   CLASSIFICATION_MODEL: string;
   CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
   APP_NAME?: string;
+  PI_DURABLE_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;

@@ -11,6 +11,7 @@ import { validateReasoningEffort } from "../../reasoning-effort";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxInitializer } from "../../sandbox-ports";
 import type { ParticipantRepository } from "../../participant-repository";
+import type { PiRuntimeDispatch } from "../../../pi/runtime-contract";
 
 const repositoryRefSchema = z.object({
   repoOwner: z.string(),
@@ -90,7 +91,8 @@ export class SessionInitHandler {
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
     private readonly generateId: (bytes?: number) => string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly piRuntime?: Pick<PiRuntimeDispatch, "status">
   ) {}
 
   async init(request: Request, log: Logger): Promise<Response> {
@@ -134,6 +136,10 @@ export class SessionInitHandler {
     }
 
     const harness = getValidHarnessOrDefault(body.harness);
+    const piRuntimeForSession = harness === "pi" ? this.piRuntime : undefined;
+    if (harness === "pi" && !piRuntimeForSession) {
+      return Response.json({ error: "Pi Durable is not available" }, { status: 503 });
+    }
     let selection;
     try {
       selection = resolveHarnessInitialization(harness, body);
@@ -227,13 +233,15 @@ export class SessionInitHandler {
           baseBranch: repo.baseBranch,
         }))
       );
-      const sandboxId = this.generateId();
-      this.sandboxRepository.createSandbox({
-        id: sandboxId,
-        status: "pending",
-        gitSyncStatus: "pending",
-        createdAt: 0,
-      });
+      if (harness !== "pi") {
+        const sandboxId = this.generateId();
+        this.sandboxRepository.createSandbox({
+          id: sandboxId,
+          status: "pending",
+          gitSyncStatus: "pending",
+          createdAt: 0,
+        });
+      }
 
       const participantId = this.generateId();
       this.participantRepository.createParticipant({
@@ -249,8 +257,12 @@ export class SessionInitHandler {
       });
     });
 
-    log.info("Triggering sandbox spawn for new session");
-    this.scheduleWarmSandbox();
+    if (harness === "pi" && piRuntimeForSession) {
+      log.info("Created sandbox-free Pi Durable session");
+    } else {
+      log.info("Triggering sandbox spawn for new session");
+      this.scheduleWarmSandbox();
+    }
 
     return Response.json({ sessionId, status: "created" });
   }
