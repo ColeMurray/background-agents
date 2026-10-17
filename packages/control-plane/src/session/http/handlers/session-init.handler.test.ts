@@ -19,6 +19,7 @@ function createHandler() {
   const generateId = vi.fn();
   const now = vi.fn(() => 1234);
   const scheduleWarmSandbox = vi.fn();
+  const piRuntime = { status: vi.fn(async () => ({ busy: false, pending: 0 })) };
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -34,7 +35,8 @@ function createHandler() {
     "session-do-id",
     scheduleWarmSandbox,
     generateId,
-    now
+    now,
+    piRuntime
   );
 
   // Bind the request-scoped log so call sites exercise the threading without
@@ -50,9 +52,66 @@ function createHandler() {
     generateId,
     now,
     scheduleWarmSandbox,
+    piRuntime,
     log,
   };
 }
+
+describe("Pi Durable initialization", () => {
+  it("initializes the separate durable runtime without creating or warming a sandbox", async () => {
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox, piRuntime } =
+      createHandler();
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionName: "pi",
+          repoOwner: null,
+          repoName: null,
+          userId: "owner",
+          harness: "pi",
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "high",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+    expect(piRuntime.status).not.toHaveBeenCalled();
+  });
+
+  it("initializes repository-backed Pi sessions without creating a sandbox", async () => {
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox, piRuntime } =
+      createHandler();
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionName: "pi",
+          repoOwner: "acme",
+          repoName: "app",
+          repoId: 1,
+          userId: "owner",
+          harness: "pi",
+          model: "openai/gpt-5.6-sol",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: "pi", repoOwner: "acme", repoName: "app" })
+    );
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
+    expect(piRuntime.status).not.toHaveBeenCalled();
+  });
+});
 
 describe("Codex durable initialization", () => {
   const init = (overrides: Record<string, unknown>) =>

@@ -75,7 +75,8 @@ export function SessionPromptComposer({
     !hasContent || prompt.draftLocked || prompt.sendBlocked || !sessionPromptable;
   // Keep the complete draft stable while its attachments upload and until
   // the server confirms that the matching prompt was queued.
-  const attachmentsLocked = prompt.draftLocked;
+  const attachmentsSupported = session.harness !== "pi";
+  const attachmentsLocked = prompt.draftLocked || !attachmentsSupported;
   const {
     isDraggingOver,
     handleFileInputChange,
@@ -123,12 +124,14 @@ export function SessionPromptComposer({
           onDrop={handleDrop}
         >
           {/* Pending attachment previews */}
-          <AttachmentPreviewStrip
-            items={attachments.items}
-            error={attachments.error}
-            onRemove={attachments.onRemove}
-            disabled={attachmentsLocked}
-          />
+          {attachmentsSupported && (
+            <AttachmentPreviewStrip
+              items={attachments.items}
+              error={attachments.error}
+              onRemove={attachments.onRemove}
+              disabled={attachmentsLocked}
+            />
+          )}
 
           {/* Text input area with floating send button */}
           <div className="relative flex flex-wrap items-end justify-end sm:block">
@@ -151,27 +154,31 @@ export function SessionPromptComposer({
               data-testid="prompt-actions"
               className="flex shrink-0 items-center gap-1 pb-1.5 pr-2 sm:absolute sm:bottom-3 sm:right-3 sm:gap-2 sm:p-0"
             >
-              {attachments.isUploading && (
+              {attachmentsSupported && attachments.isUploading && (
                 <span className="whitespace-nowrap text-xs text-muted-foreground">Uploading…</span>
               )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={ATTACHMENT_ACCEPT}
-                multiple
-                className="hidden"
-                onChange={handleFileInputChange}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={attachmentsLocked}
-                className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                title="Attach images"
-                aria-label="Attach images"
-              >
-                <PaperclipIcon className="w-5 h-5" />
-              </button>
+              {attachmentsSupported && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept={ATTACHMENT_ACCEPT}
+                    multiple
+                    className="hidden"
+                    onChange={handleFileInputChange}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={attachmentsLocked}
+                    className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    title="Attach images"
+                    aria-label="Attach images"
+                  >
+                    <PaperclipIcon className="w-5 h-5" />
+                  </button>
+                </>
+              )}
               {prompt.isProcessing && session.capabilities.lifecycle && (
                 <button
                   type="button"

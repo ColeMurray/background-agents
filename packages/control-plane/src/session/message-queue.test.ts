@@ -258,6 +258,16 @@ function buildQueue(
   const getProviderAuthenticationError = vi.fn(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
+  const piRuntime = {
+    submit: vi.fn(async () => ({
+      operationId: "msg-1",
+      accepted: true,
+      rejected: undefined as string | undefined,
+    })),
+    abort: vi.fn(async () => true),
+    status: vi.fn(async () => ({ busy: false, pending: 0 })),
+    destroy: vi.fn(async () => {}),
+  };
 
   const alarmScheduler = createEarliestAlarmScheduler(
     { getAlarm, setAlarm, deleteAlarm: vi.fn(async () => {}) },
@@ -306,7 +316,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    piRuntime
   );
 
   return {
@@ -327,6 +338,7 @@ function buildQueue(
     callbackService,
     getProviderAuthenticationError,
     projectTerminalMessage,
+    piRuntime,
     log,
     setExecutionTimeoutMs(value: number) {
       executionTimeoutMs = value;
@@ -335,6 +347,131 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it("dispatches Pi prompts without consulting, spawning, or sending to a sandbox", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({
+        harness: "pi",
+        model: "openai/gpt-5.6-sol",
+        repo_owner: null,
+        repo_name: null,
+        repo_id: null,
+        base_branch: null,
+      })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+    expect(h.piRuntime.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s1",
+        messageId: "msg-1",
+        content: "hello",
+        model: "openai/gpt-5.6-sol",
+      })
+    );
+    expect(h.wsManager.getSandboxCommandTarget).not.toHaveBeenCalled();
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambiguous Pi admission processing and emits the started callback", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    h.piRuntime.submit.mockRejectedValue(new Error("RPC response lost"));
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(h.callbackService.notifyStarted).toHaveBeenCalledWith("msg-1");
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "prompt.dispatch",
+      expect.objectContaining({ outcome: "ambiguous", message_id: "msg-1" })
+    );
+  });
+
+  it("settles a definite Pi pre-admission rejection immediately", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    const message = createMessage();
+    h.repository.getNextPendingMessage.mockReturnValueOnce(message).mockReturnValueOnce(null);
+    h.piRuntime.submit.mockResolvedValue({
+      operationId: message.id,
+      accepted: false,
+      rejected: "Repository access is unavailable",
+    });
+    h.repository.recordMessageCompletion.mockReturnValue({
+      messageId: message.id,
+      messageCreatedAt: message.created_at,
+      messageStartedAt: 1,
+      completedAt: 2,
+      status: "failed",
+    });
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: "Repository access is unavailable" }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  it("rejects Pi attachments before claiming uploaded files", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+
+    await expect(
+      h.queue.enqueuePromptFromApi({
+        content: "Inspect this",
+        authorId: "user-1",
+        source: "agent",
+        attachments: [{ name: "document.pdf", attachmentId: "upload-1" }],
+      })
+    ).rejects.toThrow("Pi Durable does not support attachments yet");
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+  });
+
+  it("aborts Pi directly instead of sending a sandbox stop command", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+
+    h.queue.cancelExecution();
+    await h.backgroundTasks.settle();
+
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1");
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a timed-out Pi message even when best-effort abort fails", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.piRuntime.abort.mockRejectedValue(new Error("runtime unavailable"));
+
+    await h.queue.failStuckProcessingMessage();
+
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "pi.abort_failed",
+      expect.objectContaining({ message_id: "msg-1", error_type: "Error" })
+    );
+  });
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

@@ -1,7 +1,11 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
+import {
+  availableHarnessIds,
+  checkHarnessCompatibility,
+  DEFAULT_HARNESS,
+} from "@open-inspect/shared/harnesses";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -56,10 +60,18 @@ export async function loadAuthoritativeSlackLaunchSettings(
       getAuthoritativeUserPreferences(env, userId),
     ]);
     if (!enabledModels || !slackConfig) return null;
+    const availableHarnesses = availableHarnessIds(env.PI_DURABLE_ENABLED);
+    const workspaceHarness = availableHarnesses.includes(slackConfig.harness)
+      ? slackConfig.harness
+      : DEFAULT_HARNESS;
+    const availablePreferences =
+      prefs?.harness && !availableHarnesses.includes(prefs.harness)
+        ? { ...prefs, harness: undefined }
+        : prefs;
     const userPreferences = resolveUserPreferences(
-      prefs,
+      availablePreferences,
       slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-      slackConfig.harness
+      workspaceHarness
     );
     const modelSource =
       userPreferences.modelOrigin === "app-home"
@@ -185,6 +197,15 @@ export async function startSessionAndSendPrompt(
   // model it cannot run is refused, never moved to another harness, so a
   // session always runs where the user expects.
   const { harness } = userPrefs;
+  if (harness === "pi" && preparedImages.files.length > 0) {
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      "Pi Durable does not support image attachments yet. Send a text-only request or choose another agent harness.",
+      { thread_ts: threadTs }
+    );
+    return null;
+  }
   const incompatibility = checkHarnessCompatibility(harness, model);
   if (incompatibility) {
     log.info("slack.session.harness_model_refused", { trace_id: traceId, harness, model });
@@ -277,7 +298,15 @@ export async function startSessionAndSendPrompt(
     env,
     channel,
     threadTs,
-    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs, teamId)
+    buildThreadSession(
+      session.sessionId,
+      target,
+      model,
+      reasoningEffort,
+      messageTs,
+      teamId,
+      harness
+    )
   );
   return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
 }

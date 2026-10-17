@@ -190,6 +190,27 @@ describe("automation create route", () => {
       }
     });
 
+    it("persists repository-targeted Pi automations", async () => {
+      const response = await callRoute("POST", "/automations", {
+        body: {
+          ...validBody,
+          harness: "pi",
+          model: "openai/gpt-5.6-sol",
+          providerSelections: {
+            openai: {
+              mode: "provider_account",
+              accountId: "0123456789abcdef0123456789abcdef",
+            },
+          },
+        },
+      });
+
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: "pi", model: "openai/gpt-5.6-sol" })
+      );
+    });
+
     it("denies repository targets before SCM lookup or persistence", async () => {
       const res = await callRoute("POST", "/automations", {
         body: validBody,

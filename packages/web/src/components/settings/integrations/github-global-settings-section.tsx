@@ -294,6 +294,7 @@ export function GlobalSettingsSection({
           Agent harness
         </label>
         <HarnessSelect
+          supportsPi={false}
           id="github-harness"
           className="w-full"
           value={harness}

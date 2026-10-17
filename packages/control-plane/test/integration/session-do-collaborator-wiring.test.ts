@@ -80,6 +80,7 @@ function stubSourceControlProvider(): SourceControlProvider {
     }),
     resolveCommit: () => notUsedHere("resolveCommit"),
     listTree: () => notUsedHere("listTree"),
+    readFile: () => notUsedHere("readFile"),
     readBlob: () => notUsedHere("readBlob"),
     buildManualPullRequestUrl: (config) =>
       `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,

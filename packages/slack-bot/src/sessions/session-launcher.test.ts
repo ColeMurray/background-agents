@@ -92,6 +92,28 @@ describe("startSessionAndSendPrompt team boundaries", () => {
     vi.mocked(postMessage).mockResolvedValue({ ok: true, channel: "C123", ts: "111.333" });
   });
 
+  it("starts repository-backed Pi sessions through the control plane", async () => {
+    const piSettings: SlackLaunchSettings = {
+      ...launchSettings,
+      enabledModels: ["openai/gpt-5.6-sol"],
+      userPreferences: {
+        ...launchSettings.userPreferences,
+        harness: "pi",
+        model: "openai/gpt-5.6-sol",
+      },
+    };
+
+    const env = makeEnv();
+    await expect(
+      startSessionAndSendPrompt(env, { ...options, launchSettings: piSettings })
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ target: repositoryTarget, harness: "pi" })
+    );
+    expect(deliverPrompt).toHaveBeenCalled();
+  });
+
   it.each([
     [
       { status: 403, code: "session_action_denied", reasonCode: "not_member" },
@@ -159,7 +181,8 @@ describe("startSessionAndSendPrompt team boundaries", () => {
         "openai/gpt-5.4",
         "high",
         undefined,
-        teamId
+        teamId,
+        "opencode"
       );
       expect(storeThreadSession).toHaveBeenCalledWith(
         env,

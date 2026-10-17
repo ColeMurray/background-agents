@@ -274,7 +274,6 @@ export async function handleCreateSession(
     Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
   );
   if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
-
   let managedSkillsManifest;
   try {
     managedSkillsManifest = await resolveManagedSkills(

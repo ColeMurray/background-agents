@@ -103,6 +103,7 @@ module "control_plane_worker" {
       SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
       SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
       TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
+      PI_DURABLE_ENABLED            = { value = tostring(local.pi_durable_available) }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
@@ -223,14 +224,15 @@ module "control_plane_worker" {
     } : {}
   )
 
-  durable_objects = {
-    SESSION = { class_name = "SessionDO" }
-  }
+  durable_objects = merge(
+    { SESSION = { class_name = "SessionDO" } },
+    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {}
+  )
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
 
   compatibility_date  = "2024-09-23"
-  compatibility_flags = ["nodejs_compat"]
+  compatibility_flags = ["nodejs_compat", "enable_weak_ref"]
   migration_tag       = var.control_plane_migration_tag
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes

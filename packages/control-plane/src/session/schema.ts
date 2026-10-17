@@ -56,6 +56,11 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   next_attempt_at INTEGER NOT NULL
 );`;
 
+const PI_RESULT_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS pi_result_receipts (
+  operation_id TEXT PRIMARY KEY,
+  projected_at INTEGER NOT NULL
+);`;
+
 const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
   id TEXT PRIMARY KEY,
   message_id TEXT,
@@ -246,6 +251,9 @@ ${SESSION_ALARM_STATE_TABLE_SQL}
 -- A terminal message whose D1 projection has not landed yet. Only the newest
 -- is kept: the projection is monotonic, so an older one would be a no-op.
 ${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
+
+-- Acknowledges a Pi result only after all SessionDO projection work finishes.
+${PI_RESULT_RECEIPTS_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -758,6 +766,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Persist completed Pi result projections",
+    run: PI_RESULT_RECEIPTS_TABLE_SQL,
   },
 ];
 

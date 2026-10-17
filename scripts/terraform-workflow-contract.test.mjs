@@ -40,14 +40,17 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
 });
 
 // Inputs the workflow deliberately does not take from the environment:
-// control_plane_* values are staged per migration (the "Stage SchedulerDO
-// deletion migration" step writes them to an auto.tfvars.json file), and
+// control_plane_* values are staged per migration (the "Stage Durable Object
+// migration" step writes them to an auto.tfvars.json file), and
 // project_root is a path inside the checkout.
 const NOT_FROM_ENVIRONMENT = new Set([
   "control_plane_migration_tag",
   "control_plane_migration_old_tag",
   "control_plane_new_sqlite_classes",
   "control_plane_deleted_classes",
+  // Derived by migration staging. An environment value would override the
+  // auto tfvars that preserve the binding after admission is disabled.
+  "pi_durable_binding_enabled",
   "project_root",
 ]);
 
@@ -69,4 +72,33 @@ test("Every production Terraform variable reaches plan and apply", async () => {
     }
   });
   assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
+});
+
+test("PiSessionDO migration is staged and guarded in plan and apply", () => {
+  assertInPlanAndApply("pi_durable_binding_enabled", "Pi binding retention");
+  assertInPlanAndApply('"control_plane_migration_tag":"v4"', "Pi migration tag");
+  assertInPlanAndApply(
+    '\\"control_plane_new_sqlite_classes\\":[\\"PiSessionDO\\"]',
+    "Pi SQLite class"
+  );
+  assertInPlanAndApply(
+    "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first",
+    "Pi migration phase guard"
+  );
+  assertInPlanAndApply(
+    "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable",
+    "Pi rollback phase guard"
+  );
+});
+
+test("incremental Durable Object migration preserves existing bindings", async () => {
+  const module = await readFile(
+    new URL("../terraform/modules/cloudflare-worker/main.tf", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    module,
+    /if !contains\(var\.new_sqlite_classes, binding\.class_name\)/,
+    "phase one must withhold only newly introduced classes"
+  );
 });

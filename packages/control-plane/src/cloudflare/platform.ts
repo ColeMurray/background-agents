@@ -11,10 +11,13 @@ import type { Env, EnvConfig, Platform } from "../types";
 import { createQueueJobs, type JobQueueBindings } from "./job-queue";
 import { R2ObjectStorage } from "./object-storage";
 import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
+import { createDurableObjectPiRuntimeDispatch } from "./pi-runtime-dispatch";
+import type { PiSessionDO } from "./pi-durable-object";
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
+  PI_SESSION?: DurableObjectNamespace<PiSessionDO>;
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
@@ -33,6 +36,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
   const {
     DB,
     SESSION,
+    PI_SESSION,
     REPOS_CACHE,
     MEDIA_BUCKET,
     SLACK_BOT,
@@ -45,6 +49,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
   const platform: Platform = {
     DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
+    PI_SESSION: PI_SESSION ? createDurableObjectPiRuntimeDispatch(PI_SESSION) : undefined,
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
     SLACK_BOT,

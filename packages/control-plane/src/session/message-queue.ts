@@ -27,7 +27,13 @@ import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
-import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
+import type {
+  MessageRow,
+  ParticipantRow,
+  PromptGitIdentity,
+  SandboxCommand,
+  SessionRow,
+} from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
@@ -46,6 +52,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import type { PiRuntimeDispatch } from "../pi/runtime-contract";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
@@ -175,7 +182,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly piRuntime?: PiRuntimeDispatch
   ) {}
 
   async enqueueAutofix(
@@ -462,6 +470,15 @@ export class SessionMessageQueue {
       }
       return;
     }
+    if (harness === "pi") {
+      await this.dispatchPiMessage(
+        message,
+        currentSession,
+        resolvedModel,
+        inheritedReasoningEffort
+      );
+      return;
+    }
     const target = this.wsManager.getSandboxCommandTarget();
     if (target.kind === "booting") {
       // A bridge is attached ahead of its boot. Nothing to spawn and nothing
@@ -625,6 +642,94 @@ export class SessionMessageQueue {
     });
   }
 
+  private async dispatchPiMessage(
+    message: MessageRow,
+    session: SessionRow,
+    resolvedModel: string,
+    inheritedReasoningEffort: string | null | undefined
+  ): Promise<void> {
+    if (!this.piRuntime) {
+      if (this.failMessage(message, "Pi Durable is not available", Date.now(), "pending")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+      }
+      return;
+    }
+    const author = this.participantRepository.getParticipantById(message.author_id);
+    if (!author) throw new Error(`Missing prompt author ${message.author_id}`);
+    const now = Date.now();
+    const requestedEffort =
+      message.reasoning_effort ??
+      inheritedReasoningEffort ??
+      getHarnessReasoningConfig("pi", resolvedModel)?.default ??
+      getDefaultReasoningEffort(resolvedModel);
+    const reasoningEffort =
+      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log, "pi") ??
+      undefined;
+    const userMessageEvent = this.createUserMessageEvent(
+      author,
+      message.content,
+      message.id,
+      now,
+      parseStoredSessionAttachments(message.attachments, () =>
+        this.log.error("prompt.invalid_stored_attachments")
+      ),
+      message.origin_context
+    );
+    if (!this.mayDispatch()) return;
+    if (!this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent)) return;
+    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+    this.messenger.broadcast({ type: "processing_status", isProcessing: true });
+    this.broadcastPromptQueue();
+    await this.alarmScheduler.schedule(now + this.getExecutionTimeoutMs());
+    this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
+      name: "callback.notify_started",
+      context: { message_id: message.id },
+    });
+
+    let receipt;
+    try {
+      receipt = await this.piRuntime.submit({
+        sessionId: session.session_name || session.id,
+        messageId: message.id,
+        content: message.content,
+        model: resolvedModel,
+        reasoningEffort,
+      });
+    } catch (error) {
+      // The RPC may have failed after Pi durably admitted the operation. Keep
+      // the processing claim and let Pi's durable projector or the execution
+      // deadline settle it; resubmitting under new state would risk two turns.
+      this.log.warn("prompt.dispatch", {
+        event: "prompt.dispatch",
+        message_id: message.id,
+        outcome: "ambiguous",
+        execution_backend: "durable_object",
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+      return;
+    }
+
+    if (receipt.rejected) {
+      if (this.failMessage(message, receipt.rejected, Date.now(), "processing")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
+      return;
+    }
+
+    this.log.info("prompt.dispatch", {
+      event: "prompt.dispatch",
+      message_id: message.id,
+      outcome: receipt.accepted ? "sent" : "duplicate",
+      model: resolvedModel,
+      reasoning_effort: reasoningEffort,
+      execution_backend: "durable_object",
+      queue_wait_ms: now - message.created_at,
+    });
+  }
+
   async handleFatalSandboxFailure(reason: string): Promise<void> {
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
@@ -645,6 +750,13 @@ export class SessionMessageQueue {
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
+    const session = this.repository.getSession();
+    if (session?.harness === "pi" && this.piRuntime) {
+      this.backgroundTasks.submit(() => this.piRuntime!.abort(session.session_name || session.id), {
+        name: "pi.abort",
+      });
+      return;
+    }
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
   }
@@ -683,6 +795,18 @@ export class SessionMessageQueue {
     }
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
+    const session = this.repository.getSession();
+    if (session?.harness === "pi" && this.piRuntime) {
+      try {
+        await this.piRuntime.abort(session.session_name || session.id, processingMessage.id);
+      } catch (error) {
+        this.log.warn("pi.abort_failed", {
+          event: "pi.abort_failed",
+          message_id: processingMessage.id,
+          error_type: error instanceof Error ? error.constructor.name : typeof error,
+        });
+      }
+    }
     await this.sessionStatus.reconcileAfterExecution(false);
   }
 
@@ -866,6 +990,9 @@ export class SessionMessageQueue {
     if (raced) return raced;
     this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
+    if (harness === "pi" && data.attachments?.length) {
+      throw new HarnessModelIncompatibleError("Pi Durable does not support attachments yet.");
+    }
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
       this.attachmentRepository

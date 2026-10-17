@@ -59,5 +59,11 @@ module "web_app" {
     },
     # Append new variables to keep count indices stable and avoid Vercel
     # ENV_CONFLICT replacement races.
+    {
+      key       = "NEXT_PUBLIC_PI_DURABLE_ENABLED"
+      value     = tostring(local.pi_durable_available)
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
   ]
 }

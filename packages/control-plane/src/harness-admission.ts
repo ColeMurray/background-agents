@@ -25,12 +25,24 @@ import type {
 } from "@open-inspect/shared/types/provider-accounts";
 import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
 
-type HarnessAdmissionConfig = Pick<EnvConfig, "SANDBOX_PROVIDER">;
+type HarnessAdmissionConfig = Pick<EnvConfig, "SANDBOX_PROVIDER" | "PI_DURABLE_ENABLED"> & {
+  PI_SESSION?: unknown;
+};
+
+function enabled(value: string | undefined): boolean {
+  return ["1", "true"].includes(value?.trim().toLowerCase() ?? "");
+}
 
 export function getHarnessAdmissionError(
   env: HarnessAdmissionConfig,
   harness: HarnessId
 ): { code: string; message: string } | null {
+  if (harness === "pi" && (!enabled(env.PI_DURABLE_ENABLED) || !env.PI_SESSION)) {
+    return {
+      code: "harness_runtime_unavailable",
+      message: "Pi Durable is not enabled for this deployment.",
+    };
+  }
   if (harness !== "codex") return null;
   if (!["modal", "modal-vm"].includes(env.SANDBOX_PROVIDER?.trim().toLowerCase() || "modal")) {
     return {

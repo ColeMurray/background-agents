@@ -50,6 +50,7 @@ const GRACEFUL_STOP_PHASES: ReadonlySet<SandboxShutdownState["phase"]> = new Set
 function displayedSandboxStatus(
   sessionState: SessionSocketState["sessionState"]
 ): SandboxStatusValue | undefined {
+  if (sessionState?.executionBackend === "durable") return undefined;
   const status = sessionState?.sandboxStatus;
   const phase = sessionState?.sandboxPreservation?.phase;
   return status === "ready" && phase && GRACEFUL_STOP_PHASES.has(phase) ? "snapshotting" : status;
@@ -270,6 +271,11 @@ export function SessionHeader({
                 >
                   {resolvedTitle}
                 </button>
+                {sessionState?.executionBackend === "durable" && (
+                  <span className="ml-2 rounded border border-border-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Instant
+                  </span>
+                )}
               </h1>
             )}
             <p className="hidden truncate text-sm text-muted-foreground md:block">{repoLabel}</p>

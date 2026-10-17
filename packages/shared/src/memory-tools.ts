@@ -66,6 +66,9 @@ export function harnessMemoryToolName(harness: HarnessId, tool: MemoryToolName):
     case "codex":
       // Codex receives the same tools in the `oi` dynamic-tool namespace.
       return tool;
+    case "pi":
+      // Pi reserves the canonical names; its authorized memory extension remains future work.
+      return tool;
     default: {
       const exhaustive: never = harness;
       throw new Error(`Unknown harness: ${String(exhaustive)}`);

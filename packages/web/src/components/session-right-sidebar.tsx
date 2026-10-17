@@ -142,8 +142,10 @@ export function SessionRightSidebarContent({
     () => buildAuthenticatedUrl(sessionState?.ttydUrl, sessionState?.ttydToken),
     [sessionState?.ttydUrl, sessionState?.ttydToken]
   );
+  const isDurable = sessionState?.executionBackend === "durable";
   const hasRepository = Boolean(
-    sessionState?.repositories?.length || (sessionState?.repoOwner && sessionState.repoName)
+    !isDurable &&
+    (sessionState?.repositories?.length || (sessionState?.repoOwner && sessionState.repoName))
   );
   const diffView = deriveSessionDiffView({
     hasRepository,
@@ -252,36 +254,41 @@ export function SessionRightSidebarContent({
         <div role="status" aria-live="polite" className={diffView.showManifest ? "mt-2" : ""}>
           {!sessionState ? (
             <p className="text-xs text-muted-foreground">Loading session information…</p>
-          ) : diffView.kind === "hidden" ? (
+          ) : isDurable ? null : diffView.kind === "hidden" ? (
             <p className="text-xs text-muted-foreground">
               No repository is attached to this session.
             </p>
           ) : null}
-          {sessionState && diffView.kind === "loading" && (
+          {isDurable && (
+            <p className="text-xs text-muted-foreground">
+              Pi Durable runs without a local repository checkout.
+            </p>
+          )}
+          {!isDurable && sessionState && diffView.kind === "loading" && (
             <p className="text-xs text-muted-foreground">Loading changes…</p>
           )}
-          {diffView.kind === "error" && (
+          {!isDurable && diffView.kind === "error" && (
             <p className="text-xs text-destructive">Unable to load changes.</p>
           )}
-          {diffView.kind === "unavailable" && (
+          {!isDurable && diffView.kind === "unavailable" && (
             <p className="text-xs text-muted-foreground">{diffView.message}</p>
           )}
-          {diffView.kind === "available_after_execution" && (
+          {!isDurable && diffView.kind === "available_after_execution" && (
             <p className="text-xs text-muted-foreground">
               Changes will be available after the first execution.
             </p>
           )}
-          {diffView.kind === "working" && (
+          {!isDurable && diffView.kind === "working" && (
             <p className="text-xs text-muted-foreground">
               {diffView.showManifest
                 ? "Agent working — showing the previous changes."
                 : "Changes will be available after this execution."}
             </p>
           )}
-          {diffView.kind === "empty" && (
+          {!isDurable && diffView.kind === "empty" && (
             <p className="text-xs text-muted-foreground">No file changes in the latest diff.</p>
           )}
-          {diffView.kind === "failed" && (
+          {!isDurable && diffView.kind === "failed" && (
             <DiffRetryNotice
               sessionId={sessionId}
               message={diffView.message ?? ""}
@@ -409,9 +416,11 @@ export function SessionRightSidebarContent({
           <p className="text-xs leading-relaxed text-muted-foreground">
             {!sessionState
               ? "Loading workspace tools…"
-              : !capabilities.sandboxAccess
-                ? "Sandbox access is not available with your permissions."
-                : "Sandbox tools will appear here when available."}
+              : isDurable
+                ? "Pi Durable runs without sandbox workspace tools."
+                : !capabilities.sandboxAccess
+                  ? "Sandbox access is not available with your permissions."
+                  : "Sandbox tools will appear here when available."}
           </p>
         )}
 

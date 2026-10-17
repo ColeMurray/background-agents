@@ -1287,6 +1287,7 @@ R2_MEDIA_BUCKET_NAME
 SANDBOX_INACTIVITY_TIMEOUT_MS
 SANDBOX_BOOT_TIMEOUT_MS
 ENABLE_DURABLE_OBJECT_BINDINGS
+PI_DURABLE_ENABLED
 ENABLE_SERVICE_BINDINGS
 
 # Vercel web app
@@ -1379,6 +1380,7 @@ Secrets for credentials:
 | `R2_MEDIA_BUCKET_NAME`             | Optional media bucket name override for a pre-created bucket                                    |
 | `DEPLOYMENT_NAME`                  | Your deployment name                                                                            |
 | `TEAMS_ENFORCEMENT`                | Session enforcement: `off`, `shadow` (default), or `on`; prefer a repository variable           |
+| `PI_DURABLE_ENABLED`               | `true` enables Pi Durable after the additive `PiSessionDO` migration; defaults to `false`       |
 | `R2_ACCESS_KEY_ID`                 | R2 access key ID                                                                                |
 | `R2_SECRET_ACCESS_KEY`             | R2 secret access key                                                                            |
 | `WEB_PLATFORM`                     | `vercel` or `cloudflare`                                                                        |
@@ -1444,6 +1446,7 @@ Secrets for credentials:
 | `ALLOWED_GITHUB_ORGS`              | Comma-separated GitHub orgs whose active members can sign in                                    |
 | `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)      |
 | `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
+| `PI_DURABLE_ENABLED`               | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
 | `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
 | `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                           |
 | `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                          |
@@ -1467,6 +1470,27 @@ secret; an Anthropic value is served by `CLASSIFICATION_ANTHROPIC_API_KEY`, fall
 credentials from Open-Inspect's secret store. The optional `CLASSIFICATION_REASONING_EFFORT`
 variable sets the reasoning effort an OpenAI classifier requests (for example `low`); leave it unset
 to use the model's default.
+
+### Enable Pi Durable
+
+Pi Durable is opt-in and requires a connected OpenAI provider account. It does not persist the
+account's refresh token in the Pi Durable Object. For an existing deployment:
+
+1. If the control-plane migration tag is still `v2`, run Terraform once with
+   `PI_DURABLE_ENABLED=false` to retire the historical `SchedulerDO` class.
+2. Set `PI_DURABLE_ENABLED=true` and `ENABLE_DURABLE_OBJECT_BINDINGS=false`, then run Terraform.
+   This adds `PiSessionDO` without advertising Pi to clients.
+3. Set `ENABLE_DURABLE_OBJECT_BINDINGS=true` and run Terraform again. The binding and UI/Slack
+   selector become available only in this phase.
+4. When the web app runs on Vercel, dispatch the **Deploy Web** workflow so the build-time
+   `NEXT_PUBLIC_PI_DURABLE_ENABLED` value is included in the active bundle.
+
+Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
+The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
+sessions can still continue, stop, and delete while new admission and selectors are disabled. Direct
+Terraform operators must likewise keep `pi_durable_binding_enabled=true` after the class migration.
+When the web app runs on Vercel, dispatch **Deploy Web** again so the disabled build-time flag
+reaches the active bundle. Do not delete the class or its storage as part of a normal rollback.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

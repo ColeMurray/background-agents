@@ -11,6 +11,7 @@ import { hashToken } from "../../src/auth/crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 
 /**
  * The test D1 binding viewed through the engine-neutral interface, so tests
@@ -226,9 +227,9 @@ export async function serviceFetch(url: string, init?: ServiceRequestInit): Prom
 /** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
-  repoOwner?: string;
-  repoName?: string;
-  repoId?: number;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  repoId?: number | null;
   defaultBranch?: string;
   repositories?: Array<{
     repoOwner: string;
@@ -239,6 +240,7 @@ export async function initSession(overrides?: {
   environmentId?: string | null;
   title?: string;
   model?: string;
+  harness?: HarnessId;
   reasoningEffort?: string;
   sandboxSettings?: SandboxSettings;
   userId?: string;
@@ -266,16 +268,21 @@ export async function initSession(overrides?: {
     repoOwner: defaults.repoOwner,
     repoName: defaults.repoName,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    harness: defaults.harness ?? "opencode",
     reasoningEffort: defaults.reasoningEffort ?? null,
-    baseBranch: defaults.defaultBranch ?? "main",
-    repositories: defaults.repositories ?? [
-      {
-        repoOwner: defaults.repoOwner,
-        repoName: defaults.repoName,
-        repoId: defaults.repoId,
-        baseBranch: defaults.defaultBranch ?? "main",
-      },
-    ],
+    baseBranch: defaults.repoOwner ? (defaults.defaultBranch ?? "main") : null,
+    repositories:
+      defaults.repositories ??
+      (defaults.repoOwner && defaults.repoName && defaults.repoId != null
+        ? [
+            {
+              repoOwner: defaults.repoOwner,
+              repoName: defaults.repoName,
+              repoId: defaults.repoId,
+              baseBranch: defaults.defaultBranch ?? "main",
+            },
+          ]
+        : []),
     environmentId: defaults.environmentId ?? null,
     status: "created",
     userId: defaults.canonicalUserId ?? defaults.userId,

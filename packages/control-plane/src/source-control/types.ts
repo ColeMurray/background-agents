@@ -450,6 +450,22 @@ export interface SourceControlProvider {
   ): Promise<RepositoryTree>;
 
   /**
+   * Read one commit-pinned repository file directly by path.
+   *
+   * Providers must use a path-scoped file endpoint rather than recursively
+   * listing the parent tree. A confirmed missing path returns null; oversized
+   * bodies are refused using the same bounded streaming contract as readBlob.
+   */
+  readFile(
+    config: GetRepositoryConfig & {
+      commitSha: string;
+      path: string;
+      maxBytes: number;
+    },
+    scope: CredentialScope
+  ): Promise<Uint8Array | null>;
+
+  /**
    * Read one blob's raw bytes by its provider blob ID.
    *
    * App-authenticated. Blob IDs come from `listTree`, so the content read is

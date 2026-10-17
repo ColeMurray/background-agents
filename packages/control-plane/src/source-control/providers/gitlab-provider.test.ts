@@ -1432,6 +1432,27 @@ describe("managed-skill repository reads", () => {
     ).resolves.toEqual({ entries: [], truncated: false });
   });
 
+  it("reads one commit-pinned file without listing its recursive parent tree", async () => {
+    mockFetch.mockResolvedValueOnce(new Response("hello"));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    await expect(
+      provider.readFile(
+        {
+          owner: "acme",
+          name: "skills",
+          commitSha: "abc123",
+          path: "docs/README.md",
+          maxBytes: 100,
+        },
+        repositoryScope
+      )
+    ).resolves.toEqual(new TextEncoder().encode("hello"));
+    const requestUrl = String(mockFetch.mock.calls[0]?.[0]);
+    expect(requestUrl).toContain("/repository/files/docs%2FREADME.md/raw");
+    expect(requestUrl).toContain("ref=abc123");
+  });
+
   it("cancels an undeclared oversized blob while streaming it", async () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({

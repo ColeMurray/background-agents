@@ -696,6 +696,21 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     return await readResponseBytesWithinLimit(response, config.maxBytes, config.blobId);
   }
 
+  async readFile(
+    config: GetRepositoryConfig & { commitSha: string; path: string; maxBytes: number },
+    _scope: CredentialScope
+  ): Promise<Uint8Array | null> {
+    const projectPath = encodeProjectPath(config.owner, config.name);
+    const query = new URLSearchParams({ ref: config.commitSha });
+    const response = await this.patFetch(
+      `/projects/${projectPath}/repository/files/${encodeURIComponent(config.path)}/raw?${query.toString()}`,
+      "read repository file"
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) throw await gitlabResponseError(response, "read repository file");
+    return await readResponseBytesWithinLimit(response, config.maxBytes, config.path);
+  }
+
   /** PAT-authenticated GitLab API request with transport failures classified. */
   private async patFetch(path: string, operation: string): Promise<Response> {
     try {

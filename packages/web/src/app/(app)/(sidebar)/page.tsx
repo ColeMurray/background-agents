@@ -174,7 +174,11 @@ export default function Home() {
 
   const launchContextReady = canCreateSession && teamCreationReady && preferences.providerReady;
   const warmRequest: WarmDraftSessionRequest | null =
-    launchContextReady && session && preferences.ready && targetRequestFields
+    launchContextReady &&
+    session &&
+    preferences.ready &&
+    targetRequestFields &&
+    !(harness === "pi" && sessionAttachments.attachments.length > 0)
       ? {
           ...targetRequestFields,
           harness,
@@ -201,10 +205,15 @@ export default function Home() {
   useEffect(() => {
     if (!warmRequested || !warmIdentity) return;
     setWarmRequested(false);
+    if (harness === "pi") return;
     void createSessionForWarming();
-  }, [warmRequested, warmIdentity, createSessionForWarming]);
+  }, [harness, warmRequested, warmIdentity, createSessionForWarming]);
 
   const hasAttachments = sessionAttachments.attachments.length > 0;
+  const piProviderError =
+    harness === "pi" && !providerAccounts.loading && !preferences.providerReady
+      ? "Pi Durable requires an active connected OpenAI account"
+      : null;
   const launch = useFirstPromptLaunch(
     {
       prompt,
@@ -217,13 +226,16 @@ export default function Home() {
         sessionAttachments.isUploading ||
         models.loading,
       validationError:
-        preferences.modelAvailability.status === "unavailable"
-          ? preferences.modelAvailability.message
-          : !isLaunchable
-            ? sessionTarget?.kind === "repos"
-              ? "Select at least one repository"
-              : "Please select a repository or environment"
-            : null,
+        piProviderError ??
+        (harness === "pi" && hasAttachments
+          ? "Pi Durable does not support attachments yet"
+          : preferences.modelAvailability.status === "unavailable"
+            ? preferences.modelAvailability.message
+            : !isLaunchable
+              ? sessionTarget?.kind === "repos"
+                ? "Select at least one repository"
+                : "Please select a repository or environment"
+              : null),
     },
     {
       sessions: warmSession,
@@ -249,7 +261,8 @@ export default function Home() {
     launch.submitting ||
     sessionAttachments.isUploading ||
     !launchContextReady ||
-    !isLaunchable;
+    !isLaunchable ||
+    (harness === "pi" && hasAttachments);
 
   return (
     <HomeContent
@@ -299,7 +312,7 @@ export default function Home() {
         submitting: launch.submitting,
         warming: warmSession.isWarming,
         sendDisabled,
-        error: creationError?.message ?? launch.error,
+        error: piProviderError ?? creationError?.message ?? launch.error,
         onSubmit: (event) => {
           event.preventDefault();
           void launch.submit();
@@ -414,6 +427,7 @@ function HomeContent({
     error,
     onSubmit: handleSubmit,
   } = launch;
+  const attachmentsSupported = harness !== "pi";
   const attachmentsLocked = creating || attachments.isUploading;
   const {
     isDraggingOver,
@@ -422,7 +436,10 @@ function HomeContent({
     handleDrop,
     handleDragOver,
     handleDragLeave,
-  } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
+  } = useAttachmentDropZone({
+    locked: attachmentsLocked || !attachmentsSupported,
+    onAdd: attachments.onAdd,
+  });
   const { repos, loadingRepos } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
@@ -489,20 +506,26 @@ function HomeContent({
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
               >
-                <AttachmentPreviewStrip
-                  items={attachments.items}
-                  error={attachments.error}
-                  onRemove={attachments.onRemove}
-                  disabled={attachmentsLocked}
-                />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ATTACHMENT_ACCEPT}
-                  multiple
-                  className="hidden"
-                  onChange={handleFileInputChange}
-                />
+                {(attachmentsSupported || attachments.items.length > 0) && (
+                  <>
+                    <AttachmentPreviewStrip
+                      items={attachments.items}
+                      error={attachments.error}
+                      onRemove={attachments.onRemove}
+                      disabled={attachmentsLocked}
+                    />
+                    {attachmentsSupported && (
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept={ATTACHMENT_ACCEPT}
+                        multiple
+                        className="hidden"
+                        onChange={handleFileInputChange}
+                      />
+                    )}
+                  </>
+                )}
                 {/* Text input area */}
                 <div className="relative">
                   <PromptSkillTextarea
@@ -523,19 +546,21 @@ function HomeContent({
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (
                       <span className="whitespace-nowrap text-xs text-accent">
-                        Warming sandbox...
+                        {harness === "pi" ? "Starting instant session..." : "Warming sandbox..."}
                       </span>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={attachmentsLocked}
-                      className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title="Attach images"
-                      aria-label="Attach images"
-                    >
-                      <PaperclipIcon className="w-5 h-5" />
-                    </button>
+                    {attachmentsSupported && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={attachmentsLocked}
+                        className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                        title="Attach images"
+                        aria-label="Attach images"
+                      >
+                        <PaperclipIcon className="w-5 h-5" />
+                      </button>
+                    )}
                     <button
                       type="submit"
                       disabled={launch.sendDisabled}

@@ -367,6 +367,7 @@ function GlobalSettingsSection({
             allows it, and the Anthropic API key otherwise.
           </p>
           <HarnessSelect
+            supportsPi={false}
             id="linear-harness"
             describedBy="linear-harness-help"
             className="w-full sm:w-96"
@@ -800,6 +801,7 @@ function RepoOverrideRow({
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
         <HarnessSelect
+          supportsPi={false}
           density="compact"
           value={harness}
           onChange={handleHarnessChange}

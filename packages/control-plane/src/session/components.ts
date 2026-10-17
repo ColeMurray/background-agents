@@ -172,6 +172,14 @@ import {
 } from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
+import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
+import { PiCredentialService } from "./pi-credential-service";
+import { PiResultHandler } from "./http/handlers/pi-result.handler";
+import { PiEventHandler } from "./http/handlers/pi-event.handler";
+import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
+import { SessionSkillStore } from "../db/session-skills";
+import { PiRepositoryTools } from "../pi/repository-tools";
+import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -530,6 +538,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (): void => messageQueue.broadcastPromptQueue(),
     (): Promise<void> => messageQueue.processMessageQueue()
   );
+  async function processPiEvent(event: SandboxIngressEvent): Promise<void> {
+    await sandboxEventProcessor.processSandboxEvent(event);
+  }
   const messageQueue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
@@ -563,7 +574,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
-    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
+    env.PI_SESSION
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -573,17 +585,28 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     send: (ws, msg) => wsManager.send(ws, msg),
     getSandboxSocket: () => wsManager.getSandboxSocket(),
     isSpawning: () => lifecycleManager.isSpawning(),
-    warmSandbox: () => lifecycleManager.spawnSandbox("warm"),
+    warmSandbox: async () => {
+      if (sessionCoreRepository.getSession()?.harness === "pi") return;
+      await lifecycleManager.spawnSandbox("warm");
+    },
     log,
   });
 
+  const stopExecution = async () => {
+    const session = sessionCoreRepository.getSession();
+    if (session?.harness === "pi" && env.PI_SESSION) {
+      await messageQueue.failStuckProcessingMessage("Execution was stopped");
+      return;
+    }
+    await executionStop.stop();
+  };
   const messageService = new MessageService({
     repository: messageRepository,
     eventRepository,
     artifactRepository,
     usageRepository,
     messageQueue,
-    stopExecution: () => executionStop.stop(),
+    stopExecution,
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
     transaction,
   });
@@ -598,7 +621,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     generateId
   );
 
-  const updateLastActivity = (timestamp: number) => lifecycleManager.updateLastActivity(timestamp);
+  const isPiSession = () => sessionCoreRepository.getSession()?.harness === "pi";
+  const updateLastActivity = (timestamp: number) => {
+    if (!isPiSession()) lifecycleManager.updateLastActivity(timestamp);
+  };
+  const scheduleInactivityCheck = async () => {
+    if (!isPiSession()) await lifecycleManager.scheduleInactivityCheck();
+  };
   const streamingEventHandler = new SandboxStreamingEventHandler(
     backgroundTasks,
     eventRepository,
@@ -623,9 +652,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => lifecycleManager.triggerSnapshot(reason),
+    (reason) => (isPiSession() ? Promise.resolve() : lifecycleManager.triggerSnapshot(reason)),
     updateLastActivity,
-    () => lifecycleManager.scheduleInactivityCheck(),
+    scheduleInactivityCheck,
     () => messageQueue.processMessageQueue(),
     () => messageQueue.broadcastPromptQueue(),
     budgetService,
@@ -647,7 +676,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
-    () => lifecycleManager.scheduleInactivityCheck(),
+    scheduleInactivityCheck,
     backgroundTasks,
     messageQueue,
     log,
@@ -670,7 +699,22 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       prepared: (event) => lifecycleManager.onShutdownPrepared(event),
     }
   );
-
+  const piResultHandler = new PiResultHandler(
+    messageRepository,
+    processPiEvent,
+    new PiResultReceiptRepository(sql),
+    async (result) => {
+      await terminalMessageProjection.flushPending();
+      await callbackService.notifyComplete(result.operationId, result.success, result.error);
+      await statusService.reconcileAfterExecution(result.success);
+      messenger.broadcast({ type: "processing_status", isProcessing: false });
+      messageQueue.broadcastPromptQueue();
+      await messageQueue.processMessageQueue();
+    },
+    isPiSession,
+    getPublicSessionId
+  );
+  const piEventHandler = new PiEventHandler(messageRepository, processPiEvent, isPiSession);
   const alarmHandler = createAlarmHandler({
     repository: messageRepository,
     messageQueue,
@@ -762,6 +806,20 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new ScmCredentialsService(sourceControlProvider(), requestLog, () =>
       resolveCredentialScope(getPublicSessionId())
     ).getCredentials();
+  const piCredentialService = new PiCredentialService(db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
+  const piRepositoryTools = new PiRepositoryTools({
+    repositories: () => sessionCoreRepository.getSessionRepositories(),
+    resolveCredentialScope: () => resolveCredentialScope(getPublicSessionId()),
+    provider: sourceControlProvider,
+  });
+  const piBridgeHandler = new PiBridgeHandler({
+    sessions: sessionCoreRepository,
+    messages: messageRepository,
+    credentials: piCredentialService,
+    skills: new SessionSkillStore(db),
+    repositories: piRepositoryTools,
+    getSessionId: getPublicSessionId,
+  });
 
   const sandboxHandler = new SandboxHandler(
     messageRepository,
@@ -792,7 +850,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    generateId
+    generateId,
+    Date.now,
+    env.PI_SESSION
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,
@@ -971,6 +1031,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       sandboxHandler.verifySandboxToken(request, requestLog),
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
+    piCredential: (request) => piBridgeHandler.credential(request),
+    piContext: () => piBridgeHandler.context(),
+    piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
+    piResult: (request) => piResultHandler.handle(request),
+    piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
     scmCredentials: (_request, _url, requestLog) => sandboxHandler.scmCredentials(requestLog),
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
@@ -1007,7 +1072,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const clientCommands = new SessionClientCommandFacade(
     connectionAuthenticator,
     messageQueue,
-    () => executionStop.stop(),
+    stopExecution,
     presenceService,
     eventStream,
     (action) => lifecycleManager.recoverShutdown(action)

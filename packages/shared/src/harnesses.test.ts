@@ -52,7 +52,7 @@ describe("harness selection policy", () => {
 
 describe("harness catalog", () => {
   it("lists only harnesses the runtime can boot, built-in first", () => {
-    expect(HARNESS_IDS).toEqual(["opencode", "claude", "codex"]);
+    expect(HARNESS_IDS).toEqual(["opencode", "claude", "codex", "pi"]);
     expect(DEFAULT_HARNESS).toBe("opencode");
   });
 
@@ -67,6 +67,7 @@ describe("harness catalog", () => {
     expect(getValidHarnessOrDefault("claude")).toBe("claude");
     expect(isValidHarness("claude")).toBe(true);
     expect(isValidHarness("codex")).toBe(true);
+    expect(isValidHarness("pi")).toBe(true);
     expect(isValidHarness(42)).toBe(false);
   });
 });
@@ -90,6 +91,12 @@ describe("harnessSupportsModel", () => {
     expect(filtered.length).toBeGreaterThan(0);
     expect(filtered.every((model) => model.startsWith("anthropic/"))).toBe(true);
     expect(filterModelsForHarness("opencode", VALID_MODELS)).toEqual([...VALID_MODELS]);
+  });
+
+  it("restricts Pi Durable to native Codex subscription models", () => {
+    expect(harnessSupportsModel("pi", "openai/gpt-6.1-sol")).toBe(true);
+    expect(harnessSupportsModel("pi", "openai/gpt-5.4")).toBe(false);
+    expect(harnessSupportsModel("pi", "anthropic/claude-sonnet-4-6")).toBe(false);
   });
 });
 
@@ -116,6 +123,13 @@ describe("harnessSupportsProviderAuth", () => {
     expect(harnessSupportsProviderAuth("claude", "openai", "api_key")).toBe(false);
     expect(harnessSupportsProviderAuth("claude", "xai", "provider_account")).toBe(false);
     expect(harnessSupportsProviderAuth("opencode", "google", "api_key")).toBe(false);
+  });
+
+  it("lets Pi Durable use only a connected OpenAI subscription account", () => {
+    expect(harnessSupportsProviderAuth("pi", "openai", "provider_account")).toBe(true);
+    expect(harnessSupportsProviderAuth("pi", "openai", "api_key")).toBe(false);
+    expect(harnessSupportsProviderAuth("pi", "openai", "legacy_scoped_oauth")).toBe(false);
+    expect(harnessSupportsProviderAuth("pi", "anthropic", "provider_account")).toBe(false);
   });
 });
 
@@ -219,6 +233,20 @@ describe("Codex pinned native compatibility", () => {
     expect(harnessSupportsModel("codex", "openai/gpt-5.4")).toBe(false);
     expect(harnessSupportsModel("opencode", "openai/gpt-5.4")).toBe(true);
     expect(harnessSupportsModel("codex", "anthropic/claude-sonnet-4-6")).toBe(false);
+  });
+
+  it("uses the same native reasoning contract for Pi Durable", () => {
+    expect(getHarnessReasoningConfig("pi", "openai/gpt-6.1-sol")).toEqual(
+      getHarnessReasoningConfig("codex", "openai/gpt-6.1-sol")
+    );
+    expect(
+      checkHarnessCompatibility("pi", "openai/gpt-6.1-sol", {
+        openai: "provider_account",
+      })
+    ).toBeNull();
+    expect(checkHarnessCompatibility("pi", "openai/gpt-6.1-sol", { openai: "api_key" })?.code).toBe(
+      "provider_auth"
+    );
   });
   it("accepts native max but never none or automatic ultra delegation", () => {
     expect(checkHarnessCompatibility("codex", "openai/gpt-5.6-sol", undefined, "max")).toBeNull();

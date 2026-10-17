@@ -3,6 +3,7 @@
  */
 
 import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type { SlackCompletionJob } from "./completion/job";
 // targets.ts is a pure leaf (types + policy functions, no I/O), so the types
@@ -34,6 +35,7 @@ export interface Env {
   CLASSIFICATION_MODEL: string;
   CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
   APP_NAME?: string;
+  PI_DURABLE_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;
@@ -111,6 +113,7 @@ export interface ThreadSession {
   repoFullName: string;
   model: string;
   reasoningEffort?: string;
+  harness?: HarnessId;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
   /**
