@@ -8,6 +8,7 @@ import { Lifecycle } from "agents/lifecycle";
 import { SessionInternalPaths } from "../session/contracts";
 import { CodexBrokerCredentialStore } from "../pi/codex-credential-store";
 import { PiProjectionCapability } from "../pi/projection-capability";
+import { RetryablePiProjectionError } from "../pi/projection-retry-policy";
 import {
   toPiModel,
   toPiThinkingLevel,
@@ -144,13 +145,21 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async deliverResult(sessionId: string, result: PiRuntimeResult): Promise<void> {
-    const response = await this.env.SESSION.getByName(sessionId).fetch(
-      new Request(`http://session${SessionInternalPaths.piResult}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(result),
-      })
-    );
-    if (!response.ok) throw new Error(`Pi result delivery failed (${response.status})`);
+    let response: Response;
+    try {
+      response = await this.env.SESSION.getByName(sessionId).fetch(
+        new Request(`http://session${SessionInternalPaths.piResult}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(result),
+        })
+      );
+    } catch (error) {
+      throw new RetryablePiProjectionError("Pi result delivery unavailable", { cause: error });
+    }
+    if (response.status >= 500) {
+      throw new RetryablePiProjectionError(`Pi result delivery failed (${response.status})`);
+    }
+    if (!response.ok) throw new Error(`Pi result delivery rejected (${response.status})`);
   }
 }

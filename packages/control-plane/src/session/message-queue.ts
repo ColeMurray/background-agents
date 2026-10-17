@@ -793,7 +793,15 @@ export class SessionMessageQueue {
     this.broadcastPromptQueue();
     const session = this.repository.getSession();
     if (session?.harness === "pi" && this.piRuntime) {
-      await this.piRuntime.abort(session.session_name || session.id, processingMessage.id);
+      try {
+        await this.piRuntime.abort(session.session_name || session.id, processingMessage.id);
+      } catch (error) {
+        this.log.warn("pi.abort_failed", {
+          event: "pi.abort_failed",
+          message_id: processingMessage.id,
+          error_type: error instanceof Error ? error.constructor.name : typeof error,
+        });
+      }
     }
     await this.sessionStatus.reconcileAfterExecution(false);
   }

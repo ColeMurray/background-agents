@@ -388,6 +388,21 @@ describe("SessionMessageQueue", () => {
     expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
+  it("reconciles a timed-out Pi message even when best-effort abort fails", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.piRuntime.abort.mockRejectedValue(new Error("runtime unavailable"));
+
+    await h.queue.failStuckProcessingMessage();
+
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "pi.abort_failed",
+      expect.objectContaining({ message_id: "msg-1", error_type: "Error" })
+    );
+  });
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

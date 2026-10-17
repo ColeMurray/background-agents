@@ -4,9 +4,9 @@ import {
   type LifecycleJobOutcome,
 } from "agents/lifecycle";
 import type { PiRuntimeResult } from "./runtime-contract";
+import { projectionRetryOutcome, RetryablePiProjectionError } from "./projection-retry-policy";
 
 const POLL_INTERVAL_MS = 2_000;
-const RETRY_INTERVAL_MS = 5_000;
 
 interface ProjectionPayload {
   sessionId: string;
@@ -47,7 +47,7 @@ export class PiProjectionCapability extends LifecycleCapability {
       time: Date.now() + POLL_INTERVAL_MS,
       payload,
       singleflight: true,
-      retry: { maxAttempts: 5, baseDelayMs: 250, maxDelayMs: RETRY_INTERVAL_MS },
+      retry: { maxAttempts: 5, baseDelayMs: 250, maxDelayMs: 5_000 },
     });
   }
 
@@ -55,15 +55,24 @@ export class PiProjectionCapability extends LifecycleCapability {
     if (context.job.fn !== "project")
       throw new Error(`Unknown Pi projection job ${context.job.fn}`);
     const payload = projectionPayload(context.job.payload);
-    if (await this.options.isPending(payload.operationId)) {
-      return { rescheduleAt: Date.now() + POLL_INTERVAL_MS };
+    let pending: boolean;
+    try {
+      pending = await this.options.isPending(payload.operationId);
+    } catch (error) {
+      throw new RetryablePiProjectionError("Pi operation status unavailable", { cause: error });
     }
-    const result = await this.options.result(payload.operationId);
+    if (pending) return { rescheduleAt: Date.now() + POLL_INTERVAL_MS };
+    let result: PiRuntimeResult;
+    try {
+      result = await this.options.result(payload.operationId);
+    } catch (error) {
+      throw new RetryablePiProjectionError("Pi operation result unavailable", { cause: error });
+    }
     await this.options.deliver(payload.sessionId, result);
     return undefined;
   }
 
-  onJobError(): LifecycleJobOutcome {
-    return { rescheduleAt: Date.now() + RETRY_INTERVAL_MS };
+  onJobError(_context: LifecycleJobContext, error: unknown): LifecycleJobOutcome {
+    return projectionRetryOutcome(error);
   }
 }
