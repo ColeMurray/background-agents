@@ -197,15 +197,6 @@ export async function startSessionAndSendPrompt(
   // model it cannot run is refused, never moved to another harness, so a
   // session always runs where the user expects.
   const { harness } = userPrefs;
-  if (harness === "pi" && target.kind !== "none") {
-    await postMessage(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      "Pi Durable currently supports Slack sessions without a repository. Choose *No repository* or another agent harness.",
-      { thread_ts: threadTs }
-    );
-    return null;
-  }
   if (harness === "pi" && preparedImages.files.length > 0) {
     await postMessage(
       env.SLACK_BOT_TOKEN,

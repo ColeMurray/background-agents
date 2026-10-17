@@ -710,6 +710,15 @@ export class SessionMessageQueue {
       return;
     }
 
+    if (receipt.rejected) {
+      if (this.failMessage(message, receipt.rejected, Date.now(), "processing")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
+      return;
+    }
+
     this.log.info("prompt.dispatch", {
       event: "prompt.dispatch",
       message_id: message.id,

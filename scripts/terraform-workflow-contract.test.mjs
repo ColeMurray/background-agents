@@ -48,6 +48,9 @@ const NOT_FROM_ENVIRONMENT = new Set([
   "control_plane_migration_old_tag",
   "control_plane_new_sqlite_classes",
   "control_plane_deleted_classes",
+  // Derived by migration staging. An environment value would override the
+  // auto tfvars that preserve the binding after admission is disabled.
+  "pi_durable_binding_enabled",
   "project_root",
 ]);
 
@@ -72,6 +75,7 @@ test("Every production Terraform variable reaches plan and apply", async () => {
 });
 
 test("PiSessionDO migration is staged and guarded in plan and apply", () => {
+  assertInPlanAndApply("pi_durable_binding_enabled", "Pi binding retention");
   assertInPlanAndApply('"control_plane_migration_tag":"v4"', "Pi migration tag");
   assertInPlanAndApply(
     '\\"control_plane_new_sqlite_classes\\":[\\"PiSessionDO\\"]',

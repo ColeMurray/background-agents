@@ -70,6 +70,10 @@ export class PiProjectionCapability extends LifecycleCapability {
     payload: Omit<ProjectionPayload, "admissionDeadline" | "deliveryDeadline">
   ): Promise<void> {
     await this.lifecycle.ready();
+    if (this.lifecycle.jobs.get(payload.operationId)) {
+      await this.lifecycle.jobs.rearm();
+      return;
+    }
     await this.lifecycle.jobs.push({
       id: payload.operationId,
       fn: "project",

@@ -1,0 +1,141 @@
+import { describe, expect, it, vi } from "vitest";
+import { PiRepositoryTools } from "./repository-tools";
+
+function harness() {
+  const resolveCommit = vi.fn(async () => ({ sha: "abc123" }));
+  const listTree = vi.fn(async () => ({
+    entries: [
+      {
+        path: "src/index.ts",
+        type: "file" as const,
+        blobId: "blob-1",
+        sizeBytes: 12,
+        executable: false,
+      },
+    ],
+    truncated: false,
+  }));
+  const readBlob = vi.fn(async () => new TextEncoder().encode("hello world\n"));
+  const tools = new PiRepositoryTools({
+    repositories: () => [
+      {
+        repoOwner: "acme",
+        repoName: "widgets",
+        position: 0,
+        baseBranch: "main",
+      },
+    ],
+    resolveCredentialScope: vi.fn(async () => ({ kind: "all" as const })),
+    provider: () => ({ resolveCommit, listTree, readBlob }),
+  });
+  return { tools, resolveCommit, listTree, readBlob };
+}
+
+describe("PiRepositoryTools", () => {
+  it("pins each session repository to one immutable default commit", async () => {
+    const h = harness();
+    await expect(h.tools.pin()).resolves.toEqual([
+      {
+        repoOwner: "acme",
+        repoName: "widgets",
+        position: 0,
+        baseBranch: "main",
+        commitSha: "abc123",
+      },
+    ]);
+  });
+
+  it("lists a bounded repository tree at an immutable commit", async () => {
+    const h = harness();
+
+    await expect(h.tools.list({ repository: 0, path: "src" })).resolves.toEqual({
+      repository: "acme/widgets",
+      commitSha: "abc123",
+      path: "src",
+      truncated: false,
+      nextOffset: null,
+      entries: [
+        {
+          path: "src/index.ts",
+          type: "file",
+          sizeBytes: 12,
+          executable: false,
+        },
+      ],
+    });
+    expect(h.listTree).toHaveBeenCalledWith(
+      { owner: "acme", name: "widgets", commitSha: "abc123", path: "src" },
+      { kind: "all" }
+    );
+  });
+
+  it("reads UTF-8 text by blob id from the resolved commit", async () => {
+    const h = harness();
+
+    await expect(h.tools.read({ repository: 0, path: "src/index.ts" })).resolves.toEqual({
+      repository: "acme/widgets",
+      commitSha: "abc123",
+      path: "src/index.ts",
+      content: "hello world\n",
+      start: 0,
+      end: 12,
+      totalBytes: 12,
+      truncated: false,
+    });
+    expect(h.readBlob).toHaveBeenCalledWith(
+      { owner: "acme", name: "widgets", blobId: "blob-1", maxBytes: 262_144 },
+      { kind: "all" }
+    );
+    expect(h.listTree).toHaveBeenCalledWith(
+      { owner: "acme", name: "widgets", commitSha: "abc123", path: "src" },
+      { kind: "all" }
+    );
+  });
+
+  it.each(["/etc/passwd", "../secret", "src/../../secret", "src\\index.ts"])(
+    "rejects unsafe repository paths: %s",
+    async (path) => {
+      const h = harness();
+      await expect(h.tools.read({ path })).rejects.toThrow("repository-relative POSIX path");
+      expect(h.resolveCommit).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects a repository outside the session member list", async () => {
+    const h = harness();
+    await expect(h.tools.list({ repository: 1 })).rejects.toThrow(
+      "Repository index 1 is not part of this session"
+    );
+  });
+
+  it("pages large trees instead of returning an unbounded structured result", async () => {
+    const h = harness();
+    h.listTree.mockResolvedValueOnce({
+      entries: Array.from({ length: 3 }, (_, index) => ({
+        path: `file-${index}.txt`,
+        type: "file" as const,
+        blobId: `blob-${index}`,
+        sizeBytes: 1,
+        executable: false,
+      })),
+      truncated: false,
+    });
+    await expect(h.tools.list({ offset: 1, limit: 1 })).resolves.toMatchObject({
+      entries: [expect.objectContaining({ path: "file-1.txt" })],
+      truncated: true,
+      nextOffset: 2,
+    });
+  });
+
+  it("refuses truncated provider trees instead of presenting an incomplete listing", async () => {
+    const h = harness();
+    h.listTree.mockResolvedValueOnce({ entries: [], truncated: true });
+    await expect(h.tools.list({})).rejects.toThrow("repository tree is truncated");
+  });
+
+  it("rejects binary files", async () => {
+    const h = harness();
+    h.readBlob.mockResolvedValueOnce(new Uint8Array([0, 1, 2]));
+    await expect(h.tools.read({ path: "src/index.ts" })).rejects.toThrow("not UTF-8 text");
+  });
+});

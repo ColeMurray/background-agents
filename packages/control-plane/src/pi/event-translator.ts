@@ -1,8 +1,18 @@
-import type { AgentEvent } from "@earendil-works/pi-durable";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AgentEvent, SnapshotEvent } from "@earendil-works/pi-durable";
 import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 
 export interface PiEventTranslationState {
   text: string;
+  tools?: Map<string, PiToolTranslationState>;
+}
+
+interface PiToolTranslationState {
+  tool: string;
+  args: Record<string, unknown>;
+  output: string;
+  isSubtask?: boolean;
+  taskCallId?: string;
 }
 
 export function translatePiEvents(
@@ -12,8 +22,57 @@ export function translatePiEvents(
 ): SandboxIngressEvent[] {
   const translated: SandboxIngressEvent[] = [];
   let textChanged = false;
+  const tools = (state.tools ??= new Map());
   for (const event of events) {
     switch (event.type) {
+      case "snapshot": {
+        const partial = event.generation?.message;
+        const recoveredText = partial ? assistantText(partial) : state.text;
+        if (partial && recoveredText !== state.text) {
+          state.text = recoveredText;
+          translated.push(tokenEvent(state.text, envelope));
+        }
+        const calls = toolCalls(partial ?? latestAssistant(event));
+        for (const slot of event.tools) {
+          const current = {
+            tool: slot.name,
+            args: calls.get(slot.callId) ?? {},
+            output: slot.output ?? "",
+          };
+          tools.set(slot.callId, current);
+          translated.push(
+            toolEvent(
+              current,
+              slot.callId,
+              slot.status === "done" ? snapshotToolStatus(event, slot.entry) : slot.status,
+              envelope
+            )
+          );
+        }
+        for (const slot of event.nestedTools) {
+          const current = {
+            tool: slot.name,
+            args: slot.arguments,
+            output: slot.output ?? "",
+            isSubtask: true,
+            taskCallId: slot.parentCallId,
+          };
+          tools.set(slot.callId, current);
+          translated.push(
+            toolEvent(
+              current,
+              slot.callId,
+              slot.status === "done"
+                ? slot.summary?.isError
+                  ? "failed"
+                  : "completed"
+                : slot.status,
+              envelope
+            )
+          );
+        }
+        break;
+      }
       case "turn_start":
         translated.push({
           type: "step_start",
@@ -25,11 +84,106 @@ export function translatePiEvents(
         break;
       case "message_update":
         for (const change of event.changes) {
-          if (change.type !== "text_delta") continue;
-          state.text += change.delta;
-          textChanged = true;
+          if (change.type === "text_delta") {
+            state.text += change.delta;
+            textChanged = true;
+          } else if (change.type === "message") {
+            const text = assistantText(change.message);
+            if (text !== state.text) {
+              state.text = text;
+              textChanged = true;
+            }
+          }
         }
         break;
+      case "message_end": {
+        const message = event.entry.model?.[0];
+        if (message?.role !== "assistant") break;
+        translated.push({
+          type: "step_finish",
+          sandboxId: `pi:${envelope.sessionId}`,
+          timestamp: envelope.timestamp,
+          messageId: envelope.operationId,
+          stepId: envelope.operationId,
+          tokens: {
+            input: message.usage.input,
+            output: message.usage.output,
+            ...(message.usage.reasoning === undefined
+              ? {}
+              : { reasoning: message.usage.reasoning }),
+            cache: {
+              read: message.usage.cacheRead,
+              write: message.usage.cacheWrite,
+            },
+            total: message.usage.totalTokens,
+          },
+          reason: message.stopReason,
+        });
+        break;
+      }
+      case "tool_execution_start": {
+        const current = {
+          tool: event.toolName,
+          args: event.args,
+          output: "",
+          ...(event.parentToolCallId
+            ? { isSubtask: true, taskCallId: event.parentToolCallId }
+            : {}),
+        };
+        tools.set(event.toolCallId, current);
+        translated.push(toolEvent(current, event.toolCallId, "running", envelope));
+        break;
+      }
+      case "tool_execution_update": {
+        const current = tools.get(event.toolCallId) ?? {
+          tool: event.toolName,
+          args: {},
+          output: "",
+          ...(event.parentToolCallId
+            ? { isSubtask: true, taskCallId: event.parentToolCallId }
+            : {}),
+        };
+        if (event.output) {
+          if ("set" in event.output) current.output = event.output.set;
+          else {
+            if (event.output.trimStart)
+              current.output = current.output.slice(event.output.trimStart);
+            if (event.output.append) current.output += event.output.append;
+          }
+        }
+        tools.set(event.toolCallId, current);
+        translated.push(toolEvent(current, event.toolCallId, "running", envelope));
+        break;
+      }
+      case "tool_execution_end": {
+        const current = tools.get(event.toolCallId) ?? {
+          tool: event.toolName,
+          args: {},
+          output: "",
+          ...(event.parentToolCallId
+            ? { isSubtask: true, taskCallId: event.parentToolCallId }
+            : {}),
+        };
+        const result = event.entry?.model?.[0];
+        if (result?.role === "toolResult") {
+          current.output = result.content
+            .flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join("");
+        }
+        translated.push(
+          toolEvent(
+            current,
+            event.toolCallId,
+            event.result?.isError === true ||
+              (result?.role === "toolResult" ? result.isError : event.result === undefined)
+              ? "failed"
+              : "completed",
+            envelope
+          )
+        );
+        tools.delete(event.toolCallId);
+        break;
+      }
       case "compaction_end":
         if (!event.error) {
           translated.push({
@@ -43,14 +197,70 @@ export function translatePiEvents(
     }
   }
   if (textChanged) {
-    translated.push({
-      type: "token",
-      sandboxId: `pi:${envelope.sessionId}`,
-      timestamp: envelope.timestamp,
-      messageId: envelope.operationId,
-      content: state.text,
-      partId: envelope.operationId,
-    });
+    translated.push(tokenEvent(state.text, envelope));
   }
   return translated;
+}
+
+function snapshotToolStatus(snapshot: SnapshotEvent, entryId: unknown): "completed" | "failed" {
+  if (entryId === undefined) return "failed";
+  const entry = snapshot.entries.find((candidate) => candidate.id === entryId);
+  const result = entry?.model?.[0];
+  return result?.role === "toolResult" && !result.isError ? "completed" : "failed";
+}
+
+function tokenEvent(
+  content: string,
+  envelope: { sessionId: string; operationId: string; timestamp: number }
+): Extract<SandboxIngressEvent, { type: "token" }> {
+  return {
+    type: "token",
+    sandboxId: `pi:${envelope.sessionId}`,
+    timestamp: envelope.timestamp,
+    messageId: envelope.operationId,
+    content,
+    partId: envelope.operationId,
+  };
+}
+
+function assistantText(message: AssistantMessage): string {
+  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+}
+
+function latestAssistant(snapshot: SnapshotEvent): AssistantMessage | undefined {
+  for (let index = snapshot.entries.length - 1; index >= 0; index--) {
+    const message = snapshot.entries[index]?.model?.[0];
+    if (message?.role === "assistant") return message;
+  }
+  return undefined;
+}
+
+function toolCalls(message: AssistantMessage | undefined): Map<string, Record<string, unknown>> {
+  const calls = new Map<string, Record<string, unknown>>();
+  if (!message) return calls;
+  for (const part of message.content) {
+    if (part.type === "toolCall") calls.set(part.id, part.arguments);
+  }
+  return calls;
+}
+
+function toolEvent(
+  state: PiToolTranslationState,
+  callId: string,
+  status: string,
+  envelope: { sessionId: string; operationId: string; timestamp: number }
+): Extract<SandboxIngressEvent, { type: "tool_call" }> {
+  return {
+    type: "tool_call",
+    sandboxId: `pi:${envelope.sessionId}`,
+    timestamp: envelope.timestamp,
+    messageId: envelope.operationId,
+    tool: state.tool,
+    args: state.args,
+    callId,
+    status,
+    ...(state.output ? { output: state.output } : {}),
+    ...(state.isSubtask ? { isSubtask: true } : {}),
+    ...(state.taskCallId ? { taskCallId: state.taskCallId } : {}),
+  };
 }

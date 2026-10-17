@@ -85,8 +85,9 @@ describe("Pi Durable initialization", () => {
     expect(piRuntime.status).not.toHaveBeenCalled();
   });
 
-  it("rejects repository-backed Pi sessions before persistence", async () => {
-    const { handler, repository, sandboxRepository, piRuntime } = createHandler();
+  it("initializes repository-backed Pi sessions without creating a sandbox", async () => {
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox, piRuntime } =
+      createHandler();
     const response = await handler.init(
       new Request("http://internal/internal/init", {
         method: "POST",
@@ -102,9 +103,12 @@ describe("Pi Durable initialization", () => {
       })
     );
 
-    expect(response.status).toBe(400);
-    expect(repository.transaction).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: "pi", repoOwner: "acme", repoName: "app" })
+    );
     expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
     expect(piRuntime.status).not.toHaveBeenCalled();
   });
 });

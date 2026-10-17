@@ -1486,6 +1486,9 @@ account's refresh token in the Pi Durable Object. For an existing deployment:
    `NEXT_PUBLIC_PI_DURABLE_ENABLED` value is included in the active bundle.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
+The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
+sessions can still continue, stop, and delete while new admission and selectors are disabled. Direct
+Terraform operators must likewise keep `pi_durable_binding_enabled=true` after the class migration.
 When the web app runs on Vercel, dispatch **Deploy Web** again so the disabled build-time flag
 reaches the active bundle. Do not delete the class or its storage as part of a normal rollback.
 

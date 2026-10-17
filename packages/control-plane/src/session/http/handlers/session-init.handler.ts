@@ -140,12 +140,6 @@ export class SessionInitHandler {
     if (harness === "pi" && !piRuntimeForSession) {
       return Response.json({ error: "Pi Durable is not available" }, { status: 503 });
     }
-    if (harness === "pi" && hasRepoOwner) {
-      return Response.json(
-        { error: "Pi Durable currently supports no-repository sessions only" },
-        { status: 400 }
-      );
-    }
     let selection;
     try {
       selection = resolveHarnessInitialization(harness, body);

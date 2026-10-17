@@ -190,20 +190,25 @@ describe("automation create route", () => {
       }
     });
 
-    it("rejects repository-targeted Pi automations before persistence", async () => {
+    it("persists repository-targeted Pi automations", async () => {
       const response = await callRoute("POST", "/automations", {
         body: {
           ...validBody,
           harness: "pi",
           model: "openai/gpt-5.6-sol",
+          providerSelections: {
+            openai: {
+              mode: "provider_account",
+              accountId: "0123456789abcdef0123456789abcdef",
+            },
+          },
         },
       });
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({
-        error: "Pi Durable automations must use the No repository target",
-      });
-      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: "pi", model: "openai/gpt-5.6-sol" })
+      );
     });
 
     it("denies repository targets before SCM lookup or persistence", async () => {

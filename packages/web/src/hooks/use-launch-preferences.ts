@@ -16,12 +16,14 @@ import {
 } from "@open-inspect/shared/models";
 import type {
   ModelProviderAccount,
+  ModelProviderAccountDefault,
   ModelProviderSelections,
   ProviderAuthSelection,
   SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import type { ModelPreference } from "@/lib/model-selection";
 import {
+  hasUsableHarnessProviderAuth,
   parseStoredProviderSelections,
   reconcileProviderSelections,
   setProviderSelection,
@@ -70,6 +72,7 @@ export interface LaunchPreferencesInput {
   };
   providerAccounts: {
     accounts: ModelProviderAccount[];
+    defaults?: ModelProviderAccountDefault[];
     loading: boolean;
   };
 }
@@ -190,7 +193,16 @@ export function useLaunchPreferences(
   );
   const { model: selectedModel, reasoningEffort } = modelSelection;
   const harnessHasModels = modelSelection.availability.status !== "unavailable";
-  const providerReady = providerSelectionsHydrated && !providerAccounts.loading;
+  const providerReady =
+    providerSelectionsHydrated &&
+    !providerAccounts.loading &&
+    hasUsableHarnessProviderAuth({
+      harness,
+      selections: availableProviderSelections,
+      defaults: providerAccounts.defaults ?? [],
+      accounts: providerAccounts.accounts,
+      unattended: false,
+    });
 
   function saveModelPreferenceDraft(preference: ModelPreference) {
     setModelPreferenceDraft(preference);

@@ -67,7 +67,7 @@ export function harnessMemoryToolName(harness: HarnessId, tool: MemoryToolName):
       // Codex receives the same tools in the `oi` dynamic-tool namespace.
       return tool;
     case "pi":
-      // Pi's foundation runtime has no tool registry integration yet.
+      // Pi reserves the canonical names; its authorized memory extension remains future work.
       return tool;
     default: {
       const exhaustive: never = harness;

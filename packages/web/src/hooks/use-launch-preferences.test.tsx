@@ -291,6 +291,31 @@ describe("useLaunchPreferences", () => {
     expect(storage.getItem(PROVIDER_KEY)).toBe(JSON.stringify({ xai: { mode: "api_key" } }));
   });
 
+  it("blocks Pi until an active connected OpenAI account resolves", () => {
+    const storage = memoryStorage();
+    const { result } = renderHook(() =>
+      useLaunchPreferences(
+        {
+          ...input,
+          providerAccounts: { accounts: [account], defaults: [], loading: false },
+        },
+        storage
+      )
+    );
+
+    act(() => result.current.handleHarnessChange("pi"));
+    act(() => result.current.handleModelChange(OPENAI_MODEL));
+    expect(result.current.providerReady).toBe(false);
+
+    act(() =>
+      result.current.handleProviderSelectionChange("openai", {
+        mode: "provider_account",
+        accountId: account.id,
+      })
+    );
+    expect(result.current.providerReady).toBe(true);
+  });
+
   it("separates provider readiness from model loading and unavailable models", () => {
     const storage = memoryStorage({ [HARNESS_KEY]: "claude", [MODEL_KEY]: OPENAI_MODEL });
     const { result, rerender } = renderHook(

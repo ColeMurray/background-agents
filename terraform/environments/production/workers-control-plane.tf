@@ -226,7 +226,7 @@ module "control_plane_worker" {
 
   durable_objects = merge(
     { SESSION = { class_name = "SessionDO" } },
-    var.pi_durable_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {}
+    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {}
   )
 
   enable_durable_object_bindings = var.enable_durable_object_bindings

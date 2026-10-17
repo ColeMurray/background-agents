@@ -2,11 +2,12 @@
 
 ## Summary
 
-Add Pi Durable as an additive Open-Inspect harness for instant, durable sessions that run in a
+Add Pi Durable as an additive Open-Inspect harness for instant, durable agent sessions that run in a
 Cloudflare Durable Object without provisioning a sandbox. Existing OpenCode, Claude Agent, Codex,
-and sandbox-backed sessions remain unchanged. Pi initially supports OpenAI Codex subscription
-accounts brokered by the Open-Inspect control plane; the optional `pi-claude-code` plugin is out of
-scope.
+and sandbox-backed sessions remain unchanged. Pi uses its native durable agent loop, inbox,
+compaction, extensions, tools, sub-conversations, and recovery model rather than acting as a thin
+text-generation adapter. OpenAI Codex subscription accounts are brokered by the Open-Inspect control
+plane; the optional `pi-claude-code` plugin remains out of scope.
 
 The product exposes Pi as a harness and records its execution backend as durable. A Pi session uses
 a dedicated `PiSessionDO` namespace. It must not share SQLite storage or alarm ownership with the
@@ -22,7 +23,7 @@ Web / Slack / Automations
            |
            +-- Pi Durable ----------------> PiSessionDO
                                                 |
-                                                +-- remote tools / MCP / web
+                                                 +-- authorized remote tools
                                                 +-- durable inbox and tasks
                                                 +-- Codex subscription broker
 ```
@@ -30,8 +31,9 @@ Web / Slack / Automations
 ## Goals
 
 - Provision Pi sessions without creating a sandbox row or warming E2B.
-- Preserve Open-Inspect's existing session, team, visibility, participant, message, budget,
-  callback, and audit contracts.
+- Preserve Open-Inspect's existing session, team, visibility, participant, message, callback, and
+  audit contracts, plus token usage accounting. Codex subscription requests have no provider dollar
+  charge, so dollar budgets remain explicitly unavailable as they are for the native Codex harness.
 - Stream Pi activity through the existing normalized sandbox-event contract so current web and bot
   clients continue to work.
 - Keep D1 as the authority for provider accounts. No refresh token, GitHub App private key, or
@@ -39,6 +41,9 @@ Web / Slack / Automations
 - Support OpenAI Codex subscription accounts only in the first release.
 - Recover admitted prompts after Durable Object eviction without duplicate model calls or side
   effects.
+- Install Open-Inspect capabilities as Pi extensions before `Harness.open()`: stable prompt
+  sections, managed skills, read-only repository tools, and Pi-native subagents.
+- Preserve Pi's automatic compaction and per-conversation agent state.
 - Keep the feature disabled unless the deployment has the Pi Durable binding and explicitly enables
   the harness.
 
@@ -47,10 +52,10 @@ Web / Slack / Automations
 - Replacing existing sandbox harnesses.
 - Running local shell, native binaries, code-server, VNC, or repository builds in Pi.
 - Adding the optional `pi-claude-code` plugin.
-- Adding Cloudflare Computer, Browser Run, container escalation, multi-conversation Slack channels,
-  or self-modifying applications in the first implementation.
+- Adding Cloudflare Computer, Browser Run, or self-modifying applications in the first
+  implementation.
 - Moving existing sessions between harnesses.
-- Admitting repository-backed Pi sessions before remote repository tools are available.
+- Mutating repository files without an explicitly linked sandbox child.
 - Persisting provider refresh tokens inside the Durable Object.
 
 ## Dependencies and maturity
@@ -235,20 +240,41 @@ built-in `openai-codex` provider handles request shape, model filtering, reasoni
 
 ## Tools
 
-The foundation PR exposes no tools: an empty registry is safer than accidentally granting sandbox or
-deployment capabilities before replay contracts exist. The tools/product-surface phase adds only
-control-plane-backed, replay-classified tools:
+The registry is assembled before `Harness.open()` as Pi Durable requires. The initial application
+registry contains:
 
-- memory read/search/write
-- child-session spawn/status/prompt/cancel
-- Slack notify
-- remote MCP/API tools explicitly marked Pi-compatible
+- `open-inspect`: a stable system-prompt section and replay-safe repository list/read tools backed
+  by the owning `SessionDO`'s fresh repository credential scope;
+- `open-inspect.subagent`: a replay-safe foreground subagent that owns a Pi child conversation,
+  derives its request id from the tool task id, and removes only recursive delegation from the
+  child;
+- `open-inspect.skills`: activation and resource-reading tools generated from the session's
+  immutable managed-skill snapshot.
 
-Each tool declares replay behavior. Reads may be replay-safe. Mutations are replay-unsafe unless
-their control-plane endpoint accepts a stable idempotency key derived from Pi's task id.
+MCP remains blocked in this PR. A direct client in `PiSessionDO` would bypass SessionDO
+authorization and audit, expose the control-plane Worker to configured-server SSRF, make durable
+tool names depend on mutable discovery order, and still would not implement executor-scoped OAuth.
+Local-process MCP also requires a sandbox. The follow-up must use the separately encrypted
+connection broker described under Future work; no static header, OAuth token, or Executor credential
+enters Pi SQLite.
 
-Filesystem, shell, Git, pull-request creation from local changes, and sandbox-only MCP servers are
-not offered to Pi conversations.
+Each tool declares replay behavior. Reads are replay-safe. Mutations remain replay-unsafe unless
+their control-plane endpoint accepts a stable idempotency key derived from Pi's task id. Local
+filesystem, shell, Git mutation, and pull-request creation from local changes are not offered to Pi
+conversations; those require explicit sandbox-child escalation.
+
+## Pi application model
+
+The implementation follows the Pi Durable Technical Manual's three-way split:
+
+- **Registry:** process-local extension code, installed in stable order before opening Pi.
+- **Settings:** host policy, including Pi's enabled-by-default compaction and retry policies.
+- **`pi.agent`:** per-conversation model, thinking level, extension/tool selection, instructions,
+  and future working-directory choices.
+
+Pi owns submissions, steering/follow-up ordering, generation, tools, compaction, task checkpoints,
+usage, and child-conversation ownership. Open-Inspect does not duplicate those mechanisms. It adds
+the outer authorization, credential, event-projection, callback, budget, and product contracts.
 
 ## Security
 
@@ -264,8 +290,11 @@ not offered to Pi conversations.
 
 ## Product integration
 
-- Add Pi Durable to web, Slack, Linear, repository defaults, and automation harness selectors only
-  when the deployment advertises Pi availability.
+- Add Pi Durable to web, Slack, and automation harness selectors only when the deployment advertises
+  Pi availability. Repository-backed sessions use the remote read-only repository extension and
+  still create no sandbox. GitHub review/comment and Linear issue integrations remain rejected:
+  their current prompts require local diff, mutation, and publication tools that Pi does not yet
+  expose.
 - Sidebar/session detail uses the Pi harness badge and an `Instant` runtime indicator.
 - Pi sessions have no code-server, VNC, sandbox dashboard, repository diff, or local terminal UI.
 - Slack and automation continuations reuse the same Open-Inspect session and Pi root conversation.
@@ -327,7 +356,7 @@ Add structured fields:
 - recovery count and wake reason
 - tool replay classification
 - provider broker latency/version
-- token and cost usage
+- token usage (Codex subscription requests do not expose dollar cost)
 - sandbox avoidance count
 - sandbox child escalation count
 
@@ -344,8 +373,8 @@ Never log prompt contents or credentials.
 7. Measure latency, recovery, cost and broker failures.
 8. Expand only after a soak period; keep a deployment-wide kill switch.
 
-Rollback disables new Pi admission. Existing Pi sessions may finish or be interrupted and restarted
-as sandbox child sessions. Removing the Durable Object class or deleting its storage is a separate,
+Rollback disables new Pi admission while retaining the `PI_SESSION` binding so existing sessions can
+continue, stop, and delete. Removing the Durable Object class or deleting its storage is a separate,
 deliberate migration and is never part of rollback.
 
 ## Phased pull requests
@@ -354,7 +383,9 @@ deliberate migration and is never part of rollback.
 2. **Pi runtime foundation** — dependencies, PiSessionDO, runtime port, fake provider and DO tests.
 3. **Prompt/event bridge** — queue dispatch, translation, recovery and abort.
 4. **Codex brokerage** — ephemeral credential store and provider-account tests.
-5. **Tools and product surfaces** — controlled tools, web, Slack and automations.
+5. **Extensions and product surfaces** — managed skills, remote repository tools, Pi-native
+   subagents, web, Slack, and automations. MCP, GitHub, and Linear follow after their authorization
+   and tool contracts exist.
 6. **Terraform and canary controls** — additive binding/migration, metrics and runbook.
 
 ## Acceptance gates
@@ -367,14 +398,25 @@ deliberate migration and is never part of rollback.
 - A broker denial never falls back to an API key.
 - Slack and automation completion use existing callback/publication gates.
 - No sandbox is created for a Pi session.
+- Repository reads use a fresh session credential scope and never expose SCM credentials to Pi.
+- Managed skills come from the pinned session manifest, not the mutable catalog.
 - Terraform changes are additive and reviewed separately before any production enablement.
 
 ## Future work
 
 - Cloudflare Computer durable VFS and JavaScript execution.
 - Browser Run and reusable browser sessions.
-- Remote MCP and Pi Code Mode catalogs.
+- Remote MCP, including static-header and interactive OAuth servers, through an encrypted shared
+  `McpConnectionDO` broker with stable tool identities, SSRF controls, executor-aware authorization,
+  and mutation audit/approval policy.
+- Session memory read/search/write extensions using the existing SessionDO authorization and
+  proposal/approval policies.
+- Pi durable Code Mode using a separately deployed `CodemodeSandboxDurableObject`; do not run
+  QuickJS inline in `PiSessionDO` or bundle the WASM through the control-plane's single-module
+  Terraform uploader.
 - Durable schedules, multiple conversations, forks and search subagents.
 - Edge-first analysis with explicit linked sandbox escalation.
+- Image attachments after the Open-Inspect attachment store can provide bounded Pi image inputs.
+- GitHub and Linear integrations after remote diff, mutation, and publication tools exist.
 - Optional Claude subscription support through `pi-claude-code` only after a separate security and
   provider-terms review.

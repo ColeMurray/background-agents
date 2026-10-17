@@ -14,7 +14,7 @@ export class PiCredentialService {
     private readonly encryptionKey: string
   ) {}
 
-  async getOpenAIAccess(sessionId: string) {
+  async getOpenAIAccess(sessionId: string, rejectedCredentialVersion?: number) {
     const binding = await new SessionIndexStore(this.db).getProviderAuthForProvider(
       sessionId,
       "openai"
@@ -31,6 +31,6 @@ export class PiCredentialService {
       modelProviderAccountAdapterRegistry,
       { now: Date.now, createOwner: () => generateId() }
     );
-    return broker.getAccess(binding.providerAccountId, "openai");
+    return broker.getAccess(binding.providerAccountId, "openai", { rejectedCredentialVersion });
   }
 }

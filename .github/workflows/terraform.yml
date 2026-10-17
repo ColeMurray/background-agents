@@ -193,6 +193,9 @@ jobs:
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
+          if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ]; then
+            printf '%s\n' '{"pi_durable_binding_enabled":true}' > pi-binding.auto.tfvars.json
+          fi
           if [ "$pi_enabled" = "true" ]; then
             if [ "$bindings_enabled" = "false" ]; then
               case "$current_tag" in
@@ -517,6 +520,9 @@ jobs:
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
+          if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ]; then
+            printf '%s\n' '{"pi_durable_binding_enabled":true}' > pi-binding.auto.tfvars.json
+          fi
           if [ "$pi_enabled" = "true" ]; then
             if [ "$bindings_enabled" = "false" ]; then
               case "$current_tag" in

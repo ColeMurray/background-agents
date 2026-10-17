@@ -14,6 +14,8 @@ export interface PiRuntimePrompt {
 export interface PiRuntimeReceipt {
   operationId: string;
   accepted: boolean;
+  /** Definite failure before Pi admitted the operation; safe for SessionDO to settle immediately. */
+  rejected?: string;
 }
 
 export interface PiRuntimeUsage {

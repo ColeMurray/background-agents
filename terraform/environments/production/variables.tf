@@ -759,6 +759,12 @@ variable "pi_durable_enabled" {
   default     = false
 }
 
+variable "pi_durable_binding_enabled" {
+  description = "Keep the migrated PiSessionDO binding available for existing sessions independently of new-session admission"
+  type        = bool
+  default     = false
+}
+
 variable "sandbox_boot_timeout_ms" {
   description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
   type        = number

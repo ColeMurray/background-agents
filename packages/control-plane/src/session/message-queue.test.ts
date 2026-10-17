@@ -259,7 +259,11 @@ function buildQueue(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
   const piRuntime = {
-    submit: vi.fn(async () => ({ operationId: "msg-1", accepted: true })),
+    submit: vi.fn(async () => ({
+      operationId: "msg-1",
+      accepted: true,
+      rejected: undefined as string | undefined,
+    })),
     abort: vi.fn(async () => true),
     status: vi.fn(async () => ({ busy: false, pending: 0 })),
     destroy: vi.fn(async () => {}),
@@ -391,6 +395,37 @@ describe("SessionMessageQueue", () => {
       "prompt.dispatch",
       expect.objectContaining({ outcome: "ambiguous", message_id: "msg-1" })
     );
+  });
+
+  it("settles a definite Pi pre-admission rejection immediately", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    const message = createMessage();
+    h.repository.getNextPendingMessage.mockReturnValueOnce(message).mockReturnValueOnce(null);
+    h.piRuntime.submit.mockResolvedValue({
+      operationId: message.id,
+      accepted: false,
+      rejected: "Repository access is unavailable",
+    });
+    h.repository.recordMessageCompletion.mockReturnValue({
+      messageId: message.id,
+      messageCreatedAt: message.created_at,
+      messageStartedAt: 1,
+      completedAt: 2,
+      status: "failed",
+    });
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: "Repository access is unavailable" }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 
   it("rejects Pi attachments before claiming uploaded files", async () => {

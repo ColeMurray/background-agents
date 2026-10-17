@@ -1,7 +1,13 @@
+import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
-import { createRegistry, Harness, type AgentEventStream } from "@earendil-works/pi-durable";
+import {
+  createRegistry,
+  Harness,
+  type AgentEvent,
+  type AgentEventStream,
+} from "@earendil-works/pi-durable";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
@@ -19,24 +25,53 @@ import {
   type PiRuntimeUsage,
 } from "../pi/runtime-contract";
 import type { WorkerBindings } from "./platform";
+import { piSessionContextSchema, type PiSessionContext } from "../pi/session-context-contract";
+import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-inspect-extension";
+import { skillSourceFromInstallation } from "../pi/skill-source";
+import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
+import { z } from "zod";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION">;
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
+const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
+const EVENT_DELIVERY_ATTEMPTS = 3;
+const EVENT_DELIVERY_RETRY_MS = 100;
+const repositoryPinsSchema = z.array(
+  z.object({
+    repoOwner: z.string().min(1),
+    repoName: z.string().min(1),
+    position: z.number().int().nonnegative(),
+    commitSha: z.string().min(1),
+  })
+);
 
 /** OpenCode-free, sandbox-free Pi runtime for one Open-Inspect session. */
 export class PiSessionDO extends DurableObject<PiWorkerBindings> {
-  private readonly credentials = new CodexBrokerCredentialStore((signal) =>
-    this.fetchCodexCredential(signal)
+  private readonly credentials = new CodexBrokerCredentialStore((version, signal) =>
+    this.fetchCodexCredential(version, signal)
   );
   private readonly models = createModels({ credentials: this.credentials });
   private readonly registry = createRegistry();
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   readonly harness = new PiHarness({
-    harness: ({ storage, context }) => {
+    harness: async ({ storage, context }) => {
+      const sessionContext = await this.fetchSessionContext();
+      this.registry.install(
+        createOpenInspectExtension({
+          repositories: sessionContext.repositories,
+          invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
+        })
+      );
+      this.registry.install(createSubagentExtension());
+      if (sessionContext.skills && sessionContext.skills.skills.length > 0) {
+        this.registry.install(
+          await createManagedSkillsExtension([skillSourceFromInstallation(sessionContext.skills)])
+        );
+      }
       this.models.setProvider(openaiCodexProvider());
       return Harness.open(
         storage,
@@ -65,17 +100,40 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.projector);
 
+  async onStart(): Promise<void> {
+    if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) return;
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) return;
+    const pending = await this.harness.pending({ session: ROOT_SESSION });
+    await Promise.all(
+      pending.map((operation) =>
+        this.startEventRelay(sessionId, operation.operationId, {
+          recoverSnapshot: operation.status === "running",
+        })
+      )
+    );
+  }
+
   async submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt> {
-    await this.ensureSession(input.sessionId);
-    await this.configure(input);
-    await this.ensureSession(input.sessionId);
-    await this.startEventRelay(input.sessionId, input.messageId);
-    await this.projector.schedule({
-      sessionId: input.sessionId,
-      operationId: input.messageId,
-      usageBaseline: await this.usageTotals(),
-    });
-    await this.ensureSession(input.sessionId);
+    try {
+      await this.ensureSession(input.sessionId);
+      await this.configure(input);
+      await this.ensureSession(input.sessionId);
+      await this.startEventRelay(input.sessionId, input.messageId);
+      await this.projector.schedule({
+        sessionId: input.sessionId,
+        operationId: input.messageId,
+        usageBaseline: await this.usageTotals(),
+      });
+      await this.ensureSession(input.sessionId);
+    } catch {
+      await this.stopEventRelay(input.messageId).catch(() => {});
+      return {
+        operationId: input.messageId,
+        accepted: false,
+        rejected: "Pi Durable initialization failed",
+      };
+    }
     const receipt = await this.harness.submit(input.content, {
       session: ROOT_SESSION,
       operationId: input.messageId,
@@ -116,16 +174,24 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   async destroy(sessionId: string): Promise<void> {
     if ((await this.ctx.storage.get<string>(DELETION_STATE_KEY)) === "destroyed") return;
     await this.ctx.blockConcurrencyWhile(async () => {
-      if ((await this.ctx.storage.get<string>(DELETION_STATE_KEY)) === "destroyed") return;
+      const deletionState = await this.ctx.storage.get<string>(DELETION_STATE_KEY);
+      if (deletionState === "destroyed") return;
       const stored = await this.ctx.storage.get<string>(SESSION_ID_KEY);
       if (stored !== undefined && stored !== sessionId) {
         throw new Error("Pi Durable Object session identity mismatch");
       }
-      await this.ctx.storage.put(DELETION_STATE_KEY, "destroying");
+      if (stored === undefined) await this.ctx.storage.put(SESSION_ID_KEY, sessionId);
       await Promise.all(
         [...this.eventStreams.keys()].map((operationId) => this.stopEventRelay(operationId))
       );
-      await this.harness.abort({ session: ROOT_SESSION });
+      if (deletionState !== "destroying") {
+        // A cold abort opens Pi and may load its SessionDO-owned context. Mark
+        // deletion only after that open succeeds; retries after this point skip
+        // reopening and continue the idempotent teardown.
+        await this.harness.abort({ session: ROOT_SESSION });
+        await this.ctx.storage.put(DELETION_STATE_KEY, "destroying");
+      }
+      await this.lifecycle.disableAlarms();
       await this.harness.dispose();
       this.credentials.clear();
       await this.ctx.storage.deleteAll();
@@ -181,7 +247,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (stored !== sessionId) throw new Error("Pi Durable Object session identity mismatch");
   }
 
-  private async fetchCodexCredential(signal?: AbortSignal) {
+  private async fetchCodexCredential(rejectedCredentialVersion?: number, signal?: AbortSignal) {
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) {
       throw new Error("Pi Durable session was deleted");
     }
@@ -193,7 +259,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const response = await stub.fetch(
       new Request(`http://session${SessionInternalPaths.piCredential}`, {
         method: "POST",
-        headers: { "X-Pi-Operation-ID": operation.operationId },
+        headers: {
+          "X-Pi-Operation-ID": operation.operationId,
+          ...(rejectedCredentialVersion === undefined
+            ? {}
+            : { "X-Pi-Rejected-Credential-Version": String(rejectedCredentialVersion) }),
+        },
         signal,
       })
     );
@@ -207,18 +278,104 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       !("access_token" in body) ||
       typeof body.access_token !== "string" ||
       !("expires_in" in body) ||
-      typeof body.expires_in !== "number"
+      typeof body.expires_in !== "number" ||
+      !("credential_version" in body) ||
+      typeof body.credential_version !== "number"
     ) {
       throw new Error("Invalid OpenAI credential broker response");
     }
-    return { accessToken: body.access_token, expiresIn: body.expires_in };
+    return {
+      accessToken: body.access_token,
+      expiresIn: body.expires_in,
+      credentialVersion: body.credential_version,
+    };
   }
 
-  private async startEventRelay(sessionId: string, operationId: string): Promise<void> {
+  private async fetchSessionContext(): Promise<PiSessionContext> {
+    if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) {
+      throw new Error("Pi Durable session was deleted");
+    }
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piContext}`)
+    );
+    if (!response.ok) throw new Error(`Pi session context unavailable (${response.status})`);
+    const sessionContext = piSessionContextSchema.parse(await response.json());
+    const storedPins = await this.ctx.storage.get<unknown>(REPOSITORY_PINS_KEY);
+    if (storedPins === undefined) {
+      await this.ctx.storage.put(
+        REPOSITORY_PINS_KEY,
+        sessionContext.repositories.map(({ repoOwner, repoName, position, commitSha }) => ({
+          repoOwner,
+          repoName,
+          position,
+          commitSha,
+        }))
+      );
+      return sessionContext;
+    }
+    const pins = repositoryPinsSchema.parse(storedPins);
+    const byPosition = new Map(pins.map((pin) => [pin.position, pin]));
+    return {
+      ...sessionContext,
+      repositories: sessionContext.repositories.map((repository) => {
+        const pin = byPosition.get(repository.position);
+        if (
+          !pin ||
+          pin.repoOwner !== repository.repoOwner ||
+          pin.repoName !== repository.repoName
+        ) {
+          throw new Error("Pi repository pin does not match the session repository set");
+        }
+        return { ...repository, commitSha: pin.commitSha };
+      }),
+    };
+  }
+
+  private async invokeRepositoryTool(
+    tool: "repository_list" | "repository_read",
+    args: Record<string, JsonValue | undefined>,
+    signal?: AbortSignal
+  ) {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
+    if (!operation) throw new Error("Pi Durable has no active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piRepositoryTool}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operation.operationId,
+        },
+        body: JSON.stringify({ tool, arguments: args }),
+        signal,
+      })
+    );
+    const body: unknown = await response.json();
+    if (!response.ok) {
+      const message =
+        typeof body === "object" &&
+        body !== null &&
+        "error" in body &&
+        typeof body.error === "string"
+          ? body.error
+          : `Repository tool failed (${response.status})`;
+      throw new Error(message);
+    }
+    return z.json().parse(body);
+  }
+
+  private async startEventRelay(
+    sessionId: string,
+    operationId: string,
+    options: { recoverSnapshot?: boolean } = {}
+  ): Promise<void> {
     if (this.eventStreams.has(operationId)) return;
     const stream = await this.harness.session(ROOT_SESSION).events(BACKGROUND_CONTEXT);
-    const state = { text: "" };
-    stream.start(async (events) => {
+    const state = { text: "", tools: new Map() };
+    const queue = (events: readonly AgentEvent[]) => {
       const previous = (this.eventRelayWork.get(operationId) ?? Promise.resolve()).catch(() => {});
       const work = previous.then(async () => {
         const translated = translatePiEvents(events, state, {
@@ -229,9 +386,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         for (const event of translated) await this.deliverEvent(sessionId, operationId, event);
       });
       this.eventRelayWork.set(operationId, work);
-      await work;
-    });
+      return work;
+    };
     this.eventStreams.set(operationId, stream);
+    if (options.recoverSnapshot) void queue([stream.snapshot]).catch(() => {});
+    stream.start((events) => queue(events).catch(() => {}));
     void stream.closed.then(() => this.eventStreams.delete(operationId));
   }
 
@@ -255,17 +414,30 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     operationId: string,
     event: ReturnType<typeof translatePiEvents>[number]
   ): Promise<void> {
-    const response = await this.env.SESSION.getByName(sessionId).fetch(
-      new Request(`http://session${SessionInternalPaths.piEvent}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Pi-Operation-ID": operationId,
-        },
-        body: JSON.stringify(event),
-      })
-    );
-    if (!response.ok) throw new Error(`Pi event delivery rejected (${response.status})`);
+    let failure: unknown;
+    for (let attempt = 1; attempt <= EVENT_DELIVERY_ATTEMPTS; attempt++) {
+      try {
+        const response = await this.env.SESSION.getByName(sessionId).fetch(
+          new Request(`http://session${SessionInternalPaths.piEvent}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Pi-Operation-ID": operationId,
+            },
+            body: JSON.stringify(event),
+          })
+        );
+        if (response.ok) return;
+        failure = new Error(`Pi event delivery rejected (${response.status})`);
+        if (response.status < 500) break;
+      } catch (error) {
+        failure = error;
+      }
+      if (attempt < EVENT_DELIVERY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, EVENT_DELIVERY_RETRY_MS * attempt));
+      }
+    }
+    throw failure instanceof Error ? failure : new Error("Pi event delivery failed");
   }
 
   private async deliverResult(sessionId: string, result: PiRuntimeResult): Promise<void> {

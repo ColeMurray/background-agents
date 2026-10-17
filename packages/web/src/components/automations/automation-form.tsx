@@ -6,12 +6,15 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { useResourceTeams } from "@/hooks/use-resource-teams";
 import { ResourceTeamField } from "@/components/resource-team-field";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
-import { reconcileProviderSelectionsForHarness } from "@open-inspect/shared/harnesses";
+import {
+  getHarnessLabel,
+  reconcileProviderSelectionsForHarness,
+} from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
-import { setProviderSelection } from "@/lib/provider-selection";
+import { hasUsableHarnessProviderAuth, setProviderSelection } from "@/lib/provider-selection";
 import { FieldDescription } from "./automation-form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +123,13 @@ export function AutomationForm({
   const resolvedModel = modelSelection.model;
   const modelError =
     modelSelection.availability.status === "unavailable" ? modelSelection.availability.message : "";
+  const providerAuthValid = hasUsableHarnessProviderAuth({
+    harness: agent.harness,
+    selections: providerSelections,
+    defaults: providerAccounts.defaults,
+    accounts: providerAccounts.accounts,
+    unattended: true,
+  });
 
   // A harness switch drops pins the new harness cannot honour, so the form
   // never offers to save a configuration the server would refuse.
@@ -162,7 +172,14 @@ export function AutomationForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formEvaluation.valid || !scopeValid || !environmentsUsable || submitting) return;
+    if (
+      !formEvaluation.valid ||
+      !scopeValid ||
+      !environmentsUsable ||
+      !providerAuthValid ||
+      submitting
+    )
+      return;
     onSubmit({ ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) });
   };
 
@@ -226,6 +243,11 @@ export function AutomationForm({
           Unpinned providers use defaults when each run starts. Pins are retained when the
           configured model changes and apply only to future sessions.
         </FieldDescription>
+        {!providerAccounts.loading && !providerAuthValid && (
+          <p className="mb-3 text-xs text-destructive">
+            {getHarnessLabel(agent.harness)} requires an active connected provider account.
+          </p>
+        )}
         {SUBSCRIPTION_PROVIDER_IDS.map((provider) => (
           <ProviderAuthControls
             key={provider}
@@ -264,7 +286,13 @@ export function AutomationForm({
       <div className="flex justify-end gap-2">
         <Button
           type="submit"
-          disabled={submitting || !formEvaluation.valid || !scopeValid || !environmentsUsable}
+          disabled={
+            submitting ||
+            !formEvaluation.valid ||
+            !scopeValid ||
+            !environmentsUsable ||
+            !providerAuthValid
+          }
         >
           {submitting
             ? mode === "create"

@@ -92,7 +92,7 @@ describe("startSessionAndSendPrompt team boundaries", () => {
     vi.mocked(postMessage).mockResolvedValue({ ok: true, channel: "C123", ts: "111.333" });
   });
 
-  it("refuses repository-backed Pi sessions before control-plane creation", async () => {
+  it("starts repository-backed Pi sessions through the control plane", async () => {
     const piSettings: SlackLaunchSettings = {
       ...launchSettings,
       enabledModels: ["openai/gpt-5.6-sol"],
@@ -103,16 +103,15 @@ describe("startSessionAndSendPrompt team boundaries", () => {
       },
     };
 
-    expect(
-      await startSessionAndSendPrompt(makeEnv(), { ...options, launchSettings: piSettings })
-    ).toBeNull();
-    expect(createSession).not.toHaveBeenCalled();
-    expect(postMessage).toHaveBeenCalledWith(
-      "xoxb-test",
-      "C123",
-      expect.stringContaining("without a repository"),
-      { thread_ts: "111.222" }
+    const env = makeEnv();
+    await expect(
+      startSessionAndSendPrompt(env, { ...options, launchSettings: piSettings })
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ target: repositoryTarget, harness: "pi" })
     );
+    expect(deliverPrompt).toHaveBeenCalled();
   });
 
   it.each([

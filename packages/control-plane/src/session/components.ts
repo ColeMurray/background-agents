@@ -177,6 +177,9 @@ import { PiCredentialService } from "./pi-credential-service";
 import { PiResultHandler } from "./http/handlers/pi-result.handler";
 import { PiEventHandler } from "./http/handlers/pi-event.handler";
 import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
+import { SessionSkillStore } from "../db/session-skills";
+import { PiRepositoryTools } from "../pi/repository-tools";
+import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -804,6 +807,19 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       resolveCredentialScope(getPublicSessionId())
     ).getCredentials();
   const piCredentialService = new PiCredentialService(db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
+  const piRepositoryTools = new PiRepositoryTools({
+    repositories: () => sessionCoreRepository.getSessionRepositories(),
+    resolveCredentialScope: () => resolveCredentialScope(getPublicSessionId()),
+    provider: sourceControlProvider,
+  });
+  const piBridgeHandler = new PiBridgeHandler({
+    sessions: sessionCoreRepository,
+    messages: messageRepository,
+    credentials: piCredentialService,
+    skills: new SessionSkillStore(db),
+    repositories: piRepositoryTools,
+    getSessionId: getPublicSessionId,
+  });
 
   const sandboxHandler = new SandboxHandler(
     messageRepository,
@@ -1015,30 +1031,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       sandboxHandler.verifySandboxToken(request, requestLog),
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
-    piCredential: async (request) => {
-      const session = sessionCoreRepository.getSession();
-      const operationId = request.headers.get("X-Pi-Operation-ID");
-      if (
-        session?.harness !== "pi" ||
-        !operationId ||
-        messageRepository.getProcessingMessage()?.id !== operationId
-      ) {
-        return Response.json({ error: "Pi execution is not active" }, { status: 409 });
-      }
-      try {
-        const access = await piCredentialService.getOpenAIAccess(getPublicSessionId());
-        return Response.json(
-          {
-            access_token: access.accessToken,
-            expires_in: Math.max(1, Math.floor((access.expiresAt - Date.now()) / 1_000)),
-            credential_version: access.credentialVersion,
-          },
-          { headers: { "Cache-Control": "no-store" } }
-        );
-      } catch {
-        return Response.json({ error: "OpenAI provider account unavailable" }, { status: 409 });
-      }
-    },
+    piCredential: (request) => piBridgeHandler.credential(request),
+    piContext: () => piBridgeHandler.context(),
+    piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
     piResult: (request) => piResultHandler.handle(request),
     piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),

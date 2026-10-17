@@ -112,7 +112,11 @@ describe("Integration settings API", () => {
           `https://test.local/integration-settings/${integrationId}`,
           {
             method: "PUT",
-            body: JSON.stringify({ settings: { defaults: { harness: "pi" } } }),
+            body: JSON.stringify({
+              settings: {
+                defaults: { harness: "pi", model: "openai/gpt-5.6-sol" },
+              },
+            }),
           }
         );
 

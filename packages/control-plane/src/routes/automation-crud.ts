@@ -264,12 +264,6 @@ async function handleCreateAutomation(
 
   // Validate harness and model
   const harness = getValidHarnessOrDefault(body.harness);
-  if (
-    harness === "pi" &&
-    (requestedRepositories.length > 0 || environmentRepositories.length > 0)
-  ) {
-    return error("Pi Durable automations must use the No repository target", 400);
-  }
   let harnessSelection;
   try {
     harnessSelection = await resolveHarnessSelection(ctx.db, env, {
@@ -546,19 +540,6 @@ async function handleUpdateAutomation(
   const nextHarness = body.harness !== undefined ? body.harness : storedHarness;
   const selection = getRepositorySelection(body);
   const environmentSelection = getEnvironmentSelection(body);
-  if (nextHarness === "pi") {
-    const repositoryCount =
-      selection.kind === "replace"
-        ? selection.repositories.length
-        : (await store.getRepositoriesForAutomation(id)).length;
-    const environmentCount =
-      environmentSelection.kind === "replace"
-        ? environmentSelection.environmentIds.length
-        : (await store.getEnvironmentsForAutomation(id)).length;
-    if (repositoryCount > 0 || environmentCount > 0) {
-      return error("Pi Durable automations must use the No repository target", 400);
-    }
-  }
   const storedProviderSelections = toProviderSelections(await providerAuthStore.list(id));
   // Execution changes are judged against the stored configuration, not by which
   // fields were sent: the edit form always resubmits them unchanged.

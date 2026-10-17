@@ -165,10 +165,6 @@ export default function Home() {
   const preferences = useLaunchPreferences({ models, providerAccounts });
   const { selectedModel, reasoningEffort, harness, providerSelections } = preferences;
   const targetRequestFields = buildRequestFields();
-  const piTargetError =
-    harness === "pi" && sessionTarget && sessionTarget.kind !== "none"
-      ? "Pi Durable currently supports No repository sessions only"
-      : null;
   const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
   const {
     preview: skillPreview,
@@ -182,7 +178,6 @@ export default function Home() {
     session &&
     preferences.ready &&
     targetRequestFields &&
-    !piTargetError &&
     !(harness === "pi" && sessionAttachments.attachments.length > 0)
       ? {
           ...targetRequestFields,
@@ -208,9 +203,9 @@ export default function Home() {
   } = warmSession;
 
   useEffect(() => {
-    if (!warmRequested) return;
+    if (!warmRequested || !warmIdentity) return;
     setWarmRequested(false);
-    if (harness === "pi" || !warmIdentity) return;
+    if (harness === "pi") return;
     void createSessionForWarming();
   }, [harness, warmRequested, warmIdentity, createSessionForWarming]);
 
@@ -227,16 +222,17 @@ export default function Home() {
         sessionAttachments.isUploading ||
         models.loading,
       validationError:
-        piTargetError ??
-        (harness === "pi" && hasAttachments
-          ? "Pi Durable does not support attachments yet"
-          : preferences.modelAvailability.status === "unavailable"
-            ? preferences.modelAvailability.message
-            : !isLaunchable
-              ? sessionTarget?.kind === "repos"
-                ? "Select at least one repository"
-                : "Please select a repository or environment"
-              : null),
+        harness === "pi" && !providerAccounts.loading && !preferences.providerReady
+          ? "Pi Durable requires an active connected OpenAI account"
+          : harness === "pi" && hasAttachments
+            ? "Pi Durable does not support attachments yet"
+            : preferences.modelAvailability.status === "unavailable"
+              ? preferences.modelAvailability.message
+              : !isLaunchable
+                ? sessionTarget?.kind === "repos"
+                  ? "Select at least one repository"
+                  : "Please select a repository or environment"
+                : null,
     },
     {
       sessions: warmSession,
@@ -263,7 +259,6 @@ export default function Home() {
     sessionAttachments.isUploading ||
     !launchContextReady ||
     !isLaunchable ||
-    !!piTargetError ||
     (harness === "pi" && hasAttachments);
 
   return (

@@ -68,6 +68,8 @@ export function ProviderAuthControls({
 }) {
   const accountsSelectable =
     harness === undefined || harnessSupportsProviderAuth(harness, provider, "provider_account");
+  const apiKeySelectable =
+    harness === undefined || harnessSupportsProviderAuth(harness, provider, "api_key");
   const available = accountsSelectable
     ? accounts.filter(
         (account) =>
@@ -75,27 +77,40 @@ export function ProviderAuthControls({
       )
     : [];
   const selected = value
-    ? value.mode === "api_key"
+    ? value.mode === "api_key" && apiKeySelectable
       ? API_KEY
-      : `${ACCOUNT_PREFIX}${value.accountId}`
+      : value.mode === "provider_account"
+        ? `${ACCOUNT_PREFIX}${value.accountId}`
+        : POLICY
     : POLICY;
   const defaultAccount = available.find(
     (account) => account.id === defaultValue?.providerAccountId
   );
-  const effectiveDefaultLabel =
-    !accountsSelectable || (unattended && defaultValue?.unattendedMode === "api_key")
-      ? "No account"
-      : defaultValue
-        ? (defaultAccount?.displayName ?? "Unavailable account")
-        : undefined;
+  const defaultAccountUsable =
+    !!defaultAccount && (!unattended || defaultValue?.unattendedMode === "provider_account");
+  const policySelectable = apiKeySelectable || defaultAccountUsable;
+  const effectiveDefaultLabel = !accountsSelectable
+    ? "No account"
+    : defaultAccountUsable
+      ? defaultAccount.displayName
+      : defaultValue?.providerAccountId &&
+          (!unattended || defaultValue.unattendedMode === "provider_account")
+        ? "Unavailable account"
+        : apiKeySelectable
+          ? defaultValue
+            ? "No account"
+            : undefined
+          : "Choose an account";
   const explicitAccount =
     value?.mode === "provider_account"
       ? available.find((account) => account.id === value.accountId)
       : undefined;
   const triggerSelectionLabel = value
-    ? value.mode === "api_key"
+    ? value.mode === "api_key" && apiKeySelectable
       ? "No account"
-      : (explicitAccount?.displayName ?? "Unavailable account")
+      : value.mode === "provider_account"
+        ? (explicitAccount?.displayName ?? "Unavailable account")
+        : effectiveDefaultLabel
     : (effectiveDefaultLabel ?? "Use default");
   const policyDescription = effectiveDefaultLabel
     ? `${policyLabel}: ${effectiveDefaultLabel}`
@@ -104,7 +119,7 @@ export function ProviderAuthControls({
   const handleChange = (next: string) => {
     if (disabled) return;
     if (next === POLICY) onChange(undefined);
-    else if (next === API_KEY) onChange({ mode: "api_key" });
+    else if (next === API_KEY && apiKeySelectable) onChange({ mode: "api_key" });
     else onChange({ mode: "provider_account", accountId: next.slice(ACCOUNT_PREFIX.length) });
   };
 
@@ -138,7 +153,7 @@ export function ProviderAuthControls({
               className="w-36 max-w-[calc(100vw-2rem)] sm:w-72"
             >
               <DropdownMenuRadioGroup value={selected} onValueChange={handleChange}>
-                <DropdownMenuRadioItem value={POLICY} disabled={disabled}>
+                <DropdownMenuRadioItem value={POLICY} disabled={disabled || !policySelectable}>
                   <span className="truncate">{policyDescription}</span>
                 </DropdownMenuRadioItem>
                 {available.map((account) => (
@@ -150,9 +165,11 @@ export function ProviderAuthControls({
                     <span className="truncate">{account.displayName}</span>
                   </DropdownMenuRadioItem>
                 ))}
-                <DropdownMenuRadioItem value={API_KEY} disabled={disabled}>
-                  No account
-                </DropdownMenuRadioItem>
+                {apiKeySelectable && (
+                  <DropdownMenuRadioItem value={API_KEY} disabled={disabled}>
+                    No account
+                  </DropdownMenuRadioItem>
+                )}
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
@@ -175,7 +192,9 @@ export function ProviderAuthControls({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={POLICY}>{policyDescription}</SelectItem>
+          <SelectItem value={POLICY} disabled={!policySelectable}>
+            {policyDescription}
+          </SelectItem>
           {value?.mode === "provider_account" && !explicitAccount && (
             <SelectItem value={`${ACCOUNT_PREFIX}${value.accountId}`}>
               Unavailable account
@@ -187,13 +206,15 @@ export function ProviderAuthControls({
               {account.externalAccountId ? ` (${account.externalAccountId})` : ""}
             </SelectItem>
           ))}
-          <SelectItem value={API_KEY}>No account</SelectItem>
+          {apiKeySelectable && <SelectItem value={API_KEY}>No account</SelectItem>}
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">
-        {accountsSelectable
+        {accountsSelectable && apiKeySelectable
           ? "Provider-account mode overrides this provider's API key for the session."
-          : `${getHarnessLabel(harness!)} runs ${providerName} on its API key; connected accounts are not offered.`}
+          : accountsSelectable
+            ? `${getHarnessLabel(harness!)} requires a connected ${providerName} account.`
+            : `${getHarnessLabel(harness!)} runs ${providerName} on its API key; connected accounts are not offered.`}
       </p>
     </div>
   );

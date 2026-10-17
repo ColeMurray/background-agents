@@ -6,6 +6,7 @@ describe("CodexBrokerCredentialStore", () => {
     const fetchCredential = vi.fn(async () => ({
       accessToken: "access.jwt.token",
       expiresIn: 3_600,
+      credentialVersion: 1,
     }));
     const store = new CodexBrokerCredentialStore(fetchCredential, () => 1_000_000);
 
@@ -19,7 +20,11 @@ describe("CodexBrokerCredentialStore", () => {
   });
 
   it("never offers the credential to another Pi provider", async () => {
-    const fetchCredential = vi.fn(async () => ({ accessToken: "token", expiresIn: 60 }));
+    const fetchCredential = vi.fn(async () => ({
+      accessToken: "token",
+      expiresIn: 60,
+      credentialVersion: 1,
+    }));
     const store = new CodexBrokerCredentialStore(fetchCredential);
 
     await expect(store.read("openai")).resolves.toBeUndefined();
@@ -28,18 +33,24 @@ describe("CodexBrokerCredentialStore", () => {
   });
 
   it("single-flights concurrent broker reads and replaces generic OAuth refreshes through the broker", async () => {
-    let release!: (value: { accessToken: string; expiresIn: number }) => void;
+    let release!: (value: {
+      accessToken: string;
+      expiresIn: number;
+      credentialVersion: number;
+    }) => void;
     const fetchCredential = vi.fn(
-      () =>
-        new Promise<{ accessToken: string; expiresIn: number }>((resolve) => {
-          release = resolve;
-        })
+      (..._args: unknown[]) =>
+        new Promise<{ accessToken: string; expiresIn: number; credentialVersion: number }>(
+          (resolve) => {
+            release = resolve;
+          }
+        )
     );
     const store = new CodexBrokerCredentialStore(fetchCredential, () => 1_000);
 
     const first = store.read("openai-codex");
     const second = store.read("openai-codex");
-    release({ accessToken: "token", expiresIn: 120 });
+    release({ accessToken: "token", expiresIn: 120, credentialVersion: 1 });
 
     expect(await first).toEqual(await second);
     expect(fetchCredential).toHaveBeenCalledOnce();
@@ -50,9 +61,10 @@ describe("CodexBrokerCredentialStore", () => {
       expires: 999_999,
     }));
     const refreshed = store.modify("openai-codex", genericRefresh);
-    release({ accessToken: "broker-refreshed", expiresIn: 120 });
+    release({ accessToken: "broker-refreshed", expiresIn: 120, credentialVersion: 2 });
     await expect(refreshed).resolves.toMatchObject({ access: "broker-refreshed" });
     expect(genericRefresh).not.toHaveBeenCalled();
+    expect(fetchCredential).toHaveBeenLastCalledWith(1, undefined);
     await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "broker-refreshed" });
   });
 
@@ -67,23 +79,27 @@ describe("CodexBrokerCredentialStore", () => {
   });
 
   it("does not let an invalidated broker request clear a newer in-flight request", async () => {
-    const releases: Array<(value: { accessToken: string; expiresIn: number }) => void> = [];
+    const releases: Array<
+      (value: { accessToken: string; expiresIn: number; credentialVersion: number }) => void
+    > = [];
     const fetchCredential = vi.fn(
       () =>
-        new Promise<{ accessToken: string; expiresIn: number }>((resolve) => {
-          releases.push(resolve);
-        })
+        new Promise<{ accessToken: string; expiresIn: number; credentialVersion: number }>(
+          (resolve) => {
+            releases.push(resolve);
+          }
+        )
     );
     const store = new CodexBrokerCredentialStore(fetchCredential);
 
     const stale = store.read("openai-codex");
     store.clear();
     const current = store.read("openai-codex");
-    releases[0]?.({ accessToken: "stale", expiresIn: 60 });
+    releases[0]?.({ accessToken: "stale", expiresIn: 60, credentialVersion: 1 });
     await expect(stale).rejects.toThrow("invalidated");
     const joined = store.read("openai-codex");
     expect(fetchCredential).toHaveBeenCalledTimes(2);
-    releases[1]?.({ accessToken: "current", expiresIn: 60 });
+    releases[1]?.({ accessToken: "current", expiresIn: 60, credentialVersion: 2 });
     await expect(current).resolves.toMatchObject({ access: "current" });
     await expect(joined).resolves.toMatchObject({ access: "current" });
   });
