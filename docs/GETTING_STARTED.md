@@ -1485,8 +1485,9 @@ account's refresh token in the Pi Durable Object. For an existing deployment:
 4. When the web app runs on Vercel, dispatch the **Deploy Web** workflow so the build-time
    `NEXT_PUBLIC_PI_DURABLE_ENABLED` value is included in the active bundle.
 
-Rollback sets `PI_DURABLE_ENABLED=false`; do not delete the class or its storage as part of a normal
-rollback.
+Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
+When the web app runs on Vercel, dispatch **Deploy Web** again so the disabled build-time flag
+reaches the active bundle. Do not delete the class or its storage as part of a normal rollback.
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed

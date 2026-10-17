@@ -1,6 +1,7 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { compareSlackTimestamps } from "@open-inspect/shared/slack";
 import { z } from "zod";
+import { harnessIdSchema, type HarnessId } from "@open-inspect/shared/harnesses";
 import { createLogger } from "../logger";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env, ThreadSession } from "../types";
@@ -16,6 +17,7 @@ const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   repoFullName: z.string().min(1),
   model: z.string().min(1),
   reasoningEffort: z.string().min(1).optional(),
+  harness: harnessIdSchema.optional(),
   createdAt: z.number().finite().nonnegative(),
   lastPromptTs: z.string().min(1).optional(),
 });
@@ -227,7 +229,8 @@ export function buildThreadSession(
   model: string,
   reasoningEffort?: string,
   lastPromptTs?: string,
-  teamId?: string | null
+  teamId?: string | null,
+  harness?: HarnessId
 ): ThreadSession {
   return {
     sessionId,
@@ -235,6 +238,7 @@ export function buildThreadSession(
     repoFullName: targetLabel(target),
     model,
     reasoningEffort,
+    ...(harness ? { harness } : {}),
     createdAt: Date.now(),
     lastPromptTs,
     ...(teamId !== undefined ? { teamId } : {}),

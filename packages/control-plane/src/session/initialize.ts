@@ -151,6 +151,9 @@ export async function initializeSession(
           },
         ]
       : [];
+  if (input.harness === "pi" && repositories.length > 0) {
+    throw new Error("Pi Durable currently supports no-repository sessions only");
+  }
   const sandboxProvider = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
   const unsupportedSettings = unsupportedSandboxSettings(
     input.sandboxSettings ?? {},

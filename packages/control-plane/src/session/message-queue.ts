@@ -678,6 +678,14 @@ export class SessionMessageQueue {
     );
     if (!this.mayDispatch()) return;
     if (!this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent)) return;
+    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+    this.messenger.broadcast({ type: "processing_status", isProcessing: true });
+    this.broadcastPromptQueue();
+    await this.alarmScheduler.schedule(now + this.getExecutionTimeoutMs());
+    this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
+      name: "callback.notify_started",
+      context: { message_id: message.id },
+    });
 
     let receipt;
     try {
@@ -692,10 +700,6 @@ export class SessionMessageQueue {
       // The RPC may have failed after Pi durably admitted the operation. Keep
       // the processing claim and let Pi's durable projector or the execution
       // deadline settle it; resubmitting under new state would risk two turns.
-      this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
-      this.messenger.broadcast({ type: "processing_status", isProcessing: true });
-      this.broadcastPromptQueue();
-      await this.alarmScheduler.schedule(now + this.getExecutionTimeoutMs());
       this.log.warn("prompt.dispatch", {
         event: "prompt.dispatch",
         message_id: message.id,
@@ -705,15 +709,6 @@ export class SessionMessageQueue {
       });
       return;
     }
-
-    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
-    this.messenger.broadcast({ type: "processing_status", isProcessing: true });
-    this.broadcastPromptQueue();
-    await this.alarmScheduler.schedule(now + this.getExecutionTimeoutMs());
-    this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
-      name: "callback.notify_started",
-      context: { message_id: message.id },
-    });
 
     this.log.info("prompt.dispatch", {
       event: "prompt.dispatch",
@@ -986,6 +981,9 @@ export class SessionMessageQueue {
     if (raced) return raced;
     this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
+    if (harness === "pi" && data.attachments?.length) {
+      throw new HarnessModelIncompatibleError("Pi Durable does not support attachments yet.");
+    }
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
       this.attachmentRepository

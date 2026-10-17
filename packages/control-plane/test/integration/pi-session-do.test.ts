@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { initSession, queryDO } from "./helpers";
@@ -14,6 +14,9 @@ describe("PiSessionDO", () => {
       harness: "pi",
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "high",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
     });
 
     await expect(queryDO(stub, "SELECT id FROM sandbox")).resolves.toEqual([]);
@@ -28,5 +31,23 @@ describe("PiSessionDO", () => {
     const stub = piStub(`pi-repeat-${crypto.randomUUID()}`);
     await stub.status("session-1");
     await expect(stub.status("session-1")).resolves.toEqual({ busy: false, pending: 0 });
+  });
+
+  it("clears Pi transcript and lifecycle storage when the session is deleted", async () => {
+    const stub = piStub(`pi-delete-${crypto.randomUUID()}`);
+    await stub.status("session-1");
+
+    await stub.destroy("session-1");
+    await stub.destroy("session-1");
+
+    const tables = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE '_cf_%'"
+        )
+        .toArray()
+        .map((row) => row.name)
+    );
+    expect(tables.some((name) => name.startsWith("pi_"))).toBe(false);
   });
 });

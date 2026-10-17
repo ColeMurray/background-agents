@@ -109,6 +109,7 @@ export const SessionInternalPaths = {
   openaiTokenRefresh: "/internal/openai-token-refresh",
   piCredential: "/internal/pi-credential",
   piResult: "/internal/pi-result",
+  piEvent: "/internal/pi-event",
   xaiTokenRefresh: "/internal/xai-token-refresh",
   scmCredentials: "/internal/scm-credentials",
   tunnelUrls: "/internal/tunnel-urls",

@@ -175,6 +175,8 @@ import type { SessionWebSocket } from "../platform-ports";
 import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import { PiCredentialService } from "./pi-credential-service";
 import { PiResultHandler } from "./http/handlers/pi-result.handler";
+import { PiEventHandler } from "./http/handlers/pi-event.handler";
+import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -590,10 +592,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const stopExecution = async () => {
     const session = sessionCoreRepository.getSession();
     if (session?.harness === "pi" && env.PI_SESSION) {
-      await env.PI_SESSION.abort(
-        session.session_name || session.id,
-        messageRepository.getProcessingMessage()?.id
-      );
+      await messageQueue.failStuckProcessingMessage("Execution was stopped");
       return;
     }
     await executionStop.stop();
@@ -700,8 +699,19 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const piResultHandler = new PiResultHandler(
     messageRepository,
     processPiEvent,
+    new PiResultReceiptRepository(sql),
+    async (result) => {
+      await terminalMessageProjection.flushPending();
+      await callbackService.notifyComplete(result.operationId, result.success, result.error);
+      await statusService.reconcileAfterExecution(result.success);
+      messenger.broadcast({ type: "processing_status", isProcessing: false });
+      messageQueue.broadcastPromptQueue();
+      await messageQueue.processMessageQueue();
+    },
+    isPiSession,
     getPublicSessionId
   );
+  const piEventHandler = new PiEventHandler(messageRepository, processPiEvent, isPiSession);
   const alarmHandler = createAlarmHandler({
     repository: messageRepository,
     messageQueue,
@@ -1005,7 +1015,16 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       sandboxHandler.verifySandboxToken(request, requestLog),
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
-    piCredential: async () => {
+    piCredential: async (request) => {
+      const session = sessionCoreRepository.getSession();
+      const operationId = request.headers.get("X-Pi-Operation-ID");
+      if (
+        session?.harness !== "pi" ||
+        !operationId ||
+        messageRepository.getProcessingMessage()?.id !== operationId
+      ) {
+        return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+      }
       try {
         const access = await piCredentialService.getOpenAIAccess(getPublicSessionId());
         return Response.json(
@@ -1021,6 +1040,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       }
     },
     piResult: (request) => piResultHandler.handle(request),
+    piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
     scmCredentials: (_request, _url, requestLog) => sandboxHandler.scmCredentials(requestLog),
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),

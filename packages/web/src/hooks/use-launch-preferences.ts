@@ -27,6 +27,7 @@ import {
   setProviderSelection,
 } from "@/lib/provider-selection";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
+import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_HARNESS_STORAGE_KEY = "open-inspect-last-selected-harness";
@@ -125,7 +126,15 @@ export function useLaunchPreferences(
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
-    setHarness(getValidHarnessOrDefault(storage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)));
+    const storedHarness = getValidHarnessOrDefault(
+      storage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)
+    );
+    if (AVAILABLE_HARNESS_IDS.includes(storedHarness)) {
+      setHarness(storedHarness);
+    } else {
+      setHarness(DEFAULT_HARNESS);
+      storage.removeItem(LAST_SELECTED_HARNESS_STORAGE_KEY);
+    }
     if (storedProviderSelections) setProviderSelections(storedProviderSelections);
     setProviderSelectionsHydrated(true);
     hasHydratedPreferencesRef.current = true;

@@ -16,12 +16,15 @@ export function sessionDiffKey(sessionId: string): BrowserApiPath {
   return `/api/sessions/${sessionId}/diff`;
 }
 
-export function useSessionDiffs(sessionId: string): {
+export function useSessionDiffs(
+  sessionId: string,
+  enabled = true
+): {
   state: SessionDiffState | null;
   isLoading: boolean;
   error: Error | null;
 } {
-  const { data, error, isLoading } = useSWR<unknown>(sessionDiffKey(sessionId));
+  const { data, error, isLoading } = useSWR<unknown>(enabled ? sessionDiffKey(sessionId) : null);
   const parsed = useMemo(
     () => (data === undefined ? null : sessionDiffStateSchema.safeParse(data)),
     [data]

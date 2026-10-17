@@ -335,6 +335,14 @@ describe("useLaunchPreferences", () => {
     expect(storage.setItem).not.toHaveBeenCalled();
   });
 
+  it("clears a stored Pi preference after the deployment disables Pi", () => {
+    const storage = memoryStorage({ [HARNESS_KEY]: "pi" });
+    const { result } = renderHook(() => useLaunchPreferences(input, storage));
+
+    expect(result.current.harness).toBe(DEFAULT_HARNESS);
+    expect(storage.removeItem).toHaveBeenCalledWith(HARNESS_KEY);
+  });
+
   it("leaves absent effort unset, but model changes use the harness default and persist it", () => {
     const storage = memoryStorage();
     const { result } = renderHook(() => useLaunchPreferences(input, storage));

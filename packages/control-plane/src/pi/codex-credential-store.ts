@@ -27,6 +27,7 @@ type BrokerCredentialFetcher = (signal?: AbortSignal) => Promise<BrokerCredentia
 export class CodexBrokerCredentialStore implements CredentialStore {
   private credential: OAuthCredential | undefined;
   private inFlight: Promise<OAuthCredential> | undefined;
+  private generation = 0;
 
   constructor(
     private readonly fetchCredential: BrokerCredentialFetcher,
@@ -38,12 +39,7 @@ export class CodexBrokerCredentialStore implements CredentialStore {
     if (this.credential && this.credential.expires - this.now() > REFRESH_BUFFER_MS) {
       return { ...this.credential };
     }
-    if (!this.inFlight) {
-      this.inFlight = this.load(options?.signal).finally(() => {
-        this.inFlight = undefined;
-      });
-    }
-    return { ...(await this.inFlight) };
+    return { ...(await this.loadOnce(options?.signal)) };
   }
 
   async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
@@ -61,12 +57,7 @@ export class CodexBrokerCredentialStore implements CredentialStore {
     // built-in Codex provider would exchange `refresh`; that value is only a
     // sentinel here, so bypass the callback and ask Open-Inspect's authority.
     this.credential = undefined;
-    if (!this.inFlight) {
-      this.inFlight = this.load(options?.signal).finally(() => {
-        this.inFlight = undefined;
-      });
-    }
-    return { ...(await this.inFlight) };
+    return { ...(await this.loadOnce(options?.signal)) };
   }
 
   async delete(providerId: string, options?: AuthOperationOptions): Promise<void> {
@@ -76,7 +67,23 @@ export class CodexBrokerCredentialStore implements CredentialStore {
     // not erase it or enable a fallback to ambient/deployment credentials.
   }
 
+  clear(): void {
+    this.generation += 1;
+    this.credential = undefined;
+    this.inFlight = undefined;
+  }
+
+  private loadOnce(signal?: AbortSignal): Promise<OAuthCredential> {
+    if (this.inFlight) return this.inFlight;
+    const tracked = this.load(signal).finally(() => {
+      if (this.inFlight === tracked) this.inFlight = undefined;
+    });
+    this.inFlight = tracked;
+    return tracked;
+  }
+
   private async load(signal?: AbortSignal): Promise<OAuthCredential> {
+    const generation = this.generation;
     signal?.throwIfAborted();
     const value = await this.fetchCredential(signal);
     if (!value.accessToken.trim() || !Number.isFinite(value.expiresIn) || value.expiresIn <= 0) {
@@ -88,6 +95,8 @@ export class CodexBrokerCredentialStore implements CredentialStore {
       refresh: REFRESH_SENTINEL,
       expires: this.now() + value.expiresIn * 1_000,
     };
+    if (generation !== this.generation)
+      throw new Error("OpenAI credential request was invalidated");
     this.credential = credential;
     return credential;
   }

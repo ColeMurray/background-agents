@@ -227,9 +227,9 @@ export async function serviceFetch(url: string, init?: ServiceRequestInit): Prom
 /** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
-  repoOwner?: string;
-  repoName?: string;
-  repoId?: number;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  repoId?: number | null;
   defaultBranch?: string;
   repositories?: Array<{
     repoOwner: string;
@@ -270,15 +270,19 @@ export async function initSession(overrides?: {
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
     harness: defaults.harness ?? "opencode",
     reasoningEffort: defaults.reasoningEffort ?? null,
-    baseBranch: defaults.defaultBranch ?? "main",
-    repositories: defaults.repositories ?? [
-      {
-        repoOwner: defaults.repoOwner,
-        repoName: defaults.repoName,
-        repoId: defaults.repoId,
-        baseBranch: defaults.defaultBranch ?? "main",
-      },
-    ],
+    baseBranch: defaults.repoOwner ? (defaults.defaultBranch ?? "main") : null,
+    repositories:
+      defaults.repositories ??
+      (defaults.repoOwner && defaults.repoName && defaults.repoId != null
+        ? [
+            {
+              repoOwner: defaults.repoOwner,
+              repoName: defaults.repoName,
+              repoId: defaults.repoId,
+              baseBranch: defaults.defaultBranch ?? "main",
+            },
+          ]
+        : []),
     environmentId: defaults.environmentId ?? null,
     status: "created",
     userId: defaults.canonicalUserId ?? defaults.userId,

@@ -211,7 +211,10 @@ function SessionContent({
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
-  const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
+  const { state: diffState, isLoading: diffLoading } = useSessionDiffs(
+    sessionId,
+    sessionHarness !== "pi"
+  );
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");

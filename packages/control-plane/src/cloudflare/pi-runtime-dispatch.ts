@@ -10,5 +10,6 @@ export function createDurableObjectPiRuntimeDispatch(
     submit: (input: PiRuntimePrompt) => stub(input.sessionId).submit(input),
     abort: (sessionId, operationId) => stub(sessionId).abort(sessionId, operationId),
     status: (sessionId) => stub(sessionId).status(sessionId),
+    destroy: (sessionId) => stub(sessionId).destroy(sessionId),
   };
 }

@@ -274,6 +274,9 @@ export async function handleCreateSession(
     Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
   );
   if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
+  if (harness === "pi" && scopeMembers.length > 0) {
+    return error("Pi Durable currently supports no-repository sessions only", 400);
+  }
 
   let managedSkillsManifest;
   try {

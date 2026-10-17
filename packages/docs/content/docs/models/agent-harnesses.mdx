@@ -56,6 +56,10 @@ does not expose sandbox tools, local MCP servers, repository files, shell, Git, 
 managed skills, or memory mutation. Deployments should keep Pi disabled until that narrower behavior
 matches their use case. See the operator rollout in the repository's `docs/GETTING_STARTED.md`.
 
+Pi session creation is therefore limited to **No repository** targets. Slack supports Pi in DMs and
+other no-repository launches; repository-bound Slack channels, GitHub, Linear, and repository-backed
+automations must use another harness until replay-safe remote repository tools are implemented.
+
 ## Comparison
 
 |                                | OpenCode                                                             | Claude Agent                                                                                         |

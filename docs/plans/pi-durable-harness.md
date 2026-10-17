@@ -50,6 +50,7 @@ Web / Slack / Automations
 - Adding Cloudflare Computer, Browser Run, container escalation, multi-conversation Slack channels,
   or self-modifying applications in the first implementation.
 - Moving existing sessions between harnesses.
+- Admitting repository-backed Pi sessions before remote repository tools are available.
 - Persisting provider refresh tokens inside the Durable Object.
 
 ## Dependencies and maturity

@@ -47,12 +47,18 @@ locals {
       name = binding_name
       text = binding.value
     }],
-    # Durable Object bindings (disabled only for initial class creation)
+    # During an incremental class-creation migration, preserve bindings for
+    # existing classes while withholding only the classes being introduced.
     var.enable_durable_object_bindings ? [for binding_name, binding in var.durable_objects : {
       type       = "durable_object_namespace"
       name       = binding_name
       class_name = binding.class_name
-    }] : []
+      }] : length(var.new_sqlite_classes) > 0 ? [for binding_name, binding in var.durable_objects : {
+      type       = "durable_object_namespace"
+      name       = binding_name
+      class_name = binding.class_name
+      } if !contains(var.new_sqlite_classes, binding.class_name)
+    ] : []
   )
 }
 

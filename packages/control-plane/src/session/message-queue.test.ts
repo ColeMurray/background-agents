@@ -259,12 +259,10 @@ function buildQueue(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
   const piRuntime = {
-    initialize: vi.fn(async () => {}),
     submit: vi.fn(async () => ({ operationId: "msg-1", accepted: true })),
-    wait: vi.fn(async () => ({ operationId: "msg-1", status: "done" as const, text: "Hi" })),
-    prompt: vi.fn(),
     abort: vi.fn(async () => true),
     status: vi.fn(async () => ({ busy: false, pending: 0 })),
+    destroy: vi.fn(async () => {}),
   };
 
   const alarmScheduler = createEarliestAlarmScheduler(
@@ -371,9 +369,45 @@ describe("SessionMessageQueue", () => {
         model: "openai/gpt-5.6-sol",
       })
     );
-    expect(h.piRuntime.wait).not.toHaveBeenCalled();
     expect(h.wsManager.getSandboxCommandTarget).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambiguous Pi admission processing and emits the started callback", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    h.piRuntime.submit.mockRejectedValue(new Error("RPC response lost"));
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(h.callbackService.notifyStarted).toHaveBeenCalledWith("msg-1");
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "prompt.dispatch",
+      expect.objectContaining({ outcome: "ambiguous", message_id: "msg-1" })
+    );
+  });
+
+  it("rejects Pi attachments before claiming uploaded files", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+
+    await expect(
+      h.queue.enqueuePromptFromApi({
+        content: "Inspect this",
+        authorId: "user-1",
+        source: "agent",
+        attachments: [{ name: "document.pdf", attachmentId: "upload-1" }],
+      })
+    ).rejects.toThrow("Pi Durable does not support attachments yet");
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
   });
 
   it("aborts Pi directly instead of sending a sandbox stop command", async () => {

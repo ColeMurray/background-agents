@@ -84,6 +84,29 @@ describe("Pi Durable initialization", () => {
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
     expect(piRuntime.status).not.toHaveBeenCalled();
   });
+
+  it("rejects repository-backed Pi sessions before persistence", async () => {
+    const { handler, repository, sandboxRepository, piRuntime } = createHandler();
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionName: "pi",
+          repoOwner: "acme",
+          repoName: "app",
+          repoId: 1,
+          userId: "owner",
+          harness: "pi",
+          model: "openai/gpt-5.6-sol",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(repository.transaction).not.toHaveBeenCalled();
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
+    expect(piRuntime.status).not.toHaveBeenCalled();
+  });
 });
 
 describe("Codex durable initialization", () => {

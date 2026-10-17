@@ -81,4 +81,20 @@ test("PiSessionDO migration is staged and guarded in plan and apply", () => {
     "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first",
     "Pi migration phase guard"
   );
+  assertInPlanAndApply(
+    "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable",
+    "Pi rollback phase guard"
+  );
+});
+
+test("incremental Durable Object migration preserves existing bindings", async () => {
+  const module = await readFile(
+    new URL("../terraform/modules/cloudflare-worker/main.tf", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    module,
+    /if !contains\(var\.new_sqlite_classes, binding\.class_name\)/,
+    "phase one must withhold only newly introduced classes"
+  );
 });

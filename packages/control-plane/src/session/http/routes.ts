@@ -51,6 +51,7 @@ export interface SessionInternalRouteHandlers {
   openaiTokenRefresh: SessionInternalRouteHandler;
   piCredential: SessionInternalRouteHandler;
   piResult: SessionInternalRouteHandler;
+  piEvent: SessionInternalRouteHandler;
   xaiTokenRefresh: SessionInternalRouteHandler;
   scmCredentials: SessionInternalRouteHandler;
   tunnelUrls: SessionInternalRouteHandler;
@@ -137,6 +138,7 @@ export function createSessionInternalRoutes(
       handler: handlers.piCredential,
     },
     { method: "POST", path: SessionInternalPaths.piResult, handler: handlers.piResult },
+    { method: "POST", path: SessionInternalPaths.piEvent, handler: handlers.piEvent },
     {
       method: "POST",
       path: SessionInternalPaths.xaiTokenRefresh,

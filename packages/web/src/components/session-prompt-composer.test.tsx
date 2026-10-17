@@ -83,7 +83,7 @@ function ComposerHarness({
   withSkill?: boolean;
   blockedReason?: string;
   canManageLifecycle?: boolean;
-  harness?: "opencode" | "claude";
+  harness?: "opencode" | "claude" | "pi";
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -160,6 +160,12 @@ describe("SessionPromptComposer", () => {
     expect(screen.getByTitle("Attach images")).toBeEnabled();
     expect(screen.getByRole("button", { name: /model and effort/i })).toBeEnabled();
     expect(screen.getByTitle(/Send/)).toBeDisabled();
+  });
+
+  it("does not offer attachments to Pi Durable sessions", () => {
+    render(<ComposerHarness harness="pi" />);
+
+    expect(screen.queryByTitle("Attach images")).not.toBeInTheDocument();
   });
 
   it("starts with one row and grows and shrinks with its content", () => {

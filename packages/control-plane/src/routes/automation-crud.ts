@@ -264,6 +264,12 @@ async function handleCreateAutomation(
 
   // Validate harness and model
   const harness = getValidHarnessOrDefault(body.harness);
+  if (
+    harness === "pi" &&
+    (requestedRepositories.length > 0 || environmentRepositories.length > 0)
+  ) {
+    return error("Pi Durable automations must use the No repository target", 400);
+  }
   let harnessSelection;
   try {
     harnessSelection = await resolveHarnessSelection(ctx.db, env, {
@@ -538,6 +544,21 @@ async function handleUpdateAutomation(
 
   const storedHarness = getValidHarnessOrDefault(existing.harness);
   const nextHarness = body.harness !== undefined ? body.harness : storedHarness;
+  const selection = getRepositorySelection(body);
+  const environmentSelection = getEnvironmentSelection(body);
+  if (nextHarness === "pi") {
+    const repositoryCount =
+      selection.kind === "replace"
+        ? selection.repositories.length
+        : (await store.getRepositoriesForAutomation(id)).length;
+    const environmentCount =
+      environmentSelection.kind === "replace"
+        ? environmentSelection.environmentIds.length
+        : (await store.getEnvironmentsForAutomation(id)).length;
+    if (repositoryCount > 0 || environmentCount > 0) {
+      return error("Pi Durable automations must use the No repository target", 400);
+    }
+  }
   const storedProviderSelections = toProviderSelections(await providerAuthStore.list(id));
   // Execution changes are judged against the stored configuration, not by which
   // fields were sent: the edit form always resubmits them unchanged.
@@ -616,8 +637,6 @@ async function handleUpdateAutomation(
   // active-invocation guard. In-flight invocations already materialized their
   // children from their firing-time snapshot, so an edit cannot corrupt them;
   // it simply applies from the next invocation.
-  const selection = getRepositorySelection(body);
-  const environmentSelection = getEnvironmentSelection(body);
   const repositoryAuthorizationError = await authorizeSessionTarget(ctx, {
     teamId: null,
     repositories:

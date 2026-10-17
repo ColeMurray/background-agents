@@ -65,4 +65,26 @@ describe("CodexBrokerCredentialStore", () => {
     await store.delete("openai-codex");
     await expect(store.read("openai-codex")).rejects.toThrow("account disabled");
   });
+
+  it("does not let an invalidated broker request clear a newer in-flight request", async () => {
+    const releases: Array<(value: { accessToken: string; expiresIn: number }) => void> = [];
+    const fetchCredential = vi.fn(
+      () =>
+        new Promise<{ accessToken: string; expiresIn: number }>((resolve) => {
+          releases.push(resolve);
+        })
+    );
+    const store = new CodexBrokerCredentialStore(fetchCredential);
+
+    const stale = store.read("openai-codex");
+    store.clear();
+    const current = store.read("openai-codex");
+    releases[0]?.({ accessToken: "stale", expiresIn: 60 });
+    await expect(stale).rejects.toThrow("invalidated");
+    const joined = store.read("openai-codex");
+    expect(fetchCredential).toHaveBeenCalledTimes(2);
+    releases[1]?.({ accessToken: "current", expiresIn: 60 });
+    await expect(current).resolves.toMatchObject({ access: "current" });
+    await expect(joined).resolves.toMatchObject({ access: "current" });
+  });
 });

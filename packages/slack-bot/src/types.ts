@@ -3,6 +3,7 @@
  */
 
 import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type { SlackCompletionJob } from "./completion/job";
 // targets.ts is a pure leaf (types + policy functions, no I/O), so the types
@@ -112,6 +113,7 @@ export interface ThreadSession {
   repoFullName: string;
   model: string;
   reasoningEffort?: string;
+  harness?: HarnessId;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
   /**

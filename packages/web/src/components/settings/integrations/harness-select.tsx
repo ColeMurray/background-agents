@@ -25,6 +25,7 @@ export function HarnessSelect({
   className,
   describedBy,
   disabled,
+  supportsPi = true,
 }: {
   id?: string;
   value: HarnessId | undefined;
@@ -35,7 +36,12 @@ export function HarnessSelect({
   describedBy?: string;
   /** Passed to the root so an open menu closes and its options stop responding. */
   disabled?: boolean;
+  /** Repository-only integrations cannot use the current no-repository Pi runtime. */
+  supportsPi?: boolean;
 }) {
+  const harnesses = supportsPi
+    ? AVAILABLE_HARNESS_IDS
+    : AVAILABLE_HARNESS_IDS.filter((harness) => harness !== "pi");
   return (
     <Select
       disabled={disabled}
@@ -53,7 +59,7 @@ export function HarnessSelect({
       </SelectTrigger>
       <SelectContent>
         {inheritLabel && <SelectItem value={INHERIT_VALUE}>{inheritLabel}</SelectItem>}
-        {AVAILABLE_HARNESS_IDS.map((harness) => (
+        {harnesses.map((harness) => (
           <SelectItem key={harness} value={harness}>
             {getHarnessLabel(harness)}
           </SelectItem>

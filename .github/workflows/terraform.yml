@@ -215,6 +215,9 @@ jobs:
               echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
               exit 1
             fi
+          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ]; then
+            echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable" >&2
+            exit 1
           elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
@@ -536,6 +539,9 @@ jobs:
               echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
               exit 1
             fi
+          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ]; then
+            echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable" >&2
+            exit 1
           elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi

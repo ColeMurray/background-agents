@@ -266,6 +266,16 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     const interimContext = interimHistory
       ? formatInterimThreadContext(interimHistory.messages)
       : "";
+    const followUpImages = imageOnly ? images : [...images, ...(interimHistory?.images ?? [])];
+    if (existingSession.harness === "pi" && followUpImages.length > 0) {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        "Pi Durable does not support image attachments yet. Send a text-only follow-up.",
+        { thread_ts: threadTs }
+      );
+      return;
+    }
     const promptResult = await deliverPrompt(env, {
       sessionId: existingSession.sessionId,
       content:
