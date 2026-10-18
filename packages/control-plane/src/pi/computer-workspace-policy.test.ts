@@ -65,13 +65,7 @@ describe("workspace mutation policy delegate", () => {
     } as ToolExecutionResult;
 
     await expect(
-      delegate.afterTool?.(
-        toolCall,
-        declaration("edit", "local_mutation"),
-        result,
-        api,
-        context
-      )
+      delegate.afterTool?.(toolCall, declaration("edit", "local_mutation"), result, api, context)
     ).resolves.toBe(result);
     expect(memo).toHaveBeenCalledWith(
       "open-inspect.workspace-policy.after",

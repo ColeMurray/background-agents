@@ -95,11 +95,11 @@ Rule: tick only with evidence on the same line.
 - [x] `/simplify` — one quota filesystem proxy, one workspace-wide FIFO, canonical shared effects
       and extension slot, and one composite policy; no duplicate effect contract or external-action
       gateway
-- [x] Narrow and full relevant validation green — 4,824 control-plane unit tests, 15 PiSessionDO
+- [x] Narrow and full relevant validation green — 4,896 control-plane unit tests, 15 PiSessionDO
       workerd tests, 4 workspace Terraform tests, 44 docs tests, docs build, root typecheck, lint,
       format, Terraform validate/fmt, and Worker bundle boundary
-- [x] Committed — `a31f6099`, `c015abd1`, `08e7b712`
-- [x] Slice report — `features/pi-first-class/SLICE-3.md`
+- [x] Committed — `97bcfee7`, `8df485a7`, `040980eb`
+- [x] Slice report — `features/pi-first-class/SLICE-3-WRITABLE-WORKSPACE.md`
 
 ### Slice 4: Pi Durable Code Mode integration
 

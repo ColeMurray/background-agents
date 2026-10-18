@@ -37,8 +37,8 @@ continue and be deleted normally.
 
 ## Validation
 
-- Control-plane unit: 270 files, 4,824 passed, 1 skipped.
-- Writable workspace/policy/event focused unit: 68 passed; canonical shared contract focused unit: 8
+- Control-plane unit: 282 files, 4,896 passed, 1 skipped.
+- Writable workspace/policy/event focused unit: 70 passed; canonical shared contract focused unit: 8
   passed.
 - PiSessionDO workerd integration: 15 passed, including missing-file creation and forced eviction
   dirty-state recovery.
