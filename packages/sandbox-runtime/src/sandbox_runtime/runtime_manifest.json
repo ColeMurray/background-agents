@@ -1,9 +1,10 @@
 {
-  "runtimeVersion": "v76-child-output-discovery",
-  "generation": 76,
+  "runtimeVersion": "v77-pi-sandbox-execution",
+  "generation": 77,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 76,
+  "minimumRebuildGeneration": 77,
+  "executionMinimumGeneration": 77,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,

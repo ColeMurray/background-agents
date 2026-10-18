@@ -187,6 +187,8 @@ export default defineConfig({
             WEB_APP_URL: "https://app.test.local",
             APP_NAME: "Open-Inspect",
             PI_WORKSPACE_MODE: "writable",
+            PI_SANDBOX_EXECUTION_MODE: "enabled",
+            PI_EXTERNAL_ACTIONS_MODE: "enabled",
             TEST_MIGRATIONS: migrations,
           },
         },

@@ -9,7 +9,7 @@ import {
 
 const execute = {
   type: "command_execute" as const,
-  policyClass: "sandbox_execution" as const,
+  effect: "sandbox_execution" as const,
   commandId: "cmd-1",
   purpose: "test" as const,
   argv: ["npm", "test"],

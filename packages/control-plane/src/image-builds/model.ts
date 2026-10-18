@@ -23,6 +23,7 @@ import { z } from "zod";
 import {
   HARNESS_MIN_RUNTIME_GENERATION,
   MIN_COMPATIBLE_RUNTIME_GENERATION,
+  MIN_PI_SANDBOX_EXECUTION_RUNTIME_GENERATION,
 } from "../sandbox/runtime-manifest";
 
 export { IMAGE_BUILD_PROVIDER_IDS } from "@open-inspect/shared/types/image-builds";
@@ -101,6 +102,14 @@ export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
  */
 export function minCompatibleRuntimeVersionFor(harness: HarnessId): number {
   return Math.max(MIN_COMPATIBLE_RUNTIME_VERSION, HARNESS_MIN_RUNTIME_GENERATION[harness] ?? 0);
+}
+
+export const MIN_PI_SANDBOX_EXECUTION_RUNTIME_VERSION = MIN_PI_SANDBOX_EXECUTION_RUNTIME_GENERATION;
+
+export function supportsPiSandboxExecution(runtimeVersion: string | null | undefined): boolean {
+  if (!runtimeVersion) return false;
+  const generation = parseRuntimeVersionNumber(runtimeVersion);
+  return generation !== null && generation >= MIN_PI_SANDBOX_EXECUTION_RUNTIME_VERSION;
 }
 
 /**

@@ -1,4 +1,6 @@
 /** Attempt identity captured before asynchronous lifecycle effects. */
+import type { SandboxRuntimeMode } from "@open-inspect/shared";
+
 export interface SandboxGeneration {
   sandboxId: string | null;
   createdAt: number;
@@ -44,7 +46,14 @@ export class ShutdownRecoveryRejectedError extends Error {
 
 /** Accepts an authenticated runtime observation; false means no transition. */
 export interface SandboxReadiness {
-  onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean;
+  onRuntimeReady(
+    timestamp: number,
+    harness?: string,
+    protocolVersion?: 1,
+    runtimeMode?: SandboxRuntimeMode,
+    runtimeVersion?: string,
+    bridgeInstanceId?: string
+  ): boolean;
 }
 
 /**

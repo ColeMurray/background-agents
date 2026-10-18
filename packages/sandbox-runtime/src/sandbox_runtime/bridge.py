@@ -51,6 +51,7 @@ from .constants import (
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .event_size import MAX_EVENT_BYTES, event_size_bytes
+from .execution_bridge import ExecutionBridge
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
     DEFAULT_HARNESS_ID,
@@ -1181,6 +1182,12 @@ async def main() -> None:
     parser.add_argument("--token", required=True, help="Auth token")
     parser.add_argument("--opencode-port", type=int, default=4096, help="OpenCode port")
     parser.add_argument(
+        "--runtime-mode",
+        choices=("agent", "execution"),
+        default="agent",
+        help="Runtime role; execution starts no agent harness",
+    )
+    parser.add_argument(
         "--harness",
         default=DEFAULT_HARNESS_ID.value,
         help="Agent harness id",
@@ -1190,17 +1197,30 @@ async def main() -> None:
         action="store_true",
         help="Connect before the repository boots; attach the harness when the supervisor reports it up",
     )
+    parser.add_argument("--bridge-instance-id", default="standalone")
+    parser.add_argument("--bridge-restarted", action="store_true")
 
     args = parser.parse_args()
 
-    bridge = AgentBridge(
-        sandbox_id=args.sandbox_id,
-        session_id=args.session_id,
-        control_plane_url=args.control_plane,
-        auth_token=args.token,
-        opencode_port=args.opencode_port,
-        harness_id=parse_harness_id(args.harness),
-        early_connect=args.early_connect,
+    bridge = (
+        ExecutionBridge(
+            sandbox_id=args.sandbox_id,
+            session_id=args.session_id,
+            control_plane_url=args.control_plane,
+            auth_token=args.token,
+            bridge_instance_id=args.bridge_instance_id,
+            bridge_restarted=args.bridge_restarted,
+        )
+        if args.runtime_mode == "execution"
+        else AgentBridge(
+            sandbox_id=args.sandbox_id,
+            session_id=args.session_id,
+            control_plane_url=args.control_plane,
+            auth_token=args.token,
+            opencode_port=args.opencode_port,
+            harness_id=parse_harness_id(args.harness),
+            early_connect=args.early_connect,
+        )
     )
 
     try:

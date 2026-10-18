@@ -107,6 +107,8 @@ export function createMockSandbox(
     boot_seq: null,
     fenced: 0,
     startup_rejected: 0,
+    runtime_mode: "agent",
+    execution_bridge_id: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -269,6 +271,10 @@ export function createMockStorage(
     updateSandboxRuntimeVersion: vi.fn((runtimeVersion: string | null) => {
       calls.push(`updateSandboxRuntimeVersion:${runtimeVersion}`);
       if (sandbox) sandbox.runtime_version = runtimeVersion;
+    }),
+    recordExecutionBridgeIdentity: vi.fn((bridgeInstanceId: string | null) => {
+      calls.push(`recordExecutionBridgeIdentity:${bridgeInstanceId}`);
+      if (sandbox) sandbox.execution_bridge_id = bridgeInstanceId;
     }),
     recordSandboxSnapshot: vi.fn(
       (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {

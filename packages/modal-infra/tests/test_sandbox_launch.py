@@ -3,7 +3,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from modal.exception import NotFoundError, SandboxTimeoutError
@@ -19,7 +19,13 @@ from sandbox_runtime.constants import (
     VNC_PASSWORD_ENV_VAR,
 )
 from sandbox_runtime.types import SandboxStatus, SessionConfig
-from src.sandbox.launch import ACCESS_PASSWORD_READ_TIMEOUT_SECONDS, SandboxLauncher
+from src.sandbox.launch import (
+    ACCESS_PASSWORD_READ_TIMEOUT_SECONDS,
+    BaseImageSource,
+    SandboxLauncher,
+    SandboxLaunchSpec,
+    is_execution_runtime,
+)
 from src.sandbox.launch_policy import (
     DockerImageUnavailableError,
     InvalidDockerSettingsError,
@@ -34,6 +40,39 @@ from src.sandbox.manager import (
 from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 from src.sandbox.vm_recovery import VMAllocationOutcome, VMServiceLaunch
 from tests.modal_sdk_contract import sandbox_create_request, sandbox_exec_request
+
+
+def test_execution_runtime_classification_never_depends_on_harness():
+    assert is_execution_runtime({"runtime_mode": "execution", "harness": "pi"}) is True
+    assert is_execution_runtime(SessionConfig(session_id="s", runtime_mode="execution")) is True
+    assert is_execution_runtime(SessionConfig(session_id="s")) is False
+
+
+@pytest.mark.asyncio
+async def test_execution_runtime_does_not_attach_modal_model_secrets(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
+    from_name = MagicMock(side_effect=AssertionError("model secret must not be loaded"))
+    monkeypatch.setattr("src.sandbox.launch.modal.Secret.from_name", from_name)
+
+    await SandboxLauncher().launch(
+        SandboxLaunchSpec(
+            config=SandboxConfig(
+                repo_owner=None,
+                repo_name=None,
+                clone_host="github.com",
+                clone_username="x-access-token",
+                sandbox_id="sandbox-execution",
+                session_config=SessionConfig(
+                    session_id="session-1", runtime_mode="execution", harness="pi"
+                ),
+            ),
+            source=BaseImageSource(),
+        )
+    )
+
+    assert captured["kwargs"]["secrets"] == []
+    from_name.assert_not_called()
 
 
 def _fake_create(captured: dict):

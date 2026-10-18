@@ -48,6 +48,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "sandbox_generation_ready",
   "preservation_prepared",
   "command_completed",
+  "command_replay_gap",
 ]);
 
 /**
@@ -75,6 +76,7 @@ export class SessionSandboxEventProcessor {
     },
     private readonly commands?: {
       handle(event: Extract<SandboxIngressEvent, { type: `command_${string}` }>): void;
+      onSandboxReady?(): Promise<void> | void;
     }
   ) {}
 
@@ -134,7 +136,9 @@ export class SessionSandboxEventProcessor {
         this.runtime.handleSessionTitle(event);
         return;
       case "ready":
-        await this.runtime.handleReady(event, context);
+        if (await this.runtime.handleReady(event, context)) {
+          await this.commands?.onSandboxReady?.();
+        }
         return;
       case "boot_progress":
         this.runtime.handleBootProgress(event, context);
@@ -183,6 +187,7 @@ export class SessionSandboxEventProcessor {
         return;
       case "command_started":
       case "command_output":
+      case "command_replay_gap":
       case "command_completed":
         if (!this.commands) throw new Error("Sandbox command handlers are not configured");
         this.commands.handle(event);

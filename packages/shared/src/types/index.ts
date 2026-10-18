@@ -217,8 +217,6 @@ export {
   MAX_SANDBOX_COMMAND_ARGV_ITEMS,
   MAX_SANDBOX_COMMAND_ARG_BYTES,
   MAX_SANDBOX_COMMAND_OUTPUT_BYTES,
-  SANDBOX_EXECUTION_POLICY_CLASS,
-  sandboxExecutionPolicyClassSchema,
   sandboxRuntimeModeSchema,
   sandboxCommandPurposeSchema,
   sandboxExecutionCommandSchema,

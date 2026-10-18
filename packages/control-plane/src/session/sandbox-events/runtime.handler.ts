@@ -65,7 +65,7 @@ export class SandboxRuntimeEventHandler {
   async handleReady(
     event: Extract<SandboxEvent, { type: "ready" }>,
     context: SandboxEventContext
-  ): Promise<void> {
+  ): Promise<boolean> {
     // The runtime reports which harness actually booted; the session's
     // harness is fixed at create, so a mismatch is an image/config drift
     // worth a log line, never something to reconcile silently.
@@ -87,9 +87,16 @@ export class SandboxRuntimeEventHandler {
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
     if (
-      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
+      !this.lifecycle.onRuntimeReady(
+        context.now,
+        event.harness,
+        event.preservationProtocolVersion,
+        event.runtimeMode,
+        event.runtimeVersion,
+        event.bridgeInstanceId
+      )
     ) {
-      return;
+      return false;
     }
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
@@ -100,6 +107,7 @@ export class SandboxRuntimeEventHandler {
     // a bridge is attached (the disconnect check armed at attach, re-armed by
     // every alarm run), and the scheduler keeps the earlier deadline.
     await this.scheduleInactivityCheck();
+    return true;
   }
 
   /**

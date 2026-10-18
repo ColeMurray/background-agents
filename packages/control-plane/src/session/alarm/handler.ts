@@ -24,6 +24,8 @@ export interface AlarmHandlerDeps {
   };
   /** Wakes queued work for a live runtime that nothing else will; idempotent. */
   redriveIdleQueue?: () => Promise<void>;
+  /** Command deadlines share this Durable Object's one alarm slot. */
+  sandboxCommandDeadlines?: () => Promise<void>;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
   now: () => number;
@@ -67,6 +69,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       if (externalActionDeadline !== null) {
         await deps.alarmScheduler.schedule(externalActionDeadline);
       }
+      await deps.sandboxCommandDeadlines?.();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
       // already failed (by lifecycle recovery or a prior alarm),

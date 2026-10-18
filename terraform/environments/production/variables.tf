@@ -782,6 +782,17 @@ variable "pi_workspace_mode" {
   }
 }
 
+variable "pi_sandbox_execution_mode" {
+  description = "Pi sandbox execution capability for new sessions: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_sandbox_execution_mode)
+    error_message = "pi_sandbox_execution_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
 variable "pi_codemode_sandbox_migration_applied" {
   description = "Record that the Pi Code Mode sandbox v1 class migration has been deployed so later versions omit it"
   type        = bool

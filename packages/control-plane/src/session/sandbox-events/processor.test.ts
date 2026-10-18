@@ -27,12 +27,12 @@ function createProcessor() {
     handleToolCall: vi.fn(),
     recordTimelineEvent: vi.fn(),
   };
-  const runtime = { handleHeartbeat: vi.fn() };
+  const runtime = { handleHeartbeat: vi.fn(), handleReady: vi.fn(async () => true) };
   const shutdown = {
     generationReady: vi.fn<(event: ShutdownEvent) => void>(),
     prepared: vi.fn<(event: ShutdownEvent) => void>(),
   };
-  const commands = { handle: vi.fn() };
+  const commands = { handle: vi.fn(), onSandboxReady: vi.fn() };
   const processor = new SessionSandboxEventProcessor(
     log as unknown as Logger,
     repository as unknown as MessageRepository,
@@ -56,10 +56,27 @@ function createProcessor() {
     streaming,
     shutdown,
     commands,
+    runtime,
   };
 }
 
 describe("SessionSandboxEventProcessor command execution boundary", () => {
+  it("does not recover commands when readiness was rejected", async () => {
+    const h = createProcessor();
+    h.runtime.handleReady.mockResolvedValue(false);
+
+    await h.processor.processSandboxEvent({
+      type: "ready",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
+      runtimeMode: "execution",
+      bridgeInstanceId: "bridge-1",
+      runtimeVersion: "v76-old",
+    });
+
+    expect(h.commands.onSandboxReady).not.toHaveBeenCalled();
+  });
+
   it.each([
     { type: "command_started", commandId: "cmd-1", sandboxId: "sandbox-1", timestamp: 1 },
     {

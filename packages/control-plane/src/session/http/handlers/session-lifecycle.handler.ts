@@ -166,7 +166,9 @@ export class SessionLifecycleHandler {
     // projection: reconnects must see draining in the same turn.
     await Promise.all([
       this.statusService.beginTransition("archived"),
-      ...(session.harness === "pi" ? [] : [this.sandboxLifecycle.preserveForArchive()]),
+      ...(session.harness === "pi" && !this.sandboxRepository.getSandbox()
+        ? []
+        : [this.sandboxLifecycle.preserveForArchive()]),
     ]);
     try {
       await this.statusService.confirmIndexStatus("archived");
@@ -264,7 +266,9 @@ export class SessionLifecycleHandler {
 
     await this.cancelSession();
 
-    if (session.harness !== "pi") await this.sandboxLifecycle.cancelSandbox();
+    if (session.harness !== "pi" || this.sandboxRepository.getSandbox()) {
+      await this.sandboxLifecycle.cancelSandbox();
+    }
 
     return Response.json({ status: "cancelled" });
   }

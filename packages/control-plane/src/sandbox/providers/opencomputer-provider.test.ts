@@ -327,6 +327,28 @@ describe("OpenComputerSandboxProvider", () => {
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-provider");
   });
 
+  it("suppresses provider and repository secrets for execution-only sandboxes", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      sandboxAccessPasswordSecret: "secret",
+      llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      runtimeMode: "execution",
+      harness: undefined,
+      userEnvVars: { ANTHROPIC_API_KEY: "sk-repo", CUSTOM_SECRET: "hidden" },
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).not.toHaveProperty("CUSTOM_SECRET");
+    expect(createCall.env).not.toHaveProperty("ANTHROPIC_API_KEY", "sk-provider");
+    const secretStore = vi.mocked(client.createSecretStore);
+    expect(secretStore).not.toHaveBeenCalled();
+  });
+
   it("keeps repo LLM credentials ahead of provider defaults", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {

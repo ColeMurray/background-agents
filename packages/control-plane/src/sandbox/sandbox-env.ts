@@ -1,4 +1,5 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SandboxRuntimeMode } from "@open-inspect/shared";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
@@ -41,7 +42,9 @@ export interface SessionConfigPayload {
   repo_owner: string | null;
   repo_name: string | null;
   /** Agent harness the runtime must boot. */
-  harness: HarnessId;
+  harness?: HarnessId;
+  /** Omitted for the legacy/default agent runtime. */
+  runtime_mode?: Extract<SandboxRuntimeMode, "execution">;
   provider: string;
   model: string;
   /** Omitted from the serialized payload when undefined. */
@@ -64,7 +67,8 @@ export interface SessionConfigInput {
   sessionId: string;
   repoOwner: string | null;
   repoName: string | null;
-  harness: HarnessId;
+  harness?: HarnessId;
+  runtimeMode?: SandboxRuntimeMode;
   provider: string;
   model: string;
   mcpServers?: McpServerConfig[];
@@ -85,12 +89,17 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
     session_id: input.sessionId,
     repo_owner: input.repoOwner,
     repo_name: input.repoName,
-    harness: input.harness,
     provider: input.provider,
     model: input.model,
     mcp_servers: input.mcpServers,
     bridge_early_connect: true,
   };
+  if (input.runtimeMode !== "execution" && input.harness !== undefined) {
+    payload.harness = input.harness;
+  }
+  if (input.runtimeMode === "execution") {
+    payload.runtime_mode = "execution";
+  }
   if (input.branch !== undefined) {
     payload.branch = input.branch;
   }

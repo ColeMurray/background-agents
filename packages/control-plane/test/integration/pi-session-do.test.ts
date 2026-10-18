@@ -92,8 +92,8 @@ describe("PiSessionDO", () => {
         workspace: "enabled",
         repositoryEditing: "off",
         codeMode: "off",
-        sandboxExecution: "off",
-        externalActions: "off",
+        sandboxExecution: "enabled",
+        externalActions: "enabled",
         mcp: "off",
       },
     });
@@ -360,6 +360,7 @@ describe("PiSessionDO", () => {
       "open-inspect",
       "open-inspect.subagent",
       "open-inspect.workspace",
+      "open-inspect.external-actions",
     ]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -371,8 +372,8 @@ describe("PiSessionDO", () => {
         workspace: "enabled",
         repositoryEditing: "off",
         codeMode: "off",
-        sandboxExecution: "off",
-        externalActions: "off",
+        sandboxExecution: "enabled",
+        externalActions: "enabled",
         mcp: "off",
       },
     });

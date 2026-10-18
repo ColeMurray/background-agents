@@ -1,11 +1,10 @@
 import { z } from "zod";
+import { SANDBOX_EXECUTION_TOOL_EFFECT } from "../pi-tool-effects";
 
 export const MAX_SANDBOX_COMMAND_TIMEOUT_MS = 60 * 60 * 1_000;
 export const MAX_SANDBOX_COMMAND_ARGV_ITEMS = 256;
 export const MAX_SANDBOX_COMMAND_ARG_BYTES = 32 * 1024;
 export const MAX_SANDBOX_COMMAND_OUTPUT_BYTES = 64 * 1024;
-export const SANDBOX_EXECUTION_POLICY_CLASS = "sandbox_execution" as const;
-export const sandboxExecutionPolicyClassSchema = z.literal(SANDBOX_EXECUTION_POLICY_CLASS);
 
 export const sandboxRuntimeModeSchema = z.enum(["agent", "execution"]).default("agent");
 export type SandboxRuntimeMode = z.infer<typeof sandboxRuntimeModeSchema>;
@@ -27,7 +26,7 @@ const workspacePathSchema = z
 const commandExecuteSchema = z
   .object({
     type: z.literal("command_execute"),
-    policyClass: sandboxExecutionPolicyClassSchema,
+    effect: z.literal(SANDBOX_EXECUTION_TOOL_EFFECT),
     commandId: commandIdSchema,
     purpose: sandboxCommandPurposeSchema,
     argv: z

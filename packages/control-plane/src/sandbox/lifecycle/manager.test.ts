@@ -94,9 +94,118 @@ describe("SandboxLifecycleManager", () => {
         createdAt: 1_000,
       });
     });
+
+    it("rejects an execution bridge below the minimum runtime generation", () => {
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        runtime_mode: "execution",
+        created_at: 1_000,
+      });
+      const storage = createMockStorage(createMockSession({ harness: "pi" }), sandbox);
+      const manager = createTestLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        createTestConfig()
+      );
+
+      expect(
+        manager.onRuntimeReady(
+          1_750,
+          undefined,
+          1,
+          "execution",
+          "v76-child-output-discovery",
+          "bridge-1"
+        )
+      ).toBe(false);
+      expect(sandbox.status).toBe("failed");
+      expect(storage.recordExecutionBridgeIdentity).not.toHaveBeenCalled();
+    });
+
+    it("records the valid execution bridge identity before readiness", () => {
+      const sandbox = createMockSandbox({
+        status: "connecting",
+        runtime_mode: "execution",
+        created_at: 1_000,
+      });
+      const storage = createMockStorage(createMockSession({ harness: "pi" }), sandbox);
+      const manager = createTestLifecycleManager(
+        createMockProvider(),
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        createTestConfig()
+      );
+
+      expect(
+        manager.onRuntimeReady(
+          1_750,
+          undefined,
+          1,
+          "execution",
+          "v77-pi-sandbox-execution",
+          "bridge-1"
+        )
+      ).toBe(true);
+      expect(storage.recordExecutionBridgeIdentity).toHaveBeenCalledWith("bridge-1");
+    });
   });
 
   describe("spawnSandbox", () => {
+    it("threads an explicit execution-only mode to the provider", async () => {
+      const session = createMockSession({
+        harness: "pi",
+        code_server_enabled: 1,
+        vnc_enabled: 1,
+        sandbox_settings: JSON.stringify({
+          terminalEnabled: true,
+          tunnelPorts: [3000],
+          codeServerPort: 9000,
+          vncPort: 9001,
+          terminalPort: 9002,
+          cpuCores: 2,
+        }),
+      });
+      const storage = createMockStorage(session, createMockSandbox({ status: "pending" }));
+      const provider = createMockProvider();
+      const manager = createTestLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox("spawn", "execution");
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeMode: "execution",
+          harness: undefined,
+          codeServerEnabled: false,
+          vncEnabled: false,
+          agentSlackNotifyEnabled: false,
+          mcpServers: undefined,
+          userEnvVars: undefined,
+          sandboxSettings: { cpuCores: 2 },
+        })
+      );
+    });
+
     it.each([
       ["spawn", "public-session-name"],
       ["restore", null],

@@ -162,7 +162,11 @@ class RepositoryBoot:
             yield scope
 
     async def boot(
-        self, boot_mode: BootMode, expected_tunnel_ports: list[int]
+        self,
+        boot_mode: BootMode,
+        expected_tunnel_ports: list[int],
+        *,
+        run_hooks: bool = True,
     ) -> RepositoryBootResult:
         if self.repo_config_error:
             raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
@@ -221,7 +225,7 @@ class RepositoryBoot:
                     "git.sync_complete", head_sha=head_sha, repository_shas=repository_shas
                 )
         setup_success: bool | None = None
-        if self.repositories and boot_mode in (BootMode.FRESH, BootMode.BUILD):
+        if run_hooks and self.repositories and boot_mode in (BootMode.FRESH, BootMode.BUILD):
             setup_success = True
             for repo in self.repositories:
                 with self._phase(boot_mode, "setup", repo) as setup_phase:
@@ -241,7 +245,7 @@ class RepositoryBoot:
                     )
 
         start_success: bool | None = None
-        if self.repositories and boot_mode is not BootMode.BUILD:
+        if run_hooks and self.repositories and boot_mode is not BootMode.BUILD:
             await self.tunnel_environment.wait_until_ready(expected_tunnel_ports)
             start_success = True
             for index, repo in enumerate(self.repositories):
@@ -272,3 +276,7 @@ class RepositoryBoot:
             repositories=tuple(self.repositories),
             workdir=self._opencode_workdir(),
         )
+
+    async def boot_execution(self, boot_mode: BootMode) -> RepositoryBootResult:
+        """Clone/synchronize only; execution sandboxes run no repository-authored boot hooks."""
+        return await self.boot(boot_mode, [], run_hooks=False)

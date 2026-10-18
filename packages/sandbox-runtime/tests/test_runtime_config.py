@@ -3,7 +3,7 @@ from types import MappingProxyType
 
 import pytest
 
-from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
+from sandbox_runtime.runtime_config import BootMode, RuntimeConfig, RuntimeMode
 
 
 @pytest.mark.parametrize(
@@ -40,6 +40,27 @@ def test_runtime_config_parses_frozen_values_without_environment_patching(tmp_pa
     assert config.session_id == "session-1"
     assert config.base_branch == "develop"
     assert config.has_repository is True
+
+
+@pytest.mark.parametrize(
+    ("session_config", "expected"),
+    [
+        ({}, RuntimeMode.AGENT),
+        ({"runtime_mode": "agent"}, RuntimeMode.AGENT),
+        ({"runtime_mode": "execution"}, RuntimeMode.EXECUTION),
+    ],
+)
+def test_runtime_mode_defaults_to_agent_and_accepts_execution(session_config, expected):
+    config = RuntimeConfig.from_env({"SESSION_CONFIG": json.dumps(session_config)})
+
+    assert config.runtime_mode is expected
+
+
+def test_runtime_mode_rejects_unknown_values():
+    config = RuntimeConfig.from_env({"SESSION_CONFIG": json.dumps({"runtime_mode": "build"})})
+
+    with pytest.raises(ValueError, match="runtime mode"):
+        _ = config.runtime_mode
 
 
 def test_runtime_config_rejects_non_object_session_config():

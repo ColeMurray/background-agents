@@ -6,6 +6,7 @@
  */
 
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SandboxRuntimeMode } from "@open-inspect/shared";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type {
@@ -168,6 +169,7 @@ export function buildModalSandboxDashboardUrl(params: {
 }
 
 export interface CreateSandboxRequest {
+  runtimeMode?: SandboxRuntimeMode;
   scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
@@ -179,7 +181,7 @@ export interface CreateSandboxRequest {
   controlPlaneUrl: string;
   sandboxAuthToken: string;
   agentSessionId?: string;
-  harness: HarnessId;
+  harness?: HarnessId;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
@@ -211,6 +213,7 @@ export interface CreateSandboxResponse {
 }
 
 export interface RestoreSandboxRequest {
+  runtimeMode?: SandboxRuntimeMode;
   scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
@@ -222,7 +225,7 @@ export interface RestoreSandboxRequest {
   controlPlaneUrl: string;
   repoOwner: string | null;
   repoName: string | null;
-  harness: HarnessId;
+  harness?: HarnessId;
   provider: string;
   model: string;
   userEnvVars?: Record<string, string>;
@@ -514,7 +517,8 @@ export class ModalClient {
           clone_host: request.scmIdentity.host,
           clone_username: request.scmIdentity.cloneUsername,
           agent_session_id: request.agentSessionId || null,
-          harness: request.harness,
+          harness: request.runtimeMode === "execution" ? null : (request.harness ?? null),
+          runtime_mode: request.runtimeMode === "execution" ? "execution" : null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,

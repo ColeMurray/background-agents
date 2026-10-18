@@ -10,6 +10,9 @@ export const TOOL_EFFECT_KINDS = [
 
 export type ToolEffectKind = (typeof TOOL_EFFECT_KINDS)[number];
 
+/** Canonical effect classification for any exposed sandbox process execution. */
+export const SANDBOX_EXECUTION_TOOL_EFFECT = "sandbox_execution" satisfies ToolEffectKind;
+
 /** Pi Durable callers which may invoke a registered tool. */
 export const TOOL_CALLERS = ["model", "tools"] as const;
 

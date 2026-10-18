@@ -49,6 +49,28 @@ run "workspace_defaults_off" {
   }
 }
 
+run "sandbox_execution_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_SANDBOX_EXECUTION_MODE"] == "off"
+    error_message = "Pi sandbox execution must fail closed by default."
+  }
+}
+
+run "sandbox_execution_gate_reaches_the_worker" {
+  command = plan
+
+  variables {
+    pi_sandbox_execution_mode = "enabled"
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_SANDBOX_EXECUTION_MODE"] == "enabled"
+    error_message = "The Pi sandbox execution gate must reach the control-plane Worker."
+  }
+}
+
 run "workspace_read_only_reaches_the_worker" {
   command = plan
 

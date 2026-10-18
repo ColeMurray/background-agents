@@ -282,6 +282,18 @@ async def test_create_sandbox_passes_unknown_fields_to_session_config_helper(mon
 
 
 @pytest.mark.asyncio
+async def test_create_sandbox_preserves_execution_runtime_mode(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    await _call_create_sandbox({**CREATE_REQUEST, "runtime_mode": "execution", "harness": "pi"})
+
+    assert captured["config"].session_config.runtime_mode == "execution"
+    assert captured["config"].session_config.harness == "pi"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("call", [_call_create_sandbox, _call_restore_sandbox])
 async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, call):
     _patch_auth(monkeypatch)

@@ -34,7 +34,7 @@ from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
 from .repository_hooks import RepositoryHooks
 from .repository_sync import RepositorySynchronizer
-from .runtime_config import RuntimeConfig
+from .runtime_config import RuntimeConfig, RuntimeMode
 from .supervisor import SandboxSupervisor
 from .tunnel_environment import TunnelEnvironment
 from .web_terminal import WebTerminal
@@ -56,6 +56,8 @@ def build_harness_process(
     claude_config_dir: Path | None,
 ) -> HarnessProcessOwner:
     """The supervisor-half registry: pick the process owner for the session's harness."""
+    if config.runtime_mode is RuntimeMode.EXECUTION:
+        return DormantHarnessProcess()
     match config.harness:
         case HarnessId.OPENCODE:
             return OpenCodeServer(
@@ -81,6 +83,22 @@ def build_harness_process(
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 
+class DormantHarnessProcess:
+    """Process-owner seam for execution sandboxes, which intentionally have no harness."""
+
+    async def start(self, _repositories: Any, _workdir: Any) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def wait(self) -> int | None:
+        return None
+
+    def exit_code(self) -> int | None:
+        return None
+
+
 def claude_config_dir_for(
     config: RuntimeConfig, repositories: Sequence[RepoEntry], log: Any
 ) -> Path | None:
@@ -89,7 +107,7 @@ def claude_config_dir_for(
     Managed skills and memory are materialized before the stager runs, so all
     take the directory from here rather than deciding separately.
     """
-    if config.harness is not HarnessId.CLAUDE:
+    if config.runtime_mode is RuntimeMode.EXECUTION or config.harness is not HarnessId.CLAUDE:
         return None
     return isolated_claude_config_dir(
         resolve_claude_config_dir(), config.workspace_path, repositories, log
@@ -119,6 +137,9 @@ def _build_memory(
     config: RuntimeConfig, claude_config_dir: Path | None, log: Any
 ) -> MemoryMaterializer | None:
     """Session memory needs the control plane; without one the harness starts with none."""
+    if config.runtime_mode is RuntimeMode.EXECUTION:
+        log.info("memory.disabled", reason="execution_runtime")
+        return None
     if not (config.control_plane_url and config.session_id):
         log.info("memory.disabled", reason="no_control_plane_session")
         return None
@@ -158,7 +179,11 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     claude_config_dir = claude_config_dir_for(config, repository_boot.repositories, log)
     managed_skills_config = config.managed_skills_config()
     managed_skills = None
-    if managed_skills_config.control_plane_url and managed_skills_config.session_id:
+    if (
+        config.runtime_mode is RuntimeMode.AGENT
+        and managed_skills_config.control_plane_url
+        and managed_skills_config.session_id
+    ):
         managed_skills = ManagedSkillsMaterializer(
             ManagedSkillsClient(
                 managed_skills_config.control_plane_url,

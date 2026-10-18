@@ -38,6 +38,13 @@ from .tunnels import SandboxTunnels
 from .vcs_env import inject_vcs_env_vars
 from .vm_recovery import VMAllocationOutcome, VMServiceLaunch, find_owned_vm, owned_vm_tags_match
 
+
+def is_execution_runtime(session_config: object) -> bool:
+    if isinstance(session_config, dict):
+        return session_config.get("runtime_mode") == "execution"
+    return getattr(session_config, "runtime_mode", "agent") == "execution"
+
+
 _RESERVED_LAUNCH_ENV_VARS = {
     "RESTORED_FROM_SNAPSHOT",
     "FROM_REPO_IMAGE",
@@ -205,13 +212,17 @@ class SandboxLauncher:
         )
         env_vars.update(tunnels.environment)
 
-        # A fresh handle avoids Modal caching the ID of a deleted/recreated secret.
-        llm_secrets = modal.Secret.from_name("llm-api-keys")
-        await llm_secrets.hydrate.aio()
+        # Execution-only sandboxes never receive deployment model credentials.
+        launch_secrets: list[modal.Secret] = []
+        if not is_execution_runtime(config.session_config):
+            # A fresh handle avoids Modal caching the ID of a deleted/recreated secret.
+            llm_secrets = modal.Secret.from_name("llm-api-keys")
+            await llm_secrets.hydrate.aio()
+            launch_secrets.append(llm_secrets)
         create_kwargs: dict[str, Any] = {
             "image": image,
             "app": app,
-            "secrets": [llm_secrets],
+            "secrets": launch_secrets,
             "timeout": config.timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,

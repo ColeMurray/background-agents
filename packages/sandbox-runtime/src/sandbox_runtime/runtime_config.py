@@ -32,6 +32,11 @@ class BootMode(StrEnum):
         return cls.FRESH
 
 
+class RuntimeMode(StrEnum):
+    AGENT = "agent"
+    EXECUTION = "execution"
+
+
 def _freeze_json(value: Any) -> Any:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
@@ -103,7 +108,8 @@ class BridgeProcessConfig:
     control_plane_url: str
     sandbox_token: str
     session_id: str
-    harness: HarnessId
+    runtime_mode: RuntimeMode
+    harness: HarnessId | None
 
 
 @dataclass(frozen=True)
@@ -168,6 +174,13 @@ class RuntimeConfig:
         return parse_harness_id(self.session_config.get("harness"))
 
     @property
+    def runtime_mode(self) -> RuntimeMode:
+        try:
+            return RuntimeMode(str(self.session_config.get("runtime_mode") or "agent"))
+        except ValueError as error:
+            raise ValueError("Unsupported sandbox runtime mode") from error
+
+    @property
     def bridge_early_connect(self) -> bool:
         """The control plane asked for the bridge to connect ahead of the repository boot.
 
@@ -225,12 +238,14 @@ class RuntimeConfig:
         )
 
     def bridge_process_config(self) -> BridgeProcessConfig:
+        runtime_mode = self.runtime_mode
         return BridgeProcessConfig(
             sandbox_id=self.sandbox_id,
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
             session_id=self.session_id,
-            harness=self.harness,
+            runtime_mode=runtime_mode,
+            harness=self.harness if runtime_mode is RuntimeMode.AGENT else None,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:

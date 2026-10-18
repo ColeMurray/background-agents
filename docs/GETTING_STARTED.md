@@ -1453,6 +1453,7 @@ Secrets for credentials:
 | `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
 | `PI_DURABLE_ENABLED`               | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
 | `PI_WORKSPACE_MODE`                | Pi scratch workspace: `off` (default), `read_only`, or `writable`                               |
+| `PI_SANDBOX_EXECUTION_MODE`        | Pi execution capability: `off`, `read_only`, or `enabled`; no model tool is exposed yet         |
 | `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
 | `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                           |
 | `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                          |

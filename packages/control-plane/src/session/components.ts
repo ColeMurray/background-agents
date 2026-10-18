@@ -22,6 +22,7 @@
  */
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
+import { resolvePiFeatureCapabilities } from "@open-inspect/shared";
 import { HarnessAdmissionError, validateHarnessExecution } from "../harness-admission";
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
@@ -76,6 +77,8 @@ import { SessionCoreRepository } from "./session-core-repository";
 // The composition root grants each consumer only its declared sandbox port.
 // eslint-disable-next-line no-restricted-imports
 import { SandboxRepository } from "./sandbox-repository";
+import { SandboxCommandRepository } from "./sandbox-command-repository";
+import { PiSandboxExecutionCoordinator } from "./pi-sandbox-execution";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -118,6 +121,7 @@ import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
 import { SandboxRuntimeEventHandler } from "./sandbox-events/runtime.handler";
 import { SandboxStreamingEventHandler } from "./sandbox-events/streaming.handler";
+import { SandboxCommandEventHandler } from "./sandbox-events/command.handler";
 import { SandboxPushService } from "./sandbox-push-service";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { PersistedTerminalMessageProjectionStore } from "./terminal-message-projection-store";
@@ -132,6 +136,7 @@ import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
 import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
+import { PiSandboxExecutionHandler } from "./http/handlers/pi-sandbox-execution.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -242,6 +247,7 @@ export interface SessionComponents {
   callbackService: CallbackNotificationService;
   externalActionGateway: ExternalActionGateway;
   externalActionDefinitions: ExternalActionDefinitionRegistry;
+  piSandboxExecution: PiSandboxExecutionCoordinator;
 }
 
 /**
@@ -337,6 +343,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
   // for access secrets, so it takes the key.
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
+  const sandboxCommandRepository = new SandboxCommandRepository(sql, transaction);
 
   // Tier 2 — sockets and alarm scheduling.
   const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
@@ -607,6 +614,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   );
 
   // Tier 7 — services over the queue and lifecycle.
+  const isPiSession = () => sessionCoreRepository.getSession()?.harness === "pi";
+  const isSandboxlessPiSession = () => isPiSession() && sandboxRepository.getSandbox() === null;
   const presenceService = new PresenceService({
     getAuthenticatedClients: () => wsManager.getAuthenticatedClients(),
     messenger,
@@ -614,7 +623,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getSandboxSocket: () => wsManager.getSandboxSocket(),
     isSpawning: () => lifecycleManager.isSpawning(),
     warmSandbox: async () => {
-      if (sessionCoreRepository.getSession()?.harness === "pi") return;
+      if (isSandboxlessPiSession()) return;
       await lifecycleManager.spawnSandbox("warm");
     },
     log,
@@ -649,12 +658,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     generateId
   );
 
-  const isPiSession = () => sessionCoreRepository.getSession()?.harness === "pi";
   const updateLastActivity = (timestamp: number) => {
-    if (!isPiSession()) lifecycleManager.updateLastActivity(timestamp);
+    if (!isSandboxlessPiSession()) lifecycleManager.updateLastActivity(timestamp);
   };
   const scheduleInactivityCheck = async () => {
-    if (!isPiSession()) await lifecycleManager.scheduleInactivityCheck();
+    if (!isSandboxlessPiSession()) await lifecycleManager.scheduleInactivityCheck();
   };
   const streamingEventHandler = new SandboxStreamingEventHandler(
     backgroundTasks,
@@ -680,7 +688,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => (isPiSession() ? Promise.resolve() : lifecycleManager.triggerSnapshot(reason)),
+    (reason) =>
+      isSandboxlessPiSession() ? Promise.resolve() : lifecycleManager.triggerSnapshot(reason),
     updateLastActivity,
     scheduleInactivityCheck,
     () => messageQueue.processMessageQueue(),
@@ -690,6 +699,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
     }
+  );
+  const piSandboxExecution = new PiSandboxExecutionCoordinator({
+    enabled:
+      resolvePiFeatureCapabilities({ sandboxExecution: env.PI_SANDBOX_EXECUTION_MODE })
+        .sandboxExecution === "enabled",
+    commands: sandboxCommandRepository,
+    sandboxes: sandboxRepository,
+    lifecycle: lifecycleManager,
+    sockets: lifecycleSockets,
+    alarmScheduler,
+    getSession: () => sessionCoreRepository.getSession(),
+    isFenced: () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()) !== null,
+    generateId,
+    now: () => Date.now(),
+  });
+  const commandEventHandler = new SandboxCommandEventHandler(sandboxCommandRepository, () =>
+    Date.now()
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -725,6 +751,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     {
       generationReady: (event) => lifecycleManager.onShutdownGenerationReady(event),
       prepared: (event) => lifecycleManager.onShutdownPrepared(event),
+    },
+    {
+      handle: (event) => commandEventHandler.handle(event),
+      onSandboxReady: () => piSandboxExecution.onSandboxReady(),
     }
   );
   const piResultHandler = new PiResultHandler(
@@ -765,6 +795,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     preserveBeforeWatchdogs: (allowCaptureRetry) =>
       lifecycleManager.handleShutdownAlarm(allowCaptureRetry),
     redriveIdleQueue: () => lifecycleManager.redriveIdleQueue(),
+    sandboxCommandDeadlines: () => piSandboxExecution.handleAlarm(),
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
@@ -886,6 +917,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       },
     },
     getSessionId: getPublicSessionId,
+  });
+  const piSandboxExecutionHandler = new PiSandboxExecutionHandler({
+    execution: piSandboxExecution,
+    commands: sandboxCommandRepository,
+    getProcessingMessageId: () => messageRepository.getProcessingMessage()?.id ?? null,
   });
 
   const sandboxHandler = new SandboxHandler(
@@ -1106,6 +1142,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),
     externalActionDecision: (request) => piBridgeHandler.externalActionDecision(request),
+    piSandboxCommand: (request) => piSandboxExecutionHandler.handle(request),
     piResult: (request) => piResultHandler.handle(request),
     piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
@@ -1205,6 +1242,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     externalActionGateway,
     externalActionDefinitions,
+    piSandboxExecution,
   };
 
   return {

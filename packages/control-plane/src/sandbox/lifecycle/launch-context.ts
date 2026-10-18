@@ -59,7 +59,9 @@ export interface SandboxLaunchContextDependencies {
   getLogger: () => Pick<Logger, "info" | "warn">;
 }
 
-export type AgentLaunchFields = Pick<CreateSandboxConfig, "harness" | "provider" | "model">;
+export type AgentLaunchFields = Required<
+  Pick<CreateSandboxConfig, "harness" | "provider" | "model">
+>;
 
 export interface RepositoryLaunchInputs {
   repositories: SessionRepositoryInfo[];

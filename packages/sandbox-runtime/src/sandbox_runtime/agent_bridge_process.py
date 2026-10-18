@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import secrets
 from typing import TYPE_CHECKING, Any
 
 from .constants import OPENCODE_PORT
@@ -22,8 +23,10 @@ class AgentBridgeProcess:
         self.sandbox_token = config.sandbox_token
         self.session_id = config.session_id
         self.harness = config.harness
+        self.runtime_mode = config.runtime_mode
         self._process: asyncio.subprocess.Process | None = None
         self._early_connect = False
+        self._start_count = 0
 
     async def start(self, early_connect: bool | None = None) -> None:
         """Spawn the bridge; ``early_connect`` sticks, so a restart keeps the mode.
@@ -42,6 +45,18 @@ class AgentBridgeProcess:
             self.log.info("bridge.skip", reason="no_session_id")
             return
 
+        mode_arguments = ["--runtime-mode", self.runtime_mode.value]
+        harness_arguments = ["--harness", self.harness.value] if self.harness is not None else []
+        execution_identity_arguments = (
+            [
+                "--bridge-instance-id",
+                secrets.token_hex(16),
+                *(["--bridge-restarted"] if self._start_count > 0 else []),
+            ]
+            if self.runtime_mode.value == "execution"
+            else []
+        )
+        self._start_count += 1
         self._process = await asyncio.create_subprocess_exec(
             "python",
             "-m",
@@ -56,8 +71,9 @@ class AgentBridgeProcess:
             self.sandbox_token,
             "--opencode-port",
             str(OPENCODE_PORT),
-            "--harness",
-            self.harness.value,
+            *mode_arguments,
+            *harness_arguments,
+            *execution_identity_arguments,
             *(["--early-connect"] if self._early_connect else []),
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,

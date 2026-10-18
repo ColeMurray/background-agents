@@ -105,6 +105,47 @@ def _successful_sync(repository_boot):
     return _sync_result(repository_boot.repositories)
 
 
+def test_build_supervisor_accepts_pi_harness_in_execution_mode(monkeypatch):
+    from sandbox_runtime.entrypoint import DormantHarnessProcess, build_supervisor
+
+    environment = {
+        "SANDBOX_ID": "sandbox-1",
+        "REPO_OWNER": "acme",
+        "REPO_NAME": "repo",
+        "SESSION_CONFIG": json.dumps(
+            {"session_id": "session-1", "runtime_mode": "execution", "harness": "pi"}
+        ),
+    }
+    monkeypatch.setattr(os, "environ", environment)
+
+    supervisor = build_supervisor(asyncio.Event())
+
+    assert isinstance(supervisor.harness_process, DormantHarnessProcess)
+
+
+@pytest.mark.asyncio
+async def test_execution_repository_boot_skips_setup_start_and_tunnels(base_env):
+    execution_env = {
+        **base_env,
+        "SESSION_CONFIG": json.dumps(
+            {"session_id": "session-1", "runtime_mode": "execution", "harness": "pi"}
+        ),
+    }
+    supervisor = _make_supervisor(execution_env)
+    repository = supervisor.repository_boot
+    repository.synchronizer.ensure_credentials_configured = AsyncMock()
+    repository.synchronizer.sync = AsyncMock(return_value=_successful_sync(repository))
+    repository.hooks.run_setup = AsyncMock()
+    repository.hooks.run_start = AsyncMock()
+    repository.tunnel_environment.wait_until_ready = AsyncMock()
+
+    await repository.boot_execution(BootMode.FRESH)
+
+    repository.hooks.run_setup.assert_not_awaited()
+    repository.hooks.run_start.assert_not_awaited()
+    repository.tunnel_environment.wait_until_ready.assert_not_awaited()
+
+
 class TestImageBuildMode:
     """IMAGE_BUILD_MODE=true: setup only, don't run start/OpenCode/bridge."""
 

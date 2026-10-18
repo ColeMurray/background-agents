@@ -102,7 +102,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         fromPrebuiltImage: !!config.prebuiltImageId,
         prebuiltImageSha: config.prebuiltImageSha ?? undefined,
       });
-      secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
+      secretStore =
+        config.runtimeMode === "execution"
+          ? undefined
+          : await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const labels = this.buildLabels(config);
       const timeoutSeconds = config.timeoutSeconds;
       let sandbox = await this.client.createSandbox({
@@ -178,7 +181,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       const environment = await this.buildRuntimeEnvironment(config, {
         restoredFromSnapshot: true,
       });
-      secretStore = await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
+      secretStore =
+        config.runtimeMode === "execution"
+          ? undefined
+          : await this.createSecretStoreFor(config.sessionId, environment.secretEnvVars);
       const timeoutSeconds = config.timeoutSeconds;
       let sandbox = await this.client.createSandbox({
         name: config.sandboxId,
@@ -567,7 +573,11 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       prebuiltImageSha?: string;
     } = {}
   ): Promise<PreparedOpenComputerEnvironment> {
-    const { envVars: baseEnvVars, secretEnvVars } = this.prepareEnvironment(config.userEnvVars);
+    const executionOnly = config.runtimeMode === "execution";
+    const { envVars: baseEnvVars, secretEnvVars } = this.prepareEnvironment(
+      executionOnly ? undefined : config.userEnvVars,
+      { includeLlmEnv: !executionOnly }
+    );
     const envVars = buildSandboxEnvVars(config, {
       baseEnvVars,
       scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
@@ -606,7 +616,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     // The inherited env can also carry a deployment LLM key that has since been
     // unset. Blank any key neither the deployment nor the repository supplies
     // now, so a checkpoint taken before the key was removed cannot restore it.
-    if (mode.restoredFromSnapshot || mode.fromPrebuiltImage) {
+    if (executionOnly) {
+      for (const key of Object.keys(this.providerConfig.llmEnvVars ?? {})) envVars[key] = "";
+    } else if (mode.restoredFromSnapshot || mode.fromPrebuiltImage) {
       for (const key of Object.keys(this.providerConfig.llmEnvVars ?? {})) {
         envVars[key] ??= "";
       }
@@ -655,10 +667,11 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
   private prepareEnvironment(
     userEnvVars: Record<string, string> | undefined,
-    options: { scrubReservedRepoImageEnv?: boolean } = {}
+    options: { scrubReservedRepoImageEnv?: boolean; includeLlmEnv?: boolean } = {}
   ): PreparedOpenComputerEnvironment {
     const envVars: Record<string, string> = {};
-    copyDefinedEnvVars(envVars, this.providerConfig.llmEnvVars);
+    if (options.includeLlmEnv !== false)
+      copyDefinedEnvVars(envVars, this.providerConfig.llmEnvVars);
     copyDefinedEnvVars(envVars, userEnvVars);
 
     const secretEnvVars = copyDefinedEnvVars({}, userEnvVars);
