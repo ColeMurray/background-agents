@@ -40,6 +40,8 @@ import { UserStore } from "./user-store";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import { automationExecutionPredicate } from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
+import { AutomationExecutorReassignmentStore } from "./automation-executor-reassignment";
+import type { BoundAppliedAuditEvent } from "./team-audit";
 
 /** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
 function needsCanonicalOwner(row: AutomationRow): boolean {
@@ -516,10 +518,17 @@ export class AutomationStore {
     const identity = await new UserStore(this.db).getIdentity("github", automation.created_by);
     if (!identity) return automation;
 
-    const result = await this.db
-      .prepare("UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL")
-      .bind(identity.userId, automation.id)
-      .run();
+    const [, result] = await this.db.batch(
+      new AutomationExecutorReassignmentStore(this.db).bindBulkReassignment({
+        executorUpdate: this.db
+          .prepare("UPDATE automations SET user_id = ? WHERE id = ? AND user_id IS NULL")
+          .bind(identity.userId, automation.id),
+        automationId: automation.id,
+        previousExecutorUserId: null,
+        nextExecutorUserId: identity.userId,
+        revokedAt: Date.now(),
+      })
+    );
     if ((result.meta?.changes ?? 0) > 0) {
       return { ...automation, user_id: identity.userId };
     }
@@ -726,18 +735,26 @@ export class AutomationStore {
 
   /**
    * Reassign the executor only if, at write time, the caller still holds reassignment authority
-   * and the candidate can still launch the automation's current targets.
+   * and the candidate can still launch the automation's current targets. The returned bundle is
+   * indivisible: UPDATE -> audit -> external-action grant revocation preserves both the audit
+   * helper's immediate `changes()` dependency and the executor/grant invariant.
    */
-  bindExecutorChange(automation: AutomationRow, userId: string, actorUserId: string): SqlStatement {
+  bindExecutorChange(
+    automation: AutomationRow,
+    userId: string,
+    actorUserId: string,
+    audit: BoundAppliedAuditEvent
+  ): SqlStatement[] {
     const manageOwn = rolePermissionPredicate("automations.manage.own");
     const manageAny = rolePermissionPredicate("automations.manage.any");
+    const changedAt = Date.now();
     const execution = automationExecutionPredicate({
       automationId: automation.id,
       executionUserId: userId,
       requiresRepositoryUse: "stored",
       requiresEnvironmentUse: "stored",
     });
-    return this.db
+    const executorUpdate = this.db
       .prepare(
         `UPDATE automations SET user_id = ?, updated_at = ?
          WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
@@ -756,7 +773,7 @@ export class AutomationStore {
       )
       .bind(
         userId,
-        Date.now(),
+        changedAt,
         automation.id,
         automation.user_id,
         automation.owner_team_id,
@@ -767,6 +784,12 @@ export class AutomationStore {
         ...WORKSPACE_ADMIN_ROLE_KEYS,
         ...execution.values
       );
+    return new AutomationExecutorReassignmentStore(this.db).bindGuardedReassignment({
+      executorUpdate,
+      audit,
+      automationId: automation.id,
+      revokedAt: changedAt,
+    });
   }
 
   /** Build a soft-delete statement for composition in an atomic batch. */

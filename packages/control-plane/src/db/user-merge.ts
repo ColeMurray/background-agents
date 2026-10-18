@@ -1,4 +1,5 @@
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
+import { AutomationExecutorReassignmentStore } from "./automation-executor-reassignment.ts";
 
 /**
  * Split-merge primitive: converge a loser canonical user's entire graph onto
@@ -34,7 +35,8 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 /**
  * Mirror of `./email`'s normalizeEmail: this module is imported by the
  * operator CLI under Node's type-stripping loader, which cannot resolve
- * extensionless runtime imports — so it must stay free of value imports.
+ * extensionless runtime imports. Runtime imports in this module must therefore
+ * include their `.ts` extension and remain free of Node-incompatible side effects.
  * Keep byte-identical to `./email` and to the SQL `lower(trim(...))` rule.
  */
 function normalizeEmail(email: string | null | undefined): string | null {
@@ -112,8 +114,14 @@ const RESULT_CHANGE_DIVISORS: Partial<Record<UserMergeCountKey, number>> = {
 
 interface MergeOperation {
   readonly key: UserMergeCountKey;
-  readonly execute: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
+  readonly execute: (
+    db: SqlDatabase,
+    survivorId: string,
+    loserId: string,
+    occurredAt: number
+  ) => readonly SqlStatement[];
   readonly preview: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
+  readonly resultOffset?: number;
   readonly subtract?: UserMergeCountKey;
   readonly countResultRows?: boolean;
 }
@@ -121,8 +129,9 @@ interface MergeOperation {
 function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
   return {
     key,
-    execute: (db, survivorId, loserId) =>
+    execute: (db, survivorId, loserId) => [
       db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).bind(survivorId, loserId),
+    ],
     preview: (db, _survivorId, loserId) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
   };
@@ -131,8 +140,9 @@ function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id
 function regularDelete(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
   return {
     key,
-    execute: (db, _survivorId, loserId) =>
+    execute: (db, _survivorId, loserId) => [
       db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).bind(loserId),
+    ],
     preview: (db, _survivorId, loserId) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
   };
@@ -147,10 +157,11 @@ function dedupeThenRepoint(options: {
   return [
     {
       key: options.dedupeKey,
-      execute: (db, survivorId, loserId) =>
+      execute: (db, survivorId, loserId) => [
         db
           .prepare(`DELETE FROM ${options.table} WHERE user_id = ? AND ${options.collision}`)
           .bind(loserId, survivorId),
+      ],
       preview: (db, survivorId, loserId) =>
         db
           .prepare(
@@ -211,11 +222,20 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
   regularRepoint("sessionsRepointed", "sessions"),
   regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
   {
-    ...regularRepoint("automationsOwnedRepointed", "automations"),
-    execute: (db, survivorId, loserId) =>
-      db
-        .prepare("UPDATE automations SET user_id = ? WHERE user_id = ? RETURNING id")
-        .bind(survivorId, loserId),
+    key: "automationsOwnedRepointed",
+    execute: (db, survivorId, loserId, occurredAt) =>
+      new AutomationExecutorReassignmentStore(db).bindBulkReassignment({
+        executorUpdate: db
+          .prepare("UPDATE automations SET user_id = ? WHERE user_id = ? RETURNING id")
+          .bind(survivorId, loserId),
+        automationId: null,
+        previousExecutorUserId: loserId,
+        nextExecutorUserId: survivorId,
+        revokedAt: occurredAt,
+      }),
+    preview: (db, _survivorId, loserId) =>
+      db.prepare("SELECT COUNT(*) AS count FROM automations WHERE user_id = ?").bind(loserId),
+    resultOffset: 1,
     countResultRows: true,
   },
   regularRepoint("automationsCreatedRepointed", "automations", "created_by"),
@@ -244,14 +264,15 @@ const SKILL_PROFILE_OPERATIONS = dedupeThenRepoint({
 
 const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
   key: "skillCatalogGenerationsAdvanced",
-  execute: (db, _survivorId, loserId) =>
+  execute: (db, _survivorId, loserId) => [
     db
       .prepare(
         `UPDATE skills_catalog_state SET generation = generation + 1
-         WHERE singleton = 1
-           AND EXISTS (SELECT 1 FROM skill_profiles WHERE user_id = ?)`
+           WHERE singleton = 1
+             AND EXISTS (SELECT 1 FROM skill_profiles WHERE user_id = ?)`
       )
       .bind(loserId),
+  ],
   preview: (db, _survivorId, loserId) =>
     db
       .prepare(
@@ -308,12 +329,12 @@ const FINAL_REPOINT_OPERATIONS = [
   }),
 ] as const satisfies readonly MergeOperation[];
 
-const TABLE_OPERATIONS = [
+const TABLE_OPERATIONS: readonly MergeOperation[] = [
   ...BEFORE_SKILL_PROFILE_OPERATIONS,
   SKILL_CATALOG_GENERATION_OPERATION,
   ...SKILL_PROFILE_OPERATIONS,
   ...FINAL_REPOINT_OPERATIONS,
-] as const;
+];
 
 /** Counts and identities produced by a user merge or dry-run preview. */
 export interface UserMergeResult {
@@ -415,7 +436,9 @@ export async function mergeUsers(
   };
   const addOperations = (operations: readonly MergeOperation[]) => {
     for (const operation of operations) {
-      add(operation.key, operation.execute(db, survivorId, loserId));
+      const operationStatements = operation.execute(db, survivorId, loserId, occurredAt);
+      track[operation.key] = statements.length + (operation.resultOffset ?? 0);
+      statements.push(...operationStatements);
     }
   };
 
@@ -518,10 +541,7 @@ export async function mergeUsers(
 
   // Profile resolution uses this generation as a consistency fence. Advance
   // it before any profile membership or ownership rows are changed.
-  add(
-    SKILL_CATALOG_GENERATION_OPERATION.key,
-    SKILL_CATALOG_GENERATION_OPERATION.execute(db, survivorId, loserId)
-  );
+  addOperations([SKILL_CATALOG_GENERATION_OPERATION]);
 
   // Merge items before deleting colliding skill profiles.
   add(

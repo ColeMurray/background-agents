@@ -21,8 +21,9 @@ CREATE INDEX idx_automation_external_action_grants_executor
   ON automation_external_action_grants(executor_user_id, automation_id)
   WHERE revoked_at IS NULL;
 
--- Reassignment must revoke in the same database statement. A route-level
--- follow-up would leave a fail-open window if the Worker died between writes.
+-- Temporary rollback bridge for binaries that predate application-level
+-- executor-change revocation. Remove only in a later forward migration after
+-- those binaries are outside every rollback window.
 CREATE TRIGGER revoke_external_action_grants_on_executor_change
 AFTER UPDATE OF user_id ON automations
 WHEN OLD.user_id IS NOT NEW.user_id

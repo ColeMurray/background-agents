@@ -240,6 +240,20 @@ describe("automation team ownership", () => {
 
   it("reserves executor changes for leads and audits only effective changes", async () => {
     await automation("executor-change", TEAM_A);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO automation_external_action_grants
+          (id, automation_id, executor_user_id, provider, action, created_by, created_at)
+         VALUES ('grant-route-1', 'executor-change', ?, 'fake', 'publish_comment', ?, 1)`
+      ).bind(EXECUTOR, LEAD),
+      env.DB.prepare(
+        `INSERT INTO automation_external_action_grants
+          (id, automation_id, executor_user_id, provider, action, created_by, created_at,
+           revoked_at, revoked_reason)
+         VALUES ('grant-route-history', 'executor-change', ?, 'fake', 'close_issue', ?, 1,
+                 2, 'operator_revoked')`
+      ).bind(EXECUTOR, LEAD),
+    ]);
     const path = "/automations/executor-change";
     await expectStatus(request(path, EXECUTOR, "PATCH", { userId: MEMBER }), 403);
     expect((await store.getById("executor-change"))?.user_id).toBe(EXECUTOR);
@@ -262,6 +276,25 @@ describe("automation team ownership", () => {
       before: { userId: EXECUTOR },
       after: { userId: MEMBER },
     });
+    expect(
+      await env.DB.prepare(
+        `SELECT id, revoked_at, revoked_reason FROM automation_external_action_grants
+         WHERE automation_id = 'executor-change' ORDER BY id`
+      ).all()
+    ).toMatchObject({
+      results: [
+        {
+          id: "grant-route-1",
+          revoked_at: expect.any(Number),
+          revoked_reason: "executor_changed",
+        },
+        {
+          id: "grant-route-history",
+          revoked_at: 2,
+          revoked_reason: "operator_revoked",
+        },
+      ],
+    });
     await expectStatus(request(path, LEAD, "PATCH", { userId: MEMBER }), 200);
     expect(
       await env.DB.prepare(
@@ -272,14 +305,30 @@ describe("automation team ownership", () => {
 
   it("rolls back an executor mutation when its batched audit fails", async () => {
     await automation("executor-change", TEAM_A);
+    await env.DB.prepare(
+      `INSERT INTO automation_external_action_grants
+        (id, automation_id, executor_user_id, provider, action, created_by, created_at)
+       VALUES ('grant-batch-failure', 'executor-change', ?, 'fake', 'publish_comment', ?, 1)`
+    )
+      .bind(EXECUTOR, LEAD)
+      .run();
     const row = (await store.getById("executor-change"))!;
     await expect(
-      sqlDatabase(env.DB).batch([
-        store.bindExecutorChange(row, MEMBER, LEAD),
-        env.DB.prepare("INSERT INTO authorization_audit_events (id) VALUES ('invalid-audit')"),
-      ])
+      sqlDatabase(env.DB).batch(
+        store.bindExecutorChange(row, MEMBER, LEAD, {
+          id: "invalid-audit",
+          statement: env.DB.prepare(
+            "INSERT INTO authorization_audit_events (id) VALUES ('invalid-audit')"
+          ),
+        })
+      )
     ).rejects.toThrow();
     expect((await store.getById(row.id))?.user_id).toBe(EXECUTOR);
+    expect(
+      await env.DB.prepare(
+        "SELECT revoked_at, revoked_reason FROM automation_external_action_grants WHERE id = 'grant-batch-failure'"
+      ).first()
+    ).toEqual({ revoked_at: null, revoked_reason: null });
   });
 
   it("allows administrator reassignment of a workspace automation", async () => {

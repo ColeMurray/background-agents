@@ -102,12 +102,20 @@ describe("automation router authorization", () => {
 
   it("repairs a legacy GitHub owner before own-scope route admission", async () => {
     await seedBrowser("member");
+    const other = await new UserStore(sqlDatabase(env.DB)).createUser({ displayName: "Other" });
     const store = new AutomationStore(env.DB);
     await store.create({
       ...automation("legacy-own-automation", BROWSER_USER_ID),
       created_by: "583231",
       user_id: null,
     });
+    await env.DB.prepare(
+      `INSERT INTO automation_external_action_grants
+        (id, automation_id, executor_user_id, provider, action, created_by, created_at)
+       VALUES ('grant-legacy-mismatch', 'legacy-own-automation', ?, 'fake', 'close_issue', ?, 1)`
+    )
+      .bind(other.id, BROWSER_USER_ID)
+      .run();
 
     const response = await serviceFetch("https://cp.test/automations/legacy-own-automation", {
       method: "PUT",
@@ -118,6 +126,14 @@ describe("automation router authorization", () => {
 
     expect(response.status).toBe(200);
     expect((await store.getById("legacy-own-automation"))?.user_id).toBe(BROWSER_USER_ID);
+    expect(
+      await env.DB.prepare(
+        `SELECT id, revoked_reason FROM automation_external_action_grants
+         WHERE automation_id = 'legacy-own-automation' ORDER BY id`
+      ).all()
+    ).toMatchObject({
+      results: [{ id: "grant-legacy-mismatch", revoked_reason: "executor_changed" }],
+    });
   });
 
   it("denies users without manage permission", async () => {

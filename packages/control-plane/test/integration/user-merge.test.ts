@@ -102,8 +102,17 @@ describe("mergeUsers", () => {
     await insertSession("session-survivor", SURVIVOR);
     await env.DB.prepare(
       `INSERT INTO automation_external_action_grants
-       (id, automation_id, executor_user_id, provider, action, created_by, created_at)
+        (id, automation_id, executor_user_id, provider, action, created_by, created_at)
        VALUES ('grant-merge', 'auto-1', ?, 'fake', 'publish_comment', ?, ?)`
+    )
+      .bind(LOSER, LOSER, SEED_NOW_MS)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO automation_external_action_grants
+       (id, automation_id, executor_user_id, provider, action, created_by, created_at,
+        revoked_at, revoked_reason)
+       VALUES ('grant-merge-history', 'auto-1', ?, 'fake', 'close_issue', ?, ?,
+               1234, 'operator_revoked')`
     )
       .bind(LOSER, LOSER, SEED_NOW_MS)
       .run();
@@ -121,8 +130,8 @@ describe("mergeUsers", () => {
       authSessionsDeleted: 1,
       automationsOwnedRepointed: 1,
       automationsCreatedRepointed: 1,
-      externalActionGrantExecutorsRepointed: 1,
-      externalActionGrantCreatorsRepointed: 1,
+      externalActionGrantExecutorsRepointed: 2,
+      externalActionGrantCreatorsRepointed: 2,
       scmTokensRepointed: 1,
       skillProfilesRepointed: 1,
       skillCatalogGenerationsAdvanced: 1,
@@ -157,13 +166,26 @@ describe("mergeUsers", () => {
     ).toEqual({ user_id: SURVIVOR, created_by: SURVIVOR });
     expect(
       await env.DB.prepare(
-        `SELECT executor_user_id, created_by, revoked_reason
-         FROM automation_external_action_grants WHERE id = 'grant-merge'`
-      ).first()
-    ).toEqual({
-      executor_user_id: SURVIVOR,
-      created_by: SURVIVOR,
-      revoked_reason: "executor_changed",
+        `SELECT id, executor_user_id, created_by, revoked_at, revoked_reason
+         FROM automation_external_action_grants WHERE automation_id = 'auto-1' ORDER BY id`
+      ).all()
+    ).toMatchObject({
+      results: [
+        {
+          id: "grant-merge",
+          executor_user_id: SURVIVOR,
+          created_by: SURVIVOR,
+          revoked_at: expect.any(Number),
+          revoked_reason: "executor_changed",
+        },
+        {
+          id: "grant-merge-history",
+          executor_user_id: SURVIVOR,
+          created_by: SURVIVOR,
+          revoked_at: 1234,
+          revoked_reason: "operator_revoked",
+        },
+      ],
     });
     expect(
       await env.DB.prepare(`SELECT user_id FROM skill_profiles WHERE id = 'profile-loser'`).first()
@@ -562,6 +584,56 @@ describe("mergeUsers", () => {
         "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.user_merged'"
       ).first()
     ).toEqual({ count: 0 });
+  });
+
+  it("rolls back bulk executor grant revocation when a later merge statement fails", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await insertAutomation("auto-batch-failure", LOSER, LOSER);
+    await env.DB.prepare(
+      `INSERT INTO automation_external_action_grants
+       (id, automation_id, executor_user_id, provider, action, created_by, created_at)
+       VALUES ('grant-merge-failure', 'auto-batch-failure', ?, 'fake', 'publish_comment', ?, ?)`
+    )
+      .bind(LOSER, LOSER, SEED_NOW_MS)
+      .run();
+    let batchCount = 0;
+    const failingDatabase: SqlDatabase = {
+      prepare(query: string): SqlStatement {
+        return env.DB.prepare(query) as unknown as SqlStatement;
+      },
+      async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+        batchCount += 1;
+        const finalStatements =
+          batchCount === 2
+            ? [
+                ...statements,
+                env.DB.prepare("INSERT INTO users (id) VALUES (?)").bind(
+                  SURVIVOR
+                ) as unknown as SqlStatement,
+              ]
+            : statements;
+        return env.DB.batch(finalStatements as unknown as D1PreparedStatement[]) as Promise<
+          SqlResult<T>[]
+        >;
+      },
+    };
+
+    await expect(
+      mergeUsers(failingDatabase, { survivorId: SURVIVOR, loserId: LOSER })
+    ).rejects.toThrow();
+
+    expect(
+      await env.DB.prepare(
+        "SELECT user_id FROM automations WHERE id = 'auto-batch-failure'"
+      ).first()
+    ).toEqual({ user_id: LOSER });
+    expect(
+      await env.DB.prepare(
+        "SELECT executor_user_id, revoked_at, revoked_reason FROM automation_external_action_grants WHERE id = 'grant-merge-failure'"
+      ).first()
+    ).toEqual({ executor_user_id: LOSER, revoked_at: null, revoked_reason: null });
+    expect(await getUserRow(LOSER)).not.toBeNull();
   });
 
   it("rejects a missing survivor and a self-merge", async () => {

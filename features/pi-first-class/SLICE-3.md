@@ -7,8 +7,10 @@ enable a production provider.
 
 - SessionDO migration 60 owns immutable action documents, exact-call bindings, transition history,
   dispatch leases, indeterminate outcomes, and reconciliation.
-- D1 migration 0090 owns executor-scoped automation grants. Executor reassignment revokes grants in
-  the same database statement; user merge repoints their references while retaining revocation.
+- D1 migration 0090 owns executor-scoped automation grants. New binaries use a required atomic
+  statement bundle that preserves audit ordering, revokes mismatched active grants, and lets user
+  merge repoint historical references without altering prior revocations. Migration 0090 temporarily
+  retains the equivalent trigger as a rollback bridge for pre-bundle binaries.
 - Pi installs a mandatory effect-catalog policy. Unknown tools fail closed. Local mutation and
   sandbox execution require their own authorization gateways. External mutations prepare an action
   in SessionDO and execute only through a credential-free gateway tool.

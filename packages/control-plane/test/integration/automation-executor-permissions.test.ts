@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { bindAppliedAuditEventWithId } from "../../src/db/team-audit";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
 import {
@@ -224,9 +225,24 @@ describe("automation executor launch permissions (integration)", () => {
     }
 
     async function write(row: AutomationRow, actorUserId = LEAD) {
-      const [result] = await sqlDatabase(env.DB).batch([
-        new AutomationStore(env.DB).bindExecutorChange(row, CANDIDATE, actorUserId),
-      ]);
+      const audit = bindAppliedAuditEventWithId(
+        env.DB,
+        {
+          requestId: crypto.randomUUID(),
+          actorUserId,
+          action: "automation.executor_changed",
+          resourceType: "automation",
+          resourceId: row.id,
+          teamId: row.owner_team_id,
+          targetUserId: CANDIDATE,
+          before: { userId: row.user_id },
+          after: { userId: CANDIDATE },
+        },
+        true
+      );
+      const [result] = await sqlDatabase(env.DB).batch(
+        new AutomationStore(env.DB).bindExecutorChange(row, CANDIDATE, actorUserId, audit)
+      );
       return result.meta.changes;
     }
 

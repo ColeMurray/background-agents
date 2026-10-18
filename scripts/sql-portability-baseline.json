@@ -56,6 +56,12 @@
         "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER"],
         "reason": "Fence private team-default inserts and updates from the previous Worker between migration commit and deployment. New store validation cannot constrain old binaries; SQLite cannot narrow the existing CHECK in place, and rebuilding the referenced teams table risks deleting dependents. A Postgres migration would ALTER the CHECK instead."
       }
+    },
+    "terraform/d1/migrations/0090_external_actions.sql": {
+      "create-trigger": {
+        "occurrences": ["CREATE TRIGGER"],
+        "reason": "Temporary compatibility bridge protecting rollback to the pre-application-revocation binary at 6c125c95, whose executor reassignment and user-merge writes rely on this trigger. Remove it with a separately numbered forward migration only after those binaries are outside every rollback window."
+      }
     }
   },
   "grandfatheredMigrations": [
