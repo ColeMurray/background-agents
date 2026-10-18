@@ -6,6 +6,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
   createRegistry,
+  defineExtension,
   Harness,
   type AgentEvent,
   type AgentEventStream,
@@ -40,6 +41,11 @@ import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extens
 import { createPiToolPolicyExtension } from "../pi/tool-policy-extension";
 import { latchPiFeatureCapabilitySnapshot } from "../pi/capability-snapshot";
 import { z } from "zod";
+import {
+  externalActionStatusResponseSchema,
+  type ExternalActionPrepareRequest,
+} from "@open-inspect/shared";
+import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
 
 type PiWorkerBindings = Pick<
   WorkerBindings,
@@ -88,13 +94,32 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         {
           slot: "policy",
           effects: [],
-          createExtension: createPiToolPolicyExtension,
+          createExtension: (effects) =>
+            createPiToolPolicyExtension(effects, [
+              createExternalActionPolicyDelegate({
+                client: {
+                  prepare: (request, signal) => this.prepareExternalAction(request, signal),
+                  status: (actionId, signal) => this.externalActionStatus(actionId, signal),
+                  execute: (actionId, signal) => this.executeExternalAction(actionId, signal),
+                },
+                // Provider-specific tools are contributed to the external_actions
+                // slot together with their canonical effect registrations.
+                externalActions: {},
+              }),
+            ]),
         },
         { slot: "core", extension: core, effects: declaredEffects(core) },
         {
           slot: "delegation",
           extension: delegation,
           effects: declaredEffects(delegation),
+        },
+        {
+          slot: "external_actions",
+          feature: "externalActions",
+          minimumCapability: "enabled",
+          extension: defineExtension({ name: "open-inspect.external-actions" }),
+          effects: [],
         },
       ];
       if (sessionContext.skills && sessionContext.skills.skills.length > 0) {
@@ -436,6 +461,68 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return z.json().parse(body);
+  }
+
+  private async prepareExternalAction(request: ExternalActionPrepareRequest, signal?: AbortSignal) {
+    return this.externalActionRequest(
+      SessionInternalPaths.piExternalActionPrepare,
+      { method: "POST", body: JSON.stringify(request) },
+      signal
+    );
+  }
+
+  private async externalActionStatus(actionId: string, signal?: AbortSignal) {
+    return this.externalActionRequest(
+      SessionInternalPaths.piExternalActionStatus,
+      { method: "GET" },
+      signal,
+      `?actionId=${encodeURIComponent(actionId)}`
+    );
+  }
+
+  private async executeExternalAction(actionId: string, signal?: AbortSignal) {
+    return this.externalActionRequest(
+      SessionInternalPaths.piExternalActionExecute,
+      { method: "POST", body: JSON.stringify({ actionId }) },
+      signal
+    );
+  }
+
+  private async externalActionRequest(
+    path:
+      | typeof SessionInternalPaths.piExternalActionPrepare
+      | typeof SessionInternalPaths.piExternalActionStatus
+      | typeof SessionInternalPaths.piExternalActionExecute,
+    init: RequestInit,
+    signal?: AbortSignal,
+    search = ""
+  ) {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
+    if (!operation) throw new Error("Pi Durable has no active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${path}${search}`, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operation.operationId,
+        },
+        signal,
+      })
+    );
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      const message =
+        typeof body === "object" &&
+        body !== null &&
+        "error" in body &&
+        typeof body.error === "string"
+          ? body.error
+          : `External action policy failed (${response.status})`;
+      throw new Error(message);
+    }
+    return externalActionStatusResponseSchema.parse(await response.json());
   }
 
   private async startEventRelay(

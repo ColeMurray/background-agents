@@ -52,6 +52,11 @@ export interface SessionInternalRouteHandlers {
   piCredential: SessionInternalRouteHandler;
   piContext: SessionInternalRouteHandler;
   piRepositoryTool: SessionInternalRouteHandler;
+  piExternalActionPrepare: SessionInternalRouteHandler;
+  piExternalActionStatus: SessionInternalRouteHandler;
+  piExternalActionExecute: SessionInternalRouteHandler;
+  externalActionStatus: SessionInternalRouteHandler;
+  externalActionDecision: SessionInternalRouteHandler;
   piResult: SessionInternalRouteHandler;
   piEvent: SessionInternalRouteHandler;
   xaiTokenRefresh: SessionInternalRouteHandler;
@@ -144,6 +149,31 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.piRepositoryTool,
       handler: handlers.piRepositoryTool,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piExternalActionPrepare,
+      handler: handlers.piExternalActionPrepare,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piExternalActionStatus,
+      handler: handlers.piExternalActionStatus,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piExternalActionExecute,
+      handler: handlers.piExternalActionExecute,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.externalActionStatus,
+      handler: handlers.externalActionStatus,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.externalActionDecision,
+      handler: handlers.externalActionDecision,
     },
     { method: "POST", path: SessionInternalPaths.piResult, handler: handlers.piResult },
     { method: "POST", path: SessionInternalPaths.piEvent, handler: handlers.piEvent },

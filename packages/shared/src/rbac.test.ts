@@ -62,7 +62,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(46);
+    expect(PERMISSION_IDS).toHaveLength(48);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -92,6 +92,15 @@ describe("RBAC registry", () => {
 
   it("assigns every permission explicitly to Owner", () => {
     expect(permissionsForBuiltInRole("owner")).toEqual(PERMISSION_IDS);
+  });
+
+  it("reserves external-action approvals and unattended grants for administrators", () => {
+    expect(permissionsForBuiltInRole("administrator")).toEqual(
+      expect.arrayContaining(["external_actions.approve", "external_actions.manage_grants"])
+    );
+    expect(permissionsForBuiltInRole("member")).not.toEqual(
+      expect.arrayContaining(["external_actions.approve", "external_actions.manage_grants"])
+    );
   });
 
   it("reserves ownership transfer for Owner", () => {

@@ -108,6 +108,11 @@ export const AUDIT_OPERATION_ACTIONS = [
   "team.secret_set",
   "team.secret_deleted",
   "automation.executor_changed",
+  "external_action.approved",
+  "external_action.denied",
+  "external_action.executed",
+  "automation.external_action_grant_added",
+  "automation.external_action_grant_revoked",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";

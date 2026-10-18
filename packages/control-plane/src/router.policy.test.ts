@@ -39,14 +39,33 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(237);
+    expect(routes).toHaveLength(239);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(179);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(237);
+    expect(new Set(paths).size).toBe(181);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(239);
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
       authentication: { kind: "user" },
       authorization: { kind: "active-self" },
+      cacheControl: "private, no-store",
+    });
+    expect(routeFor("GET", "/sessions/session-1/external-actions/action-1")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
+      },
+      cacheControl: "private, no-store",
+    });
+    expect(
+      routeFor("POST", "/sessions/session-1/external-actions/action-1/decision")
+    ).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [
+          { kind: "session", action: "read", sessionIdParam: "id" },
+          { kind: "permission", permission: "external_actions.approve" },
+        ],
+      },
       cacheControl: "private, no-store",
     });
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({

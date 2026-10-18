@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID } from "@open-inspect/shared/pi-migration-reservations";
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -78,6 +79,58 @@ it("upgrades existing sessions with a persisted status revision and preserves it
     expect(db.prepare("SELECT status_revision FROM session").get()).toEqual({ status_revision: 7 });
   } finally {
     db.close();
+  }
+});
+
+it("creates the external action ledger and append-only history on fresh and migrated sessions", () => {
+  for (const mode of ["fresh", "migrated"] as const) {
+    const db = new DatabaseSync(":memory:");
+    try {
+      if (mode === "fresh") {
+        initSchema(createDatabaseSql(db));
+      } else {
+        db.exec(
+          "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+        );
+        for (const migration of MIGRATIONS.filter(
+          ({ id }) => id !== PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID
+        )) {
+          db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+        }
+        applyMigrations(createDatabaseSql(db));
+      }
+
+      expect(db.prepare("PRAGMA table_info(external_actions)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "id" }),
+          expect.objectContaining({ name: "lease_expires_at" }),
+          expect.objectContaining({ name: "fingerprint" }),
+          expect.objectContaining({ name: "effect_fingerprint" }),
+          expect.objectContaining({ name: "continuation_consumed_at" }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(external_action_history)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "action_id" }),
+          expect.objectContaining({ name: "revision" }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(external_action_bindings)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "action_id" }),
+          expect.objectContaining({ name: "operation_id" }),
+          expect.objectContaining({ name: "fingerprint" }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(external_action_audit_outbox)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "action_id" }),
+          expect.objectContaining({ name: "next_attempt_at" }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
   }
 });
 

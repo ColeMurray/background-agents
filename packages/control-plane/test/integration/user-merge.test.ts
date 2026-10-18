@@ -100,6 +100,13 @@ describe("mergeUsers", () => {
       providerUserId: "U0SLACK",
     });
     await insertSession("session-survivor", SURVIVOR);
+    await env.DB.prepare(
+      `INSERT INTO automation_external_action_grants
+       (id, automation_id, executor_user_id, provider, action, created_by, created_at)
+       VALUES ('grant-merge', 'auto-1', ?, 'fake', 'publish_comment', ?, ?)`
+    )
+      .bind(LOSER, LOSER, SEED_NOW_MS)
+      .run();
     // Both read the same session: the (user_id, session_id) PK collision case.
     await insertReadState(LOSER, "session-survivor", "msg-loser");
     await insertReadState(SURVIVOR, "session-survivor", "msg-survivor");
@@ -114,6 +121,8 @@ describe("mergeUsers", () => {
       authSessionsDeleted: 1,
       automationsOwnedRepointed: 1,
       automationsCreatedRepointed: 1,
+      externalActionGrantExecutorsRepointed: 1,
+      externalActionGrantCreatorsRepointed: 1,
       scmTokensRepointed: 1,
       skillProfilesRepointed: 1,
       skillCatalogGenerationsAdvanced: 1,
@@ -146,6 +155,16 @@ describe("mergeUsers", () => {
         created_by: string;
       }>()
     ).toEqual({ user_id: SURVIVOR, created_by: SURVIVOR });
+    expect(
+      await env.DB.prepare(
+        `SELECT executor_user_id, created_by, revoked_reason
+         FROM automation_external_action_grants WHERE id = 'grant-merge'`
+      ).first()
+    ).toEqual({
+      executor_user_id: SURVIVOR,
+      created_by: SURVIVOR,
+      revoked_reason: "executor_changed",
+    });
     expect(
       await env.DB.prepare(`SELECT user_id FROM skill_profiles WHERE id = 'profile-loser'`).first()
     ).toEqual({ user_id: SURVIVOR });

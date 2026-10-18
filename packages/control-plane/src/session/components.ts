@@ -180,6 +180,14 @@ import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
 import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
+import { ExternalActionGateway } from "./external-action-gateway";
+import { ExternalActionDefinitionRegistry } from "./external-action-definitions";
+import { AutomationExternalActionGrantStore } from "../db/automation-external-action-grants";
+import {
+  ExternalActionAuditStore,
+  type ExternalActionAuditInput,
+} from "../db/external-action-audit";
+import { ExternalActionAuditOutbox } from "./external-action-audit-outbox";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -232,6 +240,8 @@ export interface SessionComponents {
   pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
   callbackService: CallbackNotificationService;
+  externalActionGateway: ExternalActionGateway;
+  externalActionDefinitions: ExternalActionDefinitionRegistry;
 }
 
 /**
@@ -284,6 +294,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const participantRepository = new ParticipantRepository(sql);
   const wsClientMappingRepository = new WsClientMappingRepository(sql);
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
+  const externalActionGateway = new ExternalActionGateway(sql, transaction);
+  const externalActionAuditOutbox = new ExternalActionAuditOutbox(sql, transaction);
+  // Deliberately empty until one provider passes the generic fault-injection contract.
+  const externalActionDefinitions = new ExternalActionDefinitionRegistry();
+  const projectExternalActionAudit = async (input: Omit<ExternalActionAuditInput, "teamId">) => {
+    const session = await sessionIndexStore.get(getPublicSessionId());
+    await new ExternalActionAuditStore(db).write({
+      ...input,
+      teamId: session?.ownerTeamId ?? null,
+    });
+  };
+  const nextExternalActionDeadline = () => {
+    const deadlines = [
+      externalActionGateway.nextReconciliationAt(),
+      externalActionAuditOutbox.nextDeadline(),
+    ].filter((deadline): deadline is number => deadline !== null);
+    return deadlines.length > 0 ? Math.min(...deadlines) : null;
+  };
   const alarmDeadlines = new PersistedAlarmDeadlineStore(sql);
   const terminalMessageProjectionStore = new PersistedTerminalMessageProjectionStore(sql);
 
@@ -722,6 +750,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
+    externalActions: {
+      recoverDue: () =>
+        externalActionGateway
+          .reconcileDue((action) =>
+            externalActionDefinitions.executorFor(action.provider, action.action)
+          )
+          .then(() => externalActionAuditOutbox.flush(projectExternalActionAudit)),
+      nextDeadline: nextExternalActionDeadline,
+    },
     getExecutionTimeoutMs,
     now: () => Date.now(),
     log,
@@ -818,6 +855,36 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     credentials: piCredentialService,
     skills: new SessionSkillStore(db),
     repositories: piRepositoryTools,
+    externalActions: {
+      // PiSessionDO's durably latched `externalActions` capability controls
+      // preparation. SessionDO keeps the gateway reachable so an emergency
+      // deployment deny cannot strand already-approved work or audit recovery.
+      enabled: true,
+      gateway: externalActionGateway,
+      // Provider executors are deliberately absent from the foundation. A
+      // provider must pass the generic fault-injection suite before registration.
+      definitions: externalActionDefinitions,
+      scheduleReconciliation: (deadline) => alarmScheduler.schedule(deadline),
+      flushAudit: () => externalActionAuditOutbox.flush(projectExternalActionAudit),
+      nextDeadline: nextExternalActionDeadline,
+      resolveAutomationApproval: async (provider, action) => {
+        const session = await sessionIndexStore.get(getPublicSessionId());
+        if (!session?.automationId || !session.userId) return undefined;
+        const grant = await new AutomationExternalActionGrantStore(db).findActive(
+          session.automationId,
+          session.userId,
+          provider,
+          action
+        );
+        return grant
+          ? {
+              source: "automation_grant" as const,
+              actorId: grant.executorUserId,
+              grantId: grant.id,
+            }
+          : undefined;
+      },
+    },
     getSessionId: getPublicSessionId,
   });
 
@@ -1034,6 +1101,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piCredential: (request) => piBridgeHandler.credential(request),
     piContext: (request) => piBridgeHandler.context(request),
     piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
+    piExternalActionPrepare: (request) => piBridgeHandler.externalActionPrepare(request),
+    piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
+    piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
+    externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),
+    externalActionDecision: (request) => piBridgeHandler.externalActionDecision(request),
     piResult: (request) => piResultHandler.handle(request),
     piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
@@ -1131,6 +1203,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     pushService,
     sessionLifecycleHandler,
     callbackService,
+    externalActionGateway,
+    externalActionDefinitions,
   };
 
   return {

@@ -55,6 +55,8 @@ export const PERMISSION_IDS = [
   "environments.secrets.manage",
   "environments.settings.manage",
   "environments.use",
+  "external_actions.approve",
+  "external_actions.manage_grants",
   "global_secrets.manage",
   "image_builds.read",
   "integrations.manage",

@@ -8,6 +8,39 @@ import {
 import type { MessageRepository } from "../../message-repository";
 import type { PiCredentialService } from "../../pi-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
+import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
+import type { ExternalActionGateway } from "../../external-action-gateway";
+import { z } from "zod";
+import type { ExternalActionDefinitionRegistry } from "../../external-action-definitions";
+
+const externalActionIdSchema = z.strictObject({ actionId: z.string().min(1) });
+const externalActionDecisionSchema = z.strictObject({
+  actionId: z.string().min(1),
+  decision: z.enum(["approve", "deny"]),
+  reason: z.string().min(1).max(1_000).optional(),
+});
+
+interface ExternalActionBridge {
+  enabled: boolean;
+  gateway: Pick<
+    ExternalActionGateway,
+    | "prepare"
+    | "status"
+    | "execute"
+    | "approve"
+    | "deny"
+    | "isBoundToOperation"
+    | "nextReconciliationAt"
+  >;
+  definitions: ExternalActionDefinitionRegistry;
+  resolveAutomationApproval?(
+    provider: string,
+    action: string
+  ): Promise<{ source: "automation_grant"; actorId: string; grantId: string } | undefined>;
+  flushAudit?(): Promise<void>;
+  nextDeadline?(): number | null;
+  scheduleReconciliation?(deadline: number): Promise<void>;
+}
 
 interface PiBridgeHandlerOptions {
   sessions: Pick<SessionCoreRepository, "getSession" | "getSessionRepositories">;
@@ -15,6 +48,7 @@ interface PiBridgeHandlerOptions {
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
   repositories: Pick<PiRepositoryTools, "pin" | "restore" | "list" | "read">;
+  externalActions?: ExternalActionBridge;
   getSessionId(): string;
 }
 
@@ -96,6 +130,197 @@ export class PiBridgeHandler {
     }
   }
 
+  async externalActionPrepare(request: Request): Promise<Response> {
+    const operationId = this.externalActionOperation(request);
+    if (operationId instanceof Response) return operationId;
+    const parsed = externalActionPrepareRequestSchema.safeParse(
+      await request.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid external action request" }, { status: 400 });
+    }
+    try {
+      const definition = this.options.externalActions!.definitions.get(
+        parsed.data.provider,
+        parsed.data.action
+      );
+      if (!definition) {
+        return Response.json({ error: "External action provider is unavailable" }, { status: 503 });
+      }
+      const providerRequest = definition.requestSchema.safeParse({
+        target: parsed.data.target,
+        arguments: parsed.data.arguments,
+      });
+      if (!providerRequest.success) {
+        return Response.json({ error: "Invalid provider action request" }, { status: 400 });
+      }
+      const approval = await this.options.externalActions!.resolveAutomationApproval?.(
+        parsed.data.provider,
+        parsed.data.action
+      );
+      const action = approval
+        ? await this.options.externalActions!.gateway.prepare(
+            this.options.getSessionId(),
+            operationId,
+            { ...parsed.data, ...providerRequest.data },
+            { ...approval, grantId: approval.grantId }
+          )
+        : await this.options.externalActions!.gateway.prepare(
+            this.options.getSessionId(),
+            operationId,
+            { ...parsed.data, ...providerRequest.data }
+          );
+      return Response.json(this.options.externalActions!.gateway.status(action.id), {
+        headers: { "Cache-Control": "no-store" },
+      });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "External action preparation failed" },
+        { status: 409 }
+      );
+    }
+  }
+
+  externalActionStatus(request: Request): Response {
+    const operationId = this.externalActionOperation(request);
+    if (operationId instanceof Response) return operationId;
+    const actionId = new URL(request.url).searchParams.get("actionId");
+    if (!actionId) return Response.json({ error: "actionId is required" }, { status: 400 });
+    try {
+      const status = this.options.externalActions!.gateway.status(actionId);
+      if (!this.options.externalActions!.gateway.isBoundToOperation(actionId, operationId)) {
+        return Response.json(
+          { error: "External action is not part of this operation" },
+          { status: 404 }
+        );
+      }
+      return Response.json(status, { headers: { "Cache-Control": "no-store" } });
+    } catch {
+      return Response.json({ error: "External action not found" }, { status: 404 });
+    }
+  }
+
+  async externalActionExecute(request: Request): Promise<Response> {
+    const operationId = this.externalActionOperation(request);
+    if (operationId instanceof Response) return operationId;
+    const parsed = externalActionIdSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json({ error: "Invalid external action execution" }, { status: 400 });
+    let status;
+    try {
+      status = this.options.externalActions!.gateway.status(parsed.data.actionId);
+    } catch {
+      return Response.json({ error: "External action not found" }, { status: 404 });
+    }
+    if (!this.options.externalActions!.gateway.isBoundToOperation(status.action.id, operationId)) {
+      return Response.json(
+        { error: "External action is not part of this operation" },
+        { status: 404 }
+      );
+    }
+    const definition = this.options.externalActions!.definitions.get(
+      status.action.provider,
+      status.action.action
+    );
+    const executor = definition
+      ? this.options.externalActions!.definitions.validatingExecutor(definition)
+      : undefined;
+    if (!executor) {
+      return Response.json({ error: "External action provider is unavailable" }, { status: 503 });
+    }
+    if (status.action.approval?.source === "automation_grant") {
+      const liveApproval = await this.options.externalActions!.resolveAutomationApproval?.(
+        status.action.provider,
+        status.action.action
+      );
+      if (
+        !liveApproval ||
+        liveApproval.grantId !== status.action.approval.grantId ||
+        liveApproval.actorId !== status.action.approval.actorId
+      ) {
+        return Response.json(
+          { error: "Automation external-action grant is no longer authorized" },
+          { status: 409 }
+        );
+      }
+    }
+    await this.options.externalActions!.gateway.execute(status.action.id, executor);
+    const after = this.options.externalActions!.gateway.status(status.action.id);
+    const reconciliationAt =
+      this.options.externalActions!.nextDeadline?.() ??
+      this.options.externalActions!.gateway.nextReconciliationAt();
+    if (reconciliationAt !== null) {
+      await this.options.externalActions!.scheduleReconciliation?.(reconciliationAt);
+    }
+    return Response.json(after, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  humanExternalActionStatus(request: Request): Response {
+    if (!this.options.externalActions?.enabled) {
+      return Response.json({ error: "External actions are disabled" }, { status: 404 });
+    }
+    const actionId = new URL(request.url).searchParams.get("actionId");
+    if (!actionId) return Response.json({ error: "actionId is required" }, { status: 400 });
+    try {
+      const status = this.options.externalActions.gateway.status(actionId);
+      if (status.action.sessionId !== this.options.getSessionId()) {
+        return Response.json({ error: "External action not found" }, { status: 404 });
+      }
+      return Response.json(status, { headers: { "Cache-Control": "no-store" } });
+    } catch {
+      return Response.json({ error: "External action not found" }, { status: 404 });
+    }
+  }
+
+  async externalActionDecision(request: Request): Promise<Response> {
+    if (!this.options.externalActions?.enabled) {
+      return Response.json({ error: "External actions are disabled" }, { status: 404 });
+    }
+    const actorId = request.headers.get("X-External-Action-Actor-ID");
+    if (!actorId)
+      return Response.json({ error: "External action actor is required" }, { status: 401 });
+    const parsed = externalActionDecisionSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success)
+      return Response.json({ error: "Invalid external action decision" }, { status: 400 });
+    try {
+      const current = this.options.externalActions.gateway.status(parsed.data.actionId);
+      if (current.action.sessionId !== this.options.getSessionId()) {
+        return Response.json({ error: "External action not found" }, { status: 404 });
+      }
+      if (parsed.data.decision === "approve") {
+        this.options.externalActions.gateway.approve(parsed.data.actionId, {
+          source: "human",
+          actorId,
+          grantId: null,
+          requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
+        });
+      } else {
+        this.options.externalActions.gateway.deny(
+          parsed.data.actionId,
+          actorId,
+          parsed.data.reason ?? "Denied by approver",
+          request.headers.get("X-Request-ID") ?? crypto.randomUUID()
+        );
+      }
+      const after = this.options.externalActions.gateway.status(parsed.data.actionId);
+      await this.options.externalActions.flushAudit?.();
+      const nextDeadline = this.options.externalActions.nextDeadline?.() ?? null;
+      if (nextDeadline !== null) {
+        await this.options.externalActions.scheduleReconciliation?.(nextDeadline);
+      }
+      return Response.json(after, {
+        headers: { "Cache-Control": "no-store" },
+      });
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "External action decision failed" },
+        { status: 409 }
+      );
+    }
+  }
+
   private activeOperation(request: Request): boolean {
     const operationId = request.headers.get("X-Pi-Operation-ID");
     return (
@@ -103,5 +328,16 @@ export class PiBridgeHandler {
       !!operationId &&
       this.options.messages.getProcessingMessage()?.id === operationId
     );
+  }
+
+  private externalActionOperation(request: Request): string | Response {
+    if (!this.options.externalActions?.enabled) {
+      return Response.json({ error: "External actions are disabled" }, { status: 404 });
+    }
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    if (!operationId || !this.activeOperation(request)) {
+      return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+    }
+    return operationId;
   }
 }

@@ -18,6 +18,10 @@ export interface AlarmHandlerDeps {
   lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
+  externalActions?: {
+    recoverDue(): Promise<void>;
+    nextDeadline(): number | null;
+  };
   /** Wakes queued work for a live runtime that nothing else will; idempotent. */
   redriveIdleQueue?: () => Promise<void>;
   /** Resolved per use so it honors settings persisted after construction. */
@@ -58,6 +62,11 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         return;
       }
       await deps.executionStop.recoverStopConfirmationTimeout();
+      await deps.externalActions?.recoverDue();
+      const externalActionDeadline = deps.externalActions?.nextDeadline() ?? null;
+      if (externalActionDeadline !== null) {
+        await deps.alarmScheduler.schedule(externalActionDeadline);
+      }
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
       // already failed (by lifecycle recovery or a prior alarm),

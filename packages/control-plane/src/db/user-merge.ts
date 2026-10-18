@@ -76,6 +76,8 @@ const USER_MERGE_COUNT_KEYS = [
   "authSessionsDeleted",
   "automationsOwnedRepointed",
   "automationsCreatedRepointed",
+  "externalActionGrantExecutorsRepointed",
+  "externalActionGrantCreatorsRepointed",
   "scmTokensRepointed",
   "skillProfileItemsMerged",
   "skillProfilesDeduped",
@@ -113,6 +115,7 @@ interface MergeOperation {
   readonly execute: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
   readonly preview: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
   readonly subtract?: UserMergeCountKey;
+  readonly countResultRows?: boolean;
 }
 
 function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
@@ -207,8 +210,25 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
   }),
   regularRepoint("sessionsRepointed", "sessions"),
   regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
-  regularRepoint("automationsOwnedRepointed", "automations"),
+  {
+    ...regularRepoint("automationsOwnedRepointed", "automations"),
+    execute: (db, survivorId, loserId) =>
+      db
+        .prepare("UPDATE automations SET user_id = ? WHERE user_id = ? RETURNING id")
+        .bind(survivorId, loserId),
+    countResultRows: true,
+  },
   regularRepoint("automationsCreatedRepointed", "automations", "created_by"),
+  regularRepoint(
+    "externalActionGrantExecutorsRepointed",
+    "automation_external_action_grants",
+    "executor_user_id"
+  ),
+  regularRepoint(
+    "externalActionGrantCreatorsRepointed",
+    "automation_external_action_grants",
+    "created_by"
+  ),
   regularRepoint("scmTokensRepointed", "user_scm_tokens"),
 ] as const satisfies readonly MergeOperation[];
 
@@ -553,7 +573,10 @@ export async function mergeUsers(
 
   const counts = emptyCounts();
   for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {
-    counts[key] = (results[index]?.meta.changes ?? 0) / (RESULT_CHANGE_DIVISORS[key] ?? 1);
+    const result = results[index];
+    counts[key] = TABLE_OPERATIONS.find((operation) => operation.key === key)?.countResultRows
+      ? (result?.results.length ?? 0)
+      : (result?.meta.changes ?? 0) / (RESULT_CHANGE_DIVISORS[key] ?? 1);
   }
   if (loser) {
     // The users delete's reported `changes` includes any FK-cascaded rows;

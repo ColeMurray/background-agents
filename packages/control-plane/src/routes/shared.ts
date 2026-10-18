@@ -121,6 +121,8 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "environments.manage",
   "environments.secrets.manage",
   "environments.settings.manage",
+  "external_actions.approve",
+  "external_actions.manage_grants",
   "global_secrets.manage",
   "integrations.manage",
   "mcp_servers.manage",

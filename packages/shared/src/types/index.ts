@@ -195,6 +195,23 @@ export {
 
 export { sandboxShutdownSchema } from "./sandbox-shutdown";
 export type { SandboxShutdownState } from "./sandbox-shutdown";
+export {
+  MAX_EXTERNAL_ACTION_DOCUMENT_BYTES,
+  externalActionStateSchema,
+  externalActionApprovalSchema,
+  externalActionPrepareRequestSchema,
+  externalActionSchema,
+  externalActionHistoryEventSchema,
+  externalActionStatusResponseSchema,
+} from "./external-actions";
+export type {
+  ExternalActionState,
+  ExternalActionApproval,
+  ExternalActionPrepareRequest,
+  ExternalAction,
+  ExternalActionHistoryEvent,
+  ExternalActionStatusResponse,
+} from "./external-actions";
 export { tokenUsageSchema } from "./sandbox-events";
 export type { TokenUsage } from "./sandbox-events";
 export { normalizeTokenUsage, stepUsageSchema } from "./usage";
