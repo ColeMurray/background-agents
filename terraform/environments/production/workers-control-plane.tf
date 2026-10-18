@@ -178,6 +178,7 @@ module "control_plane_worker" {
       TOKEN_ENCRYPTION_KEY             = { value = var.token_encryption_key }
       REPO_SECRETS_ENCRYPTION_KEY      = { value = var.repo_secrets_encryption_key }
       PROVIDER_ACCOUNTS_ENCRYPTION_KEY = { value = local.effective_provider_accounts_encryption_key }
+      MCP_OAUTH_ENCRYPTION_KEY         = { value = random_bytes.mcp_oauth_encryption_key.base64 }
       # Pepper for image-build callback token hashes (see service-auth.tf)
       IMAGE_CALLBACK_TOKEN_PEPPER = { value = random_password.image_callback_token_pepper.result }
       # Per-service sig1 verification keys
@@ -227,7 +228,8 @@ module "control_plane_worker" {
 
   durable_objects = merge(
     { SESSION = { class_name = "SessionDO" } },
-    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {}
+    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {},
+    var.mcp_connection_binding_enabled ? { MCP_CONNECTION = { class_name = "McpConnectionDO" } } : {}
   )
 
   enable_durable_object_bindings = var.enable_durable_object_bindings

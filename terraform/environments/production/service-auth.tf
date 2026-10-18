@@ -39,6 +39,12 @@ resource "random_bytes" "provider_accounts_encryption_key" {
   length = 32
 }
 
+# MCP OAuth credentials have an independent rotation and blast radius from
+# model-provider accounts and browser sign-in tokens.
+resource "random_bytes" "mcp_oauth_encryption_key" {
+  length = 32
+}
+
 locals {
   effective_provider_accounts_encryption_key = trimspace(var.provider_accounts_encryption_key) != "" ? trimspace(var.provider_accounts_encryption_key) : random_bytes.provider_accounts_encryption_key.base64
 }

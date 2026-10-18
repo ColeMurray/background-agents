@@ -9,7 +9,7 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
-import { isUniqueConstraintError } from "./errors";
+import { isForeignKeyConstraintError, isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
 
 const log = createLogger("db:mcp-servers");
@@ -326,8 +326,17 @@ export class McpServerStore {
   }
 
   async delete(id: string): Promise<boolean> {
-    const result = await this.db.prepare("DELETE FROM mcp_servers WHERE id = ?").bind(id).run();
-    return (result.meta?.changes ?? 0) > 0;
+    try {
+      const result = await this.db.prepare("DELETE FROM mcp_servers WHERE id = ?").bind(id).run();
+      return (result.meta?.changes ?? 0) > 0;
+    } catch (error) {
+      if (isForeignKeyConstraintError(error)) {
+        throw new McpServerConflictError(
+          "MCP server is pinned by a personal connection; remove the connection first"
+        );
+      }
+      throw error;
+    }
   }
 
   /**

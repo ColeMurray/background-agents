@@ -22,6 +22,7 @@ import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
+import { mcpConnectionRoutes } from "./mcp-connections";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
 import { modelProviderAccountRoutes } from "./model-provider-accounts";
@@ -90,6 +91,7 @@ export const catalog: readonly RouteModule[] = [
 
   // MCP servers
   mcpServerRoutes,
+  mcpConnectionRoutes,
 
   // Analytics
   analyticsRoutes,

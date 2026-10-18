@@ -197,6 +197,7 @@ jobs:
       - name: Stage Durable Object migration
         env:
           PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
+          MCP_CONNECTION_FOUNDATION_ENABLED: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
           ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
           PI_CODEMODE_SANDBOX_CPU_MS: "${{ vars.PI_CODEMODE_SANDBOX_CPU_MS }}"
         run: |
@@ -219,11 +220,12 @@ jobs:
             printf '{"pi_codemode_sandbox_cpu_ms":%s}\n' "$PI_CODEMODE_SANDBOX_CPU_MS" > pi-codemode-sandbox-cpu.auto.tfvars.json
           fi
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          mcp_foundation_enabled="$(printf '%s' "$MCP_CONNECTION_FOUNDATION_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
-          if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ]; then
+          if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ] || [ "$current_tag" = "v5" ]; then
             printf '%s\n' '{"pi_durable_binding_enabled":true}' > pi-binding.auto.tfvars.json
           fi
-          if [ "$pi_enabled" = "true" ]; then
+          if [ "$pi_enabled" = "true" ] && [ "$mcp_foundation_enabled" != "true" ]; then
             if [ "$bindings_enabled" = "false" ]; then
               case "$current_tag" in
                 "")
@@ -245,12 +247,16 @@ jobs:
               echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
               exit 1
             fi
-          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ]; then
+          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ] && [ "$mcp_foundation_enabled" != "true" ]; then
             echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable" >&2
             exit 1
           elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
+          CURRENT_CONTROL_PLANE_MIGRATION_TAG="$current_tag" \
+          MCP_CONNECTION_FOUNDATION_ENABLED="$MCP_CONNECTION_FOUNDATION_ENABLED" \
+          ENABLE_DURABLE_OBJECT_BINDINGS="$ENABLE_DURABLE_OBJECT_BINDINGS" \
+            "$GITHUB_WORKSPACE/scripts/stage-mcp-connection-do.sh"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Plan
@@ -540,6 +546,7 @@ jobs:
       - name: Stage Durable Object migration
         env:
           PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
+          MCP_CONNECTION_FOUNDATION_ENABLED: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
           ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
           PI_CODEMODE_SANDBOX_CPU_MS: "${{ vars.PI_CODEMODE_SANDBOX_CPU_MS }}"
         run: |
@@ -562,11 +569,12 @@ jobs:
             printf '{"pi_codemode_sandbox_cpu_ms":%s}\n' "$PI_CODEMODE_SANDBOX_CPU_MS" > pi-codemode-sandbox-cpu.auto.tfvars.json
           fi
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          mcp_foundation_enabled="$(printf '%s' "$MCP_CONNECTION_FOUNDATION_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
-          if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ]; then
+          if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ] || [ "$current_tag" = "v5" ]; then
             printf '%s\n' '{"pi_durable_binding_enabled":true}' > pi-binding.auto.tfvars.json
           fi
-          if [ "$pi_enabled" = "true" ]; then
+          if [ "$pi_enabled" = "true" ] && [ "$mcp_foundation_enabled" != "true" ]; then
             if [ "$bindings_enabled" = "false" ]; then
               case "$current_tag" in
                 "")
@@ -588,12 +596,16 @@ jobs:
               echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
               exit 1
             fi
-          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ]; then
+          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ] && [ "$mcp_foundation_enabled" != "true" ]; then
             echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable" >&2
             exit 1
           elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
+          CURRENT_CONTROL_PLANE_MIGRATION_TAG="$current_tag" \
+          MCP_CONNECTION_FOUNDATION_ENABLED="$MCP_CONNECTION_FOUNDATION_ENABLED" \
+          ENABLE_DURABLE_OBJECT_BINDINGS="$ENABLE_DURABLE_OBJECT_BINDINGS" \
+            "$GITHUB_WORKSPACE/scripts/stage-mcp-connection-do.sh"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Apply

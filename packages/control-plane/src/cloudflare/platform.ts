@@ -13,11 +13,14 @@ import { R2ObjectStorage } from "./object-storage";
 import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
 import { createDurableObjectPiRuntimeDispatch } from "./pi-runtime-dispatch";
 import type { PiSessionDO } from "./pi-durable-object";
+import type { McpConnectionDO } from "./mcp-connection-durable-object";
+import { createMcpConnectionBrokerDispatch } from "./mcp-connection-dispatch";
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
   PI_SESSION?: DurableObjectNamespace<PiSessionDO>;
+  MCP_CONNECTION?: DurableObjectNamespace<McpConnectionDO>;
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
@@ -37,6 +40,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     DB,
     SESSION,
     PI_SESSION,
+    MCP_CONNECTION,
     REPOS_CACHE,
     MEDIA_BUCKET,
     SLACK_BOT,
@@ -50,6 +54,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
     PI_SESSION: PI_SESSION ? createDurableObjectPiRuntimeDispatch(PI_SESSION) : undefined,
+    MCP_CONNECTION: MCP_CONNECTION ? createMcpConnectionBrokerDispatch(MCP_CONNECTION) : undefined,
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
     SLACK_BOT,

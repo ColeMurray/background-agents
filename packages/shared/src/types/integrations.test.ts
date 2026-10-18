@@ -14,6 +14,8 @@ import {
   matchRoutingRules,
   mcpServerCommandSchema,
   mcpServerCredentialMapSchema,
+  mcpConnectionCreateInputSchema,
+  mcpConnectionStatusSchema,
   mcpServerTypeSchema,
   normalizeRoutingRules,
   omitUnsupportedSandboxSettings,
@@ -381,6 +383,36 @@ describe("MCP server schemas", () => {
     expect(mcpServerCommandSchema.safeParse([]).success).toBe(false);
     expect(mcpServerCommandSchema.safeParse(["npx", 1]).success).toBe(false);
     expect(mcpServerCredentialMapSchema.safeParse({ DEBUG: 1 }).success).toBe(false);
+  });
+});
+
+describe("personal MCP connection contracts", () => {
+  it("accepts only a catalog server reference from the caller", () => {
+    expect(mcpConnectionCreateInputSchema.parse({ serverId: "server-1" })).toEqual({
+      serverId: "server-1",
+    });
+
+    for (const injected of [
+      { ownerUserId: "another-user" },
+      { url: "https://attacker.example/mcp" },
+      { headers: { Authorization: "Bearer secret" } },
+      { allowedMutations: ["delete_everything"] },
+    ]) {
+      expect(
+        mcpConnectionCreateInputSchema.safeParse({ serverId: "server-1", ...injected }).success
+      ).toBe(false);
+    }
+  });
+
+  it("keeps the staged lifecycle distinct from live OAuth readiness", () => {
+    expect(mcpConnectionStatusSchema.options).toEqual([
+      "foundation_staged",
+      "transport_ready",
+      "oauth_authorizing",
+      "oauth_ready",
+      "failed",
+      "revoked",
+    ]);
   });
 });
 

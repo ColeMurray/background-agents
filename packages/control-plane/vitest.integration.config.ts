@@ -178,6 +178,8 @@ export default defineConfig({
             TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             PROVIDER_ACCOUNTS_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            MCP_OAUTH_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            MCP_CONNECTIONS_ENABLED: "true",
             DEPLOYMENT_NAME: "integration-test",
             MODAL_API_SECRET: "test-modal-api-secret",
             MODAL_WORKSPACE: "test-workspace",

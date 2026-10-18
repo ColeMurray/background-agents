@@ -9,6 +9,7 @@ import type { FetchClient, QueueMetricsSource } from "./platform-ports";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
 import type { PiRuntimeDispatch } from "./pi/runtime-contract";
+import type { McpConnectionBrokerDispatch } from "./mcp/broker-contract";
 
 /**
  * The deployment's configuration: variables and secrets, every one a string,
@@ -23,6 +24,7 @@ export interface EnvConfig {
   BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: string;
+  MCP_OAUTH_ENCRYPTION_KEY?: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
@@ -107,6 +109,7 @@ export interface EnvConfig {
   PI_SANDBOX_EXECUTION_MODE?: string; // New-session admission only
   PI_EXTERNAL_ACTIONS_MODE?: string; // New-session admission only
   PI_MCP_MODE?: string; // New-session admission only
+  MCP_CONNECTIONS_ENABLED?: string; // "true" enables staging personal MCP OAuth connections
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
@@ -125,6 +128,8 @@ export interface Platform {
   SESSION: SessionRuntimeDispatch;
   /** Optional sandbox-free Pi Durable runtime. Absent unless explicitly deployed. */
   PI_SESSION?: PiRuntimeDispatch;
+  /** Dormant per-connection broker identity/lifecycle port. */
+  MCP_CONNECTION?: McpConnectionBrokerDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
   /** Media artifacts: screenshots, uploads, session media. */

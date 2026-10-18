@@ -31,6 +31,7 @@ const ENV_CONFIG_KEYS = {
   BROWSER_AUTH_SECRET: true,
   TOKEN_ENCRYPTION_KEY: true,
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: true,
+  MCP_OAUTH_ENCRYPTION_KEY: true,
   REPO_SECRETS_ENCRYPTION_KEY: true,
   MODAL_TOKEN_ID: true,
   MODAL_TOKEN_SECRET: true,
@@ -100,6 +101,7 @@ const ENV_CONFIG_KEYS = {
   PI_SANDBOX_EXECUTION_MODE: true,
   PI_EXTERNAL_ACTIONS_MODE: true,
   PI_MCP_MODE: true,
+  MCP_CONNECTIONS_ENABLED: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 

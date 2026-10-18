@@ -13,6 +13,11 @@ import {
   updateMcpServer,
   deleteMcpServer,
 } from "@/hooks/use-mcp-servers";
+import {
+  createMcpConnection,
+  deleteMcpConnection,
+  useMcpConnections,
+} from "@/hooks/use-mcp-connections";
 import { useRepos } from "@/hooks/use-repos";
 import { parseMaybeEnvContent } from "@/lib/env-paste";
 import { PlusIcon, TerminalIcon, GlobeIcon, ChevronRightIcon } from "@/components/ui/icons";
@@ -439,6 +444,107 @@ function McpServerForm({
   );
 }
 
+function PersonalMcpConnections({ servers }: { servers: McpServerMetadata[] }) {
+  const { enabled, connections, loading, mutate } = useMcpConnections();
+  const connectedServerIds = new Set(connections.map((connection) => connection.serverId));
+  const eligibleServers = servers.filter(
+    (server) =>
+      server.type === "remote" &&
+      server.enabled &&
+      !server.hasHeaders &&
+      !connectedServerIds.has(server.id)
+  );
+
+  async function stage(server: McpServerMetadata) {
+    try {
+      await createMcpConnection({ serverId: server.id });
+      await mutate();
+      toast.success("MCP OAuth connection staged");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to stage MCP OAuth connection");
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await deleteMcpConnection(id);
+      await mutate();
+      toast.success("MCP OAuth connection removed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to remove MCP OAuth connection");
+    }
+  }
+
+  return (
+    <section className="mt-8 border-t border-border pt-6" aria-labelledby="personal-mcp-heading">
+      <h3 id="personal-mcp-heading" className="text-base font-medium text-foreground">
+        Personal OAuth connections
+      </h3>
+      {!enabled ? (
+        <p className="mt-1 text-sm text-muted-foreground">
+          Personal MCP OAuth is not enabled for this deployment. No credentials or connections are
+          sent to agents.
+        </p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Stage a credential-free catalog server for your account. Live authorization and tool
+            execution remain disabled until the canary gates are complete.
+          </p>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading personal connections...</p>
+          ) : (
+            <>
+              {connections.map((connection) => (
+                <div
+                  key={connection.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {connection.serverName}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {connection.endpointHost} · {connection.status} · {connection.tools.length}{" "}
+                      reviewed read-only tools
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => remove(connection.id)}
+                    aria-label={`Remove OAuth staging for ${connection.serverName}`}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ))}
+              {eligibleServers.map((server) => (
+                <Button
+                  key={server.id}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => stage(server)}
+                  aria-label={`Stage OAuth for ${server.name}`}
+                >
+                  Stage {server.name}
+                </Button>
+              ))}
+              {connections.length === 0 && eligibleServers.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No enabled, credential-free remote catalog servers are available.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * Lists workspace MCP servers and exposes create, edit, and delete controls only to authorized users.
  */
@@ -722,6 +828,8 @@ export function McpServersSettings() {
           })}
         </div>
       )}
+
+      <PersonalMcpConnections servers={servers} />
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={canManage && !!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>

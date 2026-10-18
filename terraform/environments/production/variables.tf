@@ -765,6 +765,12 @@ variable "pi_durable_binding_enabled" {
   default     = false
 }
 
+variable "mcp_connection_binding_enabled" {
+  description = "Stage the migrated McpConnectionDO binding; live OAuth remains separately disabled"
+  type        = bool
+  default     = false
+}
+
 variable "pi_workspace_mode" {
   description = "Pi Durable Computer workspace mode: off or read_only"
   type        = string

@@ -153,7 +153,13 @@ async function handleDeleteMcpServer(
   if (!ctx.db) return error("Database not configured", 503);
 
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
-  const deleted = await store.delete(id);
+  let deleted: boolean;
+  try {
+    deleted = await store.delete(id);
+  } catch (err) {
+    if (err instanceof McpServerConflictError) return error(err.message, 409);
+    throw err;
+  }
   if (!deleted) return error("MCP server not found", 404);
 
   logger.info("MCP server deleted", {

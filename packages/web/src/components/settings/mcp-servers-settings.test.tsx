@@ -13,6 +13,18 @@ expect.extend(matchers);
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   updateMcpServer: vi.fn(),
+  createMcpConnection: vi.fn(),
+  deleteMcpConnection: vi.fn(),
+  mutateConnections: vi.fn(),
+  connectionFeatureEnabled: false,
+  connections: [] as Array<{
+    id: string;
+    serverId: string;
+    serverName: string;
+    endpointHost: string;
+    status: string;
+    tools: unknown[];
+  }>,
   allowedPermissions: null as Set<string> | null,
 }));
 
@@ -25,6 +37,16 @@ vi.mock("@/hooks/use-mcp-servers", () => ({
   createMcpServer: vi.fn(),
   updateMcpServer: mocks.updateMcpServer,
   deleteMcpServer: vi.fn(),
+}));
+vi.mock("@/hooks/use-mcp-connections", () => ({
+  useMcpConnections: () => ({
+    enabled: mocks.connectionFeatureEnabled,
+    connections: mocks.connections,
+    loading: false,
+    mutate: mocks.mutateConnections,
+  }),
+  createMcpConnection: mocks.createMcpConnection,
+  deleteMcpConnection: mocks.deleteMcpConnection,
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
@@ -62,9 +84,32 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.allowedPermissions = null;
+  mocks.connectionFeatureEnabled = false;
+  mocks.connections = [];
 });
 
 describe("McpServersSettings", () => {
+  it("shows the personal OAuth foundation as disabled without exposing a live connect action", () => {
+    render(<McpServersSettings />);
+
+    expect(screen.getByText("Personal OAuth connections")).toBeInTheDocument();
+    expect(screen.getByText(/not enabled for this deployment/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stage oauth/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /connect oauth/i })).not.toBeInTheDocument();
+  });
+
+  it("stages only catalog-selected personal connections when the foundation is enabled", async () => {
+    mocks.connectionFeatureEnabled = true;
+    mocks.createMcpConnection.mockResolvedValue({ id: "connection-a" });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: "Stage OAuth for Server A" }));
+
+    expect(mocks.createMcpConnection).toHaveBeenCalledWith({ serverId: "server-a" });
+    await waitFor(() => expect(mocks.mutateConnections).toHaveBeenCalled());
+  });
+
   it("shows servers but no mutation entry points with read-only permission", () => {
     mocks.allowedPermissions = new Set(["mcp_servers.read"]);
 

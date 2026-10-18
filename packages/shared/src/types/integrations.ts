@@ -709,6 +709,59 @@ export const mcpServerTypeSchema = z.enum(["local", "remote"]);
 export const mcpServerCommandSchema = z.array(z.string()).min(1);
 export const mcpServerCredentialMapSchema = z.record(z.string(), z.string());
 
+/** A personal remote MCP connection never accepts endpoint or credential material from its owner. */
+export const mcpConnectionCreateInputSchema = z
+  .object({
+    serverId: z.string().trim().min(1),
+  })
+  .strict();
+
+/** Durable connection state; `staged` is intentionally not a live OAuth connection. */
+export const mcpConnectionStatusSchema = z.enum([
+  "foundation_staged",
+  "transport_ready",
+  "oauth_authorizing",
+  "oauth_ready",
+  "failed",
+  "revoked",
+]);
+
+export type CreateMcpConnectionRequest = z.input<typeof mcpConnectionCreateInputSchema>;
+export type McpConnectionStatus = z.infer<typeof mcpConnectionStatusSchema>;
+
+/** Human-reviewed catalog entry. Only read-only tools are representable in this first contract. */
+export interface McpReviewedReadOnlyTool {
+  stableToolId: string;
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: unknown;
+  inputSchemaSha256: string;
+  outputSchema?: unknown;
+  outputSchemaSha256?: string;
+  reviewedAt: number;
+}
+
+/** Owner-safe MCP connection metadata. OAuth credentials are never part of this shape. */
+export interface McpConnectionMetadata {
+  id: string;
+  serverId: string;
+  serverRevision: number;
+  serverName: string;
+  endpointUrl: string;
+  endpointHost: string;
+  catalogSnapshotSha256: string;
+  status: McpConnectionStatus;
+  tools: McpReviewedReadOnlyTool[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface McpConnectionsResponse {
+  enabled: boolean;
+  connections: McpConnectionMetadata[];
+}
+
 const mcpServerCommonFields = {
   name: z.string().trim().min(1),
   repoScopes: z.array(z.string()).nullable().optional(),

@@ -8,11 +8,13 @@
     "bindings": [
       { "name": "SESSION", "class_name": "SessionDO" },
       { "name": "PI_SESSION", "class_name": "PiSessionDO" },
+      { "name": "MCP_CONNECTION", "class_name": "McpConnectionDO" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SessionDO"] },
     { "tag": "v2", "new_sqlite_classes": ["PiSessionDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["McpConnectionDO"] },
   ],
   "d1_databases": [
     {
