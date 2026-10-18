@@ -13,6 +13,7 @@ import {
   assembleSessionTextDiff,
   type SessionTextDiffRepository,
 } from "../session/diffs/assembler";
+import { WorkspaceMutationFifo } from "./computer-workspace-quota";
 
 const METADATA_ROOT = "/.open-inspect/repositories";
 const STAGING_ROOT = "/.open-inspect/staging";
@@ -100,14 +101,15 @@ const repositoryMutationSchema = z.discriminatedUnion("tool", [
 export class PiRepositoryWorkspace {
   private readonly manifests = new Map<number, StoredRepositoryManifest>();
   private readonly pendingMutations = new Map<string, number>();
-  private queue: Promise<void> = Promise.resolve();
+  private readonly mutations: WorkspaceMutationFifo;
 
   constructor(
     private readonly fs: RepositoryWorkspaceFileSystem,
     private readonly now: () => number = () => Date.now(),
-    options: { maxChangedFiles?: number } = {}
+    options: { maxChangedFiles?: number; mutations?: WorkspaceMutationFifo } = {}
   ) {
     this.maxChangedFiles = options.maxChangedFiles ?? SESSION_DIFF_MAX_FILES;
+    this.mutations = options.mutations ?? new WorkspaceMutationFifo();
   }
 
   private readonly maxChangedFiles: number;
@@ -416,12 +418,7 @@ export class PiRepositoryWorkspace {
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.queue.catch(() => {}).then(operation);
-    this.queue = next.then(
-      () => undefined,
-      () => undefined
-    );
-    return next;
+    return this.mutations.run(operation);
   }
 }
 

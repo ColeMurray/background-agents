@@ -327,6 +327,10 @@ sandbox_provider = "modal"
 # pi_codemode_sandbox_deployment_verified = false
 # pi_codemode_paid_canary_verified = false
 
+# Independent repository overlay/edit/diff capability: "off" or "enabled".
+# It reuses the canonical workspace FIFO, policy, redaction, and scratch quota.
+# pi_repository_editing_mode = "off"
+
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
 # - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)

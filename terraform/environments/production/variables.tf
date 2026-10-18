@@ -782,6 +782,17 @@ variable "pi_workspace_mode" {
   }
 }
 
+variable "pi_repository_editing_mode" {
+  description = "Independent Pi repository overlay/edit/diff capability: off or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "enabled"], var.pi_repository_editing_mode)
+    error_message = "pi_repository_editing_mode must be 'off' or 'enabled'."
+  }
+}
+
 variable "pi_sandbox_execution_mode" {
   description = "Pi sandbox execution capability for new sessions: off, read_only, or enabled"
   type        = string

@@ -91,7 +91,7 @@ describe("PiSessionDO", () => {
       version: 1,
       capabilities: {
         workspace: "enabled",
-        repositoryEditing: "off",
+        repositoryEditing: "enabled",
         codeMode: "off",
         sandboxExecution: "enabled",
         externalActions: "enabled",
@@ -376,7 +376,7 @@ describe("PiSessionDO", () => {
       "open-inspect.subagent",
       "open-inspect.workspace",
       "open-inspect.external-actions",
-      "open-inspect.repository-editing",
+      "open-inspect.repository-overlay",
     ]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
@@ -385,7 +385,7 @@ describe("PiSessionDO", () => {
     ).resolves.toEqual({
       version: 1,
       capabilities: {
-        workspace: "read_only",
+        workspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
         sandboxExecution: "enabled",

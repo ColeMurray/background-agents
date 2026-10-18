@@ -34,23 +34,30 @@ import {
 } from "../pi/runtime-contract";
 import type { WorkerBindings } from "./platform";
 import {
+  piRepositoryPinsSchema,
+  piSessionContextSchema,
+  type PiSessionContext,
+} from "../pi/session-context-contract";
+import {
   piRepositoryMaterializationBatchSchema,
   piRepositoryMaterializationManifestSchema,
   piRepositoryMaterializationSchema,
   PI_REPOSITORY_MAX_BYTES,
   PI_REPOSITORY_MAX_FILES,
-  piRepositoryPinsSchema,
-  piSessionContextSchema,
   type PiRepositoryMaterialization,
   type PiRepositoryMaterializationManifest,
-  type PiSessionContext,
-} from "../pi/session-context-contract";
+} from "../pi/repository-materialization-contract";
 import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-inspect-extension";
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
 import { createComputerWorkspaceCapability } from "../pi/computer-workspace-extension";
 import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
-import { COMPUTER_SCRATCH_ROOT, createQuotaWorkspace } from "../pi/computer-workspace-quota";
+import {
+  COMPUTER_SCRATCH_ROOT,
+  WorkspaceMutationFifo,
+  createQuotaWorkspace,
+} from "../pi/computer-workspace-quota";
+import { createRepositoryEditingWorkspaceCapability } from "../pi/repository-editing-capability";
 import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extension-assembler";
 import {
   createPiToolPolicyExtension,
@@ -69,6 +76,7 @@ import {
   createPiCodeModePolicyDelegate,
   createPiCodeModePolicyState,
 } from "../pi/codemode-extension";
+import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
 
 type PiWorkerBindings = Pick<
   WorkerBindings,
@@ -98,6 +106,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly registry = createRegistry();
   private workspace: Workspace | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
+  private rawWorkspace: Workspace | undefined;
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
@@ -124,6 +133,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       });
       const delegation = createSubagentExtension();
       let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
+      const workspaceMutations = new WorkspaceMutationFifo();
       const extensions: PiExtensionContribution[] = [
         {
           slot: "policy",
@@ -171,9 +181,68 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           effects: declaredEffects(skills),
         });
       }
-      if (capabilities.workspace !== "off") {
+      const repositoryEditing =
+        capabilities.repositoryEditing === "enabled" && sessionContext.repositories.length > 0;
+      if (repositoryEditing) {
+        const scratchWritable = capabilities.workspace === "enabled";
+        const scratchWorkspace = await this.openWorkspace(scratchWritable);
+        const rawWorkspace = this.rawWorkspace;
+        if (!rawWorkspace) throw new Error("Pi repository workspace is unavailable");
+        const repositoryWorkspace = new PiRepositoryWorkspace(
+          rawWorkspace.fs as unknown as ConstructorParameters<typeof PiRepositoryWorkspace>[0],
+          () => Date.now(),
+          { mutations: workspaceMutations }
+        );
+        const manifests: PiRepositoryMaterializationManifest[] = [];
+        let materializedFiles = 0;
+        for (const repository of sessionContext.repositories) {
+          const manifest = await this.fetchRepositoryMaterializationManifest(
+            repository.position,
+            repository.commitSha
+          );
+          materializedFiles += manifest.files.length;
+          if (materializedFiles > PI_REPOSITORY_MAX_FILES) {
+            throw new Error("Pi repository set exceeds the 1000 file materialization limit");
+          }
+          manifests.push(manifest);
+        }
+        for (const manifest of manifests) {
+          await repositoryWorkspace.materialize([
+            await this.fetchRepositoryMaterialization(manifest),
+          ]);
+        }
+        this.repositoryWorkspace = repositoryWorkspace;
+        const capability = createRepositoryEditingWorkspaceCapability({
+          scratchWorkspace,
+          repositoryWorkspace: rawWorkspace,
+          overlay: repositoryWorkspace,
+          mutations: workspaceMutations,
+          scratchWritable,
+          publishDiff: (bundle) => this.publishDiffBundle(bundle),
+          triggerMessageId: () => this.currentOperationId(),
+        });
+        workspacePolicyDelegate = capability.toolPolicyDelegate;
+        extensions.push({
+          slot: "workspace",
+          feature: "repositoryEditing",
+          minimumCapability: "enabled",
+          extension: capability.extension,
+          effects: capability.effects,
+        });
+        extensions.push({
+          slot: "repository_editing",
+          feature: "repositoryEditing",
+          minimumCapability: "enabled",
+          extension: defineExtension({ name: "open-inspect.repository-overlay" }),
+          effects: [],
+        });
+      } else if (capabilities.workspace !== "off") {
         const workspace = await this.openWorkspace(capabilities.workspace === "enabled");
-        const capability = createComputerWorkspaceCapability(workspace, capabilities.workspace);
+        const capability = createComputerWorkspaceCapability(
+          workspace,
+          capabilities.workspace,
+          workspaceMutations
+        );
         workspacePolicyDelegate = capability.toolPolicyDelegate;
         extensions.push({
           slot: "workspace",
@@ -318,8 +387,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       await this.harness.dispose();
       await this.codemodeSandbox?.close();
       this.codemodeSandbox = undefined;
-      await this.workspace?.close();
+      await (this.rawWorkspace ?? this.workspace)?.close();
       this.workspace = undefined;
+      this.rawWorkspace = undefined;
       this.repositoryWorkspace = undefined;
       this.credentials.clear();
       await this.ctx.storage.deleteAll();
@@ -331,7 +401,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     await this.ensureSession(sessionId);
     await this.harness.pi();
     if (!this.repositoryWorkspace) throw new Error("Pi repository editing is not enabled");
-    await this.captureAndPublishDiff(null);
+    await this.publishDiffBundle(await this.repositoryWorkspace.captureDiff(null));
   }
 
   private async openWorkspace(writable: boolean): Promise<Workspace> {
@@ -347,6 +417,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       await workspace.close().catch(() => {});
       throw error;
     }
+    this.rawWorkspace = workspace;
     this.workspace = writable ? createQuotaWorkspace(workspace, this.ctx.storage) : workspace;
     return this.workspace;
   }
@@ -690,14 +761,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     return response.json();
   }
 
-  private async captureAndPublishDiff(triggerMessageId?: string | null): Promise<void> {
-    if (!this.repositoryWorkspace) throw new Error("Pi repository editing is not enabled");
+  private async currentOperationId(): Promise<string | null> {
+    return (await this.harness.pending({ session: ROOT_SESSION }))[0]?.operationId ?? null;
+  }
+
+  private async publishDiffBundle(bundle: SessionDiffUpload): Promise<void> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
-    const bundle = await this.repositoryWorkspace.captureDiff(
-      triggerMessageId === undefined ? (operation?.operationId ?? null) : triggerMessageId
-    );
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.diffStore}`, {
         method: "POST",

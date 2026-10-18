@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PiRepositoryMaterialization } from "./repository-materialization-contract";
 import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
 import { PiRepositoryWorkspace, type RepositoryWorkspaceFileSystem } from "./repository-workspace";
+import { WorkspaceMutationFifo } from "./computer-workspace-quota";
 
 const SHA = "a".repeat(40);
 
@@ -399,6 +400,41 @@ describe("PiRepositoryWorkspace", () => {
         .at(-1)
         ?.repositories.flatMap((repository) => repository.files.map((file) => file.path))
     ).toEqual(["first.txt", "second.txt"]);
+  });
+
+  it("shares the canonical workspace FIFO with scratch mutations", async () => {
+    const fs = new MemoryFileSystem();
+    const mutations = new WorkspaceMutationFifo();
+    const workspace = new PiRepositoryWorkspace(fs, () => 100, { mutations });
+    await workspace.materialize([materialization()]);
+    let releaseScratch!: () => void;
+    let markScratchStarted!: () => void;
+    const scratchGate = new Promise<void>((resolve) => {
+      releaseScratch = resolve;
+    });
+    const scratchStarted = new Promise<void>((resolve) => {
+      markScratchStarted = resolve;
+    });
+    const scratch = mutations.run(async () => {
+      markScratchStarted();
+      await scratchGate;
+    });
+    const repositoryExecute = vi.fn(async () => {
+      await fs.writeFile("/workspace/repos/0/from-repo.txt", "repo\n");
+    });
+    const repository = workspace.runMutation(
+      "write",
+      { path: "/workspace/repos/0/from-repo.txt", content: "repo\n" },
+      repositoryExecute,
+      async () => {},
+      async () => null
+    );
+
+    await scratchStarted;
+    expect(repositoryExecute).not.toHaveBeenCalled();
+    releaseScratch();
+    await Promise.all([scratch, repository]);
+    expect(repositoryExecute).toHaveBeenCalledOnce();
   });
 });
 

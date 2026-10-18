@@ -2,7 +2,7 @@
 
 Workspace: repository root on `feat/pi-repository-editing`
 
-Base: `091bf3f6` (`feat/pi-first-class`, MCP/external-action integration tip)
+Base: `d7a401ca` (`feat/pi-first-class`, canonical writable workspace tip)
 
 Started: 2026-10-18
 
@@ -25,7 +25,7 @@ Rule: tick only with evidence on the same line.
       SessionDO baseline reuse
 - [x] Focused tests and typecheck green — focused control-plane merge-gate suites; shared and all
       four control-plane TypeScript projects clean
-- [x] Committed — `c6be1bde` (`feat: add Pi repository editing overlay`, rebased)
+- [x] Committed — `8390b65e` (`feat: add Pi repository editing overlay`, rebased)
 
 ## Slice 2: VFS overlay and diff publication
 
@@ -33,16 +33,16 @@ Rule: tick only with evidence on the same line.
       before each implementation
 - [x] GREEN implementation — position roots, raw-byte UTF-8 guard, shared `local_mutation` Computer
       tools, global net-change accounting
-- [x] Integration and regression tests green — 17 PiSessionDO workerd tests; real `0xff`, 51-file
-      batches, branch-move crash recovery, SessionDiff publication/retry
+- [x] Integration and regression tests green — PiSessionDO workerd coverage includes real `0xff`,
+      51-file batches, branch-move crash recovery, SessionDiff publication/retry
 - [x] Security/deep audit and simplify pass — watchdog P1-P3 and cross-cutting blockers reconciled;
       no Computer Git/network/credentials and unknown tools fail closed
-- [x] Committed — `8ebe9f9b` (`fix: harden Pi repository editing boundaries`, rebased)
+- [x] Committed — `04289b20` (`fix: harden Pi repository editing boundaries`, rebased)
 
 ## Finish
 
 - [x] Documentation states rollout flag and limitations — `SLICE.md`, `SPEC-MAP.md`, and
       `docs/GETTING_STARTED.md`
-- [x] Git branch and rebased commits verified — `feat/pi-repository-editing` is based on `091bf3f6`;
-      additive lock/test follow-up commit follows
+- [x] Git branch and rebased commits verified — `feat/pi-repository-editing` is based on `d7a401ca`;
+      canonical writable-composition follow-up commit follows
 - [x] No push performed — local worktree only
