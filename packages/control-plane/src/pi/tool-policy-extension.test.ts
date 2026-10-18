@@ -1,7 +1,12 @@
 import { createToolEffectRegistry } from "@open-inspect/shared/pi-tool-effects";
-import { type HookApi, type ToolHookCall, type ToolHooks } from "@earendil-works/pi-durable";
-import { describe, expect, it } from "vitest";
-import { createPiToolPolicyExtension } from "./tool-policy-extension";
+import {
+  type HookApi,
+  type ToolExecutionResult,
+  type ToolHookCall,
+  type ToolHooks,
+} from "@earendil-works/pi-durable";
+import { describe, expect, it, vi } from "vitest";
+import { createPiToolPolicyExtension, type PiToolPolicyDelegate } from "./tool-policy-extension";
 
 const effects = createToolEffectRegistry([
   { name: "model_tool", effect: "control", callers: ["model"], replay: "safe" },
@@ -18,6 +23,14 @@ function beforeTool() {
   const handler = (registration?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
   if (!handler) throw new Error("Expected Pi tool policy beforeTool hook");
   return handler;
+}
+
+function afterTool(delegates: readonly PiToolPolicyDelegate[], hookApi: HookApi = api) {
+  const extension = createPiToolPolicyExtension(effects, delegates);
+  const registration = extension.hooks?.[0];
+  const handler = (registration?.handlers as Partial<ToolHooks> | undefined)?.afterTool;
+  if (!handler) throw new Error("Expected Pi tool policy afterTool hook");
+  return { handler, hookApi };
 }
 
 function call(name: string, nested = false): ToolHookCall {
@@ -58,5 +71,60 @@ describe("createPiToolPolicyExtension", () => {
     await expect(hook(call("unknown", true), api, context)).resolves.toEqual({
       block: "Pi tool is not declared: unknown",
     });
+  });
+
+  it("replaces a successful-looking result when any afterTool delegate throws", async () => {
+    const original: ToolExecutionResult = { output: [{ type: "text", text: "published" }] };
+    const { handler, hookApi } = afterTool([
+      {
+        afterTool: async () => {
+          throw new Error("policy backend unavailable");
+        },
+      },
+    ]);
+
+    await expect(handler(call("model_tool"), original, hookApi, context)).resolves.toEqual({
+      isError: true,
+      output: [{ type: "text", text: "Pi tool policy failed closed" }],
+    });
+  });
+
+  it("fails closed when a delegate's api.memo operation rejects", async () => {
+    const original: ToolExecutionResult = { output: [{ type: "text", text: "published" }] };
+    const rejectingApi = {
+      memo: vi.fn(async () => {
+        throw new Error("memo unavailable");
+      }),
+    } as unknown as HookApi;
+    const { handler } = afterTool(
+      [
+        {
+          afterTool: async (_call, _declaration, result, delegateApi, delegateContext) => {
+            await delegateApi.memo("external-action", delegateContext);
+            return result;
+          },
+        },
+      ],
+      rejectingApi
+    );
+
+    await expect(handler(call("model_tool"), original, rejectingApi, context)).resolves.toEqual({
+      isError: true,
+      output: [{ type: "text", text: "Pi tool policy failed closed" }],
+    });
+  });
+
+  it("does not convert an abort into a policy result", async () => {
+    const abort = new DOMException("cancelled", "AbortError");
+    const original: ToolExecutionResult = { output: [{ type: "text", text: "published" }] };
+    const { handler, hookApi } = afterTool([
+      {
+        afterTool: async () => {
+          throw abort;
+        },
+      },
+    ]);
+
+    await expect(handler(call("model_tool"), original, hookApi, context)).rejects.toBe(abort);
   });
 });

@@ -55,8 +55,13 @@ export function createPiToolPolicyExtension(
           if (!declaration) return policyError(`Pi tool is not declared: ${call.name}`);
           let next = result;
           for (const delegate of delegates) {
-            if (delegate.afterTool)
+            if (!delegate.afterTool) continue;
+            try {
               next = await delegate.afterTool(call, declaration, next, api, context);
+            } catch (error) {
+              if (isAbortError(error, context)) throw error;
+              return policyError("Pi tool policy failed closed");
+            }
           }
           return next;
         },
@@ -67,4 +72,9 @@ export function createPiToolPolicyExtension(
 
 function policyError(message: string): ToolExecutionResult {
   return { isError: true, output: [{ type: "text", text: message }] };
+}
+
+function isAbortError(error: unknown, context: Context): boolean {
+  if (error instanceof Error && error.name === "AbortError") return true;
+  return context.abortSignal?.aborted === true && context.abortSignal.reason === error;
 }

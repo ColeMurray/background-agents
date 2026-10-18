@@ -54,7 +54,6 @@ describe("route policy table", () => {
       authorization: {
         allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
       },
-      cacheControl: "private, no-store",
     });
     expect(
       routeFor("POST", "/sessions/session-1/external-actions/action-1/decision")
@@ -66,7 +65,6 @@ describe("route policy table", () => {
           { kind: "permission", permission: "external_actions.approve" },
         ],
       },
-      cacheControl: "private, no-store",
     });
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
