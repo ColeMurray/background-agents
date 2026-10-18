@@ -32,8 +32,11 @@ the existing sandbox command path for other harnesses.
 
 ## Verification
 
-- Control-plane full suite: 4,933 passed, 1 skipped.
-- Shared full suite: 1,292 passed. Web full suite: 2,525 passed.
-- Focused writable/repository/diff/MCP/external-action workerd suite: 80 passed.
+- Control-plane full suite: 4,990 passed, 1 skipped.
+- Shared full suite: 1,302 passed. Web full suite: 2,525 passed.
+- Focused writable/repository/diff/sandbox/MCP/external-action workerd suite: 96 passed.
+- Code Mode workerd lane: 9 passed. Isolated sandbox contracts: 5 passed and Wrangler dry-run built.
 - Docs tests: 44 passed; the webpack production build also passed.
-- Terraform production suite: 81 passed. Terraform workflow contracts: 31 passed.
+- Terraform: 89 production, 2 Modal module, and 6 Cloudflare Worker module tests passed.
+- Terraform workflow contracts: 31 passed. Node-version workflow contract: 1 passed.
+- Root typecheck, lint, formatting, and Node 24/npm 11 offline `npm ci` passed.

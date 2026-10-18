@@ -1452,6 +1452,7 @@ Secrets for credentials:
 | `ENABLE_DURABLE_OBJECT_BINDINGS`          | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
 | `PI_DURABLE_ENABLED`                      | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
 | `PI_WORKSPACE_MODE`                       | Pi scratch workspace: `off` (default), `read_only`, or `writable`                               |
+| `PI_REPOSITORY_EDITING_MODE`              | Independent position-rooted repository overlay/edit/diff gate: `off` or `enabled`               |
 | `PI_SANDBOX_EXECUTION_MODE`               | Pi execution capability: `off`, `read_only`, or `enabled`; no model tool is exposed yet         |
 | `PI_CODEMODE_MODE`                        | Native Pi Code Mode: `off` (default) or explicit paid-plan opt-in `paid`                        |
 | `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED` | Keep `false` until the protected Wrangler deployment is verified live                           |
@@ -1508,6 +1509,12 @@ a personal or staging canary, set the Actions variable to one of these values an
 
 Neither mode adds a checkout, Git, shell, network, mounts, publishing, or an execution backend.
 Leave the value `off` to avoid initializing Computer VFS tables.
+
+`PI_REPOSITORY_EDITING_MODE=enabled` independently materializes strict commit-pinned repositories
+under `/workspace/repos/{position}`. Repository and scratch mutations share the canonical workspace
+FIFO, policy, redaction, and SessionDiff publication order. Scratch remains governed by
+`PI_WORKSPACE_MODE`, including its durable aggregate quota when writable. Repository bytes cross
+SessionDO in bounded batches and never carry source-control credentials.
 
 Each Pi session durably snapshots its workspace capability on first open. Changing
 `PI_WORKSPACE_MODE` never silently upgrades or downgrades an existing session after eviction. To

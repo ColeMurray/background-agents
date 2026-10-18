@@ -375,8 +375,8 @@ describe("PiSessionDO", () => {
       "open-inspect",
       "open-inspect.subagent",
       "open-inspect.workspace",
-      "open-inspect.external-actions",
       "open-inspect.repository-overlay",
+      "open-inspect.external-actions",
     ]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>

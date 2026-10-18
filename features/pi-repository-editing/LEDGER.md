@@ -2,7 +2,7 @@
 
 Workspace: repository root on `feat/pi-repository-editing`
 
-Base: `d7a401ca` (`feat/pi-first-class`, canonical writable workspace tip)
+Base: `3605e0fd` (`feat/pi-first-class`, canonical sandbox execution and Code Mode tip)
 
 Started: 2026-10-18
 
@@ -43,6 +43,11 @@ Rule: tick only with evidence on the same line.
 
 - [x] Documentation states rollout flag and limitations — `SLICE.md`, `SPEC-MAP.md`, and
       `docs/GETTING_STARTED.md`
-- [x] Git branch and rebased commits verified — `feat/pi-repository-editing` is based on `d7a401ca`;
-      canonical writable-composition follow-up commit follows
+- [x] Sandbox-generation fixture drift resolved — diff readiness now uses the active sandbox ID;
+      extension expectations follow the canonical assembler slot order
+- [x] Combined verification green — control 4,990/1 skipped; shared 1,302; web 2,525; focused
+      workerd 96; Code Mode workerd 9; Code Mode sandbox contracts 5; docs 44 plus webpack build;
+      Terraform 97; workflow contracts 31+1; root typecheck, lint, format, and offline `npm ci`
+- [x] Git branch and rebased commits verified — `feat/pi-repository-editing` is based on exact
+      `3605e0fd`; all seven repository commits follow additively
 - [x] No push performed — local worktree only
