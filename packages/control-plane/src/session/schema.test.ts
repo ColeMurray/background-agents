@@ -3,12 +3,34 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
-import { validateMigrationArtifacts } from "@open-inspect/shared/pi-migration-reservations";
+import {
+  PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+  validateMigrationArtifacts,
+} from "@open-inspect/shared/pi-migration-reservations";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
-import { PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID } from "@open-inspect/shared/pi-migration-reservations";
+
+it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
+  expect(
+    MIGRATIONS.filter(({ id }) => id >= PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID).map(
+      ({ id, feature }) => ({ id, feature })
+    )
+  ).toEqual([
+    {
+      id: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+      feature: "sandboxExecution",
+    },
+    {
+      id: PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+      feature: "sandboxExecution",
+    },
+    { id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID, feature: "externalActions" },
+  ]);
+});
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.

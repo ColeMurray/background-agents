@@ -1,9 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { createAlarmHandler } from "./handler";
 
-it("reconciles due external actions and rearms their persisted deadline", async () => {
+it("composes external reconciliation and sandbox commands through one alarm scheduler", async () => {
   const recoverDue = vi.fn(async () => undefined);
-  const schedule = vi.fn(async () => undefined);
+  const schedule = vi.fn(async (_deadline: number) => undefined);
+  const sandboxCommandDeadlines = vi.fn(async () => {
+    await schedule(6_000);
+  });
   const handler = createAlarmHandler({
     repository: {
       getProcessingMessageWithStartedAt: () => null,
@@ -24,6 +27,7 @@ it("reconciles due external actions and rearms their persisted deadline", async 
       recoverDue,
       nextDeadline: () => 7_000,
     },
+    sandboxCommandDeadlines,
     getExecutionTimeoutMs: () => 60_000,
     now: () => 5_000,
     log: { warn: vi.fn() } as never,
@@ -32,5 +36,7 @@ it("reconciles due external actions and rearms their persisted deadline", async 
   await handler.handle();
 
   expect(recoverDue).toHaveBeenCalledOnce();
+  expect(sandboxCommandDeadlines).toHaveBeenCalledOnce();
   expect(schedule).toHaveBeenCalledWith(7_000);
+  expect(schedule).toHaveBeenCalledWith(6_000);
 });
