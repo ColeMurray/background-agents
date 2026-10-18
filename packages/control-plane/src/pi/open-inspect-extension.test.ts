@@ -22,6 +22,11 @@ describe("createOpenInspectExtension", () => {
       ["repository_list", "safe"],
       ["repository_read", "safe"],
     ]);
+    expect(extension.tools?.map((tool) => tool.callers)).toEqual([
+      ["model", "tools"],
+      ["model", "tools"],
+    ]);
+    expect(extension.sections?.[0]?.render({} as never, {} as never)).not.toContain("Delegate");
 
     const list = extension.tools?.find((tool) => tool.name === "repository_list");
     const result = await list?.execute({ path: "src" }, { taskId: 17 } as ToolExecutionApi, {
@@ -51,5 +56,9 @@ describe("createOpenInspectExtension", () => {
     expect(extension.tools?.map((tool) => [tool.name, tool.replay])).toEqual([
       ["subagent", "safe"],
     ]);
+    expect(extension.tools?.[0]?.callers).toEqual(["model"]);
+    expect(extension.sections?.[0]?.render({} as never, {} as never)).toContain(
+      "Delegate independent analysis"
+    );
   });
 });

@@ -49,6 +49,7 @@ const repositoryList = defineTool({
   }),
   structuredOutputSchema: Type.Any(),
   replay: "safe",
+  callers: ["model", "tools"],
   execute: async () => ({ isError: true, output: [{ type: "text", text: "Tool not bound" }] }),
 });
 
@@ -67,6 +68,7 @@ const repositoryRead = defineTool({
   }),
   structuredOutputSchema: Type.Any(),
   replay: "safe",
+  callers: ["model", "tools"],
   execute: async () => ({ isError: true, output: [{ type: "text", text: "Tool not bound" }] }),
 });
 
@@ -100,7 +102,6 @@ export function createOpenInspectExtension(options: OpenInspectExtensionOptions)
             options.repositories.length > 0
               ? "Repository tools read the session's pinned repositories without creating a sandbox."
               : "This session has no attached repository.",
-            "Delegate independent analysis to the subagent tool.",
           ].join(" "),
         { tag: false }
       ),
@@ -114,6 +115,11 @@ export function createSubagentExtension(): Extension {
   const selection = defineExtension({ name: "open-inspect.subagent" });
   return defineExtension({
     name: "open-inspect.subagent",
+    sections: [
+      section("subagent", () => "Delegate independent analysis to the subagent tool.", {
+        tag: false,
+      }),
+    ],
     tools: [createSubagentTool(selection)],
   });
 }
@@ -156,6 +162,7 @@ function createSubagentTool(extension: Extension) {
       }),
     }),
     replay: "safe",
+    callers: ["model"],
     execute: async ({ task }, api, context) => {
       // Resolve outside the commit: a transaction must never wait on registry or
       // environment work. Write the exact parent selection minus recursive

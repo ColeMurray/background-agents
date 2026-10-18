@@ -65,4 +65,38 @@ describe("skillSourceFromInstallation", () => {
       })
     ).toThrow("Invalid managed skill snapshot");
   });
+
+  it("preserves descriptors and normalizes invocation metadata for catalog filtering", async () => {
+    const source = skillSourceFromInstallation({
+      schemaVersion: 1,
+      manifestSha256: "a".repeat(64),
+      nextCursor: null,
+      skills: [
+        {
+          name: "manual-only",
+          files: [
+            {
+              path: "SKILL.md",
+              content:
+                "---\nname: manual-only\ndescription: Manual only\ncompatibility: pi\nmetadata:\n  disable-model-invocation: true\n  owner: platform\n---\nUse explicitly.",
+              sha256: "b".repeat(64),
+              sizeBytes: 150,
+              executable: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    await expect(source.list()).resolves.toEqual([
+      expect.objectContaining({
+        name: "manual-only",
+        compatibility: "pi",
+        metadata: {
+          "disable-model-invocation": true,
+          owner: "platform",
+        },
+      }),
+    ]);
+  });
 });

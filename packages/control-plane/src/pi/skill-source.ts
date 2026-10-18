@@ -32,7 +32,7 @@ export function skillSourceFromInstallation(installation: SandboxSkillInstallati
     const compatibility = scalar(parsed.frontmatter, "compatibility");
     const license = scalar(parsed.frontmatter, "license");
     const allowedTools = scalar(parsed.frontmatter, "allowed-tools");
-    const metadata = stringMap(parsed.frontmatter, "metadata");
+    const metadata = skillMetadata(parsed.frontmatter);
     resourcesBySkill.set(skill.name, resources);
     skills.set(skill.name, {
       name,
@@ -49,7 +49,10 @@ export function skillSourceFromInstallation(installation: SandboxSkillInstallati
   return {
     id: "open-inspect.session-skills",
     fingerprint: installation.manifestSha256,
-    list: async () => [...skills.values()].map(({ name, description }) => ({ name, description })),
+    list: async () =>
+      [...skills.values()].map(
+        ({ body: _body, rawContent: _raw, resources: _resources, ...item }) => item
+      ),
     load: async (name) => skills.get(name) ?? null,
     readResource: async (name, path) => {
       const resource = resourcesBySkill.get(name)?.find((candidate) => candidate.path === path);
@@ -66,6 +69,18 @@ function scalar(frontmatter: ReturnType<typeof parseSkillMarkdown>["frontmatter"
 function stringMap(frontmatter: ReturnType<typeof parseSkillMarkdown>["frontmatter"], key: string) {
   const value = frontmatter.get(key);
   return value?.kind === "map" ? value.value : undefined;
+}
+
+function skillMetadata(
+  frontmatter: ReturnType<typeof parseSkillMarkdown>["frontmatter"]
+): Record<string, unknown> | undefined {
+  const metadata = stringMap(frontmatter, "metadata");
+  if (!metadata) return undefined;
+  const normalized: Record<string, unknown> = { ...metadata };
+  const invocation = metadata["disable-model-invocation"]?.trim().toLowerCase();
+  if (invocation === "true") normalized["disable-model-invocation"] = true;
+  if (invocation === "false") normalized["disable-model-invocation"] = false;
+  return normalized;
 }
 
 function resourceKind(path: string): "reference" | "script" | "asset" | "file" {
