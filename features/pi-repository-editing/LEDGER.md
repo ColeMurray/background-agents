@@ -25,7 +25,7 @@ Rule: tick only with evidence on the same line.
       SessionDO baseline reuse
 - [x] Focused tests and typecheck green — 243 focused control-plane tests; shared and all four
       control-plane TypeScript projects clean
-- [ ] Committed
+- [x] Committed — `56ba3875` (`feat: add Pi repository editing overlay`)
 
 ## Slice 2: VFS overlay and diff publication
 
@@ -37,11 +37,12 @@ Rule: tick only with evidence on the same line.
       batches, branch-move crash recovery, SessionDiff publication/retry
 - [x] Security/deep audit and simplify pass — watchdog P1-P3 and cross-cutting blockers reconciled;
       no Computer Git/network/credentials and unknown tools fail closed
-- [ ] Committed
+- [x] Committed — `56ba3875` (`feat: add Pi repository editing overlay`)
 
 ## Finish
 
 - [x] Documentation states rollout flag and limitations — `SLICE.md`, `SPEC-MAP.md`, and
       `docs/GETTING_STARTED.md`
-- [ ] Git branch, commits, and clean worktree verified
+- [x] Git branch and implementation commit verified — `feat/pi-repository-editing` at `56ba3875`;
+      final ledger commit follows
 - [x] No push performed — local worktree only
