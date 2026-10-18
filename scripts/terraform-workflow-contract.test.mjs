@@ -178,7 +178,9 @@ async function stageMcpMigration(environment) {
       output = JSON.parse(
         await readFile(join(directory, "mcp-connection-do.auto.tfvars.json"), "utf8")
       );
-    } catch {}
+    } catch {
+      // Failed staging intentionally has no generated auto-tfvars file.
+    }
     return { ...result, output };
   } finally {
     await rm(directory, { recursive: true, force: true });
