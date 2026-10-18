@@ -33,32 +33,32 @@ adapter may implement that interface for existing full sandboxes.
 
 ## Requirement map
 
-| Requirement                           | Current status      | Implementation                                             |
-| ------------------------------------- | ------------------- | ---------------------------------------------------------- |
-| Atomic sessions/tasks/recovery        | Exists              | Pi Durable + PiHarness in base PR                          |
-| Automatic compaction                  | Exists              | Pi default policy in base PR                               |
-| Extensions and managed skills         | Exists              | `packages/control-plane/src/pi/`                           |
-| Foreground subagents                  | Exists, UI partial  | Stream child conversation in Slice 5                       |
-| Commit-pinned repository reads        | Exists              | SessionDO-authorized provider `readFile`/`listTree`        |
-| Durable writable files                | Build               | Computer VFS, no exec/Git/network initially                |
-| Write/edit/delete tools               | Build               | Explicit replay policy; permission hooks before exposure   |
-| JavaScript execution                  | Build later         | Worker-JS only after Terraform supports `worker_loader`    |
-| Durable Code Mode                     | Build               | External QuickJS Worker + native Pi extension              |
-| Mutation approval/audit               | Build               | Pi hooks + SessionDO authority + durable approval document |
-| Deferred tools/tool search            | Build               | Native Pi Durable extension after catalog expands          |
-| Pi steering/follow-ups                | Partial             | Admit directly to Pi with durable operation projection     |
-| Reset/handoff/forks/manual compaction | Missing UI/API      | Extend Pi runtime port in Slice 5                          |
-| Task graph/inspect                    | Missing             | Sanitized runtime projection in Slice 5                    |
-| Reasoning/retry/inbox/failure events  | Partial             | Extend event translation in Slice 5                        |
-| MCP static headers                    | Blocked             | Encrypted broker, never direct Pi client                   |
-| MCP OAuth                             | Blocked             | Per-principal D1 authority and callback UI                 |
-| MCP mutation replay                   | Blocked             | Execution ledger and indeterminate outcomes                |
-| Automation executor MCP               | Blocked             | Executor-owned grants and firing-time reauthorization      |
-| Browser                               | Later               | Agents Browser capability after core policy gates          |
-| Memory tools                          | Later               | Existing SessionDO memory policy through Pi proxy tools    |
-| Attachments/images                    | Later               | Bounded attachment adapter and model capability checks     |
-| Native shell/builds                   | Explicit escalation | Linked sandbox child; never silently mutate Pi backend     |
-| GitHub/Linear Pi flows                | Blocked             | Require diff/mutation/publication tools first              |
+| Requirement                           | Current status       | Implementation                                                 |
+| ------------------------------------- | -------------------- | -------------------------------------------------------------- |
+| Atomic sessions/tasks/recovery        | Exists               | Pi Durable + PiHarness in base PR                              |
+| Automatic compaction                  | Exists               | Pi default policy in base PR                                   |
+| Extensions and managed skills         | Exists               | `packages/control-plane/src/pi/`                               |
+| Foreground subagents                  | Exists, UI partial   | Stream child conversation in Slice 5                           |
+| Commit-pinned repository reads        | Exists               | SessionDO-authorized provider `readFile`/`listTree`            |
+| Durable writable files                | Done                 | Quota proxy over Computer VFS; no exec/Git/network             |
+| Write/edit/delete tools               | Done for scratch VFS | Unsafe replay, sequential mode, global FIFO, redacted events   |
+| JavaScript execution                  | Build later          | Worker-JS only after Terraform supports `worker_loader`        |
+| Durable Code Mode                     | Build                | External QuickJS Worker + native Pi extension                  |
+| Mutation approval/audit               | Partial              | Local scratch policy hooks/memos done; external approval later |
+| Deferred tools/tool search            | Build                | Native Pi Durable extension after catalog expands              |
+| Pi steering/follow-ups                | Partial              | Admit directly to Pi with durable operation projection         |
+| Reset/handoff/forks/manual compaction | Missing UI/API       | Extend Pi runtime port in Slice 5                              |
+| Task graph/inspect                    | Missing              | Sanitized runtime projection in Slice 5                        |
+| Reasoning/retry/inbox/failure events  | Partial              | Extend event translation in Slice 5                            |
+| MCP static headers                    | Blocked              | Encrypted broker, never direct Pi client                       |
+| MCP OAuth                             | Blocked              | Per-principal D1 authority and callback UI                     |
+| MCP mutation replay                   | Blocked              | Execution ledger and indeterminate outcomes                    |
+| Automation executor MCP               | Blocked              | Executor-owned grants and firing-time reauthorization          |
+| Browser                               | Later                | Agents Browser capability after core policy gates              |
+| Memory tools                          | Later                | Existing SessionDO memory policy through Pi proxy tools        |
+| Attachments/images                    | Later                | Bounded attachment adapter and model capability checks         |
+| Native shell/builds                   | Explicit escalation  | Linked sandbox child; never silently mutate Pi backend         |
+| GitHub/Linear Pi flows                | Blocked              | Require diff/mutation/publication tools first                  |
 
 ## Delivery slices
 
@@ -75,7 +75,7 @@ adapter may implement that interface for existing full sandboxes.
 - Follow Cloudflare's Pi example with one workspace per `PiSessionDO` unless conformance/performance
   proves a separate workspace DO is necessary.
 - Wrap Computer Pi-AI results into Pi Durable 1.3 `output` results.
-- Initially expose only `read`, `ls`, `find`, and `grep` under `/workspace`.
+- Initially expose only `read`, `ls`, `find`, and `grep` under `/workspace/scratch`.
 - Exclude mutations, exec, assets, mounts, runtime access, and Computer Git.
 - Construct the Workspace only after session identity/deletion checks, so a cold request cannot
   recreate VFS tables for a deleted session.
@@ -85,8 +85,11 @@ adapter may implement that interface for existing full sandboxes.
 
 - Install a mandatory extension containing `beforeTool` and `afterTool` hooks.
 - SessionDO authorizes external effects; Pi documents only durable approval state.
-- Enable bounded `write`, forced `delete`, and unsafe-replay `edit` only after this policy and
-  durable workspace quotas are present. Deny deletion of the `/workspace` root.
+- Bounded `write`, `edit`, and forced `delete` are available only for credential-free scratch VFS
+  after durable aggregate quota accounting. All are unsafe-replay, globally serialized, and deny
+  deletion of the `/workspace/scratch` root and its `/workspace` container. Scratch quota remains
+  separate from repository overlay roots and their mutation gate. External effects still require
+  SessionDO authorization and approval policy before exposure.
 - Blast radius: authorization, timeline events, replay; default-deny unknown mutations.
 
 ### 4. Native durable Code Mode

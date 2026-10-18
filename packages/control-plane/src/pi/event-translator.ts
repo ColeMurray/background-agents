@@ -15,6 +15,8 @@ interface PiToolTranslationState {
   taskCallId?: string;
 }
 
+const REDACTED = "[redacted]";
+
 export function translatePiEvents(
   events: readonly AgentEvent[],
   state: PiEventTranslationState,
@@ -256,11 +258,30 @@ function toolEvent(
     timestamp: envelope.timestamp,
     messageId: envelope.operationId,
     tool: state.tool,
-    args: state.args,
+    args: redactToolArguments(state.tool, state.args),
     callId,
     status,
-    ...(state.output ? { output: state.output } : {}),
+    ...(state.output ? { output: redactToolOutput(state.tool, state.output) } : {}),
     ...(state.isSubtask ? { isSubtask: true } : {}),
     ...(state.taskCallId ? { taskCallId: state.taskCallId } : {}),
   };
+}
+
+function redactToolArguments(tool: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (tool === "write" && "content" in args) {
+    return { path: args.path, content: REDACTED };
+  }
+  if (tool !== "edit" || !Array.isArray(args.edits)) return args;
+  return {
+    path: args.path,
+    edits: args.edits.map((edit) =>
+      typeof edit === "object" && edit !== null
+        ? { oldText: REDACTED, newText: REDACTED }
+        : REDACTED
+    ),
+  };
+}
+
+function redactToolOutput(tool: string, output: string): string {
+  return tool === "write" || tool === "edit" ? REDACTED : output;
 }

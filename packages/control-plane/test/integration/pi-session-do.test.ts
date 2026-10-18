@@ -8,6 +8,7 @@ import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
+import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
@@ -44,7 +45,7 @@ function workspaceOf(instance: PiSessionDO): Workspace {
 
 async function executeWorkspaceTool(
   instance: PiSessionDO,
-  name: "read" | "ls" | "find" | "grep",
+  name: "read" | "ls" | "find" | "grep" | "write" | "edit" | "delete",
   args: Record<string, unknown>,
   callId: string
 ) {
@@ -81,6 +82,21 @@ describe("PiSessionDO", () => {
     );
     expect(tables.some((name) => name.startsWith("pi_"))).toBe(true);
     expect(tables.some((name) => name.startsWith("vfs_") || name.startsWith("_vfs_"))).toBe(true);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+      )
+    ).resolves.toEqual({
+      version: 1,
+      capabilities: {
+        workspace: "enabled",
+        repositoryEditing: "off",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+      },
+    });
   });
 
   it("initializes idempotently for the same Open-Inspect session", async () => {
@@ -95,7 +111,7 @@ describe("PiSessionDO", () => {
 
     const result = await runInPiSessionDO(stub, async (instance) => {
       const workspace = workspaceOf(instance);
-      await workspace.fs.writeFile("/workspace/note.txt", "durable note");
+      await workspace.fs.writeFile("/workspace/scratch/note.txt", "durable note");
       return executeWorkspaceTool(instance, "read", { path: "note.txt" }, "integration-read");
     });
 
@@ -106,9 +122,98 @@ describe("PiSessionDO", () => {
     await expect(stub.status(sessionName)).resolves.toEqual({ busy: false, pending: 0 });
     await expect(
       runInPiSessionDO(stub, (instance) =>
-        workspaceOf(instance).fs.readFile("/workspace/note.txt", "utf8")
+        workspaceOf(instance).fs.readFile("/workspace/scratch/note.txt", "utf8")
       )
     ).resolves.toBe("durable note");
+    await expect(
+      runInDurableObject(stub, (_instance, state) => state.storage.get(WORKSPACE_QUOTA_STATE_KEY))
+    ).resolves.toEqual({ bytes: 12, entries: 1, dirty: false });
+  });
+
+  it("writes, edits, and deletes scratch files through unsafe workspace tools", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-workspace-mutate");
+    await stub.status(sessionName);
+
+    const results = await runInPiSessionDO(stub, async (instance) => {
+      const write = await executeWorkspaceTool(
+        instance,
+        "write",
+        { path: "draft.txt", content: "hello world" },
+        "integration-write"
+      );
+      const edit = await executeWorkspaceTool(
+        instance,
+        "edit",
+        { path: "draft.txt", edits: [{ oldText: "world", newText: "Pi" }] },
+        "integration-edit"
+      );
+      const text = await workspaceOf(instance).fs.readFile("/workspace/scratch/draft.txt", "utf8");
+      const remove = await executeWorkspaceTool(
+        instance,
+        "delete",
+        { path: "draft.txt" },
+        "integration-delete"
+      );
+      return { write, edit, text, remove };
+    });
+
+    expect(results.write).toMatchObject({ isError: false });
+    expect(results.edit).toMatchObject({ isError: false });
+    expect(results.text).toBe("hello Pi");
+    expect(results.remove).toMatchObject({ isError: false });
+  });
+
+  it("recovers dirty quota accounting after eviction and keeps the workspace root", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-workspace-recover");
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, (instance) =>
+      workspaceOf(instance).fs.writeFile("/workspace/scratch/kept.txt", "kept")
+    );
+    await runInDurableObject(stub, (_instance, state) =>
+      state.storage.put(WORKSPACE_QUOTA_STATE_KEY, {
+        bytes: 999_999,
+        entries: 999,
+        dirty: true,
+      })
+    );
+
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: force Pi eviction"))
+    ).rejects.toThrow();
+    const restored = piStub(sessionName);
+    await expect(restored.status(sessionName)).resolves.toEqual({ busy: false, pending: 0 });
+
+    const rootDeletes = await runInPiSessionDO(restored, (instance) =>
+      Promise.all(
+        ["/workspace", "/workspace/scratch"].map((path, index) =>
+          executeWorkspaceTool(
+            instance,
+            "delete",
+            { path, recursive: true },
+            `integration-delete-root-${index}`
+          )
+        )
+      )
+    );
+    expect(rootDeletes).toEqual([
+      expect.objectContaining({ isError: true }),
+      expect.objectContaining({ isError: true }),
+    ]);
+    await expect(
+      runInPiSessionDO(restored, (instance) =>
+        workspaceOf(instance).fs.writeFile("/workspace/scratch/new.txt", "new")
+      )
+    ).resolves.toBeUndefined();
+    await expect(
+      runInDurableObject(restored, (_instance, state) =>
+        state.storage.get(WORKSPACE_QUOTA_STATE_KEY)
+      )
+    ).resolves.toEqual({ bytes: 7, entries: 2, dirty: false });
+    await expect(
+      runInPiSessionDO(restored, (instance) =>
+        workspaceOf(instance).fs.readFile("/workspace/scratch/kept.txt", "utf8")
+      )
+    ).resolves.toBe("kept");
   });
 
   it("rejects workspace reads outside the configured root", async () => {
@@ -128,8 +233,7 @@ describe("PiSessionDO", () => {
 
     const results = await runInPiSessionDO(stub, async (instance) => {
       const workspace = workspaceOf(instance);
-      await workspace.fs.writeFile("/outside-secret.txt", "not visible");
-      await workspace.fs.symlink("/outside-secret.txt", "/workspace/escape");
+      await workspace.fs.symlink("/outside-secret.txt", "/workspace/scratch/escape");
       return Promise.all([
         executeWorkspaceTool(instance, "read", { path: "escape" }, "symlink-read"),
         executeWorkspaceTool(instance, "ls", { path: "escape" }, "symlink-ls"),
@@ -157,19 +261,19 @@ describe("PiSessionDO", () => {
 
     await Promise.all([
       runInPiSessionDO(first.stub, (instance) =>
-        workspaceOf(instance).fs.writeFile("/workspace/same.txt", "first")
+        workspaceOf(instance).fs.writeFile("/workspace/scratch/same.txt", "first")
       ),
       runInPiSessionDO(second.stub, (instance) =>
-        workspaceOf(instance).fs.writeFile("/workspace/same.txt", "second")
+        workspaceOf(instance).fs.writeFile("/workspace/scratch/same.txt", "second")
       ),
     ]);
 
     const [firstText, secondText] = await Promise.all([
       runInPiSessionDO(first.stub, (instance) =>
-        workspaceOf(instance).fs.readFile("/workspace/same.txt", "utf8")
+        workspaceOf(instance).fs.readFile("/workspace/scratch/same.txt", "utf8")
       ),
       runInPiSessionDO(second.stub, (instance) =>
-        workspaceOf(instance).fs.readFile("/workspace/same.txt", "utf8")
+        workspaceOf(instance).fs.readFile("/workspace/scratch/same.txt", "utf8")
       ),
     ]);
     expect(firstText).toBe("first");
@@ -247,6 +351,9 @@ describe("PiSessionDO", () => {
       "ls",
       "find",
       "grep",
+      "write",
+      "edit",
+      "delete",
     ]);
     expect(agent.extensions).toEqual([
       "open-inspect.tool-policy",
@@ -261,7 +368,7 @@ describe("PiSessionDO", () => {
     ).resolves.toEqual({
       version: 1,
       capabilities: {
-        workspace: "read_only",
+        workspace: "enabled",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
@@ -287,7 +394,7 @@ describe("PiSessionDO", () => {
     const { sessionName, stub } = await initializedPiStub("pi-delete");
     await stub.status(sessionName);
     await runInPiSessionDO(stub, (instance) =>
-      workspaceOf(instance).fs.writeFile("/workspace/delete-me.txt", "gone")
+      workspaceOf(instance).fs.writeFile("/workspace/scratch/delete-me.txt", "gone")
     );
 
     await stub.destroy(sessionName);

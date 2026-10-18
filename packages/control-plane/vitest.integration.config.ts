@@ -186,7 +186,7 @@ export default defineConfig({
             SLACK_BOT_TOKEN: "xoxb-test-integration",
             WEB_APP_URL: "https://app.test.local",
             APP_NAME: "Open-Inspect",
-            PI_WORKSPACE_MODE: "read_only",
+            PI_WORKSPACE_MODE: "writable",
             TEST_MIGRATIONS: migrations,
           },
         },
@@ -200,7 +200,7 @@ export default defineConfig({
       // Better Auth implements redirects and invalid-token responses as thrown
       // APIError values. Its handler catches and converts them to HTTP responses,
       // but the Workers pool reports the intermediate rejection as unhandled.
-      const betterAuthStack =
+      const errorStack =
         "errorStack" in error && typeof error.errorStack === "string"
           ? error.errorStack
           : error.stack;
@@ -212,13 +212,25 @@ export default defineConfig({
         typeof error.body.code === "string"
           ? error.body.code
           : null;
+      const computerMissingFileHandledByWrite =
+        error.name === "WorkspaceFsError" &&
+        "code" in error &&
+        error.code === "ENOENT" &&
+        "path" in error &&
+        typeof error.path === "string" &&
+        error.path.startsWith("/workspace/") &&
+        errorStack?.includes("@cloudflare/computer/src/tools/common/fs/write.ts");
+      // Computer 0.5.1 catches this ENOENT and successfully creates the file,
+      // but the Workers pool also reports the intermediate rejection. Keep the
+      // exception exact; the integration assertion proves the write committed.
+      if (computerMissingFileHandledByWrite) return false;
       if (
         error.name === "APIError" &&
         "statusCode" in error &&
         typeof error.statusCode === "number" &&
         ((error.statusCode >= 300 && error.statusCode < 400) ||
           (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN")) &&
-        betterAuthStack?.includes("/better-auth/dist/api/routes/")
+        errorStack?.includes("/better-auth/dist/api/routes/")
       ) {
         return false;
       }

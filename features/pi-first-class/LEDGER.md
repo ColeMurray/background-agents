@@ -64,7 +64,7 @@ Rule: tick only with evidence on the same line.
 - [x] Workspace/tool contract — exact-pinned Computer 0.5.1, Pi Durable 1.3 output adapter, explicit
       four-tool allowlist
 - [x] Read/ls/find/grep implemented without mutation/exec/Git/network — `open-inspect.workspace`,
-      rooted at `/workspace`
+      now rooted at `/workspace/scratch` so future repository overlays remain outside scratch quota
 - [x] Unit + workerd tests — 16 focused unit/build checks, 13 PiSessionDO integration checks, 3
       Terraform mode checks
 - [x] Deep audit — independent API/runtime/security/build/dependency reviewers; writable-mode
@@ -78,15 +78,26 @@ Rule: tick only with evidence on the same line.
 
 ### Slice 3: permission and audit extension
 
-- [ ] Existing mutation behavior pinned
-- [ ] Approval/document/audit contract
-- [ ] `beforeTool`/`afterTool` policy implemented
-- [ ] Role/denial/replay tests
-- [ ] Deep audit
-- [ ] `/simplify`
-- [ ] Narrow validation green
+- [x] Existing mutation behavior pinned — RED for writable mode, tool registration, quota proxy,
+      root deletion, FIFO, event redaction, workerd tool flow, and Terraform mode
+- [x] Approval/document/audit contract — bounded local scratch mutations auto-allow through
+      metadata-only durable task memos; external effects remain unexposed
+- [x] `beforeTool`/`afterTool` policy implemented — shared effect metadata separates local reads,
+      local mutations, and external effects; unclassified Computer mutations fail closed
+- [x] Role/denial/replay tests — SessionDO still owns session authorization; unknown mutation/root/
+      quota denials and unsafe replay metadata are covered
+- [x] Durable mutation contract — 8 MiB/1,000-entry aggregate accounting with dirty-state recovery,
+      unsafe replay, sequential rounds, and one global FIFO
+- [x] Deep audit — two local trace/security/recovery rounds plus architecture and watchdog reviews;
+      undefined edit details, policy ownership, entry exhaustion, missing-file workerd behavior,
+      eviction recovery, nested redaction, and contradictory docs resolved
+- [x] `/simplify` — one quota filesystem proxy, one workspace-wide FIFO, mandatory capability
+      bundle, and one shared tool-effect metadata contract; no external-action gateway duplicated
+- [x] Narrow and full relevant validation green — 4,804 control-plane unit tests, 15 PiSessionDO
+      workerd tests, 80 production Terraform tests, 44 docs tests, docs build, root typecheck, lint,
+      format, Terraform validate/fmt, and Worker bundle boundary
 - [ ] Committed
-- [ ] Slice report
+- [x] Slice report — `features/pi-first-class/SLICE-3.md`
 
 ### Slice 4: Pi Durable Code Mode integration
 
@@ -178,7 +189,7 @@ Rule: tick only with evidence on the same line.
 | Requirement                   | Status             | Evidence or reason                                             |
 | ----------------------------- | ------------------ | -------------------------------------------------------------- |
 | Pi durable runtime foundation | Done in base       | PR #2431, base `d1ffd951`                                      |
-| Writable workspace            | Left               | Slice 2                                                        |
+| Writable workspace            | Implemented        | Slice 3; final audit/validation pending                        |
 | Durable Code Mode             | Left               | Slices 1 and 4                                                 |
 | MCP/OAuth                     | Left               | Slices 6 and 7; requires guarded restore support in Agents SDK |
 | Native Linux builds           | Skipped by default | Explicit linked sandbox escalation only                        |

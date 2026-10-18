@@ -37,8 +37,8 @@ All three integrations preserve a supported selected harness rather than silentl
 Existing GitHub and Linear settings that select Claude Agent without a default model are not automatically migrated. They remain readable, and rejected saves leave them unchanged. Before saving any edits, including unrelated settings, an administrator must open **Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model at every global or repository level that explicitly selects Claude Agent. A global model alone does not repair an explicit repository harness override. Alternatively, switch that level to OpenCode, or remove the repository harness override to inherit global settings.
 
 Harnesses project their output into the same session timeline and completion contract. Operators may
-enable a read-only durable scratch workspace for Pi. Features that require workspace mutation, a
-terminal, local Git checkout, or sandbox process remain unavailable.
+enable a read-only or bounded writable durable scratch workspace for Pi. A terminal, local Git
+checkout, network access, and sandbox processes remain unavailable.
 
 ## Pi Durable sessions
 
@@ -62,12 +62,19 @@ The runtime installs Pi extensions before opening the durable harness:
 Repository-backed web, Slack, and automation sessions are supported for remote read/analysis work
 without a checkout or sandbox. In personal or staging deployments that explicitly accept Cloudflare
 Computer's preview status, `PI_WORKSPACE_MODE=read_only` gives Pi a durable credential-free
-`/workspace` scratch area with `read`, `ls`, `find`, and `grep`; it is not a checkout or repository
-authority. Pi still has no workspace mutation, shell, Git mutation, pull-request creation, browser
-automation, memory mutation, Code Mode, or MCP client/OAuth integration. Image attachments are
-rejected. GitHub review/comment and Linear issue integrations must use another harness until their
-diff, mutation, and publication tools exist. See the operator rollout in the repository's
+`/workspace/scratch` area with `read`, `ls`, `find`, and `grep`; `writable` also provides bounded
+`write`, `edit`, and `delete`. Writable scratch files have an 8 MiB and 1,000-entry aggregate quota,
+mutations run one at a time, interrupted mutations are not replayed, and neither `/workspace/scratch`
+nor its `/workspace` container can be deleted. Durable policy records contain metadata only; write and edit contents are redacted from
+projected timeline events. The scratch area is not a
+checkout or repository authority. Pi still has no shell, Git mutation, pull-request creation,
+browser automation, memory mutation, Code Mode, or MCP client/OAuth integration. Image attachments
+are rejected. GitHub review/comment and Linear issue integrations must use another harness until
+their diff, mutation, and publication tools exist. See the operator rollout in the repository's
 `docs/GETTING_STARTED.md`.
+
+The workspace mode is snapshotted durably when a Pi session first opens. Deployment flag changes
+apply to later sessions and do not silently change an existing session's capabilities after eviction.
 
 Pi reports token usage, but Codex subscription requests do not expose a provider dollar charge.
 Dollar cost totals and dollar budget enforcement are therefore unavailable, matching the native

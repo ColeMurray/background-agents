@@ -266,4 +266,137 @@ describe("translatePiEvents", () => {
       expect.objectContaining({ callId: "faulted-1", status: "failed" }),
     ]);
   });
+
+  it("redacts writable workspace contents and edit diffs from projected events", () => {
+    const events = [
+      {
+        type: "tool_execution_start",
+        toolCallId: "write-1",
+        toolName: "write",
+        taskId: 2,
+        args: { path: "draft.txt", content: "super-secret-write" },
+      },
+      {
+        type: "tool_execution_start",
+        toolCallId: "edit-1",
+        toolName: "edit",
+        taskId: 3,
+        args: {
+          path: "draft.txt",
+          edits: [{ oldText: "super-secret-old", newText: "super-secret-new" }],
+        },
+      },
+      {
+        type: "tool_execution_update",
+        toolCallId: "edit-1",
+        toolName: "edit",
+        taskId: 3,
+        output: { set: "@@ -1 +1 @@\n-super-secret-old\n+super-secret-new" },
+      },
+    ] as unknown as AgentEvent[];
+
+    const translated = translatePiEvents(
+      events,
+      { text: "" },
+      {
+        sessionId: "session-1",
+        operationId: "message-1",
+        timestamp: 129,
+      }
+    );
+    const serialized = JSON.stringify(translated);
+
+    expect(serialized).not.toContain("super-secret");
+    expect(translated).toEqual([
+      expect.objectContaining({
+        tool: "write",
+        args: { path: "draft.txt", content: "[redacted]" },
+      }),
+      expect.objectContaining({
+        tool: "edit",
+        args: {
+          path: "draft.txt",
+          edits: [{ oldText: "[redacted]", newText: "[redacted]" }],
+        },
+      }),
+      expect.objectContaining({ tool: "edit", output: "[redacted]" }),
+    ]);
+  });
+
+  it("redacts recovered snapshot and nested workspace mutation data", () => {
+    const snapshot = {
+      type: "snapshot",
+      entries: [],
+      run: { inputs: [1] },
+      generation: {
+        attempt: 1,
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "write-snapshot",
+              name: "write",
+              arguments: { path: "snapshot.txt", content: "snapshot-secret" },
+            },
+          ],
+        },
+      },
+      tools: [
+        {
+          callId: "write-snapshot",
+          name: "write",
+          status: "running",
+          taskId: 2,
+          output: "snapshot-secret-output",
+        },
+      ],
+      nestedTools: [
+        {
+          callId: "edit-nested",
+          parentCallId: "parent-1",
+          name: "edit",
+          status: "running",
+          taskId: 3,
+          arguments: {
+            path: "snapshot.txt",
+            edits: [{ oldText: "nested-secret-old", newText: "nested-secret-new" }],
+          },
+          output: "nested-secret-diff",
+        },
+      ],
+      compactions: [],
+      inbox: [],
+      agent: {},
+      usage: { models: {}, tools: {} },
+    } as unknown as AgentEvent;
+
+    const translated = translatePiEvents(
+      [snapshot],
+      { text: "" },
+      {
+        sessionId: "session-1",
+        operationId: "message-1",
+        timestamp: 130,
+      }
+    );
+
+    expect(JSON.stringify(translated)).not.toContain("secret");
+    expect(translated).toEqual([
+      expect.objectContaining({
+        tool: "write",
+        args: { path: "snapshot.txt", content: "[redacted]" },
+        output: "[redacted]",
+      }),
+      expect.objectContaining({
+        tool: "edit",
+        args: {
+          path: "snapshot.txt",
+          edits: [{ oldText: "[redacted]", newText: "[redacted]" }],
+        },
+        output: "[redacted]",
+        isSubtask: true,
+      }),
+    ]);
+  });
 });

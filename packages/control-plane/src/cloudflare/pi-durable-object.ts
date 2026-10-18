@@ -36,7 +36,9 @@ import {
 import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-inspect-extension";
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
-import { createComputerWorkspaceExtension } from "../pi/computer-workspace-extension";
+import { createComputerWorkspaceCapability } from "../pi/computer-workspace-extension";
+import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
+import { COMPUTER_SCRATCH_ROOT, createQuotaWorkspace } from "../pi/computer-workspace-quota";
 import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extension-assembler";
 import { createPiToolPolicyExtension } from "../pi/tool-policy-extension";
 import { latchPiFeatureCapabilitySnapshot } from "../pi/capability-snapshot";
@@ -78,7 +80,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     harness: async ({ storage, context }) => {
       const sessionContext = await this.fetchSessionContext();
       const { capabilities } = await latchPiFeatureCapabilitySnapshot(this.ctx.storage, {
-        workspace: this.env.PI_WORKSPACE_MODE,
+        workspace: resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE),
         repositoryEditing: this.env.PI_REPOSITORY_EDITING_MODE,
         codeMode: this.env.PI_CODE_MODE,
         sandboxExecution: this.env.PI_SANDBOX_EXECUTION_MODE,
@@ -133,14 +135,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         });
       }
       if (capabilities.workspace !== "off") {
-        const workspace = await this.openWorkspace();
-        const workspaceExtension = createComputerWorkspaceExtension(workspace);
+        const workspace = await this.openWorkspace(capabilities.workspace === "enabled");
+        const capability = createComputerWorkspaceCapability(workspace, capabilities.workspace);
         extensions.push({
           slot: "workspace",
           feature: "workspace",
           minimumCapability: "read_only",
-          extension: workspaceExtension,
-          effects: declaredEffects(workspaceExtension),
+          extension: capability.extension,
+          effects: capability.effects,
         });
       }
       const assembly = assemblePiExtensions(extensions, capabilities);
@@ -274,20 +276,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     });
   }
 
-  private async openWorkspace(): Promise<Workspace> {
+  private async openWorkspace(writable: boolean): Promise<Workspace> {
     if (this.workspace) return this.workspace;
     const workspace = new Workspace({
       storage: this.ctx.storage as unknown as DurableObjectStorageLike,
       sessionId: this.ctx.id.toString(),
     });
     try {
-      await workspace.fs.mkdir("/workspace", { recursive: true });
+      await workspace.fs.mkdir(COMPUTER_SCRATCH_ROOT, { recursive: true });
     } catch (error) {
       await workspace.close().catch(() => {});
       throw error;
     }
-    this.workspace = workspace;
-    return workspace;
+    this.workspace = writable ? createQuotaWorkspace(workspace, this.ctx.storage) : workspace;
+    return this.workspace;
   }
 
   private async configure(

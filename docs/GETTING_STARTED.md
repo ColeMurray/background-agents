@@ -1452,7 +1452,7 @@ Secrets for credentials:
 | `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)      |
 | `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
 | `PI_DURABLE_ENABLED`               | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
-| `PI_WORKSPACE_MODE`                | Pi scratch workspace: `off` (default) or `read_only`                                            |
+| `PI_WORKSPACE_MODE`                | Pi scratch workspace: `off` (default), `read_only`, or `writable`                               |
 | `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
 | `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                           |
 | `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                          |
@@ -1494,11 +1494,25 @@ account's refresh token in the Pi Durable Object. For an existing deployment:
 The workspace currently depends on exact-pinned `@cloudflare/computer@0.5.1`, which Cloudflare marks
 preview-only and not production-ready. Keep `PI_WORKSPACE_MODE=off` for production deployments until
 that status changes or your deployment owner explicitly accepts and validates the preview risk. For
-a personal or staging canary, set the Actions variable `PI_WORKSPACE_MODE=read_only` and apply
-Terraform. This adds only `read`, `ls`, `find`, and `grep` under `/workspace`; it does not add a
-checkout, mutation, Git, shell, network, mounts, publishing, or an execution backend. Leave the
-value `off` to avoid initializing Computer VFS tables. Writable mode is not accepted until mutation
-policy, quotas, redaction, and replay protections are deployed.
+a personal or staging canary, set the Actions variable to one of these values and apply Terraform:
+
+- `PI_WORKSPACE_MODE=read_only` adds `read`, `ls`, `find`, and `grep` under `/workspace/scratch`.
+- `PI_WORKSPACE_MODE=writable` also adds `write`, `edit`, and forced `delete`. It enforces an 8 MiB
+  and 1,000-entry aggregate quota across files and directories, serializes all mutations, refuses
+  deletion of `/workspace/scratch` or its `/workspace` container, marks mutations unsafe to replay
+  after interruption, records only metadata in durable policy memos, and redacts write contents and
+  edit contents/diffs from projected timeline events.
+
+Neither mode adds a checkout, Git, shell, network, mounts, publishing, or an execution backend.
+Leave the value `off` to avoid initializing Computer VFS tables.
+
+Each Pi session durably snapshots its workspace capability on first open. Changing
+`PI_WORKSPACE_MODE` never silently upgrades or downgrades an existing session after eviction. To
+roll back writable mode, set `PI_WORKSPACE_MODE=read_only` and apply Terraform; newly opened
+sessions then receive only read tools, while sessions already snapshotted as writable remain
+operable. Set the mode to `off` in a later apply to disable the workspace for later sessions. Normal
+rollback never deletes the Pi class or its storage. Delete an existing writable session only when
+its workspace and conversation should be destroyed deliberately.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi

@@ -320,7 +320,10 @@ sandbox_provider = "modal"
 # Leave unset on Workers Free. Set to 60000 before enabling Code Mode on a paid plan.
 # pi_codemode_sandbox_cpu_ms = 60000
 
-# Durable Pi scratch workspace. Only read-only access is currently supported.
+# Pi's credential-free durable scratch filesystem: "off", "read_only", or
+# "writable". Writable remains VFS-only: no shell, Git, network, mounts, or
+# publishing. Keep off unless you explicitly accept Cloudflare Computer's
+# preview status. Each Pi session snapshots this capability on first open.
 # pi_workspace_mode = "off"
 
 # Platform for the web app deployment

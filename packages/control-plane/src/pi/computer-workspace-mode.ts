@@ -5,7 +5,10 @@ import {
 
 export type ComputerWorkspaceMode = FeatureCapabilityMode;
 
-/** Backward-compatible wrapper around the canonical shared capability resolver. */
+/** Map the deployment-facing writable alias onto the canonical capability vocabulary. */
 export function resolveComputerWorkspaceMode(value: string | undefined): ComputerWorkspaceMode {
-  return resolvePiFeatureCapabilities({ workspace: value }).workspace;
+  const normalized = value?.trim().toLowerCase();
+  return resolvePiFeatureCapabilities({
+    workspace: normalized === "writable" ? "enabled" : normalized,
+  }).workspace;
 }

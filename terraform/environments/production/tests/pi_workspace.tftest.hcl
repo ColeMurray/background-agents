@@ -62,11 +62,24 @@ run "workspace_read_only_reaches_the_worker" {
   }
 }
 
-run "workspace_rejects_unknown_modes" {
+run "workspace_writable_reaches_the_worker" {
   command = plan
 
   variables {
     pi_workspace_mode = "writable"
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_WORKSPACE_MODE"] == "writable"
+    error_message = "The writable Pi workspace mode must reach the control-plane Worker."
+  }
+}
+
+run "workspace_rejects_unknown_modes" {
+  command = plan
+
+  variables {
+    pi_workspace_mode = "write"
   }
 
   expect_failures = [var.pi_workspace_mode]
