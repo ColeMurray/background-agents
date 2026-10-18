@@ -89,6 +89,11 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "team.binding_added": "Team channel binding added",
   "team.binding_removed": "Team channel binding removed",
   "automation.executor_changed": "Automation executor changed",
+  "external_action.approved": "External action approved",
+  "external_action.denied": "External action denied",
+  "external_action.executed": "External action executed",
+  "automation.external_action_grant_added": "Automation action grant added",
+  "automation.external_action_grant_revoked": "Automation action grant revoked",
 };
 
 const OBSERVATION_LABELS: Record<AuditObservationAction, string> = {
