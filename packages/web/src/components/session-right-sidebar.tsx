@@ -26,6 +26,7 @@ import type {
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { DiffRefreshNotice } from "@/components/diff-refresh-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { MemoriesSection } from "./sidebar/memories-section";
 import { BudgetSection } from "./sidebar/budget-section";
@@ -40,6 +41,7 @@ import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 import type { SessionScopeControls } from "@/lib/session-scope";
+import type { SessionDiffRefresh } from "@/hooks/use-session-diffs";
 import { SessionVisibilityControl } from "./session-visibility-control";
 import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
@@ -57,6 +59,7 @@ interface SessionRightSidebarProps {
   onOpenMedia: (artifactId: string) => void;
   diffState?: SessionDiffState | null;
   diffLoading?: boolean;
+  diffRefresh?: SessionDiffRefresh;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
   capabilities: SessionCapabilities;
@@ -116,6 +119,7 @@ export function SessionRightSidebarContent({
   onOpenMedia,
   diffState,
   diffLoading,
+  diffRefresh,
   selectedDiff,
   onOpenDiff,
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
@@ -144,8 +148,9 @@ export function SessionRightSidebarContent({
   );
   const isDurable = sessionState?.executionBackend === "durable";
   const hasRepository = Boolean(
-    !isDurable &&
-    (sessionState?.repositories?.length || (sessionState?.repoOwner && sessionState.repoName))
+    sessionState?.repositories?.length ||
+    (sessionState?.repoOwner && sessionState.repoName) ||
+    diffState?.current?.repositories.length
   );
   const diffView = deriveSessionDiffView({
     hasRepository,
@@ -153,6 +158,13 @@ export function SessionRightSidebarContent({
     state: diffState ?? null,
     isLoading: diffLoading ?? false,
   });
+  const hasCapturedDiff = Boolean(diffState?.current);
+  const refreshingCapturedDiff = hasCapturedDiff && Boolean(diffRefresh?.isValidating);
+  const failedCapturedDiff =
+    hasCapturedDiff && Boolean(diffRefresh?.error) && !refreshingCapturedDiff;
+  // Session state does not expose Pi's repository-editing mode, so no capture must not
+  // be presented as a promise that a writable capability exists or will run later.
+  const piWithoutCapturedDiff = sessionState?.harness === "pi" && !hasCapturedDiff;
   const files = diffView.showManifest
     ? (diffState?.current?.repositories.flatMap((repository) => repository.files) ?? [])
     : [];
@@ -230,7 +242,7 @@ export function SessionRightSidebarContent({
         ))}
       </TabsList>
 
-      {/* Canonical durable checkout changes */}
+      {/* Canonical session changes */}
       <InspectorPanel value="changes" activeTab={activeTab}>
         <div className="mb-5">
           <h3 className="text-sm font-semibold">Files changed</h3>
@@ -254,41 +266,59 @@ export function SessionRightSidebarContent({
         <div role="status" aria-live="polite" className={diffView.showManifest ? "mt-2" : ""}>
           {!sessionState ? (
             <p className="text-xs text-muted-foreground">Loading session information…</p>
-          ) : isDurable ? null : diffView.kind === "hidden" ? (
+          ) : diffView.kind === "hidden" ? (
             <p className="text-xs text-muted-foreground">
               No repository is attached to this session.
             </p>
           ) : null}
-          {isDurable && (
+          {refreshingCapturedDiff && !diffRefresh?.error && (
             <p className="text-xs text-muted-foreground">
-              Pi Durable runs without a local repository checkout.
+              Refreshing changes — showing the last captured revision.
             </p>
           )}
-          {!isDurable && sessionState && diffView.kind === "loading" && (
-            <p className="text-xs text-muted-foreground">Loading changes…</p>
-          )}
-          {!isDurable && diffView.kind === "error" && (
+          {(failedCapturedDiff || (refreshingCapturedDiff && diffRefresh?.error)) &&
+            diffRefresh && (
+              <DiffRefreshNotice
+                message="Unable to refresh changes. Showing the last captured revision."
+                pendingMessage="Refreshing changes — showing the last captured revision."
+                isPending={refreshingCapturedDiff}
+                onRetry={diffRefresh.retry}
+              />
+            )}
+          {!refreshingCapturedDiff &&
+            !failedCapturedDiff &&
+            sessionState &&
+            diffView.kind === "loading" && (
+              <p className="text-xs text-muted-foreground">Loading changes…</p>
+            )}
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "error" && (
             <p className="text-xs text-destructive">Unable to load changes.</p>
           )}
-          {!isDurable && diffView.kind === "unavailable" && (
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "unavailable" && (
             <p className="text-xs text-muted-foreground">{diffView.message}</p>
           )}
-          {!isDurable && diffView.kind === "available_after_execution" && (
+          {!refreshingCapturedDiff &&
+            !failedCapturedDiff &&
+            diffView.kind === "available_after_execution" && (
+              <p className="text-xs text-muted-foreground">
+                {piWithoutCapturedDiff
+                  ? "No changes captured yet."
+                  : "Changes will be available after the first execution."}
+              </p>
+            )}
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "working" && (
             <p className="text-xs text-muted-foreground">
-              Changes will be available after the first execution.
+              {piWithoutCapturedDiff
+                ? "No changes captured yet."
+                : diffView.showManifest
+                  ? "Agent working — showing the previous changes."
+                  : "Changes will be available after this execution."}
             </p>
           )}
-          {!isDurable && diffView.kind === "working" && (
-            <p className="text-xs text-muted-foreground">
-              {diffView.showManifest
-                ? "Agent working — showing the previous changes."
-                : "Changes will be available after this execution."}
-            </p>
-          )}
-          {!isDurable && diffView.kind === "empty" && (
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "empty" && (
             <p className="text-xs text-muted-foreground">No file changes in the latest diff.</p>
           )}
-          {!isDurable && diffView.kind === "failed" && (
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "failed" && (
             <DiffRetryNotice
               sessionId={sessionId}
               message={diffView.message ?? ""}

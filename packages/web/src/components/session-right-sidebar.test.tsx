@@ -158,6 +158,11 @@ const READY_DIFF: SessionDiffState = {
     ],
   },
 };
+const PI_SESSION: SessionState = {
+  ...SESSION,
+  harness: "pi",
+  executionBackend: "durable",
+};
 
 function inspector(overrides: Partial<SidebarProps> = {}) {
   return (
@@ -807,6 +812,92 @@ describe("SessionRightSidebar", () => {
     expect(panel).toHaveTextContent("−1");
     expect(panel).toHaveTextContent("across 1 file");
   });
+
+  it("renders canonical Pi repository changes and opens the selected file", async () => {
+    const onOpenDiff = vi.fn();
+    render(inspector({ sessionState: PI_SESSION, diffState: READY_DIFF, onOpenDiff }));
+    selectTab("Changes 1");
+
+    expect(screen.queryByText(/local repository checkout/i)).not.toBeInTheDocument();
+    const file = screen.getByRole("button", { name: /navigation\.tsx modified/ });
+    await userEvent.click(file);
+    expect(onOpenDiff).toHaveBeenCalledWith(
+      READY_DIFF.current!.repositories[0],
+      READY_DIFF.current!.repositories[0].files[0]
+    );
+  });
+
+  it("marks a cached manifest stale after refresh failure and offers recovery", async () => {
+    const onRefreshDiff = vi.fn().mockResolvedValue(undefined);
+    const failedRefresh = {
+      error: new Error("BFF unavailable"),
+      isValidating: false,
+      retry: onRefreshDiff,
+    };
+    const view = render(
+      inspector({
+        diffState: READY_DIFF,
+        diffRefresh: failedRefresh,
+      })
+    );
+    selectTab("Changes 1");
+
+    expect(
+      screen.getByText("Unable to refresh changes. Showing the last captured revision.")
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: /navigation\.tsx modified/ })).toBeVisible();
+    const retry = screen.getByRole("button", { name: "Retry refresh" });
+    retry.focus();
+    view.rerender(
+      inspector({
+        diffState: READY_DIFF,
+        diffRefresh: { ...failedRefresh, isValidating: true },
+      })
+    );
+    const pendingRetry = screen.getByRole("button", { name: "Refreshing…" });
+    expect(pendingRetry).toBe(retry);
+    expect(pendingRetry).toBeDisabled();
+    expect(pendingRetry).toHaveFocus();
+    expect(
+      screen.getByText("Refreshing changes — showing the last captured revision.")
+    ).toBeVisible();
+
+    view.rerender(inspector({ diffState: READY_DIFF, diffRefresh: failedRefresh }));
+    expect(screen.getByRole("button", { name: "Retry refresh" })).toBe(retry);
+    expect(retry).toBeEnabled();
+    expect(retry).toHaveFocus();
+    await userEvent.click(retry);
+    expect(onRefreshDiff).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Pi sessions without a repository distinct from sessions without a captured diff", () => {
+    render(
+      inspector({
+        sessionState: { ...PI_SESSION, repoOwner: null, repoName: null, repositories: [] },
+        diffState: EMPTY_DIFF,
+      })
+    );
+    selectTab("Changes");
+    expect(screen.getByRole("tabpanel", { name: "Changes" })).toHaveTextContent(
+      "No repository is attached to this session."
+    );
+  });
+
+  it.each([false, true])(
+    "uses neutral Pi no-capture copy without claiming mutation support (processing=%s)",
+    (isProcessing) => {
+      render(
+        inspector({
+          sessionState: { ...PI_SESSION, isProcessing },
+          diffState: EMPTY_DIFF,
+        })
+      );
+      selectTab("Changes");
+      const panel = screen.getByRole("tabpanel", { name: "Changes" });
+      expect(panel).toHaveTextContent("No changes captured yet.");
+      expect(panel).not.toHaveTextContent(/available after/i);
+    }
+  );
 
   it.each([
     [{ sessionState: null }, "Loading session information…"],

@@ -16,25 +16,50 @@ export function sessionDiffKey(sessionId: string): BrowserApiPath {
   return `/api/sessions/${sessionId}/diff`;
 }
 
-export function useSessionDiffs(
-  sessionId: string,
-  enabled = true
-): {
+export interface SessionDiffRefresh {
+  error: Error | null;
+  isValidating: boolean;
+  retry: () => Promise<void>;
+}
+
+export function useSessionDiffs(sessionId: string): {
   state: SessionDiffState | null;
   isLoading: boolean;
-  error: Error | null;
+  refresh: SessionDiffRefresh;
 } {
-  const { data, error, isLoading } = useSWR<unknown>(enabled ? sessionDiffKey(sessionId) : null);
+  const [lastRefreshError, setLastRefreshError] = useState<Error | null>(null);
+  const {
+    data,
+    error,
+    isLoading,
+    isValidating,
+    mutate: revalidate,
+  } = useSWR<unknown>(sessionDiffKey(sessionId), {
+    onError: (refreshError) => {
+      setLastRefreshError(
+        refreshError instanceof Error ? refreshError : new Error("Unable to refresh changes")
+      );
+    },
+    onSuccess: () => setLastRefreshError(null),
+  });
   const parsed = useMemo(
     () => (data === undefined ? null : sessionDiffStateSchema.safeParse(data)),
     [data]
   );
   const contractError =
     parsed && !parsed.success ? new Error("Invalid session changes response") : null;
+  const currentError = error instanceof Error ? error : contractError;
+  const retry = useCallback(async () => {
+    await revalidate(undefined, { revalidate: true, throwOnError: false });
+  }, [revalidate]);
   return {
     state: parsed?.success ? parsed.data : null,
     isLoading,
-    error: error instanceof Error ? error : contractError,
+    refresh: {
+      error: currentError ?? (isValidating ? lastRefreshError : null),
+      isValidating,
+      retry,
+    },
   };
 }
 
