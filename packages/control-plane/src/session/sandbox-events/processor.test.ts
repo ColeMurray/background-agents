@@ -27,7 +27,12 @@ function createProcessor() {
     handleToolCall: vi.fn(),
     recordTimelineEvent: vi.fn(),
   };
-  const runtime = { handleHeartbeat: vi.fn(), handleReady: vi.fn(async () => true) };
+  const runtime = {
+    handleHeartbeat: vi.fn(),
+    handleReady: vi.fn<() => Promise<"rejected" | "accepted_reconnect" | "became_ready">>(
+      async () => "became_ready"
+    ),
+  };
   const shutdown = {
     generationReady: vi.fn<(event: ShutdownEvent) => void>(),
     prepared: vi.fn<(event: ShutdownEvent) => void>(),
@@ -63,7 +68,7 @@ function createProcessor() {
 describe("SessionSandboxEventProcessor command execution boundary", () => {
   it("does not recover commands when readiness was rejected", async () => {
     const h = createProcessor();
-    h.runtime.handleReady.mockResolvedValue(false);
+    h.runtime.handleReady.mockResolvedValue("rejected");
 
     await h.processor.processSandboxEvent({
       type: "ready",
@@ -76,6 +81,25 @@ describe("SessionSandboxEventProcessor command execution boundary", () => {
 
     expect(h.commands.onSandboxReady).not.toHaveBeenCalled();
   });
+
+  it.each(["became_ready", "accepted_reconnect"] as const)(
+    "recovers commands after %s",
+    async (outcome) => {
+      const h = createProcessor();
+      h.runtime.handleReady.mockResolvedValue(outcome);
+
+      await h.processor.processSandboxEvent({
+        type: "ready",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+        runtimeMode: "execution",
+        bridgeInstanceId: "bridge-1",
+        runtimeVersion: "v77-pi-sandbox-execution",
+      });
+
+      expect(h.commands.onSandboxReady).toHaveBeenCalledOnce();
+    }
+  );
 
   it.each([
     { type: "command_started", commandId: "cmd-1", sandboxId: "sandbox-1", timestamp: 1 },

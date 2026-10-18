@@ -44,7 +44,9 @@ export class ShutdownRecoveryRejectedError extends Error {
   }
 }
 
-/** Accepts an authenticated runtime observation; false means no transition. */
+/** Result of an authenticated ready observation for the current generation. */
+export type SandboxReadyOutcome = "rejected" | "accepted_reconnect" | "became_ready";
+
 export interface SandboxReadiness {
   onRuntimeReady(
     timestamp: number,
@@ -52,8 +54,9 @@ export interface SandboxReadiness {
     protocolVersion?: 1,
     runtimeMode?: SandboxRuntimeMode,
     runtimeVersion?: string,
-    bridgeInstanceId?: string
-  ): boolean;
+    bridgeInstanceId?: string,
+    runtimeSandboxId?: string
+  ): SandboxReadyOutcome;
 }
 
 /**

@@ -162,6 +162,21 @@ describe("SandboxRepository runtime mode", () => {
         runtimeMode: "agent",
       });
       expect(repository.getSandbox()?.runtime_mode).toBe("agent");
+      repository.updateSandboxStatus("connecting");
+      expect(
+        repository.recordExecutionBridgeIdentity(
+          { sandboxId: "sandbox-2", createdAt: 2 },
+          "bridge-1"
+        )
+      ).toBe(true);
+      expect(repository.getSandbox()?.execution_bridge_id).toBe("bridge-1");
+      expect(
+        repository.recordExecutionBridgeIdentity(
+          { sandboxId: "sandbox-old", createdAt: 1 },
+          "bridge-old"
+        )
+      ).toBe(false);
+      expect(repository.getSandbox()?.execution_bridge_id).toBe("bridge-1");
     } finally {
       db.close();
     }

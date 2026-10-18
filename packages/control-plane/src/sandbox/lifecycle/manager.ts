@@ -71,6 +71,7 @@ import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../../pl
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
 import type {
   SandboxGeneration,
+  SandboxReadyOutcome,
   SandboxReadiness,
   SandboxCancellation,
   SandboxAttachment,
@@ -278,7 +279,7 @@ export interface SandboxStorage extends VmStartupReconciliationStorage, Allocati
   updateSandboxForResume(data: { status: SandboxStatus; createdAt: number }): void;
   /** Set the runtime version describing the sandbox's current filesystem. */
   updateSandboxRuntimeVersion(runtimeVersion: string | null): void;
-  recordExecutionBridgeIdentity(bridgeInstanceId: string | null): void;
+  recordExecutionBridgeIdentity(generation: SandboxGeneration, bridgeInstanceId: string): boolean;
   /**
    * Record `imageId` as the snapshot of the sandbox identified by
    * `sandboxId`, with the runtime version that produced it (null when
@@ -1970,11 +1971,15 @@ export class SandboxLifecycleManager
     protocolVersion?: 1,
     runtimeMode?: SandboxRuntimeMode,
     runtimeVersion?: string,
-    bridgeInstanceId?: string
-  ): boolean {
+    bridgeInstanceId?: string,
+    runtimeSandboxId?: string
+  ): SandboxReadyOutcome {
     const row = this.storage.getSandbox();
-    if (!row) return false;
+    if (!row) return "rejected";
     const generation = { sandboxId: row.modal_sandbox_id, createdAt: row.created_at };
+    if (row.fenced || (runtimeSandboxId && runtimeSandboxId !== generation.sandboxId)) {
+      return "rejected";
+    }
     if (row.runtime_mode === "execution") {
       if (
         runtimeMode !== "execution" ||
@@ -1984,17 +1989,20 @@ export class SandboxLifecycleManager
         const reason = "Execution sandbox runtime is missing or below the required generation";
         this.storage.transitionSandboxStatus(generation, row.status, "failed");
         this.reportSandboxError(reason);
-        return false;
+        return "rejected";
       }
-      this.storage.recordExecutionBridgeIdentity(bridgeInstanceId);
+      if (!this.storage.recordExecutionBridgeIdentity(generation, bridgeInstanceId)) {
+        return "rejected";
+      }
     } else if (runtimeMode === "execution") {
       this.storage.transitionSandboxStatus(generation, row.status, "failed");
       this.reportSandboxError("Agent sandbox reported execution-only runtime mode");
-      return false;
+      return "rejected";
     }
     this.shutdown.runtimeReady(protocolVersion);
-    if (this.shutdown.isHolding()) return false;
-    if (!this.storage.markSandboxReady(generation)) return false;
+    if (this.shutdown.isHolding()) return "rejected";
+    if (row.status === "ready") return "accepted_reconnect";
+    if (!this.storage.markSandboxReady(generation)) return "rejected";
     this.vmStartup.resolvePendingBridge(generation);
     this.log.info("sandbox.ready", {
       event: "sandbox.ready",
@@ -2006,7 +2014,7 @@ export class SandboxLifecycleManager
     });
     this.updateLastActivity(timestamp);
     this.broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
-    return true;
+    return "became_ready";
   }
 
   onShutdownGenerationReady(

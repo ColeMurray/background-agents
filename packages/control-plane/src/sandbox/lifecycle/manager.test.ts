@@ -74,9 +74,10 @@ describe("SandboxLifecycleManager", () => {
         { ...createTestConfig(), getSessionId: () => "session-123" }
       );
 
-      expect(manager.onRuntimeReady(1_750, "opencode")).toBe(true);
+      expect(manager.onRuntimeReady(1_750, "opencode")).toBe("became_ready");
+      sandbox.status = "ready";
       // Replay/reconnect or a rejected generation must not emit another sample.
-      expect(manager.onRuntimeReady(9_000, "opencode")).toBe(false);
+      expect(manager.onRuntimeReady(9_000, "opencode")).toBe("accepted_reconnect");
       const events = output.mock.calls
         .map(([line]) => JSON.parse(String(line)))
         .filter((event) => event.msg === "sandbox.ready");
@@ -123,7 +124,7 @@ describe("SandboxLifecycleManager", () => {
           "v76-child-output-discovery",
           "bridge-1"
         )
-      ).toBe(false);
+      ).toBe("rejected");
       expect(sandbox.status).toBe("failed");
       expect(storage.recordExecutionBridgeIdentity).not.toHaveBeenCalled();
     });
@@ -156,9 +157,88 @@ describe("SandboxLifecycleManager", () => {
           "v77-pi-sandbox-execution",
           "bridge-1"
         )
-      ).toBe(true);
-      expect(storage.recordExecutionBridgeIdentity).toHaveBeenCalledWith("bridge-1");
+      ).toBe("became_ready");
+      expect(storage.recordExecutionBridgeIdentity).toHaveBeenCalledWith(
+        { sandboxId: sandbox.modal_sandbox_id, createdAt: 1_000 },
+        "bridge-1"
+      );
     });
+
+    it.each([
+      ["fenced generation", { fenced: 1 }, "sandbox-testowner-testrepo-123"],
+      ["old generation", { fenced: 0 }, "sandbox-replaced"],
+    ] as const)(
+      "rejects an execution ready event from a %s",
+      (_case, overrides, runtimeSandboxId) => {
+        const sandbox = createMockSandbox({
+          status: "ready",
+          runtime_mode: "execution",
+          execution_bridge_id: "bridge-old",
+          ...overrides,
+        });
+        const storage = createMockStorage(createMockSession({ harness: "pi" }), sandbox);
+        const manager = createTestLifecycleManager(
+          createMockProvider(),
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createUnmanagedShutdown(),
+          createTestConfig()
+        );
+
+        expect(
+          manager.onRuntimeReady(
+            Date.now(),
+            undefined,
+            1,
+            "execution",
+            "v77-pi-sandbox-execution",
+            "bridge-new",
+            runtimeSandboxId
+          )
+        ).toBe("rejected");
+        expect(sandbox.execution_bridge_id).toBe("bridge-old");
+      }
+    );
+
+    it.each(["bridge-old", "bridge-new"])(
+      "accepts reconnect identity %s without waking the prompt queue",
+      (bridgeInstanceId) => {
+        const sandbox = createMockSandbox({
+          status: "ready",
+          runtime_mode: "execution",
+          execution_bridge_id: "bridge-old",
+        });
+        const storage = createMockStorage(createMockSession({ harness: "pi" }), sandbox);
+        const manager = createTestLifecycleManager(
+          createMockProvider(),
+          storage,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createUnmanagedShutdown(),
+          createTestConfig()
+        );
+
+        expect(
+          manager.onRuntimeReady(
+            Date.now(),
+            undefined,
+            1,
+            "execution",
+            "v77-pi-sandbox-execution",
+            bridgeInstanceId,
+            sandbox.modal_sandbox_id ?? undefined
+          )
+        ).toBe("accepted_reconnect");
+        expect(sandbox.execution_bridge_id).toBe(bridgeInstanceId);
+      }
+    );
   });
 
   describe("spawnSandbox", () => {

@@ -272,9 +272,18 @@ export function createMockStorage(
       calls.push(`updateSandboxRuntimeVersion:${runtimeVersion}`);
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
-    recordExecutionBridgeIdentity: vi.fn((bridgeInstanceId: string | null) => {
+    recordExecutionBridgeIdentity: vi.fn((generation, bridgeInstanceId: string) => {
       calls.push(`recordExecutionBridgeIdentity:${bridgeInstanceId}`);
-      if (sandbox) sandbox.execution_bridge_id = bridgeInstanceId;
+      if (
+        !sandbox ||
+        sandbox.fenced ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt
+      ) {
+        return false;
+      }
+      sandbox.execution_bridge_id = bridgeInstanceId;
+      return true;
     }),
     recordSandboxSnapshot: vi.fn(
       (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {

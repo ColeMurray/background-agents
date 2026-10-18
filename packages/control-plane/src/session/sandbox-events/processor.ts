@@ -136,7 +136,7 @@ export class SessionSandboxEventProcessor {
         this.runtime.handleSessionTitle(event);
         return;
       case "ready":
-        if (await this.runtime.handleReady(event, context)) {
+        if ((await this.runtime.handleReady(event, context)) !== "rejected") {
           await this.commands?.onSandboxReady?.();
         }
         return;

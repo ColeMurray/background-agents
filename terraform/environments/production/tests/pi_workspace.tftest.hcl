@@ -71,6 +71,16 @@ run "sandbox_execution_gate_reaches_the_worker" {
   }
 }
 
+run "sandbox_execution_rejects_boolean_era_values" {
+  command = plan
+
+  variables {
+    pi_sandbox_execution_mode = "true"
+  }
+
+  expect_failures = [var.pi_sandbox_execution_mode]
+}
+
 run "workspace_read_only_reaches_the_worker" {
   command = plan
 

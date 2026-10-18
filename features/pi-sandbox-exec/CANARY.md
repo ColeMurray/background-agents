@@ -2,9 +2,9 @@
 
 ## Status
 
-The foundation is **not integration-ready**. `PI_SANDBOX_EXECUTION_ENABLED` defaults to `false`, and
-Pi registers no shell, build, test, or generic execution tool. The internal command boundary is
-dormant until the separate authority, approval, and credential-release work is complete.
+The foundation is **not integration-ready**. `PI_SANDBOX_EXECUTION_MODE` defaults to `off`, and Pi
+registers no shell, build, test, or generic execution tool. The internal command boundary is dormant
+until the separate authority, approval, and credential-release work is complete.
 
 ## Blockers before any provider canary
 

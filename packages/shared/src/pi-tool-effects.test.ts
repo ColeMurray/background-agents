@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
+  SANDBOX_EXECUTION_TOOL_EFFECT,
   TOOL_CALLERS,
   TOOL_EFFECT_KINDS,
   TOOL_REPLAY_POLICIES,
@@ -20,6 +21,7 @@ describe("Pi tool effect registry", () => {
     ]);
     expect(TOOL_CALLERS).toEqual(["model", "tools"]);
     expect(TOOL_REPLAY_POLICIES).toEqual(["safe", "unsafe"]);
+    expect(SANDBOX_EXECUTION_TOOL_EFFECT).toBe("sandbox_execution");
   });
 
   it("classifies every existing stable Pi tool with explicit callers and replay metadata", () => {

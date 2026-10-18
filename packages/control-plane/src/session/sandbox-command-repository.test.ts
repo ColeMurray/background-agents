@@ -145,6 +145,16 @@ describe("SandboxCommandRepository", () => {
     ]);
   });
 
+  it("replays an ambiguously sent command on the same bridge identity", () => {
+    const commands = repository();
+    commands.admit(execute, "pi-operation-1", 100);
+    commands.markDispatched("cmd-1", "sandbox-1", "bridge-1", 110, 30_110);
+
+    expect(commands.recoveryCommands("sandbox-1", "bridge-1", 120)).toEqual([
+      { type: "command_replay", commandId: "cmd-1", afterSequence: -1 },
+    ]);
+  });
+
   it("marks commands from a replaced sandbox generation indeterminate", () => {
     const commands = repository();
     commands.admit(execute, "pi-operation-1", 100);

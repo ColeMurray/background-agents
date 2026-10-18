@@ -508,11 +508,21 @@ export class SandboxRepository {
     );
   }
 
-  recordExecutionBridgeIdentity(bridgeInstanceId: string | null): void {
-    this.sql.exec(
-      `UPDATE sandbox SET execution_bridge_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      bridgeInstanceId
+  recordExecutionBridgeIdentity(
+    generation: { sandboxId: string | null; createdAt: number },
+    bridgeInstanceId: string
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET execution_bridge_id = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND fenced = 0
+         AND status IN ('connecting', 'ready', 'failed')`,
+      bridgeInstanceId,
+      generation.sandboxId,
+      generation.createdAt
     );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxHeartbeat(timestamp: number): void {
