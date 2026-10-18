@@ -57,6 +57,32 @@ export class PiRepositoryTools {
     );
   }
 
+  /** Reattach the session's first durable pins without resolving mutable refs again. */
+  restore(
+    pins: readonly Pick<PiPinnedRepository, "repoOwner" | "repoName" | "position" | "commitSha">[]
+  ): PiPinnedRepository[] {
+    const repositories = this.options.repositories();
+    const byPosition = new Map(pins.map((pin) => [pin.position, pin]));
+    if (pins.length !== repositories.length || byPosition.size !== pins.length) {
+      throw new Error("Pi repository pins do not match the session repository set");
+    }
+    return repositories.map((repository) => {
+      const pin = byPosition.get(repository.position);
+      const commitSha = pin?.commitSha.trim() ?? "";
+      if (
+        !pin ||
+        pin.repoOwner !== repository.repoOwner ||
+        pin.repoName !== repository.repoName ||
+        !commitSha ||
+        commitSha.length > 256 ||
+        hasControlCharacters(commitSha)
+      ) {
+        throw new Error("Pi repository pin does not match the session repository set");
+      }
+      return { ...repository, commitSha };
+    });
+  }
+
   async list(input: RepositoryListInput) {
     const repository = this.repository(input.repository);
     const path = repositoryPath(input.path ?? "", true);

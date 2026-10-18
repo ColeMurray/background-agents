@@ -224,4 +224,24 @@ describe("Pi Durable admission", () => {
       resolveHarnessSelection(db, { PI_DURABLE_ENABLED: "true", PI_SESSION: {} }, { harness: "pi" })
     ).resolves.toEqual({ model: "openai/gpt-6.1-sol", reasoningEffort: "low" });
   });
+
+  it("keeps existing Pi sessions executable after new admission is disabled", async () => {
+    await expect(
+      validateHarnessExecution(
+        db,
+        { PI_DURABLE_ENABLED: "false", PI_SESSION: {} },
+        { harness: "pi", model: "openai/gpt-6.1-sol", reasoningEffort: "low" }
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("still requires the retained Pi runtime binding for execution", async () => {
+    await expect(
+      validateHarnessExecution(
+        db,
+        { PI_DURABLE_ENABLED: "false" },
+        { harness: "pi", model: "openai/gpt-6.1-sol", reasoningEffort: "low" }
+      )
+    ).rejects.toThrow("not available");
+  });
 });

@@ -35,6 +35,29 @@ describe("control-plane worker build", () => {
       const bundledSources = Object.keys(metafile.inputs);
       expect(bundledSources).toContain("src/cloudflare/durable-object.ts");
       expect(bundledSources.filter((input) => input.startsWith("src/node/"))).toEqual([]);
+      expect(bundledSources).toContain("../../node_modules/@cloudflare/computer/dist/index.js");
+      expect(bundledSources).toContain(
+        "../../node_modules/@cloudflare/computer/dist/tools/pi-ai.js"
+      );
+      expect(
+        bundledSources.filter(
+          (input) =>
+            input.includes("@cloudflare/computer") &&
+            (input.includes("/backends/") ||
+              input.endsWith("/dist/git.js") ||
+              input.includes("/modules/git"))
+        )
+      ).toEqual([]);
+      expect(bundledSources.filter((input) => input.includes("node_modules/just-bash/"))).toEqual(
+        []
+      );
+
+      const nodeMetafile = JSON.parse(
+        readFileSync(resolve(packageDirectory, "dist/node/meta.json"), "utf8")
+      ) as { inputs: Record<string, unknown> };
+      expect(
+        Object.keys(nodeMetafile.inputs).filter((input) => input.includes("@cloudflare/computer"))
+      ).toEqual([]);
     },
     WORKER_BUILD_TIMEOUT_MS
   );

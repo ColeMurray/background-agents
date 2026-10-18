@@ -184,6 +184,7 @@ export default defineConfig({
             SLACK_BOT_TOKEN: "xoxb-test-integration",
             WEB_APP_URL: "https://app.test.local",
             APP_NAME: "Open-Inspect",
+            PI_WORKSPACE_MODE: "read_only",
             TEST_MIGRATIONS: migrations,
           },
         },

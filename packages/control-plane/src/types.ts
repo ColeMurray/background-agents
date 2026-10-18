@@ -101,6 +101,7 @@ export interface EnvConfig {
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
   TEAMS_ENFORCEMENT?: string; // "off" | "shadow" (default) | "on"
   PI_DURABLE_ENABLED?: string; // "true" enables the optional PiSessionDO runtime
+  PI_WORKSPACE_MODE?: string; // "off" | "read_only"; unknown values fail closed
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")

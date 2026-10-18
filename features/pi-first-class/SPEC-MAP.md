@@ -5,7 +5,20 @@
 A first-class Open-Inspect Pi session keeps its durable agent state in `PiSessionDO`, gains an
 immediate durable workspace and native Pi Durable Code Mode, and reaches credentials or external
 effects only through SessionDO-authorized tools. A traditional VM/container sandbox is optional and
-created only for work that needs native processes.
+created lazily for work that needs native processes.
+
+Pi Durable is the durable head, not a replacement for execution environments. Its tools may run in
+the same process, a lightweight in-memory/SQLite workspace, or a remote machine. Open-Inspect uses
+all three levels deliberately:
+
+1. Cloudflare Computer VFS in `PiSessionDO` for durable, credential-free working files.
+2. A separate QuickJS Worker for Pi Durable Code Mode orchestration.
+3. Existing Open-Inspect sandbox providers as remote hands for shells, package installation,
+   compilers, browsers, and native processes.
+
+Computer's official Pi-AI tools are adapted directly into Pi Durable registrations; Open-Inspect
+does not reimplement Pi's large `ExecutionEnv` interface over Computer. A later remote execution
+adapter may implement that interface for existing full sandboxes.
 
 ## Terms
 
@@ -57,18 +70,23 @@ created only for work that needs native processes.
 - Blast radius: Terraform Worker module and build workflow; protect every existing Worker
   deployment.
 
-### 2. Durable VFS workspace
+### 2. Read-only durable VFS workspace
 
 - Follow Cloudflare's Pi example with one workspace per `PiSessionDO` unless conformance/performance
   proves a separate workspace DO is necessary.
 - Wrap Computer Pi-AI results into Pi Durable 1.3 `output` results.
-- Exclude exec and Computer Git.
+- Initially expose only `read`, `ls`, `find`, and `grep` under `/workspace`.
+- Exclude mutations, exec, assets, mounts, runtime access, and Computer Git.
+- Construct the Workspace only after session identity/deletion checks, so a cold request cannot
+  recreate VFS tables for a deleted session.
 - Blast radius: Pi DO SQLite, deletion, bundle size, memory; add schema-prefix and restart tests.
 
 ### 3. Permission and audit policy
 
 - Install a mandatory extension containing `beforeTool` and `afterTool` hooks.
 - SessionDO authorizes external effects; Pi documents only durable approval state.
+- Enable bounded `write`, forced `delete`, and unsafe-replay `edit` only after this policy and
+  durable workspace quotas are present. Deny deletion of the `/workspace` root.
 - Blast radius: authorization, timeline events, replay; default-deny unknown mutations.
 
 ### 4. Native durable Code Mode

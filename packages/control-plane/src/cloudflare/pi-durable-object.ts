@@ -1,5 +1,6 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
@@ -25,13 +26,19 @@ import {
   type PiRuntimeUsage,
 } from "../pi/runtime-contract";
 import type { WorkerBindings } from "./platform";
-import { piSessionContextSchema, type PiSessionContext } from "../pi/session-context-contract";
+import {
+  piRepositoryPinsSchema,
+  piSessionContextSchema,
+  type PiSessionContext,
+} from "../pi/session-context-contract";
 import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-inspect-extension";
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
+import { createComputerWorkspaceExtension } from "../pi/computer-workspace-extension";
+import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
 import { z } from "zod";
 
-type PiWorkerBindings = Pick<WorkerBindings, "SESSION">;
+type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "PI_WORKSPACE_MODE">;
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
@@ -39,15 +46,6 @@ const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
 const EVENT_DELIVERY_ATTEMPTS = 3;
 const EVENT_DELIVERY_RETRY_MS = 100;
-const repositoryPinsSchema = z.array(
-  z.object({
-    repoOwner: z.string().min(1),
-    repoName: z.string().min(1),
-    position: z.number().int().nonnegative(),
-    commitSha: z.string().min(1),
-  })
-);
-
 /** OpenCode-free, sandbox-free Pi runtime for one Open-Inspect session. */
 export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly credentials = new CodexBrokerCredentialStore((version, signal) =>
@@ -55,6 +53,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   );
   private readonly models = createModels({ credentials: this.credentials });
   private readonly registry = createRegistry();
+  private workspace: Workspace | undefined;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   readonly harness = new PiHarness({
@@ -71,6 +70,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         this.registry.install(
           await createManagedSkillsExtension([skillSourceFromInstallation(sessionContext.skills)])
         );
+      }
+      const workspaceMode = resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE);
+      if (workspaceMode === "read_only") {
+        const workspace = await this.openWorkspace();
+        this.registry.install(createComputerWorkspaceExtension(workspace));
       }
       this.models.setProvider(openaiCodexProvider());
       return Harness.open(
@@ -193,10 +197,28 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
       await this.lifecycle.disableAlarms();
       await this.harness.dispose();
+      await this.workspace?.close();
+      this.workspace = undefined;
       this.credentials.clear();
       await this.ctx.storage.deleteAll();
       await this.ctx.storage.put(DELETION_STATE_KEY, "destroyed");
     });
+  }
+
+  private async openWorkspace(): Promise<Workspace> {
+    if (this.workspace) return this.workspace;
+    const workspace = new Workspace({
+      storage: this.ctx.storage as unknown as DurableObjectStorageLike,
+      sessionId: this.ctx.id.toString(),
+    });
+    try {
+      await workspace.fs.mkdir("/workspace", { recursive: true });
+    } catch (error) {
+      await workspace.close().catch(() => {});
+      throw error;
+    }
+    this.workspace = workspace;
+    return workspace;
   }
 
   private async configure(
@@ -297,12 +319,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const storedPinsValue = await this.ctx.storage.get<unknown>(REPOSITORY_PINS_KEY);
+    const storedPins =
+      storedPinsValue === undefined ? undefined : piRepositoryPinsSchema.parse(storedPinsValue);
     const response = await this.env.SESSION.getByName(sessionId).fetch(
-      new Request(`http://session${SessionInternalPaths.piContext}`)
+      new Request(`http://session${SessionInternalPaths.piContext}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repositoryPins: storedPins }),
+      })
     );
     if (!response.ok) throw new Error(`Pi session context unavailable (${response.status})`);
     const sessionContext = piSessionContextSchema.parse(await response.json());
-    const storedPins = await this.ctx.storage.get<unknown>(REPOSITORY_PINS_KEY);
     if (storedPins === undefined) {
       await this.ctx.storage.put(
         REPOSITORY_PINS_KEY,
@@ -315,8 +343,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       );
       return sessionContext;
     }
-    const pins = repositoryPinsSchema.parse(storedPins);
-    const byPosition = new Map(pins.map((pin) => [pin.position, pin]));
+    const byPosition = new Map(storedPins.map((pin) => [pin.position, pin]));
     return {
       ...sessionContext,
       repositories: sessionContext.repositories.map((repository) => {

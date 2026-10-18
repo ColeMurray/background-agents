@@ -1452,6 +1452,7 @@ Secrets for credentials:
 | `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)      |
 | `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
 | `PI_DURABLE_ENABLED`               | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
+| `PI_WORKSPACE_MODE`                | Pi scratch workspace: `off` (default) or `read_only`                                            |
 | `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
 | `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                           |
 | `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                          |
@@ -1489,6 +1490,15 @@ account's refresh token in the Pi Durable Object. For an existing deployment:
    selector become available only in this phase.
 4. When the web app runs on Vercel, dispatch the **Deploy Web** workflow so the build-time
    `NEXT_PUBLIC_PI_DURABLE_ENABLED` value is included in the active bundle.
+
+The workspace currently depends on exact-pinned `@cloudflare/computer@0.5.1`, which Cloudflare marks
+preview-only and not production-ready. Keep `PI_WORKSPACE_MODE=off` for production deployments until
+that status changes or your deployment owner explicitly accepts and validates the preview risk. For
+a personal or staging canary, set the Actions variable `PI_WORKSPACE_MODE=read_only` and apply
+Terraform. This adds only `read`, `ls`, `find`, and `grep` under `/workspace`; it does not add a
+checkout, mutation, Git, shell, network, mounts, publishing, or an execution backend. Leave the
+value `off` to avoid initializing Computer VFS tables. Writable mode is not accepted until mutation
+policy, quotas, redaction, and replay protections are deployed.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi

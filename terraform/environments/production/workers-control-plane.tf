@@ -104,6 +104,7 @@ module "control_plane_worker" {
       SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
       TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
       PI_DURABLE_ENABLED            = { value = tostring(local.pi_durable_available) }
+      PI_WORKSPACE_MODE             = { value = var.pi_workspace_mode }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }

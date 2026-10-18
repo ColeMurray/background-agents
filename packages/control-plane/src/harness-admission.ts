@@ -87,9 +87,18 @@ export async function resolveHarnessSelection(
     model?: string | null;
     reasoningEffort?: string | null;
   },
-  enabledModels?: readonly ValidModel[]
+  enabledModels?: readonly ValidModel[],
+  options: { existingSession?: boolean } = {}
 ): Promise<{ model: ValidModel; reasoningEffort: ReasoningEffort | null }> {
-  const unavailable = getHarnessAdmissionError(env, input.harness);
+  const unavailable =
+    options.existingSession && input.harness === "pi"
+      ? env.PI_SESSION
+        ? null
+        : {
+            code: "harness_runtime_unavailable",
+            message: "Pi Durable runtime binding is not available.",
+          }
+      : getHarnessAdmissionError(env, input.harness);
   if (unavailable) throw new HarnessAdmissionError(unavailable.message, 409);
   if (getHarnessCapabilities(input.harness).selectionPolicy === "legacy_fallback") {
     const model = getValidModelOrDefault(input.model);
@@ -140,7 +149,7 @@ export async function validateHarnessExecution(
   providerAuthModes?: Readonly<Partial<Record<string, SessionProviderAuthMode>>>
 ): Promise<void> {
   if (getHarnessCapabilities(input.harness).selectionPolicy === "legacy_fallback") return;
-  await resolveHarnessSelection(db, env, input);
+  await resolveHarnessSelection(db, env, input, undefined, { existingSession: true });
   const incompatible = checkHarnessCompatibility(
     input.harness,
     input.model,

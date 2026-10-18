@@ -57,17 +57,24 @@ Rule: tick only with evidence on the same line.
 - [x] Committed — `ea447fda` (`feat: add isolated Pi Code Mode sandbox`)
 - [x] Slice report — `features/pi-first-class/SLICE-1.md`
 
-### Slice 2: durable Computer VFS workspace
+### Slice 2: read-only durable Computer VFS workspace
 
-- [ ] Tests pinning existing behavior
-- [ ] Workspace/tool contract
-- [ ] VFS tools implemented without exec/Git/network
-- [ ] Unit + workerd tests
-- [ ] Deep audit
-- [ ] `/simplify`
-- [ ] Narrow validation green
+- [x] Tests pinning existing behavior — RED proved missing adapter/tool exposure before
+      implementation
+- [x] Workspace/tool contract — exact-pinned Computer 0.5.1, Pi Durable 1.3 output adapter, explicit
+      four-tool allowlist
+- [x] Read/ls/find/grep implemented without mutation/exec/Git/network — `open-inspect.workspace`,
+      rooted at `/workspace`
+- [x] Unit + workerd tests — 16 focused unit/build checks, 13 PiSessionDO integration checks, 3
+      Terraform mode checks
+- [x] Deep audit — independent API/runtime/security/build/dependency reviewers; writable-mode
+      deletion, prompt, symlink, isolation, env, and bundle findings resolved
+- [x] `/simplify` — one lazy Workspace per PiSessionDO, no extra DO, no ExecutionEnv
+      reimplementation, no backend imports
+- [x] Narrow validation green — full typecheck/lint/format; production Terraform 79/79; docs 44/44;
+      clean npm ci
 - [ ] Committed
-- [ ] Slice report
+- [x] Slice report — `features/pi-first-class/SLICE-2.md`
 
 ### Slice 3: permission and audit extension
 

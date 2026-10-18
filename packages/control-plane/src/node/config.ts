@@ -94,6 +94,7 @@ const ENV_CONFIG_KEYS = {
   SECRETS_CAP_ENFORCEMENT: true,
   TEAMS_ENFORCEMENT: true,
   PI_DURABLE_ENABLED: true,
+  PI_WORKSPACE_MODE: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 

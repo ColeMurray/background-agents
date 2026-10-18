@@ -273,6 +273,7 @@ jobs:
           TF_VAR_cloudflare_custom_domain: ${{ vars.CLOUDFLARE_CUSTOM_DOMAIN || secrets.CLOUDFLARE_CUSTOM_DOMAIN }}
           TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
           TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
+          TF_VAR_pi_workspace_mode: "${{ vars.PI_WORKSPACE_MODE || 'off' }}"
           TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || '000000000000000000000000' }}"
           TF_VAR_vercel_team_id: "${{ vars.VERCEL_TEAM_ID || secrets.VERCEL_TEAM_ID || 'unused' }}"
           TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}
@@ -606,6 +607,7 @@ jobs:
           TF_VAR_cloudflare_custom_domain: ${{ vars.CLOUDFLARE_CUSTOM_DOMAIN || secrets.CLOUDFLARE_CUSTOM_DOMAIN }}
           TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
           TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
+          TF_VAR_pi_workspace_mode: "${{ vars.PI_WORKSPACE_MODE || 'off' }}"
           TF_VAR_vercel_api_token: "${{ secrets.VERCEL_API_TOKEN || '000000000000000000000000' }}"
           TF_VAR_vercel_team_id: "${{ vars.VERCEL_TEAM_ID || secrets.VERCEL_TEAM_ID || 'unused' }}"
           TF_VAR_modal_token_id: ${{ secrets.MODAL_TOKEN_ID }}

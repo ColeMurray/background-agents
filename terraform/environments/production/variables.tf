@@ -765,6 +765,17 @@ variable "pi_durable_binding_enabled" {
   default     = false
 }
 
+variable "pi_workspace_mode" {
+  description = "Pi Durable Computer workspace mode: off or read_only"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only"], var.pi_workspace_mode)
+    error_message = "pi_workspace_mode must be 'off' or 'read_only'."
+  }
+}
+
 variable "pi_codemode_sandbox_migration_applied" {
   description = "Record that the Pi Code Mode sandbox v1 class migration has been deployed so later versions omit it"
   type        = bool

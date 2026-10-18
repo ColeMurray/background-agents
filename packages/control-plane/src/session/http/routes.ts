@@ -139,7 +139,7 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.piCredential,
       handler: handlers.piCredential,
     },
-    { method: "GET", path: SessionInternalPaths.piContext, handler: handlers.piContext },
+    { method: "POST", path: SessionInternalPaths.piContext, handler: handlers.piContext },
     {
       method: "POST",
       path: SessionInternalPaths.piRepositoryTool,

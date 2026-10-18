@@ -2,6 +2,7 @@ import type { SessionSkillStore } from "../../../db/session-skills";
 import type { PiRepositoryTools } from "../../../pi/repository-tools";
 import {
   piRepositoryToolRequestSchema,
+  piSessionContextRequestSchema,
   piSessionContextSchema,
 } from "../../../pi/session-context-contract";
 import type { MessageRepository } from "../../message-repository";
@@ -13,7 +14,7 @@ interface PiBridgeHandlerOptions {
   messages: Pick<MessageRepository, "getProcessingMessage">;
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
-  repositories: Pick<PiRepositoryTools, "pin" | "list" | "read">;
+  repositories: Pick<PiRepositoryTools, "pin" | "restore" | "list" | "read">;
   getSessionId(): string;
 }
 
@@ -51,13 +52,19 @@ export class PiBridgeHandler {
     }
   }
 
-  async context(): Promise<Response> {
+  async context(request: Request): Promise<Response> {
     if (this.options.sessions.getSession()?.harness !== "pi") {
       return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
     }
+    const parsed = piSessionContextRequestSchema.safeParse(await request.json().catch(() => ({})));
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid Pi session context request" }, { status: 400 });
+    }
     const sessionId = this.options.getSessionId();
     const [repositories, skills] = await Promise.all([
-      this.options.repositories.pin(),
+      parsed.data.repositoryPins
+        ? this.options.repositories.restore(parsed.data.repositoryPins)
+        : this.options.repositories.pin(),
       this.options.skills.getSandboxInstallation(sessionId),
     ]);
     const context = piSessionContextSchema.parse({

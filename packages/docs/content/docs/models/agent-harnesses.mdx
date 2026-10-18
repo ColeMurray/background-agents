@@ -36,8 +36,9 @@ All three integrations preserve a supported selected harness rather than silentl
 
 Existing GitHub and Linear settings that select Claude Agent without a default model are not automatically migrated. They remain readable, and rejected saves leave them unchanged. Before saving any edits, including unrelated settings, an administrator must open **Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model at every global or repository level that explicitly selects Claude Agent. A global model alone does not repair an explicit repository harness override. Alternatively, switch that level to OpenCode, or remove the repository harness override to inherit global settings.
 
-Harnesses project their output into the same session timeline and completion contract. Features that
-require a filesystem, terminal, local Git checkout, or sandbox process are unavailable to Pi Durable.
+Harnesses project their output into the same session timeline and completion contract. Operators may
+enable a read-only durable scratch workspace for Pi. Features that require workspace mutation, a
+terminal, local Git checkout, or sandbox process remain unavailable.
 
 ## Pi Durable sessions
 
@@ -59,11 +60,14 @@ The runtime installs Pi extensions before opening the durable harness:
 - a replay-safe foreground subagent owns its child Pi conversation and cannot recursively delegate.
 
 Repository-backed web, Slack, and automation sessions are supported for remote read/analysis work
-without a checkout or sandbox. Pi still has no local filesystem, shell, Git mutation, pull-request
-creation, browser automation, memory mutation, Code Mode, or MCP client/OAuth integration. Image
-attachments are rejected. GitHub review/comment and Linear issue integrations must use another
-harness until their diff, mutation, and publication tools exist. See the operator rollout in the
-repository's `docs/GETTING_STARTED.md`.
+without a checkout or sandbox. In personal or staging deployments that explicitly accept Cloudflare
+Computer's preview status, `PI_WORKSPACE_MODE=read_only` gives Pi a durable credential-free
+`/workspace` scratch area with `read`, `ls`, `find`, and `grep`; it is not a checkout or repository
+authority. Pi still has no workspace mutation, shell, Git mutation, pull-request creation, browser
+automation, memory mutation, Code Mode, or MCP client/OAuth integration. Image attachments are
+rejected. GitHub review/comment and Linear issue integrations must use another harness until their
+diff, mutation, and publication tools exist. See the operator rollout in the repository's
+`docs/GETTING_STARTED.md`.
 
 Pi reports token usage, but Codex subscription requests do not expose a provider dollar charge.
 Dollar cost totals and dollar budget enforcement are therefore unavailable, matching the native

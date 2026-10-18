@@ -9,6 +9,19 @@ const piRepositorySchema = z.object({
   commitSha: z.string().min(1),
 });
 
+export const piRepositoryPinsSchema = z.array(
+  piRepositorySchema.pick({
+    repoOwner: true,
+    repoName: true,
+    position: true,
+    commitSha: true,
+  })
+);
+
+export const piSessionContextRequestSchema = z.object({
+  repositoryPins: piRepositoryPinsSchema.optional(),
+});
+
 export const piSessionContextSchema = z.object({
   repositories: z.array(piRepositorySchema),
   skills: sandboxSkillInstallationSchema.nullable(),

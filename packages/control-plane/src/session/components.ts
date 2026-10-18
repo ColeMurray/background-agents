@@ -1032,7 +1032,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
     piCredential: (request) => piBridgeHandler.credential(request),
-    piContext: () => piBridgeHandler.context(),
+    piContext: (request) => piBridgeHandler.context(request),
     piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
     piResult: (request) => piResultHandler.handle(request),
     piEvent: (request) => piEventHandler.handle(request),

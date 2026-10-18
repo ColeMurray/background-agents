@@ -45,6 +45,43 @@ describe("PiRepositoryTools", () => {
     ]);
   });
 
+  it("restores durable pins without resolving mutable branch heads", () => {
+    const h = harness();
+    expect(
+      h.tools.restore([
+        {
+          repoOwner: "acme",
+          repoName: "widgets",
+          position: 0,
+          commitSha: "original-sha",
+        },
+      ])
+    ).toEqual([
+      {
+        repoOwner: "acme",
+        repoName: "widgets",
+        position: 0,
+        baseBranch: "main",
+        commitSha: "original-sha",
+      },
+    ]);
+    expect(h.resolveCommit).not.toHaveBeenCalled();
+  });
+
+  it("rejects restored pins for another repository set", () => {
+    const h = harness();
+    expect(() =>
+      h.tools.restore([
+        {
+          repoOwner: "acme",
+          repoName: "other",
+          position: 0,
+          commitSha: "original-sha",
+        },
+      ])
+    ).toThrow("does not match");
+  });
+
   it("lists a bounded repository tree at an immutable commit", async () => {
     const h = harness();
 
