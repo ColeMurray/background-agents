@@ -1,5 +1,6 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
+import { PI_TOOL_EFFECT_REGISTRY } from "@open-inspect/shared/pi-tool-effects";
 import {
   AssistantEntry,
   configure,
@@ -34,6 +35,16 @@ const repositoryTarget = {
   ),
 };
 
+function declaredToolEffect(name: string) {
+  const effect = PI_TOOL_EFFECT_REGISTRY.get(name);
+  if (!effect) throw new Error(`Pi tool has no effect declaration: ${name}`);
+  return effect;
+}
+
+const repositoryListEffect = declaredToolEffect("repository_list");
+const repositoryReadEffect = declaredToolEffect("repository_read");
+const subagentEffect = declaredToolEffect("subagent");
+
 const repositoryList = defineTool({
   name: "repository_list",
   description: "List files from a repository attached to this session at an immutable commit.",
@@ -48,8 +59,8 @@ const repositoryList = defineTool({
     ),
   }),
   structuredOutputSchema: Type.Any(),
-  replay: "safe",
-  callers: ["model", "tools"],
+  replay: repositoryListEffect.replay,
+  callers: repositoryListEffect.callers,
   execute: async () => ({ isError: true, output: [{ type: "text", text: "Tool not bound" }] }),
 });
 
@@ -67,8 +78,8 @@ const repositoryRead = defineTool({
     ),
   }),
   structuredOutputSchema: Type.Any(),
-  replay: "safe",
-  callers: ["model", "tools"],
+  replay: repositoryReadEffect.replay,
+  callers: repositoryReadEffect.callers,
   execute: async () => ({ isError: true, output: [{ type: "text", text: "Tool not bound" }] }),
 });
 
@@ -161,8 +172,8 @@ function createSubagentTool(extension: Extension) {
         description: "The task for the subagent.",
       }),
     }),
-    replay: "safe",
-    callers: ["model"],
+    replay: subagentEffect.replay,
+    callers: subagentEffect.callers,
     execute: async ({ task }, api, context) => {
       // Resolve outside the commit: a transaction must never wait on registry or
       // environment work. Write the exact parent selection minus recursive

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { validateMigrationArtifacts } from "@open-inspect/shared/pi-migration-reservations";
 import { buildSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyMigrations, containsTransactionControl, listMigrations } from "./migrate";
@@ -36,6 +37,15 @@ describe("applyMigrations", () => {
 
   it("applies every repository migration from zero and records each in the ledger", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql"));
+    expect(() =>
+      validateMigrationArtifacts(
+        listMigrations(MIGRATIONS_DIR).map((file) => ({
+          store: "d1",
+          version: Number(file.version),
+          name: file.name,
+        }))
+      )
+    ).not.toThrow();
 
     const applied = applyMigrations(db, MIGRATIONS_DIR);
 

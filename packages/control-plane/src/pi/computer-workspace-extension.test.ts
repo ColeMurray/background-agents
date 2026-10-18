@@ -69,6 +69,12 @@ describe("createComputerWorkspaceExtension", () => {
       ["find", "safe"],
       ["grep", "safe"],
     ]);
+    expect(extension.tools?.map((tool) => tool.callers)).toEqual([
+      ["model", "tools"],
+      ["model", "tools"],
+      ["model", "tools"],
+      ["model", "tools"],
+    ]);
     expect(extension.tools?.find((tool) => tool.name === "read")?.constrainedSampling).toEqual({
       type: "json_schema",
       strict: "prefer",

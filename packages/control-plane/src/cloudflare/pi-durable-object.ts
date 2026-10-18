@@ -36,6 +36,7 @@ import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
 import { createComputerWorkspaceExtension } from "../pi/computer-workspace-extension";
 import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
+import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extension-assembler";
 import { z } from "zod";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "PI_WORKSPACE_MODE">;
@@ -59,23 +60,33 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
       const sessionContext = await this.fetchSessionContext();
-      this.registry.install(
-        createOpenInspectExtension({
-          repositories: sessionContext.repositories,
-          invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
-        })
-      );
-      this.registry.install(createSubagentExtension());
+      const extensions: PiExtensionContribution[] = [
+        {
+          slot: "core",
+          extension: createOpenInspectExtension({
+            repositories: sessionContext.repositories,
+            invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
+          }),
+        },
+        { slot: "delegation", extension: createSubagentExtension() },
+      ];
       if (sessionContext.skills && sessionContext.skills.skills.length > 0) {
-        this.registry.install(
-          await createManagedSkillsExtension([skillSourceFromInstallation(sessionContext.skills)])
-        );
+        extensions.push({
+          slot: "skills",
+          extension: await createManagedSkillsExtension([
+            skillSourceFromInstallation(sessionContext.skills),
+          ]),
+        });
       }
       const workspaceMode = resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE);
       if (workspaceMode === "read_only") {
         const workspace = await this.openWorkspace();
-        this.registry.install(createComputerWorkspaceExtension(workspace));
+        extensions.push({
+          slot: "workspace",
+          extension: createComputerWorkspaceExtension(workspace),
+        });
       }
+      for (const extension of assemblePiExtensions(extensions)) this.registry.install(extension);
       this.models.setProvider(openaiCodexProvider());
       return Harness.open(
         storage,

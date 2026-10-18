@@ -237,6 +237,18 @@
     "./child-status-tool": {
       "import": "./dist/child-status-tool.js",
       "types": "./dist/child-status-tool.d.ts"
+    },
+    "./pi-tool-effects": {
+      "import": "./dist/pi-tool-effects.js",
+      "types": "./dist/pi-tool-effects.d.ts"
+    },
+    "./pi-feature-capabilities": {
+      "import": "./dist/pi-feature-capabilities.js",
+      "types": "./dist/pi-feature-capabilities.d.ts"
+    },
+    "./pi-migration-reservations": {
+      "import": "./dist/pi-migration-reservations.js",
+      "types": "./dist/pi-migration-reservations.d.ts"
     }
   },
   "scripts": {

@@ -1,5 +1,6 @@
 import type { Workspace } from "@cloudflare/computer";
 import { createPiTools } from "@cloudflare/computer/tools/pi-ai";
+import { PI_TOOL_EFFECT_REGISTRY } from "@open-inspect/shared/pi-tool-effects";
 import {
   defineExtension,
   section,
@@ -45,25 +46,31 @@ export function createComputerWorkspaceExtension(workspace: Workspace) {
         ].join(" ")
       ),
     ],
-    tools: selected.map((tool): ToolRegistration => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      ...(tool.constrainedSampling === undefined
-        ? {}
-        : { constrainedSampling: tool.constrainedSampling }),
-      replay: "safe",
-      async execute(args, api, context): Promise<ToolExecutionResult> {
-        const result = await execute(
-          { id: api.callId, name: tool.name, arguments: args },
-          { abortSignal: context.abortSignal }
-        );
-        return {
-          output: result.content,
-          isError: result.isError,
-          ...(result.details === undefined ? {} : { details: z.json().parse(result.details) }),
-        };
-      },
-    })),
+    tools: selected.map((tool): ToolRegistration => {
+      const effect = PI_TOOL_EFFECT_REGISTRY.get(tool.name);
+      if (!effect)
+        throw new Error(`Computer workspace tool has no effect declaration: ${tool.name}`);
+      return {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        ...(tool.constrainedSampling === undefined
+          ? {}
+          : { constrainedSampling: tool.constrainedSampling }),
+        replay: effect.replay,
+        callers: effect.callers,
+        async execute(args, api, context): Promise<ToolExecutionResult> {
+          const result = await execute(
+            { id: api.callId, name: tool.name, arguments: args },
+            { abortSignal: context.abortSignal }
+          );
+          return {
+            output: result.content,
+            isError: result.isError,
+            ...(result.details === undefined ? {} : { details: z.json().parse(result.details) }),
+          };
+        },
+      };
+    }),
   });
 }

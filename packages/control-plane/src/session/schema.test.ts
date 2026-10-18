@@ -3,6 +3,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
+import { validateMigrationArtifacts } from "@open-inspect/shared/pi-migration-reservations";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
@@ -91,6 +92,15 @@ describe("applyMigrations", () => {
 
   it("has unique, strictly increasing migration ids", () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(() =>
+      validateMigrationArtifacts(
+        MIGRATIONS.map((migration) => ({
+          store: "session_do",
+          version: migration.id,
+          name: migration.description,
+        }))
+      )
+    ).not.toThrow();
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
   });
