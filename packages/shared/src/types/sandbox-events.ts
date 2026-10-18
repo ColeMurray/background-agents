@@ -4,6 +4,7 @@ import { harnessIdSchema } from "../harnesses";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
+import { sandboxExecutionEventSchemas } from "./sandbox-execution";
 
 const recordSchema = z.record(z.string(), z.unknown());
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
@@ -97,6 +98,7 @@ export const sandboxGenerationSchema = z.object({
 });
 
 const nonArtifactSandboxEventSchemas = [
+  ...sandboxExecutionEventSchemas,
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
   }),

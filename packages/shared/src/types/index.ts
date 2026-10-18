@@ -212,6 +212,22 @@ export type {
   ExternalActionHistoryEvent,
   ExternalActionStatusResponse,
 } from "./external-actions";
+export {
+  MAX_SANDBOX_COMMAND_TIMEOUT_MS,
+  MAX_SANDBOX_COMMAND_ARGV_ITEMS,
+  MAX_SANDBOX_COMMAND_ARG_BYTES,
+  MAX_SANDBOX_COMMAND_OUTPUT_BYTES,
+  sandboxRuntimeModeSchema,
+  sandboxCommandPurposeSchema,
+  sandboxExecutionCommandSchema,
+  sandboxExecutionEventSchema,
+} from "./sandbox-execution";
+export type {
+  SandboxRuntimeMode,
+  SandboxCommandPurpose,
+  SandboxExecutionCommand,
+  SandboxExecutionEvent,
+} from "./sandbox-execution";
 export { tokenUsageSchema } from "./sandbox-events";
 export type { TokenUsage } from "./sandbox-events";
 export { normalizeTokenUsage, stepUsageSchema } from "./usage";

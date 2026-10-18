@@ -47,6 +47,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
   "sandbox_generation_ready",
   "preservation_prepared",
+  "command_completed",
 ]);
 
 /**
@@ -71,6 +72,9 @@ export class SessionSandboxEventProcessor {
         event: Extract<SandboxIngressEvent, { type: "sandbox_generation_ready" }>
       ): void;
       prepared(event: Extract<SandboxIngressEvent, { type: "preservation_prepared" }>): void;
+    },
+    private readonly commands?: {
+      handle(event: Extract<SandboxIngressEvent, { type: `command_${string}` }>): void;
     }
   ) {}
 
@@ -176,6 +180,12 @@ export class SessionSandboxEventProcessor {
         // The bridge's answer to the snapshot command. The lifecycle manager
         // drives the snapshot itself through the provider; all this needs is
         // the delivery ack below, which stops the bridge re-sending it.
+        return;
+      case "command_started":
+      case "command_output":
+      case "command_completed":
+        if (!this.commands) throw new Error("Sandbox command handlers are not configured");
+        this.commands.handle(event);
         return;
       default:
         // Exhaustive: a new SandboxEvent variant must pick a family here.

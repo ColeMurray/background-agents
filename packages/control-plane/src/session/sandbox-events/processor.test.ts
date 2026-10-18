@@ -32,6 +32,7 @@ function createProcessor() {
     generationReady: vi.fn<(event: ShutdownEvent) => void>(),
     prepared: vi.fn<(event: ShutdownEvent) => void>(),
   };
+  const commands = { handle: vi.fn() };
   const processor = new SessionSandboxEventProcessor(
     log as unknown as Logger,
     repository as unknown as MessageRepository,
@@ -42,7 +43,8 @@ function createProcessor() {
     undefined as never,
     runtime as unknown as SandboxRuntimeEventHandler,
     undefined as never,
-    shutdown
+    shutdown,
+    commands
   );
   return {
     processor,
@@ -53,8 +55,42 @@ function createProcessor() {
     send: wsManager.send,
     streaming,
     shutdown,
+    commands,
   };
 }
+
+describe("SessionSandboxEventProcessor command execution boundary", () => {
+  it.each([
+    { type: "command_started", commandId: "cmd-1", sandboxId: "sandbox-1", timestamp: 1 },
+    {
+      type: "command_output",
+      commandId: "cmd-1",
+      sequence: 0,
+      stream: "stdout",
+      data: "ok\n",
+      sandboxId: "sandbox-1",
+      timestamp: 2,
+    },
+    {
+      type: "command_completed",
+      commandId: "cmd-1",
+      outcome: "succeeded",
+      exitCode: 0,
+      signal: null,
+      lastSequence: 0,
+      sandboxId: "sandbox-1",
+      timestamp: 3,
+      ackId: "command_completed:cmd-1",
+    },
+  ] satisfies SandboxEvent[])("routes $type outside the user timeline", async (event) => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.commands.handle).toHaveBeenCalledExactlyOnceWith(event);
+    expect(h.streaming.recordTimelineEvent).not.toHaveBeenCalled();
+  });
+});
 
 describe.each([
   {

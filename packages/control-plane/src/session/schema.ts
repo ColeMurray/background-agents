@@ -130,6 +130,32 @@ CREATE TABLE IF NOT EXISTS external_action_audit_outbox (
   created_at INTEGER NOT NULL
 );`;
 
+const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands (
+  id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  state TEXT NOT NULL,
+  last_output_sequence INTEGER NOT NULL DEFAULT -1,
+  output_bytes INTEGER NOT NULL DEFAULT 0,
+  output_truncated INTEGER NOT NULL DEFAULT 0,
+  exit_code INTEGER,
+  signal TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  dispatched_at INTEGER,
+  started_at INTEGER,
+  completed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS sandbox_command_output (
+  command_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  stream TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (command_id, sequence),
+  FOREIGN KEY (command_id) REFERENCES sandbox_commands(id) ON DELETE CASCADE
+);`;
+
 const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
   id TEXT PRIMARY KEY,
   message_id TEXT,
@@ -326,6 +352,10 @@ ${PI_RESULT_RECEIPTS_TABLE_SQL}
 
 -- SessionDO-authoritative approvals, dispatch leases, and external-effect history.
 ${EXTERNAL_ACTIONS_TABLES_SQL}
+
+-- Durable, provider-neutral command execution ledger. It is dormant until the
+-- Pi sandbox execution gate and an authorized caller both admit a command.
+${SANDBOX_COMMANDS_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -857,6 +887,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 57,
     description: "Persist completed Pi result projections",
     run: PI_RESULT_RECEIPTS_TABLE_SQL,
+  },
+  {
+    id: 58,
+    description: "Persist sandbox command execution ledger",
+    run: SANDBOX_COMMANDS_TABLE_SQL,
   },
   {
     id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
