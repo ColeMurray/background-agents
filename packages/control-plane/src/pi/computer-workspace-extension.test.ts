@@ -52,11 +52,8 @@ const context = {
   toString: () => "test",
 };
 
-function createExtension(mode: "read_only" | "writable", mutations?: WorkspaceMutationFifo) {
-  const extension = createComputerWorkspaceCapability({} as Workspace, mode, mutations)
-    .extensions[0];
-  if (!extension) throw new Error("Expected workspace extension");
-  return extension;
+function createExtension(mode: "read_only" | "enabled", mutations?: WorkspaceMutationFifo) {
+  return createComputerWorkspaceCapability({} as Workspace, mode, mutations).extension;
 }
 
 describe("createComputerWorkspaceCapability", () => {
@@ -133,7 +130,7 @@ describe("createComputerWorkspaceCapability", () => {
         diffTruncated: true,
       },
     });
-    const extension = createExtension("writable");
+    const extension = createExtension("enabled");
     const edit = extension.tools?.find((tool) => tool.name === "edit");
 
     await expect(
@@ -167,7 +164,7 @@ describe("createComputerWorkspaceCapability", () => {
   it("exposes write, edit, and delete as unsafe sequential tools in writable mode", () => {
     arrangeComputerTools();
 
-    const extension = createExtension("writable");
+    const extension = createExtension("enabled");
 
     expect(computer.createPiTools).toHaveBeenCalledWith({
       workspace: expect.anything(),
@@ -190,24 +187,23 @@ describe("createComputerWorkspaceCapability", () => {
     ]);
   });
 
-  it("exports shared local effects and leaves unknown Computer tools unclassified", () => {
+  it("exports canonical effects and a scratch policy contribution", () => {
     arrangeComputerTools();
 
-    const capability = createComputerWorkspaceCapability({} as Workspace, "writable");
+    const capability = createComputerWorkspaceCapability({} as Workspace, "enabled");
 
-    expect(capability.extensions.map((extension) => extension.name)).toEqual([
-      "open-inspect.workspace",
-      "open-inspect.workspace-policy",
-    ]);
+    expect(capability.extension.name).toBe("open-inspect.workspace");
+    expect(capability.toolPolicyDelegate).toEqual(
+      expect.objectContaining({ beforeTool: expect.any(Function), afterTool: expect.any(Function) })
+    );
     expect(capability.effects).toEqual([
-      { tool: "read", effect: "local_read", owner: "workspace", operation: "read" },
-      { tool: "ls", effect: "local_read", owner: "workspace", operation: "ls" },
-      { tool: "find", effect: "local_read", owner: "workspace", operation: "find" },
-      { tool: "grep", effect: "local_read", owner: "workspace", operation: "grep" },
-      { tool: "write", effect: "local_mutation", owner: "workspace", operation: "write" },
-      { tool: "edit", effect: "local_mutation", owner: "workspace", operation: "edit" },
-      { tool: "delete", effect: "local_mutation", owner: "workspace", operation: "delete" },
-      { tool: "exec", effect: "unclassified", owner: "workspace", operation: "exec" },
+      { name: "read", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
+      { name: "ls", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
+      { name: "find", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
+      { name: "grep", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
+      { name: "write", effect: "local_mutation", callers: ["model", "tools"], replay: "unsafe" },
+      { name: "edit", effect: "local_mutation", callers: ["model", "tools"], replay: "unsafe" },
+      { name: "delete", effect: "local_mutation", callers: ["model", "tools"], replay: "unsafe" },
     ]);
   });
 
@@ -220,7 +216,7 @@ describe("createComputerWorkspaceCapability", () => {
     computer.execute
       .mockImplementationOnce(() => first)
       .mockResolvedValueOnce({ content: [], isError: false });
-    const extension = createExtension("writable", new WorkspaceMutationFifo());
+    const extension = createExtension("enabled", new WorkspaceMutationFifo());
     const write = extension.tools?.find((tool) => tool.name === "write");
     const remove = extension.tools?.find((tool) => tool.name === "delete");
 
@@ -249,7 +245,7 @@ describe("createComputerWorkspaceCapability", () => {
       resolveFirst = resolve;
     });
     computer.execute.mockImplementationOnce(() => first);
-    const extension = createExtension("writable", new WorkspaceMutationFifo());
+    const extension = createExtension("enabled", new WorkspaceMutationFifo());
     const write = extension.tools?.find((tool) => tool.name === "write");
     const remove = extension.tools?.find((tool) => tool.name === "delete");
     const abort = new AbortController();
@@ -283,7 +279,7 @@ describe("createComputerWorkspaceCapability", () => {
     "child/..",
   ])("refuses deletion of the workspace root expressed as %s", async (path) => {
     arrangeComputerTools();
-    const extension = createExtension("writable");
+    const extension = createExtension("enabled");
     const remove = extension.tools?.find((tool) => tool.name === "delete");
 
     await expect(

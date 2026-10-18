@@ -25,6 +25,13 @@ function beforeTool() {
   return handler;
 }
 
+function beforeToolWithDelegates(delegates: readonly PiToolPolicyDelegate[]) {
+  const extension = createPiToolPolicyExtension(effects, delegates);
+  const handler = (extension.hooks?.[0]?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
+  if (!handler) throw new Error("Expected Pi tool policy beforeTool hook");
+  return handler;
+}
+
 function afterTool(delegates: readonly PiToolPolicyDelegate[], hookApi: HookApi = api) {
   const extension = createPiToolPolicyExtension(effects, delegates);
   const registration = extension.hooks?.[0];
@@ -71,6 +78,19 @@ describe("createPiToolPolicyExtension", () => {
     await expect(hook(call("unknown", true), api, context)).resolves.toEqual({
       block: "Pi tool is not declared: unknown",
     });
+  });
+
+  it("composes workspace and external-action delegates in one policy", async () => {
+    const workspace = vi.fn(async () => undefined);
+    const externalAction = vi.fn(async () => undefined);
+    const hook = beforeToolWithDelegates([
+      { beforeTool: workspace },
+      { beforeTool: externalAction },
+    ]);
+
+    await expect(hook(call("model_tool"), api, context)).resolves.toBeUndefined();
+    expect(workspace).toHaveBeenCalledOnce();
+    expect(externalAction).toHaveBeenCalledOnce();
   });
 
   it("replaces a successful-looking result when any afterTool delegate throws", async () => {

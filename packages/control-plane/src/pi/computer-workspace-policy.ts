@@ -1,24 +1,16 @@
 import type { JsonValue } from "@earendil-works/chord";
-import {
-  ToolTask,
-  defineExtension,
-  hook,
-  type ToolHookCall,
-  type ToolHooks,
-} from "@earendil-works/pi-durable";
+import type { ToolHookCall } from "@earendil-works/pi-durable";
+import type { PiToolPolicyDelegate } from "./tool-policy-extension";
 import {
   COMPUTER_SCRATCH_ROOT,
-  isWorkspaceRoot,
+  isProtectedWorkspaceRoot,
+  normalizeWorkspaceAbsolutePath,
   resolveWorkspacePath,
 } from "./computer-workspace-quota";
-import {
-  WORKSPACE_TOOL_EFFECT_OWNER,
-  indexPiToolEffects,
-  type PiToolEffectMetadata,
-} from "./tool-effects";
 
 const BEFORE_MEMO = "open-inspect.workspace-policy.before";
 const AFTER_MEMO = "open-inspect.workspace-policy.after";
+const REPOSITORY_OVERLAY_ROOT = "/workspace/repos";
 
 export const WORKSPACE_MUTATION_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -26,31 +18,13 @@ type MutationDecision =
   | { allowed: true; metadata: Record<string, JsonValue> }
   | { allowed: false; reason: string; metadata: Record<string, JsonValue> };
 
-/** Mandatory durable policy for Computer tools returned by one pinned adapter. */
-export function createWorkspaceMutationPolicyExtension(effects: readonly PiToolEffectMetadata[]) {
-  return defineExtension({
-    name: "open-inspect.workspace-policy",
-    hooks: [hook(ToolTask, createWorkspaceMutationPolicyHooks(effects))],
-  });
-}
-
-export function createWorkspaceMutationPolicyHooks(
-  effects: readonly PiToolEffectMetadata[]
-): Pick<ToolHooks, "beforeTool" | "afterTool"> {
-  const byTool = indexPiToolEffects(effects);
+/** Scratch-only policy contributor for the canonical composite Pi tool policy. */
+export function createWorkspaceMutationPolicyDelegate(): PiToolPolicyDelegate {
   return {
-    async beforeTool(call, api, context) {
-      const classification = byTool.get(call.name);
-      if (
-        classification === undefined ||
-        classification.owner !== WORKSPACE_TOOL_EFFECT_OWNER ||
-        classification.effect === "local_read" ||
-        classification.effect === "external_read" ||
-        classification.effect === "external_mutation"
-      ) {
-        return;
-      }
-      const decision = mutationDecision(call, classification);
+    async beforeTool(call, declaration, api, context) {
+      if (declaration.effect !== "local_mutation") return;
+      if (targetsRepositoryOverlay(call)) return;
+      const decision = mutationDecision(call);
       await api.memo(
         BEFORE_MEMO,
         {
@@ -64,12 +38,8 @@ export function createWorkspaceMutationPolicyHooks(
       );
       return decision.allowed ? undefined : { block: decision.reason };
     },
-    async afterTool(call, result, api, context) {
-      const classification = byTool.get(call.name);
-      if (
-        classification?.owner !== WORKSPACE_TOOL_EFFECT_OWNER ||
-        classification.effect !== "local_mutation"
-      ) {
+    async afterTool(call, declaration, result, api, context) {
+      if (declaration.effect !== "local_mutation" || targetsRepositoryOverlay(call)) {
         return result;
       }
       const path = pathFrom(call);
@@ -89,17 +59,7 @@ export function createWorkspaceMutationPolicyHooks(
   };
 }
 
-function mutationDecision(
-  call: ToolHookCall,
-  classification: PiToolEffectMetadata
-): MutationDecision {
-  if (classification.effect !== "local_mutation") {
-    return {
-      allowed: false,
-      reason: `Workspace mutation is not allowed: ${call.name}`,
-      metadata: {},
-    };
-  }
+function mutationDecision(call: ToolHookCall): MutationDecision {
   const path = pathFrom(call);
   if (path === null) {
     return {
@@ -108,14 +68,14 @@ function mutationDecision(
       metadata: {},
     };
   }
-  if (isWorkspaceRoot(path)) {
+  if (isProtectedWorkspaceRoot(path)) {
     return {
       allowed: false,
       reason: `Workspace mutation must name a path below ${COMPUTER_SCRATCH_ROOT}`,
       metadata: { path },
     };
   }
-  switch (classification.operation) {
+  switch (call.name) {
     case "write":
       return writeDecision(call, path);
     case "edit":
@@ -123,10 +83,7 @@ function mutationDecision(
     case "delete":
       return {
         allowed: true,
-        metadata: {
-          path,
-          recursive: call.arguments.recursive === true,
-        },
+        metadata: { path, recursive: call.arguments.recursive === true },
       };
     default:
       return {
@@ -176,10 +133,7 @@ function editDecision(call: ToolHookCall, path: string): MutationDecision {
       };
     }
   }
-  return {
-    allowed: true,
-    metadata: { path, editCount: edits.length, contentBytes },
-  };
+  return { allowed: true, metadata: { path, editCount: edits.length, contentBytes } };
 }
 
 function invalidArguments(tool: string, path: string): MutationDecision {
@@ -193,4 +147,13 @@ function invalidArguments(tool: string, path: string): MutationDecision {
 function pathFrom(call: ToolHookCall): string | null {
   const path = call.arguments.path;
   return typeof path === "string" ? resolveWorkspacePath(path) : null;
+}
+
+function targetsRepositoryOverlay(call: ToolHookCall): boolean {
+  const path = call.arguments.path;
+  if (typeof path !== "string") return false;
+  const normalized = normalizeWorkspaceAbsolutePath(path);
+  return (
+    normalized === REPOSITORY_OVERLAY_ROOT || normalized.startsWith(`${REPOSITORY_OVERLAY_ROOT}/`)
+  );
 }

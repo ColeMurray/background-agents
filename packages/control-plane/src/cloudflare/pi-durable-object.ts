@@ -40,7 +40,10 @@ import { createComputerWorkspaceCapability } from "../pi/computer-workspace-exte
 import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
 import { COMPUTER_SCRATCH_ROOT, createQuotaWorkspace } from "../pi/computer-workspace-quota";
 import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extension-assembler";
-import { createPiToolPolicyExtension } from "../pi/tool-policy-extension";
+import {
+  createPiToolPolicyExtension,
+  type PiToolPolicyDelegate,
+} from "../pi/tool-policy-extension";
 import { latchPiFeatureCapabilitySnapshot } from "../pi/capability-snapshot";
 import { z } from "zod";
 import {
@@ -92,23 +95,29 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
       });
       const delegation = createSubagentExtension();
+      let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const extensions: PiExtensionContribution[] = [
         {
           slot: "policy",
           effects: [],
-          createExtension: (effects) =>
-            createPiToolPolicyExtension(effects, [
-              createExternalActionPolicyDelegate({
-                client: {
-                  prepare: (request, signal) => this.prepareExternalAction(request, signal),
-                  status: (actionId, signal) => this.externalActionStatus(actionId, signal),
-                  execute: (actionId, signal) => this.executeExternalAction(actionId, signal),
-                },
-                // Provider-specific tools are contributed to the external_actions
-                // slot together with their canonical effect registrations.
-                externalActions: {},
-              }),
-            ]),
+          createExtension: (effects) => {
+            const externalActionDelegate = createExternalActionPolicyDelegate({
+              client: {
+                prepare: (request, signal) => this.prepareExternalAction(request, signal),
+                status: (actionId, signal) => this.externalActionStatus(actionId, signal),
+                execute: (actionId, signal) => this.executeExternalAction(actionId, signal),
+              },
+              // Provider-specific tools are contributed to the external_actions
+              // slot together with their canonical effect registrations.
+              externalActions: {},
+            });
+            return createPiToolPolicyExtension(
+              effects,
+              workspacePolicyDelegate
+                ? [externalActionDelegate, workspacePolicyDelegate]
+                : [externalActionDelegate]
+            );
+          },
         },
         { slot: "core", extension: core, effects: declaredEffects(core) },
         {
@@ -137,6 +146,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       if (capabilities.workspace !== "off") {
         const workspace = await this.openWorkspace(capabilities.workspace === "enabled");
         const capability = createComputerWorkspaceCapability(workspace, capabilities.workspace);
+        workspacePolicyDelegate = capability.toolPolicyDelegate;
         extensions.push({
           slot: "workspace",
           feature: "workspace",

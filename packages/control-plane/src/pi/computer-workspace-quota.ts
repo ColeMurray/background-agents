@@ -165,18 +165,18 @@ export function isWorkspaceRoot(path: string): boolean {
 }
 
 export function isProtectedWorkspaceRoot(path: string): boolean {
-  const normalized = normalizeWorkspacePath(path);
+  const normalized = normalizeWorkspaceAbsolutePath(path);
   return normalized === "/workspace" || normalized === COMPUTER_SCRATCH_ROOT;
 }
 
 export function resolveWorkspacePath(path: string): string | null {
-  const normalized = normalizeWorkspacePath(path);
+  const normalized = normalizeWorkspaceAbsolutePath(path);
   return normalized === COMPUTER_SCRATCH_ROOT || normalized.startsWith(`${COMPUTER_SCRATCH_ROOT}/`)
     ? normalized
     : null;
 }
 
-function normalizeWorkspacePath(path: string): string {
+export function normalizeWorkspaceAbsolutePath(path: string): string {
   const absolute = path.startsWith("/") ? path : `${COMPUTER_SCRATCH_ROOT}/${path}`;
   const parts: string[] = [];
   for (const part of absolute.split("/")) {
