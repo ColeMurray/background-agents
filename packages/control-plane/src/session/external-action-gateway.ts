@@ -10,6 +10,7 @@ import type { SqlStorage, TransactionSync } from "./sql-storage";
 
 const EXECUTION_LEASE_MS = 30_000;
 const RECONCILIATION_POLL_MS = 5_000;
+const MAX_RECONCILIATION_BACKOFF_MS = 60_000;
 
 export type ExternalActionExecutionResult =
   | { kind: "succeeded"; publicResult: JsonValue }
@@ -65,6 +66,8 @@ interface ExternalActionRow {
   error: string | null;
   lease_token: string | null;
   lease_expires_at: number | null;
+  reconciliation_attempts: number;
+  reconcile_after: number | null;
   revision: number;
   created_at: number;
   updated_at: number;
@@ -100,6 +103,8 @@ interface Transition {
   error?: string | null;
   leaseToken?: string | null;
   leaseExpiresAt?: number | null;
+  reconciliationAttempts?: number;
+  reconcileAfter?: number | null;
 }
 
 /** SessionDO-owned approval and exactly-once dispatch gateway for external effects. */
@@ -274,6 +279,8 @@ export class ExternalActionGateway {
             publicResult: result.publicResult,
             leaseToken: null,
             leaseExpiresAt: null,
+            reconciliationAttempts: 0,
+            reconcileAfter: null,
           });
         }
         if (result.kind === "accepted") {
@@ -284,6 +291,8 @@ export class ExternalActionGateway {
             providerReference: result.providerReference,
             leaseToken: null,
             leaseExpiresAt: null,
+            reconciliationAttempts: 0,
+            reconcileAfter: this.now() + RECONCILIATION_POLL_MS,
           });
         }
         return this.transition(id, current.revision, {
@@ -294,6 +303,8 @@ export class ExternalActionGateway {
           reason: result.error,
           leaseToken: null,
           leaseExpiresAt: null,
+          reconciliationAttempts: 0,
+          reconcileAfter: null,
         });
       });
     } catch (error) {
@@ -310,6 +321,8 @@ export class ExternalActionGateway {
           error: reason,
           leaseToken: null,
           leaseExpiresAt: null,
+          reconciliationAttempts: 0,
+          reconcileAfter: this.now() + RECONCILIATION_POLL_MS,
         });
       });
     }
@@ -324,18 +337,15 @@ export class ExternalActionGateway {
     try {
       result = await executor.status(current);
     } catch (error) {
-      if (current.state === "indeterminate") return current;
       const reason = error instanceof Error ? error.message : "External action status failed";
-      return this.transaction(() =>
-        this.transition(id, current.revision, {
-          state: "indeterminate",
-          event: "execution_indeterminate",
-          actorKind: "system",
-          reason,
-          error: reason,
-          leaseToken: null,
-          leaseExpiresAt: null,
-        })
+      return this.deferReconciliation(id, current, reason, "system");
+    }
+    if (result.kind === "unknown") {
+      return this.deferReconciliation(
+        id,
+        current,
+        result.reason ?? "Provider status is unknown",
+        "executor"
       );
     }
     return this.transaction(() => {
@@ -350,6 +360,8 @@ export class ExternalActionGateway {
           error: null,
           leaseToken: null,
           leaseExpiresAt: null,
+          reconciliationAttempts: 0,
+          reconcileAfter: null,
         });
       }
       if (result.kind === "failed") {
@@ -361,6 +373,8 @@ export class ExternalActionGateway {
           error: result.error,
           leaseToken: null,
           leaseExpiresAt: null,
+          reconciliationAttempts: 0,
+          reconcileAfter: null,
         });
       }
       if (result.kind === "not_admitted") {
@@ -371,10 +385,13 @@ export class ExternalActionGateway {
           error: null,
           leaseToken: null,
           leaseExpiresAt: null,
+          reconciliationAttempts: 0,
+          reconcileAfter: null,
         });
       }
       if (result.kind === "pending") {
-        if (latest.state === "executing" && result.providerReference === undefined) return latest;
+        const row = this.requireRow(id);
+        const attempts = row.reconciliation_attempts + 1;
         return this.transition(id, latest.revision, {
           state: "executing",
           event: "reconciliation_pending",
@@ -383,18 +400,11 @@ export class ExternalActionGateway {
           error: null,
           leaseToken: null,
           leaseExpiresAt: null,
+          reconciliationAttempts: attempts,
+          reconcileAfter: this.now() + reconciliationBackoffMs(attempts),
         });
       }
-      return this.transition(id, latest.revision, {
-        state: "indeterminate",
-        event:
-          latest.state === "indeterminate" ? "reconciliation_pending" : "execution_indeterminate",
-        actorKind: "executor",
-        reason: result.reason ?? "Provider status is unknown",
-        error: result.reason ?? "Provider status is unknown",
-        leaseToken: null,
-        leaseExpiresAt: null,
-      });
+      return latest;
     });
   }
 
@@ -403,6 +413,7 @@ export class ExternalActionGateway {
       .exec(
         `SELECT MIN(
            CASE
+             WHEN reconcile_after IS NOT NULL THEN reconcile_after
              WHEN state = 'executing' AND lease_expires_at IS NOT NULL THEN lease_expires_at
              ELSE updated_at + ?
            END
@@ -423,6 +434,7 @@ export class ExternalActionGateway {
         `SELECT id, provider FROM external_actions
          WHERE state IN ('executing', 'indeterminate')
            AND (CASE
+             WHEN reconcile_after IS NOT NULL THEN reconcile_after
              WHEN state = 'executing' AND lease_expires_at IS NOT NULL THEN lease_expires_at
              ELSE updated_at + ?
            END) <= ?
@@ -434,7 +446,16 @@ export class ExternalActionGateway {
     for (const row of rows) {
       const action = this.requireAction(row.id);
       const executor = resolveExecutor(action);
-      if (executor) await this.reconcile(row.id, executor);
+      if (executor) {
+        await this.reconcile(row.id, executor);
+      } else {
+        this.deferReconciliation(
+          row.id,
+          action,
+          "External action provider definition is unavailable",
+          "system"
+        );
+      }
     }
   }
 
@@ -488,6 +509,8 @@ export class ExternalActionGateway {
             error: "Execution outcome requires reconciliation",
             leaseToken: null,
             leaseExpiresAt: null,
+            reconciliationAttempts: row.reconciliation_attempts,
+            reconcileAfter: null,
           }),
           claimed: false,
         };
@@ -502,6 +525,8 @@ export class ExternalActionGateway {
           actorId: token,
           leaseToken: token,
           leaseExpiresAt: this.now() + EXECUTION_LEASE_MS,
+          reconciliationAttempts: 0,
+          reconcileAfter: null,
         }),
         claimed: true,
       };
@@ -527,9 +552,16 @@ export class ExternalActionGateway {
       transition.leaseToken === undefined ? row.lease_token : transition.leaseToken;
     const leaseExpiresAt =
       transition.leaseExpiresAt === undefined ? row.lease_expires_at : transition.leaseExpiresAt;
+    const reconciliationAttempts =
+      transition.reconciliationAttempts === undefined
+        ? row.reconciliation_attempts
+        : transition.reconciliationAttempts;
+    const reconcileAfter =
+      transition.reconcileAfter === undefined ? row.reconcile_after : transition.reconcileAfter;
     const result = this.sql.exec(
       `UPDATE external_actions SET state = ?, provider_reference = ?, public_result_json = ?, error = ?,
-       lease_token = ?, lease_expires_at = ?, revision = ?, updated_at = ?
+       lease_token = ?, lease_expires_at = ?, reconciliation_attempts = ?, reconcile_after = ?,
+       revision = ?, updated_at = ?
        WHERE id = ? AND revision = ?`,
       transition.state,
       providerReference,
@@ -537,6 +569,8 @@ export class ExternalActionGateway {
       error,
       leaseToken,
       leaseExpiresAt,
+      reconciliationAttempts,
+      reconcileAfter,
       nextRevision,
       now,
       id,
@@ -640,6 +674,31 @@ export class ExternalActionGateway {
       this.now()
     );
   }
+
+  private deferReconciliation(
+    id: string,
+    current: ExternalAction,
+    reason: string,
+    actorKind: "executor" | "system"
+  ): ExternalAction {
+    return this.transaction(() => {
+      const latest = this.requireAction(id);
+      if (latest.revision !== current.revision) return latest;
+      const row = this.requireRow(id);
+      const attempts = row.reconciliation_attempts + 1;
+      return this.transition(id, latest.revision, {
+        state: "indeterminate",
+        event: "reconciliation_pending",
+        actorKind,
+        reason,
+        error: reason,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        reconciliationAttempts: attempts,
+        reconcileAfter: this.now() + reconciliationBackoffMs(attempts),
+      });
+    });
+  }
 }
 
 function toAction(row: ExternalActionRow): ExternalAction {
@@ -710,4 +769,11 @@ function canonicalJson(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
     .join(",")}}`;
+}
+
+function reconciliationBackoffMs(attempts: number): number {
+  return Math.min(
+    MAX_RECONCILIATION_BACKOFF_MS,
+    RECONCILIATION_POLL_MS * 2 ** Math.min(Math.max(0, attempts - 1), 4)
+  );
 }

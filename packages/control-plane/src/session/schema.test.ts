@@ -107,6 +107,8 @@ it("creates the external action ledger and append-only history on fresh and migr
           expect.objectContaining({ name: "fingerprint" }),
           expect.objectContaining({ name: "effect_fingerprint" }),
           expect.objectContaining({ name: "continuation_consumed_at" }),
+          expect.objectContaining({ name: "reconciliation_attempts" }),
+          expect.objectContaining({ name: "reconcile_after" }),
         ])
       );
       expect(db.prepare("PRAGMA table_info(external_action_history)").all()).toEqual(

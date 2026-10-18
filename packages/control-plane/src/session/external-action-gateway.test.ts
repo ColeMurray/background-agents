@@ -229,4 +229,54 @@ describe("ExternalActionGateway", () => {
     });
     expect(restarted.nextReconciliationAt()).toBeNull();
   });
+
+  it("persists bounded future backoff across consecutive status exceptions", async () => {
+    const action = await gateway.prepare("session-1", "message-1", request, {
+      source: "human",
+      actorId: "user-1",
+      grantId: null,
+    });
+    const executor = fakeExecutor();
+    executor.execute.mockRejectedValueOnce(new Error("ambiguous dispatch"));
+    await gateway.execute(action.id, executor);
+    executor.status.mockRejectedValue(new Error("provider unavailable"));
+
+    now = gateway.nextReconciliationAt()!;
+    await gateway.reconcileDue(() => executor);
+    const firstRetry = gateway.nextReconciliationAt()!;
+    expect(firstRetry).toBeGreaterThan(now);
+    expect(firstRetry - now).toBeLessThanOrEqual(60_000);
+
+    now = firstRetry;
+    await gateway.reconcileDue(() => executor);
+    const secondRetry = gateway.nextReconciliationAt()!;
+    expect(secondRetry).toBeGreaterThan(firstRetry);
+    expect(secondRetry - firstRetry).toBeLessThanOrEqual(60_000);
+  });
+
+  it("persists future backoff when a provider definition disappears across restart", async () => {
+    const action = await gateway.prepare("session-1", "message-1", request, {
+      source: "human",
+      actorId: "user-1",
+      grantId: null,
+    });
+    const executor = fakeExecutor();
+    executor.execute.mockResolvedValueOnce({
+      kind: "accepted",
+      providerReference: "provider-operation-1",
+    });
+    await gateway.execute(action.id, executor);
+
+    now = gateway.nextReconciliationAt()!;
+    const restartedStorage = createNodeSqlStorage(sqlite);
+    const restarted = new ExternalActionGateway(
+      restartedStorage.sql,
+      restartedStorage.transactionSync,
+      { now: () => now }
+    );
+    await restarted.reconcileDue(() => undefined);
+
+    expect(restarted.status(action.id).action.state).toBe("indeterminate");
+    expect(restarted.nextReconciliationAt()).toBeGreaterThan(now);
+  });
 });

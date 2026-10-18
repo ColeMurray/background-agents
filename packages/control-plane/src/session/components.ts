@@ -1217,6 +1217,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           async () => {
             await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
+            const externalActionDeadline = nextExternalActionDeadline();
+            if (externalActionDeadline !== null) {
+              // Cloudflare may immediately consume a past timestamp before the
+              // reconstructed activation has finished registering its alarm
+              // work. Persist one near-future wake while retaining the same
+              // shared earliest-deadline slot.
+              await alarmScheduler.schedule(Math.max(externalActionDeadline, Date.now() + 1_000));
+            }
             await lifecycleManager.rearmRejectedStartupCleanupAlarm();
             await lifecycleManager.rearmCaptureSettlement();
             await lifecycleManager.replayPendingFatalReport();

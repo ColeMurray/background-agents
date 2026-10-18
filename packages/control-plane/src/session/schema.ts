@@ -88,6 +88,8 @@ const EXTERNAL_ACTIONS_TABLES_SQL = `CREATE TABLE IF NOT EXISTS external_actions
   error TEXT,
   lease_token TEXT,
   lease_expires_at INTEGER,
+  reconciliation_attempts INTEGER NOT NULL DEFAULT 0,
+  reconcile_after INTEGER,
   revision INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
