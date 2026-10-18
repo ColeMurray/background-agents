@@ -15,6 +15,10 @@ foundation, live read-only transport canary, then OAuth canary.
 - `McpConnectionDO` persists the immutable logical `mcpconn_*` ID and owner verified against D1. It
   uses the Agents `0.28.1` `MCPClientManager` and `DurableObjectOAuthClientProvider` contracts, but
   the manager is private and is deliberately not installed on an Agents `Lifecycle`.
+- Create and revoke are D1-checkpointed idempotent sagas. Revocation persists `revoking` before
+  closing transport cache, clearing encrypted OAuth rows, tombstoning the broker, and deleting D1
+  metadata. Retries resume from that checkpoint. Failed creation compensates the possibly
+  initialized broker before deleting its D1 row.
 - The Durable Object binding is independently staged and disabled by default. Terraform does not
   bind the management feature flag.
 - Human-only management routes derive ownership from the verified principal. Service actors cannot
@@ -30,20 +34,18 @@ foundation, live read-only transport canary, then OAuth canary.
 
 1. Stage `McpConnectionDO` as the v5 SQLite class with Durable Object bindings disabled, then deploy
    the binding in the second Terraform phase. The workflow retains the binding during rollback.
-2. Add a binding-only initialization contract that ties one broker object to one owner-scoped D1
-   connection and reauthorizes that owner on every control-plane operation.
-3. Run a credential-free read-only transport canary. Treat Agents SQLite server rows as disposable
+2. Run a credential-free read-only transport canary. Treat Agents SQLite server rows as disposable
    cache rebuilt from the D1 connection and immutable snapshot.
-4. Install `MCPClientManager` on `Lifecycle` only after callback routing, CSRF-state ownership, and
+3. Install `MCPClientManager` on `Lifecycle` only after callback routing, CSRF-state ownership, and
    reconnect/delete behavior have eviction tests.
-5. Add a network egress design that closes DNS-rebinding and redirect gaps beyond the current
+4. Add a network egress design that closes DNS-rebinding and redirect gaps beyond the current
    literal/suffix and exact-host policy. Do not rely on the Agents SDK's development-friendly
    loopback policy.
-6. Run one approved-provider OAuth canary and prove that D1 contains only AES-GCM ciphertext and the
+5. Run one approved-provider OAuth canary and prove that D1 contains only AES-GCM ciphertext and the
    broker's SQLite, logs, events, exports, prompts, and Pi storage contain no credential values.
-7. Add discovery-to-review tooling that pins schema hashes and requires explicit human review before
+6. Add discovery-to-review tooling that pins schema hashes and requires explicit human review before
    a tool enters the read-only catalog.
-8. Add the SessionDO-authorized read-only invocation proxy, stable Pi tool projection, timeout and
+7. Add the SessionDO-authorized read-only invocation proxy, stable Pi tool projection, timeout and
    cancellation behavior, output bounds, and wake/restore tests. Tokens remain broker-local.
-9. Keep static secret headers blocked. Do not enable MCP mutations until approval, idempotency,
+8. Keep static secret headers blocked. Do not enable MCP mutations until approval, idempotency,
    execution-ledger, indeterminate-outcome, and executor-grant invalidation contracts land.

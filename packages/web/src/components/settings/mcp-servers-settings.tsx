@@ -459,9 +459,11 @@ function PersonalMcpConnections({ servers }: { servers: McpServerMetadata[] }) {
     try {
       await createMcpConnection({ serverId: server.id });
       await mutate();
-      toast.success("MCP OAuth connection staged");
+      toast.success("Dormant MCP connection staged");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to stage MCP OAuth connection");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to stage dormant MCP connection"
+      );
     }
   }
 
@@ -469,27 +471,29 @@ function PersonalMcpConnections({ servers }: { servers: McpServerMetadata[] }) {
     try {
       await deleteMcpConnection(id);
       await mutate();
-      toast.success("MCP OAuth connection removed");
+      toast.success("Dormant MCP connection removed");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to remove MCP OAuth connection");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to remove dormant MCP connection"
+      );
     }
   }
 
   return (
     <section className="mt-8 border-t border-border pt-6" aria-labelledby="personal-mcp-heading">
       <h3 id="personal-mcp-heading" className="text-base font-medium text-foreground">
-        Personal OAuth connections
+        Dormant personal connections
       </h3>
       {!enabled ? (
         <p className="mt-1 text-sm text-muted-foreground">
-          Personal MCP OAuth is not enabled for this deployment. No credentials or connections are
-          sent to agents.
+          This connection foundation is dormant for this deployment. No credentials, transport, or
+          tools are sent to agents.
         </p>
       ) : (
         <div className="mt-3 space-y-3">
           <p className="text-sm text-muted-foreground">
-            Stage a credential-free catalog server for your account. Live authorization and tool
-            execution remain disabled until the canary gates are complete.
+            Stage a credential-free catalog snapshot for your account. Transport, authorization, and
+            tool execution remain disabled until separate canary gates are complete.
           </p>
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading personal connections...</p>
@@ -514,7 +518,7 @@ function PersonalMcpConnections({ servers }: { servers: McpServerMetadata[] }) {
                     variant="outline"
                     size="xs"
                     onClick={() => remove(connection.id)}
-                    aria-label={`Remove OAuth staging for ${connection.serverName}`}
+                    aria-label={`Remove dormant connection for ${connection.serverName}`}
                   >
                     Remove
                   </Button>
@@ -527,7 +531,7 @@ function PersonalMcpConnections({ servers }: { servers: McpServerMetadata[] }) {
                   variant="outline"
                   size="sm"
                   onClick={() => stage(server)}
-                  aria-label={`Stage OAuth for ${server.name}`}
+                  aria-label={`Stage dormant connection for ${server.name}`}
                 >
                   Stage {server.name}
                 </Button>

@@ -71,6 +71,8 @@ async function catalogSnapshotSha256(
       tools: tools.map((tool) => ({
         stableToolId: tool.stableToolId,
         name: tool.name,
+        title: tool.title ?? null,
+        description: tool.description ?? null,
         inputSchemaSha256: tool.inputSchemaSha256,
         outputSchemaSha256: tool.outputSchemaSha256 ?? null,
       })),
@@ -183,8 +185,58 @@ export class McpConnectionStore {
   }
 
   async getOwned(id: string, ownerUserId: string): Promise<McpConnectionMetadata | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM mcp_connections WHERE id = ? AND owner_user_id = ?")
+      .bind(id, ownerUserId)
+      .first<ConnectionRow>();
+    if (!row) return null;
+    if (row.status === "revoking") return toMetadata(row, []);
     const all = await this.listOwned(ownerUserId);
     return all.find((connection) => connection.id === id) ?? null;
+  }
+
+  /** Revocation authority read that remains available even when a catalog snapshot is corrupt. */
+  async getOwnedForSaga(id: string, ownerUserId: string): Promise<McpConnectionMetadata | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM mcp_connections WHERE id = ? AND owner_user_id = ?")
+      .bind(id, ownerUserId)
+      .first<ConnectionRow>();
+    return row ? toMetadata(row, []) : null;
+  }
+
+  async findOwnedByServer(
+    ownerUserId: string,
+    serverId: string
+  ): Promise<McpConnectionMetadata | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM mcp_connections WHERE owner_user_id = ? AND server_id = ?")
+      .bind(ownerUserId, serverId)
+      .first<ConnectionRow>();
+    if (!row) return null;
+    if (row.status === "revoking") return toMetadata(row, []);
+    return this.getOwned(row.id, ownerUserId);
+  }
+
+  async markRevoking(id: string, ownerUserId: string): Promise<McpConnectionMetadata | null> {
+    const row = await this.db
+      .prepare(
+        `UPDATE mcp_connections SET status = 'revoking', updated_at = ?
+         WHERE id = ? AND owner_user_id = ?
+         RETURNING *`
+      )
+      .bind(Date.now(), id, ownerUserId)
+      .first<ConnectionRow>();
+    return row ? toMetadata(row, []) : null;
+  }
+
+  async deleteRevoking(id: string, ownerUserId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        "DELETE FROM mcp_connections WHERE id = ? AND owner_user_id = ? AND status = 'revoking'"
+      )
+      .bind(id, ownerUserId)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async create(ownerUserId: string, serverId: string): Promise<McpConnectionMetadata> {
@@ -288,13 +340,5 @@ export class McpConnectionStore {
     const connection = await this.getOwned(id, ownerUserId);
     if (!connection) throw new Error("MCP connection not found after insert");
     return connection;
-  }
-
-  async deleteOwned(id: string, ownerUserId: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM mcp_connections WHERE id = ? AND owner_user_id = ?")
-      .bind(id, ownerUserId)
-      .run();
-    return (result.meta?.changes ?? 0) > 0;
   }
 }

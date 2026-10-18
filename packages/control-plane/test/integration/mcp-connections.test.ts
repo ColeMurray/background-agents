@@ -121,6 +121,14 @@ describe("personal MCP connections API", () => {
       connectionId: connection.id,
       ownerUserId: "11111111111111111111111111111111",
     });
+    const retriedCreate = await serviceFetch("https://test.local/mcp-connections", {
+      method: "POST",
+      body: JSON.stringify({ serverId: server.id }),
+    });
+    await expect(retriedCreate.json<McpConnectionMetadata>()).resolves.toMatchObject({
+      id: connection.id,
+      status: "foundation_staged",
+    });
   });
 
   it("rejects static credentials and unsafe endpoints before staging", async () => {
@@ -182,7 +190,12 @@ describe("personal MCP connections API", () => {
       method: "DELETE",
       as: { userId: OWNER_B, role: "member" },
     });
-    expect(remove.status).toBe(404);
+    expect(remove.status).toBe(200);
+    await expect(remove.json()).resolves.toEqual({ ok: true, result: "already_deleted" });
+    const ownerStillReads = await serviceFetch(`https://test.local/mcp-connections/${created.id}`, {
+      as: { userId: OWNER_A, role: "member" },
+    });
+    expect(ownerStillReads.status).toBe(200);
   });
 
   it("rejects a trusted service principal even when it proxies an actor", async () => {
@@ -241,6 +254,7 @@ describe("personal MCP connections API", () => {
     });
 
     expect(removed.status).toBe(200);
+    await expect(removed.json()).resolves.toEqual({ ok: true, result: "deleted" });
     const counts = await env.DB.prepare(
       `SELECT
          (SELECT COUNT(*) FROM mcp_connections WHERE id = ?) AS connections,
@@ -250,6 +264,21 @@ describe("personal MCP connections API", () => {
       .bind(connection.id, connection.id, connection.id)
       .first<{ connections: number; oauth_rows: number; snapshots: number }>();
     expect(counts).toEqual({ connections: 0, oauth_rows: 0, snapshots: 0 });
+    await expect(
+      broker.destroy(connection.id, "11111111111111111111111111111111")
+    ).resolves.toBeUndefined();
+    await expect(
+      broker.destroy(connection.id, "11111111111111111111111111111111")
+    ).resolves.toBeUndefined();
+    await expect(
+      runInMcpConnectionDO(broker, (_instance, state) => {
+        state.abort("test: evict tombstoned MCP broker");
+      })
+    ).rejects.toThrow();
+    const restoredBroker = namespace.get(namespace.idFromName(connection.id));
+    await expect(
+      restoredBroker.destroy(connection.id, "11111111111111111111111111111111")
+    ).resolves.toBeUndefined();
     await expect(storage.put("oauth/token", { refresh_token: "reinserted" })).rejects.toThrow(
       /foreign key/i
     );
@@ -263,11 +292,22 @@ describe("personal MCP connections API", () => {
       .bind(connection.id)
       .first<{ count: number }>();
     expect(oauthRowsAfterReplay?.count).toBe(0);
+    const retriedDelete = await serviceFetch(
+      `https://test.local/mcp-connections/${connection.id}`,
+      { method: "DELETE" }
+    );
+    await expect(retriedDelete.json()).resolves.toEqual({
+      ok: true,
+      result: "already_deleted",
+    });
     await expect(
-      runInMcpConnectionDO(broker, (_instance, state) =>
+      runInMcpConnectionDO(restoredBroker, (_instance, state) =>
         state.storage.get("open-inspect:mcp-deleted")
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({
+      connectionId: connection.id,
+      ownerUserId: "11111111111111111111111111111111",
+    });
   });
 
   it("returns only reviewed read-only tools from the pinned server revision", async () => {
@@ -309,14 +349,14 @@ describe("personal MCP connections API", () => {
       }),
     ]);
     await env.DB.prepare(
-      "UPDATE mcp_connection_tool_snapshots SET tool_name = 'widened' WHERE connection_id = ?"
+      "UPDATE mcp_connection_tool_snapshots SET title = 'Widened model-visible title' WHERE connection_id = ?"
     )
       .bind(created.id)
       .run();
     const widenedSnapshot = await serviceFetch(`https://test.local/mcp-connections/${created.id}`);
     expect(widenedSnapshot.status).toBe(500);
     await env.DB.prepare(
-      "UPDATE mcp_connection_tool_snapshots SET tool_name = 'list_issues' WHERE connection_id = ?"
+      "UPDATE mcp_connection_tool_snapshots SET title = 'List issues' WHERE connection_id = ?"
     )
       .bind(created.id)
       .run();
@@ -358,6 +398,16 @@ describe("personal MCP connections API", () => {
     await expect(readOnlyCatalog.json<McpConnectionMetadata>()).resolves.toMatchObject({
       tools: [expect.objectContaining({ stableToolId: "tool_read_issues_v1" })],
     });
+    await env.DB.prepare(
+      "UPDATE mcp_connection_tool_snapshots SET description = 'corrupt' WHERE connection_id = ?"
+    )
+      .bind(created.id)
+      .run();
+    const revokeCorruptSnapshot = await serviceFetch(
+      `https://test.local/mcp-connections/${created.id}`,
+      { method: "DELETE" }
+    );
+    expect(revokeCorruptSnapshot.status).toBe(200);
   });
 
   it("keeps every Agents OAuth value AES-GCM encrypted and connection-isolated", async () => {

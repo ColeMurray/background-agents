@@ -10,5 +10,5 @@ export interface McpConnectionBrokerStatus {
 export interface McpConnectionBrokerDispatch {
   initialize(connectionId: string, ownerUserId: string): Promise<void>;
   status(connectionId: string): Promise<McpConnectionBrokerStatus>;
-  destroy(connectionId: string): Promise<void>;
+  destroy(connectionId: string, ownerUserId: string): Promise<void>;
 }

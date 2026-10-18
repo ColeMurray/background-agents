@@ -719,6 +719,7 @@ export const mcpConnectionCreateInputSchema = z
 /** Durable connection state; `staged` is intentionally not a live OAuth connection. */
 export const mcpConnectionStatusSchema = z.enum([
   "foundation_staged",
+  "revoking",
   "transport_ready",
   "oauth_authorizing",
   "oauth_ready",

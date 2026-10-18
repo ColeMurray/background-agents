@@ -16,7 +16,7 @@ export async function DELETE(
     });
     return NextResponse.json(await response.json(), { status: response.status });
   } catch (error) {
-    console.error("Failed to remove personal MCP connection:", error);
+    console.error("Failed to remove dormant personal MCP connection:", error);
     return NextResponse.json(
       { error: "Failed to remove personal MCP connection" },
       { status: 500 }

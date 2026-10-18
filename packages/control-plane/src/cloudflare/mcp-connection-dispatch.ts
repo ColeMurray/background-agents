@@ -12,6 +12,6 @@ export function createMcpConnectionBrokerDispatch(
     initialize: (connectionId, ownerUserId) =>
       stub(connectionId).initialize(connectionId, ownerUserId),
     status: (connectionId): Promise<McpConnectionBrokerStatus> => stub(connectionId).status(),
-    destroy: (connectionId) => stub(connectionId).destroy(connectionId),
+    destroy: (connectionId, ownerUserId) => stub(connectionId).destroy(connectionId, ownerUserId),
   };
 }

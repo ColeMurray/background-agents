@@ -17,6 +17,7 @@ import {
 } from "./shared";
 import type { Env } from "../types";
 import { mcpConnectionsEnabled } from "../mcp/feature";
+import { McpConnectionSaga } from "../mcp/connection-saga";
 
 const OWNER_ROUTE = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -60,13 +61,10 @@ async function createConnection(
   if (body instanceof Response) return body;
   try {
     const store = new McpConnectionStore(ctx.db);
-    const connection = await store.create(ctx.principal.userId, body.serverId);
-    try {
-      await env.MCP_CONNECTION.initialize(connection.id, ctx.principal.userId);
-    } catch (brokerError) {
-      await store.deleteOwned(connection.id, ctx.principal.userId);
-      throw brokerError;
-    }
+    const connection = await new McpConnectionSaga(store, env.MCP_CONNECTION).create(
+      ctx.principal.userId,
+      body.serverId
+    );
     return json(connection, 201);
   } catch (errorValue) {
     if (errorValue instanceof McpConnectionValidationError) {
@@ -86,12 +84,12 @@ async function deleteConnection(
   ctx: UserRouteContext
 ): Promise<Response> {
   if (!ctx.db) return error("Database not configured", 503);
-  const store = new McpConnectionStore(ctx.db);
-  const existing = await store.getOwned(params.id, ctx.principal.userId);
-  if (!existing) return error("MCP connection not found", 404);
-  if (env.MCP_CONNECTION) await env.MCP_CONNECTION.destroy(params.id);
-  const deleted = await store.deleteOwned(params.id, ctx.principal.userId);
-  return deleted ? json({ ok: true }) : error("MCP connection not found", 404);
+  if (!env.MCP_CONNECTION) return error("Personal MCP connections are disabled", 503);
+  const result = await new McpConnectionSaga(
+    new McpConnectionStore(ctx.db),
+    env.MCP_CONNECTION
+  ).revoke(ctx.principal.userId, params.id);
+  return json({ ok: true, result });
 }
 
 export const mcpConnectionRoutes = new Hono<ControlPlaneHonoEnv>();

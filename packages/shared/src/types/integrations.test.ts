@@ -407,6 +407,7 @@ describe("personal MCP connection contracts", () => {
   it("keeps the staged lifecycle distinct from live OAuth readiness", () => {
     expect(mcpConnectionStatusSchema.options).toEqual([
       "foundation_staged",
+      "revoking",
       "transport_ready",
       "oauth_authorizing",
       "oauth_ready",

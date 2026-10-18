@@ -89,12 +89,15 @@ afterEach(() => {
 });
 
 describe("McpServersSettings", () => {
-  it("shows the personal OAuth foundation as disabled without exposing a live connect action", () => {
+  it("shows the dormant connection foundation without implying OAuth is available", () => {
     render(<McpServersSettings />);
 
-    expect(screen.getByText("Personal OAuth connections")).toBeInTheDocument();
-    expect(screen.getByText(/not enabled for this deployment/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /stage oauth/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Dormant personal connections")).toBeInTheDocument();
+    expect(screen.getByText(/foundation is dormant/i)).toBeInTheDocument();
+    expect(screen.queryByText(/oauth/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /stage dormant connection/i })
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /connect oauth/i })).not.toBeInTheDocument();
   });
 
@@ -104,7 +107,7 @@ describe("McpServersSettings", () => {
     const user = userEvent.setup();
     render(<McpServersSettings />);
 
-    await user.click(screen.getByRole("button", { name: "Stage OAuth for Server A" }));
+    await user.click(screen.getByRole("button", { name: "Stage dormant connection for Server A" }));
 
     expect(mocks.createMcpConnection).toHaveBeenCalledWith({ serverId: "server-a" });
     await waitFor(() => expect(mocks.mutateConnections).toHaveBeenCalled());

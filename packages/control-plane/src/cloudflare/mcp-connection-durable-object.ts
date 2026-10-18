@@ -11,6 +11,10 @@ type McpConnectionBindings = Pick<WorkerBindings, "DB" | "MCP_OAUTH_ENCRYPTION_K
 const CONNECTION_ID_KEY = "open-inspect:mcp-connection-id";
 const OWNER_USER_ID_KEY = "open-inspect:mcp-owner-user-id";
 const DELETED_KEY = "open-inspect:mcp-deleted";
+interface BrokerTombstone {
+  connectionId: string;
+  ownerUserId: string;
+}
 
 /**
  * Dormant per-connection MCP broker foundation.
@@ -46,7 +50,7 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
   async initialize(connectionId: string, ownerUserId: string): Promise<void> {
     if (!/^mcpconn_[a-f0-9]{32}$/.test(connectionId)) throw new Error("Invalid MCP connection id");
     await this.ctx.blockConcurrencyWhile(async () => {
-      if (await this.ctx.storage.get<boolean>(DELETED_KEY)) {
+      if (await this.ctx.storage.get<BrokerTombstone>(DELETED_KEY)) {
         throw new Error("MCP connection broker has been deleted");
       }
       const [storedConnectionId, storedOwnerUserId] = await Promise.all([
@@ -61,11 +65,15 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
       }
       // eslint-disable-next-line no-restricted-syntax -- Durable Object identity is verified against D1 authority at its composition boundary
       const authority = await this.env.DB.prepare(
-        "SELECT owner_user_id FROM mcp_connections WHERE id = ?"
+        "SELECT owner_user_id, status FROM mcp_connections WHERE id = ?"
       )
         .bind(connectionId)
-        .first<{ owner_user_id: string }>();
-      if (!authority || authority.owner_user_id !== ownerUserId) {
+        .first<{ owner_user_id: string; status: string }>();
+      if (
+        !authority ||
+        authority.owner_user_id !== ownerUserId ||
+        authority.status === "revoking"
+      ) {
         throw new Error("MCP connection identity is not authorized by D1");
       }
       await this.ctx.storage.put({
@@ -109,10 +117,32 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
     };
   }
 
-  async destroy(connectionId: string): Promise<void> {
-    const status = await this.status();
-    if (status.connectionId !== connectionId) {
-      throw new Error("MCP broker deletion targeted a different connection");
+  async destroy(connectionId: string, ownerUserId: string): Promise<void> {
+    const tombstone = await this.ctx.storage.get<BrokerTombstone>(DELETED_KEY);
+    if (tombstone) {
+      if (tombstone.connectionId !== connectionId || tombstone.ownerUserId !== ownerUserId) {
+        throw new Error("MCP broker tombstone belongs to a different connection or owner");
+      }
+      return;
+    }
+    const [storedConnectionId, storedOwnerUserId] = await Promise.all([
+      this.ctx.storage.get<string>(CONNECTION_ID_KEY),
+      this.ctx.storage.get<string>(OWNER_USER_ID_KEY),
+    ]);
+    if (
+      (storedConnectionId && storedConnectionId !== connectionId) ||
+      (storedOwnerUserId && storedOwnerUserId !== ownerUserId)
+    ) {
+      throw new Error("MCP broker deletion targeted a different connection or owner");
+    }
+    // eslint-disable-next-line no-restricted-syntax -- revocation reauthorizes its durable D1 checkpoint before cleanup
+    const authority = await this.env.DB.prepare(
+      "SELECT owner_user_id, status FROM mcp_connections WHERE id = ?"
+    )
+      .bind(connectionId)
+      .first<{ owner_user_id: string; status: string }>();
+    if (!authority || authority.owner_user_id !== ownerUserId || authority.status !== "revoking") {
+      throw new Error("MCP broker revocation is not authorized by D1");
     }
     await this.mcp.closeAllConnections();
     // eslint-disable-next-line no-restricted-syntax -- binding-only broker cleanup removes encrypted OAuth rows before D1 connection deletion
@@ -120,7 +150,10 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
       .bind(connectionId)
       .run();
     await this.ctx.storage.deleteAll();
-    await this.ctx.storage.put(DELETED_KEY, true);
+    await this.ctx.storage.put(DELETED_KEY, {
+      connectionId,
+      ownerUserId,
+    } satisfies BrokerTombstone);
     this.connectionId = undefined;
     this.ownerUserId = undefined;
   }

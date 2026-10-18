@@ -11,7 +11,7 @@ CREATE TABLE mcp_connections (
   endpoint_host           TEXT NOT NULL,
   catalog_snapshot_sha256 TEXT NOT NULL CHECK (length(catalog_snapshot_sha256) = 64),
   status                  TEXT NOT NULL DEFAULT 'foundation_staged'
-                          CHECK (status IN ('foundation_staged', 'transport_ready',
+                          CHECK (status IN ('foundation_staged', 'revoking', 'transport_ready',
                                             'oauth_authorizing', 'oauth_ready', 'failed', 'revoked')),
   created_at              INTEGER NOT NULL,
   updated_at              INTEGER NOT NULL,

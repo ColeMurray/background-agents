@@ -32,7 +32,7 @@ export async function createMcpConnection(
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || "Failed to stage MCP OAuth connection");
+    throw new Error(error.error || "Failed to stage dormant MCP connection");
   }
   return response.json();
 }
@@ -41,6 +41,6 @@ export async function deleteMcpConnection(id: string): Promise<void> {
   const response = await browserApiFetch(`${MCP_CONNECTIONS_KEY}/${id}`, { method: "DELETE" });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || "Failed to remove MCP OAuth connection");
+    throw new Error(error.error || "Failed to remove dormant MCP connection");
   }
 }
