@@ -37,11 +37,14 @@ continue and be deleted normally.
 
 ## Validation
 
-- Control-plane unit: 268 files, 4,804 passed, 1 skipped.
-- Writable workspace/policy/event focused unit: 48 passed.
+- Control-plane unit: 270 files, 4,824 passed, 1 skipped.
+- Writable workspace/policy/event focused unit: 68 passed; canonical shared contract focused unit: 8
+  passed.
 - PiSessionDO workerd integration: 15 passed, including missing-file creation and forced eviction
   dirty-state recovery.
-- Production Terraform: 80 passed; mode-focused subset: 4 passed.
+- Workspace Terraform mode subset: 4 passed. The full production run passed 79 tests and its final
+  unrelated case failed while the mocked Vercel provider fetched its framework catalog over the
+  network and timed out.
 - Docs: 44 passed and production build completed all 185 static pages.
 - Repository typecheck, control-plane lint, Prettier, Terraform validate/fmt, and the Worker bundle
   boundary test passed. The bundle still excludes Computer backends, Git modules, and `just-bash`.

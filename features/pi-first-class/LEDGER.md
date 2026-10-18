@@ -90,11 +90,13 @@ Rule: tick only with evidence on the same line.
       unsafe replay, sequential rounds, and one global FIFO
 - [x] Deep audit — two local trace/security/recovery rounds plus architecture and watchdog reviews;
       undefined edit details, policy ownership, entry exhaustion, missing-file workerd behavior,
-      eviction recovery, nested redaction, and contradictory docs resolved
-- [x] `/simplify` — one quota filesystem proxy, one workspace-wide FIFO, mandatory capability
-      bundle, and one shared tool-effect metadata contract; no external-action gateway duplicated
-- [x] Narrow and full relevant validation green — 4,804 control-plane unit tests, 15 PiSessionDO
-      workerd tests, 80 production Terraform tests, 44 docs tests, docs build, root typecheck, lint,
+      eviction recovery, durable capability snapshots, nested redaction, scratch/overlay separation,
+      and contradictory docs resolved
+- [x] `/simplify` — one quota filesystem proxy, one workspace-wide FIFO, canonical shared effects
+      and extension slot, and one composite policy; no duplicate effect contract or external-action
+      gateway
+- [x] Narrow and full relevant validation green — 4,824 control-plane unit tests, 15 PiSessionDO
+      workerd tests, 4 workspace Terraform tests, 44 docs tests, docs build, root typecheck, lint,
       format, Terraform validate/fmt, and Worker bundle boundary
 - [ ] Committed
 - [x] Slice report — `features/pi-first-class/SLICE-3.md`

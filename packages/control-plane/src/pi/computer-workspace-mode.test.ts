@@ -10,8 +10,7 @@ describe("resolveComputerWorkspaceMode", () => {
     expect(resolveComputerWorkspaceMode(value)).toBe("read_only");
   });
 
-  it.each(["enabled", "writable", " WRITABLE "])(
-    "enables the writable workspace for %s",
-    (value) => expect(resolveComputerWorkspaceMode(value)).toBe("enabled")
+  it.each(["enabled", "writable", " WRITABLE "])("enables the writable workspace for %s", (value) =>
+    expect(resolveComputerWorkspaceMode(value)).toBe("enabled")
   );
 });
