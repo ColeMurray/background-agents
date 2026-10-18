@@ -16,6 +16,23 @@ describe("sandbox artifact ingress", () => {
 });
 
 describe("sandbox command execution ingress", () => {
+  it("identifies an execution-only ready event without an agent harness", () => {
+    const parsed = sandboxIngressEventSchema.safeParse({
+      type: "ready",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
+      runtimeMode: "execution",
+      bridgeInstanceId: "bridge-1",
+      bridgeRestarted: true,
+      opencodeSessionId: null,
+    });
+    expect(parsed.success && parsed.data).toMatchObject({
+      runtimeMode: "execution",
+      bridgeInstanceId: "bridge-1",
+      bridgeRestarted: true,
+    });
+  });
+
   it.each(["command_started", "command_output", "command_completed"] as const)(
     "admits %s through the canonical sandbox event boundary",
     (type) => {

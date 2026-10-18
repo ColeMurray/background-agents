@@ -26,6 +26,8 @@ const commandRowSchema = z.object({
   operation_id: z.string(),
   request_json: z.string(),
   state: commandStateSchema,
+  sandbox_id: z.string().nullable(),
+  bridge_instance_id: z.string().nullable(),
   last_output_sequence: z.number(),
   output_bytes: z.number(),
   output_truncated: z.number(),
@@ -34,6 +36,7 @@ const commandRowSchema = z.object({
   error: z.string().nullable(),
   created_at: z.number(),
   dispatched_at: z.number().nullable(),
+  deadline_at: z.number().nullable(),
   started_at: z.number().nullable(),
   completed_at: z.number().nullable(),
 });
@@ -54,6 +57,8 @@ export interface SandboxCommandRecord {
   operationId: string;
   request: ExecuteCommand;
   state: SandboxCommandState;
+  sandboxId: string | null;
+  bridgeInstanceId: string | null;
   lastOutputSequence: number;
   outputBytes: number;
   outputTruncated: boolean;
@@ -62,6 +67,7 @@ export interface SandboxCommandRecord {
   error: string | null;
   createdAt: number;
   dispatchedAt: number | null;
+  deadlineAt: number | null;
   startedAt: number | null;
   completedAt: number | null;
   output: Array<{ sequence: number; stream: "stdout" | "stderr"; data: string; createdAt: number }>;
@@ -166,6 +172,8 @@ export class SandboxCommandRepository {
       operationId: row.data.operation_id,
       request: parsedRequest.data,
       state: row.data.state,
+      sandboxId: row.data.sandbox_id,
+      bridgeInstanceId: row.data.bridge_instance_id,
       lastOutputSequence: row.data.last_output_sequence,
       outputBytes: row.data.output_bytes,
       outputTruncated: row.data.output_truncated === 1,
@@ -174,14 +182,32 @@ export class SandboxCommandRepository {
       error: row.data.error,
       createdAt: row.data.created_at,
       dispatchedAt: row.data.dispatched_at,
+      deadlineAt: row.data.deadline_at,
       startedAt: row.data.started_at,
       completedAt: row.data.completed_at,
       output,
     };
   }
 
-  markDispatched(commandId: string, now: number): boolean {
-    return this.transition(commandId, ["queued"], "dispatched", "dispatched_at", now);
+  markDispatched(
+    commandId: string,
+    sandboxId: string,
+    bridgeInstanceId: string,
+    now: number,
+    deadlineAt: number
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox_commands SET state = 'dispatched', sandbox_id = ?, bridge_instance_id = ?,
+         dispatched_at = COALESCE(dispatched_at, ?), deadline_at = COALESCE(deadline_at, ?)
+       WHERE id = ? AND state = 'queued'`,
+      sandboxId,
+      bridgeInstanceId,
+      now,
+      deadlineAt,
+      commandId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   recordStarted(commandId: string, now: number): boolean {
@@ -276,39 +302,111 @@ export class SandboxCommandRepository {
       this.sql.exec(
         `UPDATE sandbox_commands
          SET state = ?, exit_code = ?, signal = ?, error = ?, completed_at = ?
+             , output_truncated = CASE WHEN ? = 1 THEN 1 ELSE output_truncated END
          WHERE id = ?`,
         state,
         event.exitCode,
         event.signal,
         event.error ?? null,
         now,
+        event.outputTruncated ? 1 : 0,
         event.commandId
       );
       return true;
     });
   }
 
-  recoveryCommands(): SandboxExecutionCommand[] {
-    return this.sql
-      .exec(
-        `SELECT id FROM sandbox_commands
-         WHERE state IN ('queued', 'dispatched', 'running', 'cancelling')
-         ORDER BY created_at, id`
-      )
-      .toArray()
-      .map((raw) => z.object({ id: z.string() }).parse(raw).id)
-      .map((id) => this.require(id))
-      .map((command) => {
-        if (command.state === "queued") return command.request;
-        if (command.state === "cancelling") {
-          return { type: "command_cancel", commandId: command.id };
+  markIndeterminate(commandId: string, error: string, now: number): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox_commands SET state = 'indeterminate', error = ?, completed_at = ?
+       WHERE id = ? AND state IN ('dispatched', 'running', 'cancelling')`,
+      error,
+      now,
+      commandId
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
+  }
+
+  claimExpired(now: number): string[] {
+    return this.transaction(() => {
+      const ids = this.sql
+        .exec(
+          `SELECT id FROM sandbox_commands
+           WHERE state IN ('dispatched', 'running') AND deadline_at IS NOT NULL AND deadline_at <= ?
+           ORDER BY deadline_at, id`,
+          now
+        )
+        .toArray()
+        .map((raw) => z.object({ id: z.string() }).parse(raw).id);
+      for (const id of ids) {
+        this.sql.exec(
+          `UPDATE sandbox_commands SET state = 'cancelling', error = 'Command deadline exceeded'
+           WHERE id = ? AND state IN ('dispatched', 'running')`,
+          id
+        );
+      }
+      return ids;
+    });
+  }
+
+  getNextDeadline(): number | null {
+    const row = z.object({ deadline: z.number().nullable() }).parse(
+      this.sql
+        .exec(
+          `SELECT MIN(deadline_at) AS deadline FROM sandbox_commands
+             WHERE state IN ('dispatched', 'running')`
+        )
+        .one()
+    );
+    return row.deadline;
+  }
+
+  recoveryCommands(
+    sandboxId: string,
+    bridgeInstanceId: string,
+    now: number
+  ): SandboxExecutionCommand[] {
+    return this.transaction(() => {
+      const commands = this.sql
+        .exec(
+          `SELECT id FROM sandbox_commands
+           WHERE state IN ('queued', 'dispatched', 'running', 'cancelling')
+           ORDER BY created_at, id`
+        )
+        .toArray()
+        .map((raw) => z.object({ id: z.string() }).parse(raw).id)
+        .map((id) => this.require(id));
+      const recoverable: SandboxExecutionCommand[] = [];
+      for (const command of commands) {
+        if (command.state === "queued") {
+          recoverable.push(command.request);
+          continue;
         }
-        return {
+        if (command.sandboxId !== sandboxId || command.bridgeInstanceId !== bridgeInstanceId) {
+          this.sql.exec(
+            `UPDATE sandbox_commands
+             SET state = 'indeterminate',
+                 error = 'Sandbox generation was replaced before command completion',
+                 completed_at = ?
+             WHERE id = ? AND state IN ('dispatched', 'running', 'cancelling')`,
+            now,
+            command.id
+          );
+          continue;
+        }
+        if (command.state === "cancelling") {
+          recoverable.push({ type: "command_cancel", commandId: command.id });
+          continue;
+        }
+        recoverable.push({
           type: "command_replay",
           commandId: command.id,
           afterSequence: command.lastOutputSequence,
-        };
-      });
+        });
+      }
+      return recoverable;
+    });
   }
 
   private require(commandId: string): SandboxCommandRecord {

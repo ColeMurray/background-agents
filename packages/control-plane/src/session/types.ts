@@ -14,6 +14,7 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
 import type { GitPushSpec } from "../source-control";
+import { sandboxRuntimeModeSchema } from "@open-inspect/shared";
 import { z } from "zod";
 
 // Database row types (match SQLite schema)
@@ -214,6 +215,8 @@ export const sandboxRowSchema = z.object({
    */
   fenced: z.number(),
   startup_rejected: z.number().default(0),
+  runtime_mode: sandboxRuntimeModeSchema.removeDefault().optional(),
+  execution_bridge_id: z.string().nullable().optional(),
   created_at: z.number(),
 });
 

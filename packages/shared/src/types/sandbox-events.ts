@@ -5,6 +5,7 @@ import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
 import { sandboxExecutionEventSchemas } from "./sandbox-execution";
+import { sandboxRuntimeModeSchema } from "./sandbox-execution";
 
 const recordSchema = z.record(z.string(), z.unknown());
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
@@ -106,6 +107,10 @@ const nonArtifactSandboxEventSchemas = [
     // Emitted after the runtime attaches its harness. This is the readiness
     // signal that moves the sandbox row to `ready`.
     type: z.literal("ready"),
+    /** Absent on legacy/default agent runtimes. */
+    runtimeMode: sandboxRuntimeModeSchema.removeDefault().optional(),
+    bridgeInstanceId: z.string().min(1).optional(),
+    bridgeRestarted: z.boolean().optional(),
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
     harness: harnessIdSchema.optional(),

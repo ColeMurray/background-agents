@@ -135,6 +135,8 @@ const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands 
   operation_id TEXT NOT NULL,
   request_json TEXT NOT NULL,
   state TEXT NOT NULL,
+  sandbox_id TEXT,
+  bridge_instance_id TEXT,
   last_output_sequence INTEGER NOT NULL DEFAULT -1,
   output_bytes INTEGER NOT NULL DEFAULT 0,
   output_truncated INTEGER NOT NULL DEFAULT 0,
@@ -143,6 +145,7 @@ const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands 
   error TEXT,
   created_at INTEGER NOT NULL,
   dispatched_at INTEGER,
+  deadline_at INTEGER,
   started_at INTEGER,
   completed_at INTEGER
 );
@@ -326,6 +329,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
   startup_rejected INTEGER NOT NULL DEFAULT 0,        -- rejected startup retains a cleanup obligation
+  runtime_mode TEXT NOT NULL DEFAULT 'agent',         -- 'agent' | 'execution'
+  execution_bridge_id TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -404,7 +409,11 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 
 import { createLogger } from "../logger";
 import type { PiFeatureId } from "@open-inspect/shared/pi-feature-capabilities";
-import { PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID } from "@open-inspect/shared/pi-migration-reservations";
+import {
+  PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+} from "@open-inspect/shared/pi-migration-reservations";
 import type { SqlStorage } from "./sql-storage";
 
 const schemaLog = createLogger("schema");
@@ -889,9 +898,22 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: PI_RESULT_RECEIPTS_TABLE_SQL,
   },
   {
-    id: 58,
+    id: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
     description: "Persist sandbox command execution ledger",
+    feature: "sandboxExecution",
     run: SANDBOX_COMMANDS_TABLE_SQL,
+  },
+  {
+    id: PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+    description: "Record sandbox runtime mode",
+    feature: "sandboxExecution",
+    run: (sql) => {
+      runMigration(
+        sql,
+        "ALTER TABLE sandbox ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'agent'"
+      );
+      runMigration(sql, "ALTER TABLE sandbox ADD COLUMN execution_bridge_id TEXT");
+    },
   },
   {
     id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,

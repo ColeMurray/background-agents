@@ -4,6 +4,8 @@ export const MAX_SANDBOX_COMMAND_TIMEOUT_MS = 60 * 60 * 1_000;
 export const MAX_SANDBOX_COMMAND_ARGV_ITEMS = 256;
 export const MAX_SANDBOX_COMMAND_ARG_BYTES = 32 * 1024;
 export const MAX_SANDBOX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+export const SANDBOX_EXECUTION_POLICY_CLASS = "sandbox_execution" as const;
+export const sandboxExecutionPolicyClassSchema = z.literal(SANDBOX_EXECUTION_POLICY_CLASS);
 
 export const sandboxRuntimeModeSchema = z.enum(["agent", "execution"]).default("agent");
 export type SandboxRuntimeMode = z.infer<typeof sandboxRuntimeModeSchema>;
@@ -25,6 +27,7 @@ const workspacePathSchema = z
 const commandExecuteSchema = z
   .object({
     type: z.literal("command_execute"),
+    policyClass: sandboxExecutionPolicyClassSchema,
     commandId: commandIdSchema,
     purpose: sandboxCommandPurposeSchema,
     argv: z
@@ -78,6 +81,13 @@ export const sandboxExecutionEventSchemas = [
     data: z.string().max(MAX_SANDBOX_COMMAND_OUTPUT_BYTES),
   }),
   executionEventBaseSchema.extend({
+    type: z.literal("command_replay_gap"),
+    requestedAfterSequence: z.number().int().min(-1),
+    firstAvailableSequence: z.number().int().nonnegative().nullable(),
+    lastSequence: z.number().int().min(-1),
+    reason: z.enum(["unknown_command", "history_truncated"]),
+  }),
+  executionEventBaseSchema.extend({
     type: z.literal("command_completed"),
     outcome: z.enum(["succeeded", "failed", "cancelled", "timed_out"]),
     exitCode: z.number().int().nullable(),
@@ -85,6 +95,7 @@ export const sandboxExecutionEventSchemas = [
     /** -1 when the process emitted no stdout or stderr chunks. */
     lastSequence: z.number().int().min(-1),
     error: z.string().max(4096).optional(),
+    outputTruncated: z.boolean().optional(),
   }),
 ] as const;
 

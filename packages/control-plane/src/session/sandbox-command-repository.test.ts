@@ -9,6 +9,7 @@ import {
 
 const execute = {
   type: "command_execute" as const,
+  policyClass: "sandbox_execution" as const,
   commandId: "cmd-1",
   purpose: "test" as const,
   argv: ["npm", "test"],
@@ -51,7 +52,7 @@ describe("SandboxCommandRepository", () => {
     const commands = repository();
     commands.admit(execute, "pi-operation-1", 100);
 
-    expect(commands.markDispatched("cmd-1", 110)).toBe(true);
+    expect(commands.markDispatched("cmd-1", "sandbox-1", "bridge-1", 110, 30_110)).toBe(true);
     expect(commands.recordStarted("cmd-1", 120)).toBe(true);
     expect(
       commands.recordOutput(
@@ -122,23 +123,64 @@ describe("SandboxCommandRepository", () => {
   it("turns cancellation into a durable recovery command", () => {
     const commands = repository();
     commands.admit(execute, "pi-operation-1", 100);
-    commands.markDispatched("cmd-1", 110);
+    commands.markDispatched("cmd-1", "sandbox-1", "bridge-1", 110, 30_110);
     commands.recordStarted("cmd-1", 120);
 
     expect(commands.requestCancellation("cmd-1", 130)).toBe("cancelling");
-    expect(commands.recoveryCommands()).toEqual([{ type: "command_cancel", commandId: "cmd-1" }]);
+    expect(commands.recoveryCommands("sandbox-1", "bridge-1", 140)).toEqual([
+      { type: "command_cancel", commandId: "cmd-1" },
+    ]);
   });
 
   it("replays queued commands and running commands from the last persisted sequence", () => {
     const commands = repository();
     commands.admit(execute, "pi-operation-1", 100);
     commands.admit({ ...execute, commandId: "cmd-2" }, "pi-operation-2", 101);
-    commands.markDispatched("cmd-2", 110);
+    commands.markDispatched("cmd-2", "sandbox-1", "bridge-1", 110, 30_110);
     commands.recordStarted("cmd-2", 120);
 
-    expect(commands.recoveryCommands()).toEqual([
+    expect(commands.recoveryCommands("sandbox-1", "bridge-1", 130)).toEqual([
       execute,
       { type: "command_replay", commandId: "cmd-2", afterSequence: -1 },
     ]);
+  });
+
+  it("marks commands from a replaced sandbox generation indeterminate", () => {
+    const commands = repository();
+    commands.admit(execute, "pi-operation-1", 100);
+    commands.markDispatched("cmd-1", "sandbox-old", "bridge-old", 110, 30_110);
+    commands.recordStarted("cmd-1", 120);
+
+    expect(commands.recoveryCommands("sandbox-new", "bridge-new", 130)).toEqual([]);
+    expect(commands.get("cmd-1")).toMatchObject({
+      state: "indeterminate",
+      error: "Sandbox generation was replaced before command completion",
+      completedAt: 130,
+    });
+  });
+
+  it("marks commands from a restarted bridge process indeterminate", () => {
+    const commands = repository();
+    commands.admit(execute, "pi-operation-1", 100);
+    commands.markDispatched("cmd-1", "sandbox-1", "bridge-old", 110, 30_110);
+    commands.recordStarted("cmd-1", 120);
+
+    expect(commands.recoveryCommands("sandbox-1", "bridge-new", 130)).toEqual([]);
+    expect(commands.get("cmd-1")?.state).toBe("indeterminate");
+  });
+
+  it("claims expired commands from the shared session alarm deadline", () => {
+    const commands = repository();
+    commands.admit(execute, "pi-operation-1", 100);
+    commands.markDispatched("cmd-1", "sandbox-1", "bridge-1", 110, 500);
+
+    expect(commands.getNextDeadline()).toBe(500);
+    expect(commands.claimExpired(499)).toEqual([]);
+    expect(commands.claimExpired(500)).toEqual(["cmd-1"]);
+    expect(commands.get("cmd-1")).toMatchObject({
+      state: "cancelling",
+      error: "Command deadline exceeded",
+    });
+    expect(commands.getNextDeadline()).toBeNull();
   });
 });

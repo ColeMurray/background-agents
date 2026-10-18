@@ -16,6 +16,7 @@ describe("sandbox execution protocol", () => {
     expect(
       sandboxExecutionCommandSchema.parse({
         type: "command_execute",
+        policyClass: "sandbox_execution",
         commandId: "cmd-1",
         purpose: "test",
         argv: ["npm", "test", "--", "unit"],
@@ -24,6 +25,7 @@ describe("sandbox execution protocol", () => {
       })
     ).toEqual({
       type: "command_execute",
+      policyClass: "sandbox_execution",
       commandId: "cmd-1",
       purpose: "test",
       argv: ["npm", "test", "--", "unit"],
@@ -33,6 +35,7 @@ describe("sandbox execution protocol", () => {
     expect(
       sandboxExecutionCommandSchema.safeParse({
         type: "command_execute",
+        policyClass: "sandbox_execution",
         commandId: "cmd-1",
         purpose: "shell",
         command: "printenv",
@@ -45,6 +48,7 @@ describe("sandbox execution protocol", () => {
   it("rejects empty argv, workspace escapes, and unbounded timeouts", () => {
     const base = {
       type: "command_execute",
+      policyClass: "sandbox_execution",
       commandId: "cmd-1",
       purpose: "build",
       argv: ["npm", "run", "build"],
@@ -94,5 +98,33 @@ describe("sandbox execution protocol", () => {
         ackId: "command_completed:cmd-1",
       })
     ).toMatchObject({ type: "command_completed", outcome: "failed", exitCode: 1 });
+  });
+
+  it("represents replay gaps and output truncation explicitly", () => {
+    expect(
+      sandboxExecutionEventSchema.parse({
+        type: "command_replay_gap",
+        commandId: "cmd-1",
+        requestedAfterSequence: 3,
+        firstAvailableSequence: null,
+        lastSequence: -1,
+        reason: "unknown_command",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+      })
+    ).toMatchObject({ type: "command_replay_gap", reason: "unknown_command" });
+    expect(
+      sandboxExecutionEventSchema.parse({
+        type: "command_completed",
+        commandId: "cmd-1",
+        outcome: "succeeded",
+        exitCode: 0,
+        signal: null,
+        lastSequence: 2,
+        outputTruncated: true,
+        sandboxId: "sandbox-1",
+        timestamp: 2,
+      })
+    ).toMatchObject({ outputTruncated: true });
   });
 });
