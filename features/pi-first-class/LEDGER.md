@@ -73,7 +73,7 @@ Rule: tick only with evidence on the same line.
       reimplementation, no backend imports
 - [x] Narrow validation green — full typecheck/lint/format; production Terraform 79/79; docs 44/44;
       clean npm ci
-- [ ] Committed
+- [x] Committed — `0c001d02` (`feat: add read-only Pi workspace`)
 - [x] Slice report — `features/pi-first-class/SLICE-2.md`
 
 ### Slice 3: permission and audit extension
