@@ -83,6 +83,10 @@ export async function handleCreateSession(
   const parsed = await parseCreateSessionInput(request);
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
+  const harness = getValidHarnessOrDefault(body.harness);
+  const repositoryResolutionOptions = {
+    checkoutLayout: harness === "pi" ? ("position" as const) : ("name" as const),
+  };
 
   // Identity comes from the verified principal; caller-asserted identity/SCM
   // body fields are rejected. SCM credentials flow only through
@@ -143,10 +147,24 @@ export async function handleCreateSession(
       new EnvironmentStore(ctx.db),
       body.environmentId
     );
-    repositories = await resolveSessionRepositories(env, envInputs, ctx, logger);
+    repositories = await resolveSessionRepositories(
+      env,
+      envInputs,
+      ctx,
+      logger,
+      undefined,
+      repositoryResolutionOptions
+    );
     environmentId = body.environmentId;
   } else if (body.repositories) {
-    repositories = await resolveSessionRepositories(env, body.repositories, ctx, logger);
+    repositories = await resolveSessionRepositories(
+      env,
+      body.repositories,
+      ctx,
+      logger,
+      undefined,
+      repositoryResolutionOptions
+    );
   }
 
   if (repositories) {
@@ -230,7 +248,6 @@ export async function handleCreateSession(
   }
 
   // Validate harness, model and reasoning effort once for both DO init and D1 index
-  const harness = getValidHarnessOrDefault(body.harness);
   let selection;
   try {
     selection = await resolveHarnessSelection(ctx.db, env, {

@@ -213,6 +213,7 @@ export default defineConfig({
             WEB_APP_URL: "https://app.test.local",
             APP_NAME: "Open-Inspect",
             PI_WORKSPACE_MODE: codeModeIntegration ? "read_only" : "writable",
+            PI_REPOSITORY_EDITING_MODE: codeModeIntegration ? "off" : "enabled",
             PI_SANDBOX_EXECUTION_MODE: codeModeIntegration ? "off" : "enabled",
             PI_CODE_MODE: codeModeIntegration ? "enabled" : "off",
             PI_EXTERNAL_ACTIONS_MODE: codeModeIntegration ? "off" : "enabled",

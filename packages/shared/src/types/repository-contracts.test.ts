@@ -118,6 +118,21 @@ describe("sessionRepositoriesInputSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts duplicate repoName across owners only for position-rooted Pi sessions", () => {
+    const repositories = [
+      { repoOwner: "acme", repoName: "app" },
+      { repoOwner: "globex", repoName: "app" },
+    ];
+
+    expect(createSessionRequestSchema.safeParse({ harness: "pi", repositories }).success).toBe(
+      true
+    );
+    expect(createSessionRequestSchema.safeParse({ repositories }).success).toBe(false);
+    expect(
+      createSessionRequestSchema.safeParse({ harness: "opencode", repositories }).success
+    ).toBe(false);
+  });
 });
 
 describe("createSessionRequestSchema repositories", () => {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { piRepositoryPinsSchema } from "./session-context-contract";
 import {
   piRepositoryMaterializationBatchSchema,
   piRepositoryMaterializationManifestSchema,
   piRepositoryMaterializationRequestSchema,
   piRepositoryMaterializationSchema,
-  piRepositoryPinsSchema,
-} from "./session-context-contract";
+} from "./repository-materialization-contract";
 
 const FULL_SHA = "a".repeat(40);
 

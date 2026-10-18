@@ -2,12 +2,14 @@ import type { SessionSkillStore } from "../../../db/session-skills";
 import type { PiRepositoryTools } from "../../../pi/repository-tools";
 import {
   piRepositoryToolRequestSchema,
-  piRepositoryMaterializationBatchSchema,
-  piRepositoryMaterializationManifestSchema,
-  piRepositoryMaterializationRequestSchema,
   piSessionContextRequestSchema,
   piSessionContextSchema,
 } from "../../../pi/session-context-contract";
+import {
+  piRepositoryMaterializationBatchSchema,
+  piRepositoryMaterializationManifestSchema,
+  piRepositoryMaterializationRequestSchema,
+} from "../../../pi/repository-materialization-contract";
 import type { MessageRepository } from "../../message-repository";
 import type { PiCredentialService } from "../../pi-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
@@ -45,7 +47,7 @@ interface ExternalActionBridge {
   scheduleReconciliation?(deadline: number): Promise<void>;
 }
 import type { SessionDiffService } from "../../diffs/service";
-import { SourceControlProviderError } from "../../../source-control";
+import { publicSourceControlError } from "../../../source-control";
 
 interface PiBridgeHandlerOptions {
   sessions: Pick<SessionCoreRepository, "getSession" | "getSessionRepositories">;
@@ -182,16 +184,14 @@ export class PiBridgeHandler {
             );
       return Response.json(materialization, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
-      if (error instanceof SourceControlProviderError && error.errorType === "transient") {
+      const publicError = publicSourceControlError(error, "Repository materialization failed");
+      if (publicError.retryable) {
         return Response.json(
-          { error: "Repository provider is temporarily unavailable" },
+          { error: publicError.message },
           { status: 503, headers: { "Retry-After": "1" } }
         );
       }
-      return Response.json(
-        { error: error instanceof Error ? error.message : "Repository materialization failed" },
-        { status: 400 }
-      );
+      return Response.json({ error: publicError.message }, { status: 400 });
     }
   }
 

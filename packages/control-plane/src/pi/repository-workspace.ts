@@ -1,19 +1,18 @@
-import { createTwoFilesPatch, diffLines } from "diff";
 import {
-  SESSION_DIFF_MAX_FILE_PATCH_BYTES,
   SESSION_DIFF_MAX_FILES,
-  SESSION_DIFF_MAX_TOTAL_PATCH_BYTES,
-  sessionDiffUploadSchema,
-  type SessionDiffFileUpload,
   type SessionDiffUpload,
 } from "@open-inspect/shared/types/session-diffs";
 import { z } from "zod";
 import {
   PI_REPOSITORY_MAX_FILE_BYTES,
   type PiRepositoryMaterialization,
-} from "./session-context-contract";
+} from "./repository-materialization-contract";
 import { FULL_GIT_OBJECT_ID_PATTERN } from "../source-control/git-object-id";
 import { readBoundedBytes } from "../http/bounded-body";
+import {
+  assembleSessionTextDiff,
+  type SessionTextDiffRepository,
+} from "../session/diffs/assembler";
 
 const METADATA_ROOT = "/.open-inspect/repositories";
 const STAGING_ROOT = "/.open-inspect/staging";
@@ -121,123 +120,119 @@ export class PiRepositoryWorkspace {
     });
   }
 
-  prepareMutation(
+  runMutation<T>(
     tool: RepositoryMutationName,
-    args: Record<string, unknown>
-  ): Promise<PreparedRepositoryMutation> {
+    args: Record<string, unknown>,
+    execute: () => Promise<T>,
+    publish: (bundle: SessionDiffUpload) => Promise<void>,
+    triggerMessageId: () => Promise<string | null>
+  ): Promise<T> {
     return this.enqueue(async () => {
-      const request = repositoryMutationSchema.parse({ tool, arguments: args });
-      if (request.tool === "delete" && request.arguments.recursive) {
-        throw new Error("Repository editing supports file deletion only");
+      const mutation = await this.prepareMutationUnlocked(tool, args);
+      let result: T | undefined;
+      let executionError: unknown;
+      let executionFailed = false;
+      try {
+        result = await execute();
+      } catch (error) {
+        executionFailed = true;
+        executionError = error;
       }
-      const target = this.resolveTarget(request.arguments.path);
-      const existingStat = await this.statOrNull(target.absolutePath);
-      const existingText = existingStat ? await this.readTextFile(target.absolutePath) : null;
-      if (request.tool !== "write" && existingText === null) {
-        throw new Error("Repository mutation requires an existing file");
-      }
-      if (request.tool === "write") assertBoundedText(request.arguments.content);
-      if (request.tool === "edit") {
-        let maximumBytes = new TextEncoder().encode(existingText ?? "").byteLength;
-        for (const edit of request.arguments.edits) {
-          assertBoundedText(edit.oldText);
-          assertBoundedText(edit.newText);
-          maximumBytes += new TextEncoder().encode(edit.newText).byteLength;
-        }
-        if (maximumBytes > MAX_TEXT_FILE_BYTES) {
-          throw new Error(`Repository text exceeds ${MAX_TEXT_FILE_BYTES} bytes`);
-        }
-      }
-      await this.ensureBaseline(target, existingText);
-      const netChanges = await this.reconcileNetChanges();
-      const changedPaths = netChanges.get(target.manifest.repository.position) ?? new Set<string>();
-      const changedFileCount = [...netChanges.values()].reduce((sum, paths) => sum + paths.size, 0);
-      if (!changedPaths.has(target.relativePath)) {
-        if (changedFileCount >= this.maxChangedFiles) {
-          throw new Error("Too many changed repository files");
-        }
-        changedPaths.add(target.relativePath);
-        await this.writeChangedPaths(target.manifest.repository.position, changedPaths);
-      }
-      const mutationKey = this.mutationKey(
-        target.manifest.repository.position,
-        target.relativePath
-      );
-      this.pendingMutations.set(mutationKey, (this.pendingMutations.get(mutationKey) ?? 0) + 1);
-      return { position: target.manifest.repository.position, path: target.relativePath };
-    });
-  }
-
-  completeMutation(mutation: PreparedRepositoryMutation): Promise<void> {
-    return this.enqueue(async () => {
-      const key = this.mutationKey(mutation.position, mutation.path);
-      const pending = this.pendingMutations.get(key) ?? 0;
-      if (pending <= 1) this.pendingMutations.delete(key);
-      else this.pendingMutations.set(key, pending - 1);
-      await this.reconcileNetChanges();
+      await this.completeMutationUnlocked(mutation);
+      await publish(await this.captureDiffUnlocked(await triggerMessageId()));
+      if (executionFailed) throw executionError;
+      return result as T;
     });
   }
 
   captureDiff(triggerMessageId: string | null): Promise<SessionDiffUpload> {
-    return this.enqueue(async () => {
-      const repositories = [];
-      let totalPatchBytes = 0;
-      const netChanges = await this.reconcileNetChanges();
-      for (const manifest of [...this.manifests.values()].sort(
-        (a, b) => a.repository.position - b.repository.position
-      )) {
-        const changedPaths = [...(netChanges.get(manifest.repository.position) ?? new Set())];
-        const files: SessionDiffFileUpload[] = [];
-        for (const path of changedPaths) {
-          const tracked = manifest.files.find((file) => file.path === path);
-          const absolutePath = `${manifest.repository.root}/${path}`;
-          const current = await this.readTextFileOrNull(absolutePath);
-          const previous = tracked
-            ? await this.readTextFile(this.baselinePath(manifest.repository.position, path))
-            : null;
-          if (previous === current) continue;
-          const status = previous === null ? "added" : current === null ? "deleted" : "modified";
-          const oldText = previous ?? "";
-          const newText = current ?? "";
-          const { additions, deletions } = lineStats(oldText, newText);
-          const patch = createGitPatch(path, oldText, newText, status, tracked?.mode ?? "100644");
-          const patchBytes = new TextEncoder().encode(patch).byteLength;
-          const renderable =
-            patchBytes <= SESSION_DIFF_MAX_FILE_PATCH_BYTES &&
-            totalPatchBytes + patchBytes <= SESSION_DIFF_MAX_TOTAL_PATCH_BYTES;
-          if (renderable) totalPatchBytes += patchBytes;
-          files.push({
-            id: await fileId(manifest.repository.position, path),
-            path,
-            status,
-            additions,
-            deletions,
-            renderState: renderable ? "renderable" : "too_large",
-            oldMode: status === "added" ? "000000" : (tracked?.mode ?? "100644"),
-            newMode: status === "deleted" ? "000000" : (tracked?.mode ?? "100644"),
-            ...(renderable ? { patch } : {}),
-          });
-        }
-        repositories.push({
-          status: "ready" as const,
-          position: manifest.repository.position,
-          repoOwner: manifest.repository.repoOwner,
-          repoName: manifest.repository.repoName,
-          baseSha: manifest.repository.commitSha,
-          // Like a Git worktree, uncommitted file changes leave HEAD at the base commit.
-          headSha: manifest.repository.commitSha,
-          truncated: false,
-          omittedFileCount: 0,
-          files,
+    return this.enqueue(() => this.captureDiffUnlocked(triggerMessageId));
+  }
+
+  private async captureDiffUnlocked(triggerMessageId: string | null): Promise<SessionDiffUpload> {
+    const repositories: SessionTextDiffRepository[] = [];
+    const netChanges = await this.reconcileNetChanges();
+    for (const manifest of [...this.manifests.values()].sort(
+      (a, b) => a.repository.position - b.repository.position
+    )) {
+      const changedPaths = [...(netChanges.get(manifest.repository.position) ?? new Set())];
+      const files = [];
+      for (const path of changedPaths) {
+        const tracked = manifest.files.find((file) => file.path === path);
+        const absolutePath = `${manifest.repository.root}/${path}`;
+        const current = await this.readTextFileOrNull(absolutePath);
+        const previous = tracked
+          ? await this.readTextFile(this.baselinePath(manifest.repository.position, path))
+          : null;
+        files.push({
+          path,
+          before: previous,
+          after: current,
+          mode: tracked?.mode ?? "100644",
         });
       }
-      return sessionDiffUploadSchema.parse({
-        version: 1,
-        triggerMessageId,
-        capturedAt: this.now(),
-        repositories,
+      repositories.push({
+        position: manifest.repository.position,
+        repoOwner: manifest.repository.repoOwner,
+        repoName: manifest.repository.repoName,
+        baseSha: manifest.repository.commitSha,
+        files,
       });
+    }
+    return assembleSessionTextDiff(repositories, {
+      triggerMessageId,
+      capturedAt: this.now(),
     });
+  }
+
+  private async prepareMutationUnlocked(
+    tool: RepositoryMutationName,
+    args: Record<string, unknown>
+  ): Promise<PreparedRepositoryMutation> {
+    const request = repositoryMutationSchema.parse({ tool, arguments: args });
+    if (request.tool === "delete" && request.arguments.recursive) {
+      throw new Error("Repository editing supports file deletion only");
+    }
+    const target = this.resolveTarget(request.arguments.path);
+    const existingStat = await this.statOrNull(target.absolutePath);
+    const existingText = existingStat ? await this.readTextFile(target.absolutePath) : null;
+    if (request.tool !== "write" && existingText === null) {
+      throw new Error("Repository mutation requires an existing file");
+    }
+    if (request.tool === "write") assertBoundedText(request.arguments.content);
+    if (request.tool === "edit") {
+      let maximumBytes = new TextEncoder().encode(existingText ?? "").byteLength;
+      for (const edit of request.arguments.edits) {
+        assertBoundedText(edit.oldText);
+        assertBoundedText(edit.newText);
+        maximumBytes += new TextEncoder().encode(edit.newText).byteLength;
+      }
+      if (maximumBytes > MAX_TEXT_FILE_BYTES) {
+        throw new Error(`Repository text exceeds ${MAX_TEXT_FILE_BYTES} bytes`);
+      }
+    }
+    await this.ensureBaseline(target, existingText);
+    const netChanges = await this.reconcileNetChanges();
+    const changedPaths = netChanges.get(target.manifest.repository.position) ?? new Set<string>();
+    const changedFileCount = [...netChanges.values()].reduce((sum, paths) => sum + paths.size, 0);
+    if (!changedPaths.has(target.relativePath)) {
+      if (changedFileCount >= this.maxChangedFiles) {
+        throw new Error("Too many changed repository files");
+      }
+      changedPaths.add(target.relativePath);
+      await this.writeChangedPaths(target.manifest.repository.position, changedPaths);
+    }
+    const mutationKey = this.mutationKey(target.manifest.repository.position, target.relativePath);
+    this.pendingMutations.set(mutationKey, (this.pendingMutations.get(mutationKey) ?? 0) + 1);
+    return { position: target.manifest.repository.position, path: target.relativePath };
+  }
+
+  private async completeMutationUnlocked(mutation: PreparedRepositoryMutation): Promise<void> {
+    const key = this.mutationKey(mutation.position, mutation.path);
+    const pending = this.pendingMutations.get(key) ?? 0;
+    if (pending <= 1) this.pendingMutations.delete(key);
+    else this.pendingMutations.set(key, pending - 1);
+    await this.reconcileNetChanges();
   }
 
   private async materializeOne(materialization: PiRepositoryMaterialization): Promise<void> {
@@ -483,47 +478,4 @@ function gitModeToFsMode(mode: "100644" | "100755"): number {
 function base64ToBytes(value: string): Uint8Array {
   const binary = atob(value);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function lineStats(oldText: string, newText: string): { additions: number; deletions: number } {
-  let additions = 0;
-  let deletions = 0;
-  for (const change of diffLines(oldText, newText)) {
-    if (change.added) additions += change.count ?? 0;
-    if (change.removed) deletions += change.count ?? 0;
-  }
-  return { additions, deletions };
-}
-
-function createGitPatch(
-  path: string,
-  oldText: string,
-  newText: string,
-  status: "added" | "modified" | "deleted",
-  mode: "100644" | "100755"
-): string {
-  const oldPath = status === "added" ? "/dev/null" : `a/${path}`;
-  const newPath = status === "deleted" ? "/dev/null" : `b/${path}`;
-  const body = createTwoFilesPatch(oldPath, newPath, oldText, newText, "", "", { context: 3 })
-    .split("\n")
-    .slice(1)
-    .join("\n");
-  const modeLine =
-    status === "added"
-      ? `new file mode ${mode}`
-      : status === "deleted"
-        ? `deleted file mode ${mode}`
-        : null;
-  return [`diff --git a/${path} b/${path}`, modeLine, body].filter(Boolean).join("\n");
-}
-
-async function fileId(position: number, path: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`${position}:${path}`)
-  );
-  return `pi-${position}-${[...new Uint8Array(digest)]
-    .slice(0, 16)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")}`;
 }

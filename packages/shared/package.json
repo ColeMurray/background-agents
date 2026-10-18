@@ -206,10 +206,6 @@
       "import": "./dist/types/skills.js",
       "types": "./dist/types/skills.d.ts"
     },
-    "./types/tool-effects": {
-      "import": "./dist/types/tool-effects.js",
-      "types": "./dist/types/tool-effects.d.ts"
-    },
     "./types/keyboard-shortcuts": {
       "import": "./dist/types/keyboard-shortcuts.js",
       "types": "./dist/types/keyboard-shortcuts.d.ts"

@@ -2,9 +2,9 @@
 
 ## Outcome
 
-Pi can now edit a bounded, durable VFS copy of repositories attached to its session when
-`PI_WORKSPACE_MODE=writable`. The default remains `off`, and `read_only` retains its previous four
-scratch-space tools.
+Pi can now edit a bounded, durable VFS copy of repositories attached to its session when the
+independent `PI_REPOSITORY_EDITING_MODE=enabled` capability is selected. Both capability gates
+default to `off`; `PI_WORKSPACE_MODE=read_only` remains limited to its four scratch-space tools.
 
 SessionDO is still the authority. It resolves strict full Git SHAs, claims those pins through the
 existing `SessionDiffService`, reads provider trees/blobs under explicit limits, and returns a

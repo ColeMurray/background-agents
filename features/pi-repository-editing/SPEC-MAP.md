@@ -21,6 +21,7 @@ credentials remain unavailable.
 | Guarded mutation                    | Consume shared `local_mutation` classification and Computer `write`/`edit`/`delete` semantics under `/workspace/repos/{position}`  | Required |
 | Diff capture                        | Capture net text changes and publish through the existing SessionDiff service/store                                                | Required |
 | Retry                               | Route browser diff retries to PiSessionDO for Pi sessions and to the sandbox for other harnesses                                   | Required |
+| Independent capability              | Gate mutation/diff runtime with `PI_REPOSITORY_EDITING_MODE`, never a writable scratch-workspace mode                              | Required |
 | No Computer Git/network/credentials | Do not construct Git clients, execution backends, mounts, or credential-bearing workspace state                                    | Required |
 
 ## Deliberately excluded

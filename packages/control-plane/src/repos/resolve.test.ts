@@ -175,4 +175,25 @@ describe("resolveSessionRepositories", () => {
     expect((error as HttpError).status).toBe(400);
     expect((error as HttpError).message).toContain("resolve to the same checkout path: app");
   });
+
+  it("allows canonical name collisions for position-rooted Pi repositories", async () => {
+    const provider = createFakeProvider({
+      "acme/app": access({ repoId: 1, repoOwner: "acme", repoName: "app" }),
+      "globex/legacy-app": access({ repoId: 2, repoOwner: "globex", repoName: "app" }),
+    });
+
+    const repositories = await resolveSessionRepositories(
+      env,
+      [
+        { repoOwner: "acme", repoName: "app", baseBranch: null },
+        { repoOwner: "globex", repoName: "legacy-app", baseBranch: null },
+      ],
+      ctx,
+      logger,
+      provider,
+      { checkoutLayout: "position" }
+    );
+
+    expect(repositories.map((repository) => repository.repoName)).toEqual(["app", "app"]);
+  });
 });

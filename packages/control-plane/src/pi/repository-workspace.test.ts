@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { PiRepositoryMaterialization } from "./session-context-contract";
+import type { PiRepositoryMaterialization } from "./repository-materialization-contract";
+import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
 import { PiRepositoryWorkspace, type RepositoryWorkspaceFileSystem } from "./repository-workspace";
 
 const SHA = "a".repeat(40);
@@ -145,10 +146,16 @@ async function computerWrite(
   path: string,
   content: string
 ): Promise<void> {
-  const mutation = await workspace.prepareMutation("write", { path, content });
-  await fs.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-  await fs.writeFile(path, content);
-  await workspace.completeMutation(mutation);
+  await workspace.runMutation(
+    "write",
+    { path, content },
+    async () => {
+      await fs.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+      await fs.writeFile(path, content);
+    },
+    async () => {},
+    async () => null
+  );
 }
 
 async function computerDelete(
@@ -156,9 +163,13 @@ async function computerDelete(
   fs: MemoryFileSystem,
   path: string
 ): Promise<void> {
-  const mutation = await workspace.prepareMutation("delete", { path });
-  await fs.rm(path);
-  await workspace.completeMutation(mutation);
+  await workspace.runMutation(
+    "delete",
+    { path },
+    () => fs.rm(path),
+    async () => {},
+    async () => null
+  );
 }
 
 describe("PiRepositoryWorkspace", () => {
@@ -217,12 +228,13 @@ describe("PiRepositoryWorkspace", () => {
     const first = new PiRepositoryWorkspace(fs, () => 100);
     await first.materialize([materialization()]);
     const path = "/workspace/repos/0/src/app.ts";
-    const mutation = await first.prepareMutation("edit", {
-      path,
-      edits: [{ oldText: "value = 1", newText: "value = 3" }],
-    });
-    await fs.writeFile(path, "const value = 3;\n");
-    await first.completeMutation(mutation);
+    await first.runMutation(
+      "edit",
+      { path, edits: [{ oldText: "value = 1", newText: "value = 3" }] },
+      () => fs.writeFile(path, "const value = 3;\n"),
+      async () => {},
+      async () => null
+    );
 
     const restarted = new PiRepositoryWorkspace(fs, () => 200);
     await restarted.materialize([materialization()]);
@@ -240,28 +252,40 @@ describe("PiRepositoryWorkspace", () => {
     await workspace.materialize([materialization()]);
 
     await expect(
-      workspace.prepareMutation("write", {
-        path: "/workspace/repos/0/../escape.txt",
-        content: "no",
-      })
+      workspace.runMutation(
+        "write",
+        { path: "/workspace/repos/0/../escape.txt", content: "no" },
+        async () => {},
+        async () => {},
+        async () => null
+      )
     ).rejects.toThrow("attached repository");
     await expect(
-      workspace.prepareMutation("write", {
-        path: "/workspace/repos/0/binary.dat",
-        content: "text",
-      })
+      workspace.runMutation(
+        "write",
+        { path: "/workspace/repos/0/binary.dat", content: "text" },
+        async () => {},
+        async () => {},
+        async () => null
+      )
     ).rejects.toThrow("UTF-8 text");
     await expect(
-      workspace.prepareMutation("write", {
-        path: "/workspace/repos/0/new.txt",
-        content: "not\0text",
-      })
+      workspace.runMutation(
+        "write",
+        { path: "/workspace/repos/0/new.txt", content: "not\0text" },
+        async () => {},
+        async () => {},
+        async () => null
+      )
     ).rejects.toThrow("UTF-8 text");
     await expect(
-      workspace.prepareMutation("delete", {
-        path: "/workspace/repos/0/src",
-        recursive: true,
-      })
+      workspace.runMutation(
+        "delete",
+        { path: "/workspace/repos/0/src", recursive: true },
+        async () => {},
+        async () => {},
+        async () => null
+      )
     ).rejects.toThrow("file deletion");
     expect(fs.files.has("/workspace/escape.txt")).toBe(false);
     expect(fs.files.has("/workspace/repos/0/new.txt")).toBe(false);
@@ -298,31 +322,6 @@ describe("PiRepositoryWorkspace", () => {
     expect(bundle.repositories.flatMap((repository) => repository.files)).toHaveLength(2);
   });
 
-  it("keeps in-flight mutation reservations inside the global file limit", async () => {
-    const fs = new MemoryFileSystem();
-    const workspace = new PiRepositoryWorkspace(fs, () => 100, { maxChangedFiles: 1 });
-    await workspace.materialize([materialization()]);
-
-    const pending = await workspace.prepareMutation("write", {
-      path: "/workspace/repos/0/first.txt",
-      content: "first\n",
-    });
-    await expect(
-      workspace.prepareMutation("write", {
-        path: "/workspace/repos/0/second.txt",
-        content: "second\n",
-      })
-    ).rejects.toThrow("Too many changed repository files");
-
-    await workspace.completeMutation(pending);
-    await expect(
-      workspace.prepareMutation("write", {
-        path: "/workspace/repos/0/second.txt",
-        content: "second\n",
-      })
-    ).resolves.toMatchObject({ path: "second.txt" });
-  });
-
   it("keeps same-name repositories from different owners isolated by position", async () => {
     const fs = new MemoryFileSystem();
     const first = materialization(0, "shared");
@@ -335,6 +334,71 @@ describe("PiRepositoryWorkspace", () => {
 
     await expect(fs.readFile("/workspace/repos/0/src/app.ts", "utf8")).resolves.toContain("value");
     await expect(fs.readFile("/workspace/repos/1/src/app.ts", "utf8")).resolves.toContain("value");
+  });
+
+  it("holds one FIFO through Computer execution, reconciliation, assembly, and publication", async () => {
+    const fs = new MemoryFileSystem();
+    const workspace = new PiRepositoryWorkspace(fs, () => 100);
+    await workspace.materialize([materialization()]);
+    const order: string[] = [];
+    const published: SessionDiffUpload[] = [];
+    let releaseFirst!: () => void;
+    let markFirstPublishStarted!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstPublishStarted = new Promise<void>((resolve) => {
+      markFirstPublishStarted = resolve;
+    });
+
+    const first = workspace.runMutation(
+      "write",
+      { path: "/workspace/repos/0/first.txt", content: "first\n" },
+      async () => {
+        order.push("execute:first");
+        await fs.writeFile("/workspace/repos/0/first.txt", "first\n");
+        return "first";
+      },
+      async (bundle) => {
+        order.push("publish:first:start");
+        published.push(bundle);
+        markFirstPublishStarted();
+        await firstGate;
+        order.push("publish:first:end");
+      },
+      async () => "message-1"
+    );
+    const second = workspace.runMutation(
+      "write",
+      { path: "/workspace/repos/0/second.txt", content: "second\n" },
+      async () => {
+        order.push("execute:second");
+        await fs.writeFile("/workspace/repos/0/second.txt", "second\n");
+        return "second";
+      },
+      async (bundle) => {
+        order.push("publish:second");
+        published.push(bundle);
+      },
+      async () => "message-2"
+    );
+    await firstPublishStarted;
+    expect(order).toEqual(["execute:first", "publish:first:start"]);
+
+    releaseFirst();
+    await expect(Promise.all([first, second])).resolves.toEqual(["first", "second"]);
+    expect(order).toEqual([
+      "execute:first",
+      "publish:first:start",
+      "publish:first:end",
+      "execute:second",
+      "publish:second",
+    ]);
+    expect(
+      published
+        .at(-1)
+        ?.repositories.flatMap((repository) => repository.files.map((file) => file.path))
+    ).toEqual(["first.txt", "second.txt"]);
   });
 });
 

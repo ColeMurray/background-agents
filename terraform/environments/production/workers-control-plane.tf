@@ -105,6 +105,7 @@ module "control_plane_worker" {
       TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
       PI_DURABLE_ENABLED            = { value = tostring(local.pi_durable_available) }
       PI_WORKSPACE_MODE             = { value = var.pi_workspace_mode }
+      PI_REPOSITORY_EDITING_MODE    = { value = var.pi_repository_editing_mode }
       PI_SANDBOX_EXECUTION_MODE     = { value = var.pi_sandbox_execution_mode }
       PI_CODE_MODE                  = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
     },

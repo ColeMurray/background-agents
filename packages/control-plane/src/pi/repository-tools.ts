@@ -9,7 +9,7 @@ import {
   PI_REPOSITORY_MAX_FILE_BYTES,
   PI_REPOSITORY_MAX_FILES,
   type PiRepositoryMaterializationManifest,
-} from "./session-context-contract";
+} from "./repository-materialization-contract";
 
 const MAX_REPOSITORY_FILE_BYTES = PI_REPOSITORY_MAX_FILE_BYTES;
 const MAX_REPOSITORY_TREE_ENTRIES = 500;

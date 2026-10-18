@@ -55,6 +55,7 @@ export {
   repositoryPairInputSchema,
   repositoryInputSchema,
   repositoriesInputSchema,
+  positionedSessionRepositoriesInputSchema,
   sessionRepositoriesInputSchema,
   RepositoryPairValidationError,
   decodeRepositoryPathSegments,
@@ -65,12 +66,6 @@ export {
   normalizeOptionalRepositoryPair,
 } from "./repositories";
 
-export {
-  LOCAL_READ_TOOL_NAMES,
-  LOCAL_MUTATION_TOOL_NAMES,
-  classifyToolEffect,
-} from "./tool-effects";
-export type { ToolEffect } from "./tool-effects";
 export type {
   RepositoryRef,
   SessionRepositoryState,

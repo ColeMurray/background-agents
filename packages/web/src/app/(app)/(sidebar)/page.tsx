@@ -496,7 +496,11 @@ function HomeContent({
               ) : null}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
-                <SessionTargetPicker {...picker} disabled={creating} />
+                <SessionTargetPicker
+                  {...picker}
+                  disabled={creating}
+                  checkoutLayout={harness === "pi" ? "position" : "name"}
+                />
               </div>
 
               <div

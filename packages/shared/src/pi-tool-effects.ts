@@ -84,6 +84,28 @@ export const PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS = [
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 
+/** Generic Computer mutations contributed only by the repository-editing capability. */
+export const PI_REPOSITORY_EDITING_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "write",
+    effect: "local_mutation",
+    callers: ["model", "tools"],
+    replay: "unsafe",
+  },
+  {
+    name: "edit",
+    effect: "local_mutation",
+    callers: ["model", "tools"],
+    replay: "unsafe",
+  },
+  {
+    name: "delete",
+    effect: "local_mutation",
+    callers: ["model", "tools"],
+    replay: "unsafe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
 /** Build a lookup while rejecting accidental tool shadowing across extensions. */
 export function createToolEffectRegistry(
   ...registrationGroups: readonly (readonly ToolEffectRegistration[])[]
