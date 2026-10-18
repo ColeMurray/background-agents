@@ -5,6 +5,7 @@ import {
 import { z } from "zod";
 import {
   PI_REPOSITORY_MAX_FILE_BYTES,
+  PI_REPOSITORY_MAX_FILES,
   type PiRepositoryMaterialization,
 } from "./repository-materialization-contract";
 import { FULL_GIT_OBJECT_ID_PATTERN } from "../source-control/git-object-id";
@@ -79,12 +80,12 @@ export interface PreparedRepositoryMutation {
 const repositoryMutationSchema = z.discriminatedUnion("tool", [
   z.object({
     tool: z.literal("write"),
-    arguments: z.object({ path: z.string(), content: z.string() }),
+    arguments: z.object({ path: z.string().max(4_096), content: z.string() }),
   }),
   z.object({
     tool: z.literal("edit"),
     arguments: z.object({
-      path: z.string(),
+      path: z.string().max(4_096),
       edits: z
         .array(z.object({ oldText: z.string().min(1), newText: z.string() }))
         .min(1)
@@ -93,7 +94,7 @@ const repositoryMutationSchema = z.discriminatedUnion("tool", [
   }),
   z.object({
     tool: z.literal("delete"),
-    arguments: z.object({ path: z.string(), recursive: z.boolean().optional() }),
+    arguments: z.object({ path: z.string().max(4_096), recursive: z.boolean().optional() }),
   }),
 ]);
 
@@ -106,19 +107,76 @@ export class PiRepositoryWorkspace {
   constructor(
     private readonly fs: RepositoryWorkspaceFileSystem,
     private readonly now: () => number = () => Date.now(),
-    options: { maxChangedFiles?: number; mutations?: WorkspaceMutationFifo } = {}
+    options: {
+      maxChangedFiles?: number;
+      maxLiveFiles?: number;
+      mutations?: WorkspaceMutationFifo;
+    } = {}
   ) {
     this.maxChangedFiles = options.maxChangedFiles ?? SESSION_DIFF_MAX_FILES;
+    this.maxLiveFiles = options.maxLiveFiles ?? PI_REPOSITORY_MAX_FILES;
     this.mutations = options.mutations ?? new WorkspaceMutationFifo();
   }
 
   private readonly maxChangedFiles: number;
+  private readonly maxLiveFiles: number;
 
   materialize(materializations: readonly PiRepositoryMaterialization[]): Promise<void> {
     return this.enqueue(async () => {
       for (const materialization of materializations) {
         await this.materializeOne(materialization);
       }
+    });
+  }
+
+  /** Identify incomplete overlays before contacting the source provider. */
+  restore(
+    repositories: readonly {
+      position: number;
+      repoOwner: string;
+      repoName: string;
+      commitSha: string;
+    }[]
+  ): Promise<{ materializePositions: number[]; restoredFileCount: number }> {
+    return this.enqueue(async () => {
+      const restored: StoredRepositoryManifest[] = [];
+      const materializePositions: number[] = [];
+      for (const repository of repositories) {
+        const manifest = await this.readManifestOrNull(
+          `${this.metadataRoot(repository.position)}/manifest.json`
+        );
+        if (!manifest) {
+          materializePositions.push(repository.position);
+          continue;
+        }
+        if (
+          manifest.repository.position !== repository.position ||
+          manifest.repository.repoOwner !== repository.repoOwner ||
+          manifest.repository.repoName !== repository.repoName ||
+          manifest.repository.commitSha !== repository.commitSha ||
+          manifest.repository.root !== `/workspace/repos/${repository.position}`
+        ) {
+          throw new Error("Repository workspace manifest does not match the durable session pins");
+        }
+        if (!(await this.isComplete(manifest))) {
+          materializePositions.push(repository.position);
+          continue;
+        }
+        restored.push(manifest);
+      }
+      const restoredFileCount = restored.reduce(
+        (count, manifest) => count + manifest.files.length,
+        0
+      );
+      if (restoredFileCount > this.maxLiveFiles) {
+        throw new Error(`Repository workspace exceeds the ${this.maxLiveFiles} live file limit`);
+      }
+      this.manifests.clear();
+      for (const manifest of restored) this.manifests.set(manifest.repository.position, manifest);
+      return {
+        materializePositions,
+        restoredFileCount,
+      };
     });
   }
 
@@ -187,6 +245,24 @@ export class PiRepositoryWorkspace {
     });
   }
 
+  private async liveFileCount(
+    netChanges: ReadonlyMap<number, ReadonlySet<string>>
+  ): Promise<number> {
+    let count = [...this.manifests.values()].reduce(
+      (total, manifest) => total + manifest.files.length,
+      0
+    );
+    for (const manifest of this.manifests.values()) {
+      for (const path of netChanges.get(manifest.repository.position) ?? []) {
+        const tracked = manifest.files.some((file) => file.path === path);
+        const exists = (await this.statOrNull(`${manifest.repository.root}/${path}`)) !== null;
+        if (tracked && !exists) count--;
+        if (!tracked && exists) count++;
+      }
+    }
+    return count;
+  }
+
   private async prepareMutationUnlocked(
     tool: RepositoryMutationName,
     args: Record<string, unknown>
@@ -215,6 +291,12 @@ export class PiRepositoryWorkspace {
     }
     await this.ensureBaseline(target, existingText);
     const netChanges = await this.reconcileNetChanges();
+    if (request.tool === "write" && existingStat === null) {
+      const liveFiles = await this.liveFileCount(netChanges);
+      if (liveFiles >= this.maxLiveFiles) {
+        throw new Error(`Repository workspace exceeds the ${this.maxLiveFiles} live file limit`);
+      }
+    }
     const changedPaths = netChanges.get(target.manifest.repository.position) ?? new Set<string>();
     const changedFileCount = [...netChanges.values()].reduce((sum, paths) => sum + paths.size, 0);
     if (!changedPaths.has(target.relativePath)) {
@@ -249,9 +331,7 @@ export class PiRepositoryWorkspace {
     const stored = await this.readManifestOrNull(manifestPath);
     if (stored) {
       assertSameManifest(stored, manifest);
-      if (!(await this.statOrNull(stored.repository.root))) {
-        throw new Error("Repository manifest exists without its materialized root");
-      }
+      await this.repairStoredMaterialization(stored, materialization, stagingPath);
       await this.fs.rm(stagingPath, { recursive: true, force: true });
       this.manifests.set(stored.repository.position, stored);
       return;
@@ -285,6 +365,91 @@ export class PiRepositoryWorkspace {
     } catch (error) {
       await this.fs.rm(stagingPath, { recursive: true, force: true }).catch(() => {});
       throw error;
+    }
+  }
+
+  private async isComplete(manifest: StoredRepositoryManifest): Promise<boolean> {
+    const root = await this.statOrNull(manifest.repository.root);
+    if (!root) return false;
+    if (!root.isDirectory || root.isSymbolicLink) {
+      throw new Error("Repository workspace root is not a durable directory");
+    }
+    const changedPaths = new Set(await this.readChangedPaths(manifest.repository.position));
+    for (const file of manifest.files) {
+      if (changedPaths.has(file.path)) {
+        const baseline = await this.statOrNull(
+          this.baselinePath(manifest.repository.position, file.path)
+        );
+        if (!baseline) return false;
+        if (!baseline.isFile || baseline.isSymbolicLink) {
+          throw new Error(`Repository baseline has an unsafe type: ${file.path}`);
+        }
+      }
+      const stat = await this.statOrNull(`${manifest.repository.root}/${file.path}`);
+      if (!stat) {
+        if (!changedPaths.has(file.path)) return false;
+        continue;
+      }
+      if (!stat.isFile || stat.isSymbolicLink) {
+        throw new Error(`Repository workspace file has an unsafe type: ${file.path}`);
+      }
+    }
+    return true;
+  }
+
+  private async repairStoredMaterialization(
+    manifest: StoredRepositoryManifest,
+    materialization: PiRepositoryMaterialization,
+    stagingPath: string
+  ): Promise<void> {
+    const root = await this.statOrNull(manifest.repository.root);
+    if (!root) {
+      await this.fs.rm(stagingPath, { recursive: true, force: true });
+      await this.fs.mkdir(stagingPath, { recursive: true });
+      for (const file of materialization.files) {
+        const destination = `${stagingPath}/${file.path}`;
+        await this.fs.mkdir(parentPath(destination), { recursive: true });
+        await this.fs.writeFile(destination, base64ToBytes(file.contentBase64), {
+          mode: gitModeToFsMode(file.mode),
+        });
+      }
+      await this.fs.mkdir(parentPath(manifest.repository.root), { recursive: true });
+      await this.fs.rename(stagingPath, manifest.repository.root);
+      return;
+    }
+    if (!root.isDirectory || root.isSymbolicLink) {
+      throw new Error("Repository workspace root is not a durable directory");
+    }
+    const changedPaths = new Set(await this.readChangedPaths(manifest.repository.position));
+    const sourceFiles = new Map(materialization.files.map((file) => [file.path, file]));
+    for (const file of manifest.files) {
+      const source = sourceFiles.get(file.path);
+      if (!source) throw new Error(`Repository source is missing tracked file: ${file.path}`);
+      if (changedPaths.has(file.path)) {
+        const baseline = this.baselinePath(manifest.repository.position, file.path);
+        const baselineStat = await this.statOrNull(baseline);
+        if (!baselineStat) {
+          await this.fs.mkdir(parentPath(baseline), { recursive: true });
+          await this.fs.writeFile(baseline, base64ToBytes(source.contentBase64), {
+            mode: gitModeToFsMode(source.mode),
+          });
+        } else if (!baselineStat.isFile || baselineStat.isSymbolicLink) {
+          throw new Error(`Repository baseline has an unsafe type: ${file.path}`);
+        }
+      }
+      const destination = `${manifest.repository.root}/${file.path}`;
+      const stat = await this.statOrNull(destination);
+      if (stat) {
+        if (!stat.isFile || stat.isSymbolicLink) {
+          throw new Error(`Repository workspace file has an unsafe type: ${file.path}`);
+        }
+        continue;
+      }
+      if (changedPaths.has(file.path)) continue;
+      await this.fs.mkdir(parentPath(destination), { recursive: true });
+      await this.fs.writeFile(destination, base64ToBytes(source.contentBase64), {
+        mode: gitModeToFsMode(source.mode),
+      });
     }
   }
 

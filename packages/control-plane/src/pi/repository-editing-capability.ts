@@ -36,7 +36,7 @@ interface RepositoryEditingCapabilityOptions {
   repositoryWorkspace: Workspace;
   overlay: PiRepositoryWorkspace;
   mutations: WorkspaceMutationFifo;
-  scratchWritable: boolean;
+  scratchMode: "off" | "read_only" | "enabled";
   publishDiff(bundle: SessionDiffUpload): Promise<void>;
   triggerMessageId(): Promise<string | null>;
 }
@@ -48,7 +48,7 @@ export function createRepositoryEditingWorkspaceCapability(
   const scratch = createPiTools({
     workspace: options.scratchWorkspace,
     root: COMPUTER_SCRATCH_ROOT,
-    readonly: !options.scratchWritable,
+    readonly: options.scratchMode !== "enabled",
     exec: {},
     assets: false,
     write: { maxBytes: WORKSPACE_MUTATION_MAX_BYTES },
@@ -80,9 +80,11 @@ export function createRepositoryEditingWorkspaceCapability(
         [
           `${REPOSITORY_ROOT}/{position} contains durable repository overlays.`,
           `${COMPUTER_SCRATCH_ROOT} remains the canonical scratch workspace.`,
-          options.scratchWritable
+          options.scratchMode === "enabled"
             ? "Scratch and repository mutations share one ordered workspace queue."
-            : "Scratch is read-only; repository mutations use the ordered workspace queue.",
+            : options.scratchMode === "read_only"
+              ? "Scratch is read-only; repository mutations use the ordered workspace queue."
+              : "Scratch tools are disabled; repository mutations use the ordered workspace queue.",
           "No shell, Git, network, mounts, publishing, or execution backend is available.",
         ].join(" ")
       ),
@@ -106,11 +108,24 @@ export function createRepositoryEditingWorkspaceCapability(
           const record = z.record(z.string(), z.unknown()).parse(args);
           const repositoryPath = targetsRepository(record);
           const selected = repositoryPath ? repository : scratch;
-          const invoke = (): Promise<PiToolResult> =>
-            selected.execute(
+          const invoke = (): Promise<PiToolResult> => {
+            if (context.abortSignal?.aborted) {
+              return Promise.resolve({
+                content: [{ type: "text", text: "Workspace operation aborted" }],
+                isError: true,
+              });
+            }
+            if (!repositoryPath && options.scratchMode === "off") {
+              return Promise.resolve({
+                content: [{ type: "text", text: "Scratch workspace is disabled" }],
+                isError: true,
+              });
+            }
+            return selected.execute(
               { id: api.callId, name: tool.name, arguments: args },
               { abortSignal: context.abortSignal }
             );
+          };
           let result: PiToolResult;
           if (mutating && repositoryPath) {
             result = await options.overlay.runMutation(
@@ -121,7 +136,7 @@ export function createRepositoryEditingWorkspaceCapability(
               options.triggerMessageId
             );
           } else if (mutating) {
-            if (!options.scratchWritable) {
+            if (options.scratchMode !== "enabled") {
               result = {
                 content: [{ type: "text", text: "Scratch workspace is read-only" }],
                 isError: true,
@@ -152,7 +167,7 @@ export function createRepositoryEditingWorkspaceCapability(
     effects,
     toolPolicyDelegate: combinePolicies(
       createWorkspaceMutationPolicyDelegate(),
-      createRepositoryMutationPolicyDelegate(options.scratchWritable)
+      createRepositoryMutationPolicyDelegate(options.scratchMode === "enabled")
     ),
   };
 }
@@ -170,15 +185,42 @@ function targetsRepository(args: Record<string, unknown>): boolean {
 
 function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): PiToolPolicyDelegate {
   return {
-    async beforeTool(call, declaration) {
+    async beforeTool(call, declaration, api, context) {
       if (declaration.effect !== "local_mutation") return;
       const path =
         typeof call.arguments.path === "string"
           ? normalizeWorkspaceAbsolutePath(call.arguments.path)
           : null;
-      if (path?.startsWith(`${REPOSITORY_ROOT}/`)) return;
+      if (path?.startsWith(`${REPOSITORY_ROOT}/`)) {
+        await api.memo(
+          "open-inspect.repository-policy.before",
+          { version: 1, scope: "repository", decision: "allow", tool: call.name, path },
+          context
+        );
+        return;
+      }
       if (scratchWritable) return;
       return { block: "Scratch workspace is read-only" };
+    },
+    async afterTool(call, declaration, result, api, context) {
+      if (declaration.effect !== "local_mutation") return result;
+      const path =
+        typeof call.arguments.path === "string"
+          ? normalizeWorkspaceAbsolutePath(call.arguments.path)
+          : null;
+      if (!path?.startsWith(`${REPOSITORY_ROOT}/`)) return result;
+      await api.memo(
+        "open-inspect.repository-policy.after",
+        {
+          version: 1,
+          scope: "repository",
+          tool: call.name,
+          path,
+          outcome: result.isError === true ? "failed" : "succeeded",
+        },
+        context
+      );
+      return result;
     },
   };
 }

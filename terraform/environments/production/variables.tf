@@ -827,6 +827,28 @@ variable "pi_codemode_sandbox_deployment_verified" {
   default     = false
 }
 
+variable "pi_codemode_sandbox_deployed_version" {
+  description = "Exact Worker version ID produced by the latest verified Wrangler sandbox deployment"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.pi_codemode_sandbox_deployed_version == "" || can(regex("^[A-Za-z0-9-]{1,128}$", var.pi_codemode_sandbox_deployed_version))
+    error_message = "pi_codemode_sandbox_deployed_version must be empty or a bounded Worker version ID."
+  }
+}
+
+variable "pi_codemode_paid_canary_version" {
+  description = "Exact Worker version ID for which the paid Code Mode canary evidence was recorded"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.pi_codemode_paid_canary_version == "" || can(regex("^[A-Za-z0-9-]{1,128}$", var.pi_codemode_paid_canary_version))
+    error_message = "pi_codemode_paid_canary_version must be empty or a bounded Worker version ID."
+  }
+}
+
 variable "sandbox_boot_timeout_ms" {
   description = "Milliseconds a sandbox whose bridge has connected may keep booting (clone, setup.sh, start.sh, agent start) before OpenInspect fails it and the prompt it was for."
   type        = number

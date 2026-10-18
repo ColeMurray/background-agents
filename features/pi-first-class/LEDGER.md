@@ -171,9 +171,28 @@ Rule: tick only with evidence on the same line.
 ## Phase 4: Whole-feature audit
 
 - [ ] Per-commit trace vs spec/manual/examples
-- [ ] Parallel reviewer round 1 reconciled
+- [x] Parallel reviewer round 1 reconciled — writable/repository, Code Mode deployment, sandbox
+      replay, cold-open, readiness, and route-manifest findings fixed with regression evidence in
+      `features/pi-first-class/AUDIT-CORRECTIONS.md`
 - [ ] Round 2+ finds no real issues
-- [ ] Every real bug has cause and regression guard
+- [x] Every confirmed round-1 bug has cause and regression guard —
+      `features/pi-first-class/AUDIT-CORRECTIONS.md`
+
+### Latest combined validation
+
+- [x] Control-plane unit suite — 297 files, 5,000 passed, 1 skipped
+- [x] Control-plane workerd suite — 171 files, 2,429 passed, 1 skipped; latest post-run deltas also
+      passed 26 focused unit tests and 28 focused workerd tests
+- [x] Production Terraform — `terraform fmt -check -recursive`; 90 tests passed
+- [x] Other package unit suites — docs 44, GitHub bot 335, Linear bot 317, shared 1,302, Slack bot
+      638, Pi Code Mode sandbox 5
+- [x] Root typecheck and ESLint — all workspaces passed
+- [x] Dependency audit reviewed — 12 inherited advisories (7 high, 5 moderate, 0 critical); this
+      correction wave changes no dependency, and no newly reachable exploit was confirmed
+- [x] Root build — all Worker, Node, docs, web, bot, infra, shared, and Code Mode packages passed
+- [x] Final format check — root Prettier check passed
+- [x] Web suite triage — 2,524/2,525 passed under concurrent load; the one unchanged timeout passed
+      65/65 when its file was rerun in isolation
 
 ## Phase 5: End to end
 

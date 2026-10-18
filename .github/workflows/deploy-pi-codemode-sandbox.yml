@@ -36,19 +36,25 @@ jobs:
       - name: Guard reviewed default branch
         env:
           REVIEWED_WORKFLOW_REF: ${{ github.ref }}
+          CODEMODE_MODE: ${{ vars.PI_CODEMODE_MODE || 'off' }}
+          PAID_CANARY_VERIFIED: ${{ vars.PI_CODEMODE_PAID_CANARY_VERIFIED || 'false' }}
         run: |
           if [[ "$REVIEWED_WORKFLOW_REF" != "refs/heads/main" ]]; then
             echo "Sandbox deployment requires reviewed workflow code from refs/heads/main" >&2
             exit 1
           fi
+          if [[ "$CODEMODE_MODE" != "off" ]] || [[ "$PAID_CANARY_VERIFIED" != "false" ]]; then
+            echo "Disable Code Mode and clear paid-canary verification before changing the sandbox version" >&2
+            exit 1
+          fi
 
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
           cache: npm

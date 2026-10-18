@@ -72,6 +72,16 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
   assert.match(workflow, /environment:\s*production/);
   assert.match(workflow, /github\.ref/);
   assert.match(workflow, /refs\/heads\/main/);
+  assert.match(workflow, /PI_CODEMODE_MODE/);
+  assert.match(workflow, /PI_CODEMODE_PAID_CANARY_VERIFIED/);
+  assert.match(workflow, /Disable Code Mode and clear paid-canary verification/);
+  assert.match(
+    workflow,
+    /if \[\[ "\$CODEMODE_MODE" != "off" \]\] \|\| \[\[ "\$PAID_CANARY_VERIFIED" != "false" \]\]/
+  );
+  assert.match(workflow, /actions\/checkout@[0-9a-f]{40} # v7/);
+  assert.match(workflow, /actions\/setup-node@[0-9a-f]{40} # v7/);
+  assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+\s*$/m);
   const guard = workflow.indexOf("Guard reviewed default branch");
   const validation = workflow.indexOf("Validate sandbox bundle and ownership contracts");
   const token = workflow.indexOf("CLOUDFLARE_API_TOKEN");
@@ -109,6 +119,10 @@ test("the runbook uses explicit Wrangler verification and protects preview-state
   assert.doesNotMatch(gettingStarted, /pi_codemode_sandbox_migration_applied/);
   assert.doesNotMatch(gettingStarted, /detects the deployed sandbox version/i);
   assert.match(gettingStarted, /PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true/);
+  assert.match(gettingStarted, /PI_CODEMODE_SANDBOX_DEPLOYED_VERSION/);
+  assert.match(gettingStarted, /PI_CODEMODE_PAID_CANARY_VERSION/);
+  assert.match(evidence, /PI_CODEMODE_SANDBOX_DEPLOYED_VERSION/);
+  assert.match(evidence, /PI_CODEMODE_PAID_CANARY_VERSION/);
   const transfer = gettingStarted.indexOf("Preview-state ownership transfer");
   const requiredFlag = gettingStarted.indexOf(
     "PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true",

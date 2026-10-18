@@ -11,6 +11,7 @@
 import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
+import { permissionsForBuiltInRole } from "@open-inspect/shared/rbac";
 import { createExecutionContext } from "cloudflare:test";
 import { cloudflareHost, createControlPlaneHttpHandler } from "../../src/cloudflare/http-host";
 import { createControlPlaneApp } from "../../src/routing/hono-app";
@@ -758,6 +759,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
   it("reports action denials for a same-team Viewer and admits a private collaborator", async () => {
     const observed: string[] = [];
+    const viewerPermissions = permissionsForBuiltInRole("viewer");
     for (const route of routes.filter(
       (item) => isSessionRoute(item) && item.authorization.kind === "active-user"
     )) {
@@ -778,14 +780,30 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       );
       const expected =
         route.authorization.kind === "active-user" &&
-        route.authorization.allOf.every(
-          (entry) => entry.kind !== "session" || entry.action === "read"
-        )
+        route.authorization.allOf.every((entry) => {
+          if (entry.kind === "session") return entry.action === "read";
+          if (entry.kind === "permission") return viewerPermissions.includes(entry.permission);
+          return false;
+        })
           ? 200
           : 403;
       observed.push(`${route.method} ${route.path} same-team-viewer=${response.status}`);
       expect(response.status, `${route.method} ${route.path}`).toBe(expected);
       if (expected === 403) {
+        const missingPermission =
+          route.authorization.kind === "active-user"
+            ? route.authorization.allOf.find(
+                (entry) =>
+                  entry.kind === "permission" && !viewerPermissions.includes(entry.permission)
+              )
+            : undefined;
+        if (missingPermission?.kind === "permission") {
+          await expect(response.json()).resolves.toMatchObject({
+            code: "permission_required",
+            permission: missingPermission.permission,
+          });
+          continue;
+        }
         const ownershipOnly =
           route.authorization.kind === "active-user" &&
           route.authorization.allOf.some(

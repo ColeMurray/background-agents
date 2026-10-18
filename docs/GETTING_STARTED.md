@@ -1457,6 +1457,8 @@ Secrets for credentials:
 | `PI_CODEMODE_MODE`                        | Native Pi Code Mode: `off` (default) or explicit paid-plan opt-in `paid`                        |
 | `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED` | Keep `false` until the protected Wrangler deployment is verified live                           |
 | `PI_CODEMODE_PAID_CANARY_VERIFIED`        | Keep `false` until migration, WASM, and CPU checks pass on a disposable paid account            |
+| `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`    | Exact version ID produced by the latest protected Wrangler deployment                           |
+| `PI_CODEMODE_PAID_CANARY_VERSION`         | Exact deployed version ID covered by the recorded paid canary                                   |
 | `ENABLE_SERVICE_BINDINGS`                 | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
 | `ENABLE_GITHUB_BOT`                       | `true` to deploy GitHub bot worker (or empty to skip)                                           |
 | `GH_WEBHOOK_SECRET`                       | GitHub webhook secret (required if GitHub bot enabled)                                          |
@@ -1542,7 +1544,8 @@ external binding must remain available for latched-session replay:
 
 1. Set Code Mode admission to `off` and deploy/upgrade the same deterministic Worker through the
    protected Wrangler workflow.
-2. Complete the live deployment proof, then set `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`
+2. Complete the live deployment proof, record its exact Worker version ID in
+   `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, then set `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`
    **before the first Terraform apply** that contains the ownership-transfer `removed` block.
    Applying with the flag false would remove the retained external binding even though
    `destroy = false` preserves the Worker.
@@ -1559,18 +1562,24 @@ external binding must remain available for latched-session replay:
    QuickJS WASM, fixed 60000 ms CPU limit, and `CodemodeSandbox` v1 SQLite migration. The job uses
    the protected `production` environment and fails unless the reviewed workflow runs from `main`;
    Cloudflare credentials are scoped only to the final deploy/rollback step after validation.
-3. Complete `docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`. Then set
+3. Record the deployed version ID as `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, complete the deployment
+   portion of `docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`, then set
    `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true` and run Terraform to add only the retained
    external `CODEMODE_SANDBOX` binding. Keep admission off.
-4. Run the paid runtime canary. After it passes, set `PI_CODEMODE_PAID_CANARY_VERIFIED=true` and
-   `PI_CODEMODE_MODE=paid`, then apply Terraform.
+4. Run the paid runtime canary against that exact version. After it passes, set
+   `PI_CODEMODE_PAID_CANARY_VERSION` to the same version ID,
+   `PI_CODEMODE_PAID_CANARY_VERIFIED=true`, and `PI_CODEMODE_MODE=paid`, then apply Terraform. The
+   hard Terraform gate refuses admission when the two version IDs differ.
 
 ### Code Mode upgrade
 
-1. Set `PI_CODEMODE_MODE=off` first and retain the external binding for admitted replay.
+1. Set `PI_CODEMODE_MODE=off` and `PI_CODEMODE_PAID_CANARY_VERIFIED=false` first, then apply
+   Terraform while retaining the external binding. The deployment workflow refuses a deploy or
+   rollback while paid admission or the old canary approval remains active.
 2. Dispatch the Wrangler workflow with operation `deploy`; Terraform never adopts its version.
-3. Record old/new version IDs and repeat the WASM, CPU, execution, abort, and replay checks before
-   restoring paid admission.
+3. Set `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION` to the new version ID. Repeat the WASM, CPU,
+   execution, abort, and replay checks, then set `PI_CODEMODE_PAID_CANARY_VERSION` to that same ID
+   before restoring paid admission.
 
 Provider issues [#6852](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6852) and
 [#6404](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6404) remain live canary
@@ -1583,7 +1592,9 @@ Set `PI_CODEMODE_MODE=off` and apply Terraform first. Keep
 `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. Admitted
 tasks retain their durable memo and replay; new tasks are denied. To roll back the Worker version,
 dispatch the dedicated workflow with operation `rollback` and an exact known-good version ID. Never
-delete or import the Wrangler-owned Worker through Terraform during normal rollback.
+delete or import the Wrangler-owned Worker through Terraform during normal rollback. Before
+restoring paid admission, set both version variables to the rollback target and ensure the recorded
+canary evidence covers that exact version.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi

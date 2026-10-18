@@ -9,9 +9,7 @@ const command = {
   argv: ["npm", "test"],
 };
 
-function fixture(
-  options: { enabled?: boolean; fenced?: boolean; sandbox?: Record<string, unknown> | null } = {}
-) {
+function fixture(options: { fenced?: boolean; sandbox?: Record<string, unknown> | null } = {}) {
   let sandbox: {
     status: string;
     runtime_mode?: "agent" | "execution";
@@ -44,7 +42,6 @@ function fixture(
   const sockets = { sendToSandbox: vi.fn(() => true) };
   const alarmScheduler = { schedule: vi.fn(async () => undefined) };
   const coordinator = new PiSandboxExecutionCoordinator({
-    enabled: options.enabled ?? true,
     commands,
     sandboxes,
     lifecycle,
@@ -59,15 +56,6 @@ function fixture(
 }
 
 describe("PiSandboxExecutionCoordinator", () => {
-  it("fails closed before admitting work when the feature is disabled", async () => {
-    const h = fixture({ enabled: false });
-
-    await expect(h.coordinator.submit(command, "operation-1")).rejects.toThrow(/disabled/i);
-
-    expect(h.commands.admit).not.toHaveBeenCalled();
-    expect(h.sandboxes.createSandbox).not.toHaveBeenCalled();
-  });
-
   it("does not admit commands after preservation fences the sandbox", async () => {
     const h = fixture({ fenced: true });
 

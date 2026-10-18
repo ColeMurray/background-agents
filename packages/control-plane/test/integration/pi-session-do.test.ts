@@ -469,6 +469,111 @@ describe("PiSessionDO", () => {
     expect(retry.status).toBe(202);
   });
 
+  it("deletes an evicted repository workspace without rematerializing provider data", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-delete-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({ entries: [], truncated: false }),
+        readBlob: async () => new Uint8Array(),
+      } as unknown as SourceControlProvider;
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: evict repository Pi"))
+    ).rejects.toThrow();
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => {
+          throw new Error("repository access revoked");
+        },
+        listTree: async () => {
+          throw new Error("repository access revoked");
+        },
+        readBlob: async () => {
+          throw new Error("repository access revoked");
+        },
+      } as unknown as SourceControlProvider;
+    });
+
+    await expect(piStub(sessionName).destroy(sessionName)).resolves.toBeUndefined();
+  });
+
+  it("restores a complete repository workspace after eviction without provider access", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-restore-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    const readBlob = vi.fn(async () => new TextEncoder().encode("durable\n"));
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({
+          entries: [
+            {
+              path: "durable.txt",
+              type: "file",
+              blobId: "blob-durable",
+              mode: "100644",
+              sizeBytes: 8,
+              executable: false,
+            },
+          ],
+          truncated: false,
+        }),
+        readBlob,
+      } as unknown as SourceControlProvider;
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+    expect(readBlob).toHaveBeenCalledOnce();
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: evict repository Pi"))
+    ).rejects.toThrow();
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => {
+          throw new Error("repository access revoked");
+        },
+        listTree: async () => {
+          throw new Error("repository access revoked");
+        },
+        readBlob: async () => {
+          throw new Error("repository access revoked");
+        },
+      } as unknown as SourceControlProvider;
+    });
+
+    await expect(piStub(sessionName).status(sessionName)).resolves.toMatchObject({ busy: false });
+    const result = await runInPiSessionDO(piStub(sessionName), (instance) =>
+      executeWorkspaceTool(
+        instance,
+        "read",
+        { path: "/workspace/repos/0/durable.txt" },
+        "read-restored"
+      )
+    );
+    expect(result).toMatchObject({ isError: false });
+  });
+
   it("rejects invalid UTF-8 provider bytes before mutating the real Computer VFS", async () => {
     const { sessionName, stub: sessionStub } = await initSession({
       sessionName: `pi-repository-binary-${crypto.randomUUID()}`,

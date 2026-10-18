@@ -22,7 +22,6 @@
  */
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
-import { resolvePiFeatureCapabilities } from "@open-inspect/shared";
 import { HarnessAdmissionError, validateHarnessExecution } from "../harness-admission";
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
@@ -709,9 +708,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     }
   );
   const piSandboxExecution = new PiSandboxExecutionCoordinator({
-    enabled:
-      resolvePiFeatureCapabilities({ sandboxExecution: env.PI_SANDBOX_EXECUTION_MODE })
-        .sandboxExecution === "enabled",
     commands: sandboxCommandRepository,
     sandboxes: sandboxRepository,
     lifecycle: lifecycleManager,

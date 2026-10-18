@@ -108,6 +108,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private rawWorkspace: Workspace | undefined;
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
+  private harnessOpened = false;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   readonly harness = new PiHarness({
@@ -184,8 +185,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const repositoryEditing =
         capabilities.repositoryEditing === "enabled" && sessionContext.repositories.length > 0;
       if (repositoryEditing) {
-        const scratchWritable = capabilities.workspace === "enabled";
-        const scratchWorkspace = await this.openWorkspace(scratchWritable);
+        const scratchWorkspace = await this.openWorkspace(capabilities.workspace === "enabled");
         const rawWorkspace = this.rawWorkspace;
         if (!rawWorkspace) throw new Error("Pi repository workspace is unavailable");
         const repositoryWorkspace = new PiRepositoryWorkspace(
@@ -193,23 +193,28 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           () => Date.now(),
           { mutations: workspaceMutations }
         );
-        const manifests: PiRepositoryMaterializationManifest[] = [];
-        let materializedFiles = 0;
-        for (const repository of sessionContext.repositories) {
-          const manifest = await this.fetchRepositoryMaterializationManifest(
-            repository.position,
-            repository.commitSha
-          );
-          materializedFiles += manifest.files.length;
-          if (materializedFiles > PI_REPOSITORY_MAX_FILES) {
-            throw new Error("Pi repository set exceeds the 1000 file materialization limit");
+        const restorePlan = await repositoryWorkspace.restore(sessionContext.repositories);
+        if (restorePlan.materializePositions.length > 0) {
+          const materializePositions = new Set(restorePlan.materializePositions);
+          const manifests: PiRepositoryMaterializationManifest[] = [];
+          let materializedFiles = restorePlan.restoredFileCount;
+          for (const repository of sessionContext.repositories) {
+            if (!materializePositions.has(repository.position)) continue;
+            const manifest = await this.fetchRepositoryMaterializationManifest(
+              repository.position,
+              repository.commitSha
+            );
+            materializedFiles += manifest.files.length;
+            if (materializedFiles > PI_REPOSITORY_MAX_FILES) {
+              throw new Error("Pi repository set exceeds the 1000 file materialization limit");
+            }
+            manifests.push(manifest);
           }
-          manifests.push(manifest);
-        }
-        for (const manifest of manifests) {
-          await repositoryWorkspace.materialize([
-            await this.fetchRepositoryMaterialization(manifest),
-          ]);
+          for (const manifest of manifests) {
+            await repositoryWorkspace.materialize([
+              await this.fetchRepositoryMaterialization(manifest),
+            ]);
+          }
         }
         this.repositoryWorkspace = repositoryWorkspace;
         const capability = createRepositoryEditingWorkspaceCapability({
@@ -217,7 +222,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           repositoryWorkspace: rawWorkspace,
           overlay: repositoryWorkspace,
           mutations: workspaceMutations,
-          scratchWritable,
+          scratchMode: capabilities.workspace,
           publishDiff: (bundle) => this.publishDiffBundle(bundle),
           triggerMessageId: () => this.currentOperationId(),
         });
@@ -265,7 +270,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const assembly = assemblePiExtensions(extensions, capabilities);
       for (const extension of assembly.extensions) this.registry.install(extension);
       this.models.setProvider(openaiCodexProvider());
-      return Harness.open(
+      const opened = await Harness.open(
         storage,
         {
           models: this.models,
@@ -273,6 +278,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         },
         context
       );
+      this.harnessOpened = true;
+      return opened;
     },
     defaults: {
       model: { provider: "openai-codex", id: "gpt-6.1-sol" },
@@ -377,14 +384,15 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         [...this.eventStreams.keys()].map((operationId) => this.stopEventRelay(operationId))
       );
       if (deletionState !== "destroying") {
-        // A cold abort opens Pi and may load its SessionDO-owned context. Mark
-        // deletion only after that open succeeds; retries after this point skip
-        // reopening and continue the idempotent teardown.
-        await this.harness.abort({ session: ROOT_SESSION });
         await this.ctx.storage.put(DELETION_STATE_KEY, "destroying");
+        // A cold object has no live code to abort. Opening its harness here can
+        // require repository rematerialization and make deletion depend on an
+        // external provider that may be unavailable or revoked.
+        if (this.harnessOpened) await this.harness.abort({ session: ROOT_SESSION });
       }
       await this.lifecycle.disableAlarms();
-      await this.harness.dispose();
+      if (this.harnessOpened) await this.harness.dispose();
+      this.harnessOpened = false;
       await this.codemodeSandbox?.close();
       this.codemodeSandbox = undefined;
       await (this.rawWorkspace ?? this.workspace)?.close();

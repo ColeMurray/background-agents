@@ -47,7 +47,6 @@ interface SandboxStore {
 }
 
 interface PiSandboxExecutionDependencies {
-  enabled: boolean;
   commands: CommandLedger;
   sandboxes: SandboxStore;
   lifecycle: {
@@ -67,6 +66,9 @@ interface PiSandboxExecutionDependencies {
  * This is intentionally not a Pi extension or model-visible tool. A later
  * authority layer may call it after approval and credential policy are in
  * place; until then the feature flag alone cannot expose process execution.
+ * New-session admission belongs to PiSessionDO's durable capability snapshot;
+ * this coordinator deliberately has no live deployment-flag gate so admitted
+ * command recovery continues after a feature rollback.
  */
 export class PiSandboxExecutionCoordinator {
   constructor(private readonly deps: PiSandboxExecutionDependencies) {}
@@ -104,7 +106,6 @@ export class PiSandboxExecutionCoordinator {
   async onSandboxReady(): Promise<void> {
     const sandbox = this.deps.sandboxes.getSandbox();
     if (
-      !this.deps.enabled ||
       sandbox?.status !== "ready" ||
       sandbox?.runtime_mode !== "execution" ||
       !sandbox.modal_sandbox_id ||
@@ -161,7 +162,6 @@ export class PiSandboxExecutionCoordinator {
   }
 
   private assertAvailable(): void {
-    if (!this.deps.enabled) throw new Error("Pi sandbox execution is disabled");
     if (this.deps.isFenced()) throw new Error("Pi sandbox execution is fenced for preservation");
     if (this.deps.getSession()?.harness !== "pi") {
       throw new Error("Sandbox command execution is reserved for Pi sessions");

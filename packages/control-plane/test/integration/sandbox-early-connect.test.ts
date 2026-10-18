@@ -1,7 +1,7 @@
-import { beforeEach, describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
-import { runInSessionDO } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
   collectMessages,
   initNamedSession,
@@ -106,20 +106,26 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     expect(await shutdown).toContainEqual({ type: "shutdown" });
     await waitForSandboxStatus(stub, "stopped");
 
-    // The legacy cancellation contract leaves socket authority intact. Wait
-    // for the late event's broadcast to prove it was processed, rather than
-    // relying on a sleep before asserting that its readiness CAS was rejected.
-    const lateReady = collectMessages(clientWs, {
-      until: (message) =>
-        message.type === "sandbox_event" && (message.event as { type: string }).type === "ready",
+    // The legacy cancellation contract leaves socket authority intact, but a
+    // late ready event is now rejected before it can be projected to clients.
+    await runInSessionDO(stub, (instance) => {
+      const manager = componentsOf(instance).lifecycleManager;
+      const onRuntimeReady = manager.onRuntimeReady.bind(manager);
+      vi.spyOn(manager, "onRuntimeReady").mockImplementation((...args) => {
+        const outcome = onRuntimeReady(...args);
+        Object.assign(instance, { lateReadyOutcome: outcome });
+        return outcome;
+      });
     });
     ws!.send(sandboxEvent({ type: "ready", harness: "opencode" }));
-    expect(await lateReady).toContainEqual(
-      expect.objectContaining({
-        type: "sandbox_event",
-        event: expect.objectContaining({ type: "ready" }),
-      })
-    );
+    await vi.waitFor(async () => {
+      const outcome = await runInSessionDO(
+        stub,
+        (instance) =>
+          (instance as unknown as { lateReadyOutcome?: string }).lateReadyOutcome ?? null
+      );
+      expect(outcome).toBe("rejected");
+    });
     expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
       { status: "stopped" },
     ]);

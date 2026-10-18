@@ -79,6 +79,8 @@ run "paid_mode_connects_to_the_external_sandbox" {
     pi_codemode_mode                        = "paid"
     pi_codemode_sandbox_deployment_verified = true
     pi_codemode_paid_canary_verified        = true
+    pi_codemode_sandbox_deployed_version    = "version-1"
+    pi_codemode_paid_canary_version         = "version-1"
   }
 
   assert {
@@ -95,6 +97,20 @@ run "paid_mode_connects_to_the_external_sandbox" {
   }
 }
 
+run "paid_mode_requires_canary_for_the_deployed_version" {
+  command = plan
+
+  variables {
+    pi_codemode_mode                        = "paid"
+    pi_codemode_sandbox_deployment_verified = true
+    pi_codemode_paid_canary_verified        = true
+    pi_codemode_sandbox_deployed_version    = "version-2"
+    pi_codemode_paid_canary_version         = "version-1"
+  }
+
+  expect_failures = [terraform_data.pi_codemode_paid_ready_gate]
+}
+
 run "paid_mode_requires_the_verified_wrangler_deployment" {
   command = plan
 
@@ -102,7 +118,7 @@ run "paid_mode_requires_the_verified_wrangler_deployment" {
     pi_codemode_mode = "paid"
   }
 
-  expect_failures = [check.pi_codemode_paid_ready]
+  expect_failures = [terraform_data.pi_codemode_paid_ready_gate]
 }
 
 run "paid_mode_requires_a_live_paid_account_canary" {
@@ -113,7 +129,7 @@ run "paid_mode_requires_a_live_paid_account_canary" {
     pi_codemode_sandbox_deployment_verified = true
   }
 
-  expect_failures = [check.pi_codemode_paid_ready]
+  expect_failures = [terraform_data.pi_codemode_paid_ready_gate]
 }
 
 run "unknown_mode_is_rejected" {

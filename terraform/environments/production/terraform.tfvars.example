@@ -326,6 +326,8 @@ sandbox_provider = "modal"
 # pi_codemode_mode = "off"
 # pi_codemode_sandbox_deployment_verified = false
 # pi_codemode_paid_canary_verified = false
+# pi_codemode_sandbox_deployed_version = ""
+# pi_codemode_paid_canary_version = ""
 
 # Independent repository overlay/edit/diff capability: "off" or "enabled".
 # It reuses the canonical workspace FIFO, policy, redaction, and scratch quota.

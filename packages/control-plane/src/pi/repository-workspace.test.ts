@@ -189,6 +189,163 @@ describe("PiRepositoryWorkspace", () => {
     );
   });
 
+  it("restores a complete durable overlay without source materialization", async () => {
+    const fs = new MemoryFileSystem();
+    const first = new PiRepositoryWorkspace(fs, () => 100);
+    await first.materialize([materialization()]);
+    const restored = new PiRepositoryWorkspace(fs, () => 200);
+
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+      ])
+    ).resolves.toEqual({ materializePositions: [], restoredFileCount: 3 });
+    await expect(restored.captureDiff(null)).resolves.toMatchObject({
+      repositories: [expect.objectContaining({ position: 0, files: [] })],
+    });
+  });
+
+  it("fetches source materialization only to repair an incomplete durable overlay", async () => {
+    const fs = new MemoryFileSystem();
+    const source = materialization();
+    const first = new PiRepositoryWorkspace(fs, () => 100);
+    await first.materialize([source]);
+    await fs.rm("/workspace/repos/0/src/app.ts");
+    const restored = new PiRepositoryWorkspace(fs, () => 200);
+
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+      ])
+    ).resolves.toEqual({ materializePositions: [0], restoredFileCount: 0 });
+    await restored.materialize([source]);
+    await expect(fs.readFile("/workspace/repos/0/src/app.ts", "utf8")).resolves.toBe(
+      "const value = 1;\n"
+    );
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+      ])
+    ).resolves.toEqual({ materializePositions: [], restoredFileCount: 3 });
+  });
+
+  it("counts complete overlays while requesting only incomplete repository positions", async () => {
+    const fs = new MemoryFileSystem();
+    const firstSource = materialization();
+    const secondSource: PiRepositoryMaterialization = {
+      ...materialization(),
+      repository: {
+        ...materialization().repository,
+        position: 1,
+        repoName: "second",
+        root: "/workspace/repos/1",
+      },
+    };
+    const first = new PiRepositoryWorkspace(fs, () => 100);
+    await first.materialize([firstSource, secondSource]);
+    await fs.rm("/workspace/repos/1/src/app.ts");
+    const restored = new PiRepositoryWorkspace(fs, () => 200);
+
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "second",
+          commitSha: SHA,
+        },
+      ])
+    ).resolves.toEqual({ materializePositions: [1], restoredFileCount: 3 });
+  });
+
+  it("rejects a durable manifest set above the configured live-file limit", async () => {
+    const fs = new MemoryFileSystem();
+    await new PiRepositoryWorkspace(fs, () => 100).materialize([materialization()]);
+    const restored = new PiRepositoryWorkspace(fs, () => 200, { maxLiveFiles: 2 });
+
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+      ])
+    ).rejects.toThrow("live file limit");
+  });
+
+  it("treats a durably recorded tracked-file deletion as a complete overlay", async () => {
+    const fs = new MemoryFileSystem();
+    const first = new PiRepositoryWorkspace(fs, () => 100);
+    await first.materialize([materialization()]);
+    await computerDelete(first, fs, "/workspace/repos/0/delete.txt");
+    const restored = new PiRepositoryWorkspace(fs, () => 200);
+
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+      ])
+    ).resolves.toEqual({ materializePositions: [], restoredFileCount: 3 });
+    expect(fs.files.has("/workspace/repos/0/delete.txt")).toBe(false);
+  });
+
+  it("repairs a missing mutation baseline without restoring a recorded deletion", async () => {
+    const fs = new MemoryFileSystem();
+    const source = materialization();
+    const first = new PiRepositoryWorkspace(fs, () => 100);
+    await first.materialize([source]);
+    await computerDelete(first, fs, "/workspace/repos/0/delete.txt");
+    await fs.rm("/.open-inspect/repositories/0/baseline/delete.txt");
+    const restored = new PiRepositoryWorkspace(fs, () => 200);
+
+    await expect(
+      restored.restore([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "widgets",
+          commitSha: SHA,
+        },
+      ])
+    ).resolves.toEqual({ materializePositions: [0], restoredFileCount: 0 });
+    await restored.materialize([source]);
+    expect(fs.files.has("/workspace/repos/0/delete.txt")).toBe(false);
+    await expect(restored.captureDiff(null)).resolves.toMatchObject({
+      repositories: [
+        expect.objectContaining({
+          files: [expect.objectContaining({ path: "delete.txt", status: "deleted" })],
+        }),
+      ],
+    });
+  });
+
   it("captures tracked writes, additions, and deletions as one SessionDiff bundle", async () => {
     const fs = new MemoryFileSystem();
     const workspace = new PiRepositoryWorkspace(fs, () => 100);
@@ -291,6 +448,35 @@ describe("PiRepositoryWorkspace", () => {
     expect(fs.files.has("/workspace/escape.txt")).toBe(false);
     expect(fs.files.has("/workspace/repos/0/new.txt")).toBe(false);
     expect(fs.files.get("/workspace/repos/0/binary.dat")?.bytes).toEqual(new Uint8Array([0, 1, 2]));
+  });
+
+  it("rejects overlong paths before executing a mutation", async () => {
+    const fs = new MemoryFileSystem();
+    const workspace = new PiRepositoryWorkspace(fs, () => 100);
+    await workspace.materialize([materialization()]);
+    const execute = vi.fn(async () => {});
+
+    await expect(
+      workspace.runMutation(
+        "write",
+        { path: `/workspace/repos/0/${"a".repeat(4_097)}`, content: "no" },
+        execute,
+        async () => {},
+        async () => null
+      )
+    ).rejects.toThrow();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("bounds total live repository files after additions", async () => {
+    const fs = new MemoryFileSystem();
+    const workspace = new PiRepositoryWorkspace(fs, () => 100, { maxLiveFiles: 3 });
+    await workspace.materialize([materialization()]);
+
+    await expect(
+      computerWrite(workspace, fs, "/workspace/repos/0/fourth.txt", "fourth\n")
+    ).rejects.toThrow("live file limit");
+    expect(fs.files.has("/workspace/repos/0/fourth.txt")).toBe(false);
   });
 
   it("fails closed on VFS storage errors instead of treating metadata as absent", async () => {

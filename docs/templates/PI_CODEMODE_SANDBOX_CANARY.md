@@ -46,5 +46,7 @@ Copy this file for each deployment/canary. Do not record credentials.
 ## Approval
 
 - `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true` approved by:
+- `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION` (must equal line 19):
 - `PI_CODEMODE_PAID_CANARY_VERIFIED=true` approved by:
+- `PI_CODEMODE_PAID_CANARY_VERSION` (must equal deployed version):
 - Notes / incident links:

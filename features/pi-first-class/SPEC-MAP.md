@@ -106,8 +106,9 @@ adapter may implement that interface for existing full sandboxes.
 
 ### 6. MCP broker
 
-- Requires an Agents SDK runtime transport factory for restored connections, contributed upstream or
-  consumed from a pinned release.
+- Agents SDK 0.28.1 now provides plain-DO `Lifecycle` installation plus persisted HTTP transport
+  restoration. The dependency blocker is resolved; Open-Inspect still needs its identity-first
+  lifecycle composition, callback route, reviewed-catalog verification, and live canary.
 - Encrypted D1 authority, stable revisions/tool names, SSRF guard, per-principal connection DO.
 - Read-only interactive canary before OAuth/mutations/automations.
 
