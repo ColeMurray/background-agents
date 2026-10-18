@@ -172,7 +172,6 @@ jobs:
         run: |
           npm run build -w @open-inspect/shared
           npm run build -w @open-inspect/control-plane
-          npm run build -w @open-inspect/pi-codemode-sandbox
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
@@ -199,7 +198,6 @@ jobs:
           PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
           MCP_CONNECTION_FOUNDATION_ENABLED: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
           ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
-          PI_CODEMODE_SANDBOX_CPU_MS: "${{ vars.PI_CODEMODE_SANDBOX_CPU_MS }}"
         run: |
           set -euo pipefail
           # Read state and parse it as separate steps: piping straight into jq
@@ -208,17 +206,6 @@ jobs:
           # retired. An absent or empty state is still a valid "not v2" answer.
           state="$(terraform state pull)"
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
-          codemode_sandbox_deployed_version="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.pi_codemode_sandbox_worker" and .type == "cloudflare_workers_deployment" and .name == "this") | .instances[0].attributes.versions[0].version_id // empty')"
-          if [ -n "$codemode_sandbox_deployed_version" ]; then
-            printf '%s\n' '{"pi_codemode_sandbox_migration_applied":true}' > pi-codemode-sandbox-migration.auto.tfvars.json
-          fi
-          if [ -n "$PI_CODEMODE_SANDBOX_CPU_MS" ]; then
-            if ! [[ "$PI_CODEMODE_SANDBOX_CPU_MS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "PI_CODEMODE_SANDBOX_CPU_MS must be a positive integer" >&2
-              exit 1
-            fi
-            printf '{"pi_codemode_sandbox_cpu_ms":%s}\n' "$PI_CODEMODE_SANDBOX_CPU_MS" > pi-codemode-sandbox-cpu.auto.tfvars.json
-          fi
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
           mcp_foundation_enabled="$(printf '%s' "$MCP_CONNECTION_FOUNDATION_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
@@ -520,7 +507,6 @@ jobs:
         run: |
           npm run build -w @open-inspect/shared
           npm run build -w @open-inspect/control-plane
-          npm run build -w @open-inspect/pi-codemode-sandbox
           npm run build -w @open-inspect/slack-bot
           npm run build -w @open-inspect/github-bot
           npm run build -w @open-inspect/linear-bot
@@ -552,7 +538,6 @@ jobs:
           PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
           MCP_CONNECTION_FOUNDATION_ENABLED: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
           ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
-          PI_CODEMODE_SANDBOX_CPU_MS: "${{ vars.PI_CODEMODE_SANDBOX_CPU_MS }}"
         run: |
           set -euo pipefail
           # Read state and parse it as separate steps: piping straight into jq
@@ -561,17 +546,6 @@ jobs:
           # retired. An absent or empty state is still a valid "not v2" answer.
           state="$(terraform state pull)"
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
-          codemode_sandbox_deployed_version="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.pi_codemode_sandbox_worker" and .type == "cloudflare_workers_deployment" and .name == "this") | .instances[0].attributes.versions[0].version_id // empty')"
-          if [ -n "$codemode_sandbox_deployed_version" ]; then
-            printf '%s\n' '{"pi_codemode_sandbox_migration_applied":true}' > pi-codemode-sandbox-migration.auto.tfvars.json
-          fi
-          if [ -n "$PI_CODEMODE_SANDBOX_CPU_MS" ]; then
-            if ! [[ "$PI_CODEMODE_SANDBOX_CPU_MS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "PI_CODEMODE_SANDBOX_CPU_MS must be a positive integer" >&2
-              exit 1
-            fi
-            printf '{"pi_codemode_sandbox_cpu_ms":%s}\n' "$PI_CODEMODE_SANDBOX_CPU_MS" > pi-codemode-sandbox-cpu.auto.tfvars.json
-          fi
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
           mcp_foundation_enabled="$(printf '%s' "$MCP_CONNECTION_FOUNDATION_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"

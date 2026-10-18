@@ -621,7 +621,7 @@ enable_service_bindings        = false
 
 ```bash
 # From the repository root
-npm run build -w @open-inspect/control-plane -w @open-inspect/pi-codemode-sandbox -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
 ```
 
 Then run:
@@ -643,12 +643,11 @@ After Phase 1 succeeds, update your `terraform.tfvars`:
 ```hcl
 enable_durable_object_bindings = true
 enable_service_bindings        = true
-pi_codemode_sandbox_migration_applied = true
 ```
 
-The Code Mode setting records that its private Worker's `v1` class migration succeeded; it does not
-expose a public endpoint or add a self-binding. The GitHub Terraform workflow derives this setting
-from the deployed sandbox Worker automatically.
+The private Pi Code Mode sandbox is not part of this Terraform phase. Its protected Wrangler
+workflow is the sole owner of its Worker, WASM, and migration; follow the explicit verification flow
+below before Terraform receives permission to add the external binding.
 
 Then run:
 
@@ -1376,90 +1375,93 @@ may contain personal information; leave them in secrets if you prefer masking in
 The table below describes deployment settings and credentials; use Variables for the names above and
 Secrets for credentials:
 
-| Setting Name                       | Value                                                                                           |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`             | Your Cloudflare API token                                                                       |
-| `CLOUDFLARE_ACCOUNT_ID`            | Your Cloudflare account ID                                                                      |
-| `CLOUDFLARE_WORKER_SUBDOMAIN`      | Your workers.dev subdomain                                                                      |
-| `R2_MEDIA_LOCATION`                | R2 location hint for the media bucket (defaults to `ENAM`)                                      |
-| `R2_MEDIA_BUCKET_NAME`             | Optional media bucket name override for a pre-created bucket                                    |
-| `DEPLOYMENT_NAME`                  | Your deployment name                                                                            |
-| `TEAMS_ENFORCEMENT`                | Session enforcement: `off`, `shadow` (default), or `on`; prefer a repository variable           |
-| `PI_DURABLE_ENABLED`               | `true` enables Pi Durable after the additive `PiSessionDO` migration; defaults to `false`       |
-| `R2_ACCESS_KEY_ID`                 | R2 access key ID                                                                                |
-| `R2_SECRET_ACCESS_KEY`             | R2 secret access key                                                                            |
-| `WEB_PLATFORM`                     | `vercel` or `cloudflare`                                                                        |
-| `VERCEL_API_TOKEN`                 | Vercel API token _(only if `web_platform = "vercel"`)_                                          |
-| `VERCEL_TEAM_ID`                   | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                    |
-| `VERCEL_PROJECT_ID`                | Vercel project ID _(only if `web_platform = "vercel"`)_                                         |
-| `DOCS_SITE_ENABLED`                | `true` keeps the docs site Vercel project (default: `false`; see `packages/docs/README.md`)     |
-| `DOCS_CUSTOM_DOMAIN`               | Optional docs site hostname, e.g. `docs.example.com` (default: the vercel.app URL only)         |
-| `MODAL_TOKEN_ID`                   | Modal token ID                                                                                  |
-| `MODAL_TOKEN_SECRET`               | Modal token secret                                                                              |
-| `MODAL_WORKSPACE`                  | Modal workspace name                                                                            |
-| `MODAL_ENVIRONMENT`                | Modal environment name (defaults to `main`)                                                     |
-| `MODAL_ENVIRONMENT_WEB_SUFFIX`     | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty     |
-| `SANDBOX_PROVIDER`                 | `modal` (default), [`modal-vm`](MODAL_DOCKER.md), `daytona`, `vercel`, `opencomputer`, or `e2b` |
-| `SANDBOX_INACTIVITY_TIMEOUT_MS`    | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)            |
-| `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)       |
-| `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                      |
-| `DAYTONA_API_KEY`                  | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                      |
-| `DAYTONA_BASE_SNAPSHOT`            | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                    |
-| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB` | Base snapshot memory in GiB (defaults to `2`)                                                   |
-| `DAYTONA_TARGET`                   | Optional Daytona target name                                                                    |
-| `DAYTONA_TOOLBOX_API_URL`          | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports              |
-| `DAYTONA_PREBUILDS_ENABLED`        | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)         |
-| `VERCEL_SANDBOX_TOKEN`             | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                      |
-| `VERCEL_SANDBOX_PROJECT_ID`        | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_                |
-| `VERCEL_SANDBOX_TEAM_ID`           | Optional Vercel team/account ID for sandbox sessions                                            |
-| `VERCEL_BASE_SNAPSHOT_ID`          | Optional manual Vercel base-runtime snapshot; skips Terraform-managed snapshot builds           |
-| `VERCEL_SANDBOX_RUNTIME`           | Optional Vercel Sandbox runtime (defaults to `node24`)                                          |
-| `VERCEL_SNAPSHOT_EXPIRATION_MS`    | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)           |
-| `VERCEL_SANDBOX_API_BASE_URL`      | Optional advanced Vercel Sandbox API base URL override                                          |
-| `OPENCOMPUTER_API_KEY`             | OpenComputer API key _(only if `sandbox_provider = "opencomputer"`)_                            |
-| `E2B_API_KEY`                      | E2B API key _(only if `sandbox_provider = "e2b"`)_                                              |
-| `GH_OAUTH_CLIENT_ID`               | Optional GitHub sign-in client ID; set with `GH_OAUTH_CLIENT_SECRET`                            |
-| `GH_OAUTH_CLIENT_SECRET`           | Optional GitHub sign-in client secret; set with `GH_OAUTH_CLIENT_ID`                            |
-| `GOOGLE_CLIENT_ID`                 | Optional Google sign-in client ID; set with `GOOGLE_CLIENT_SECRET`                              |
-| `GOOGLE_CLIENT_SECRET`             | Optional Google sign-in client secret; set with `GOOGLE_CLIENT_ID`                              |
-| `GH_APP_ID`                        | Required GitHub App repository-access ID                                                        |
-| `GH_APP_PRIVATE_KEY`               | Required GitHub App repository-access private key (PKCS#8 format)                               |
-| `GH_APP_INSTALLATION_ID`           | Required GitHub App repository-access installation ID                                           |
-| `ENABLE_SLACK_BOT`                 | `true` to deploy Slack bot, `false` to skip (default: `true`)                                   |
-| `SLACK_BOT_TOKEN`                  | Slack bot token (required if enabled)                                                           |
-| `SLACK_SIGNING_SECRET`             | Slack signing secret (required if enabled)                                                      |
-| `ENABLE_LINEAR_BOT`                | `true` to deploy Linear bot, `false` to skip (default: `false`)                                 |
-| `LINEAR_CLIENT_ID`                 | Linear OAuth application client ID (required if Linear enabled)                                 |
-| `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                             |
-| `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                      |
-| `LINEAR_API_KEY`                   | Optional Linear API key used as a comment-posting fallback                                      |
-| `ANTHROPIC_API_KEY`                | Optional; reaches Modal and OpenComputer sandboxes; classifier fallback                         |
-| `CLASSIFICATION_ANTHROPIC_API_KEY` | Optional classifier-only Anthropic key; never reaches sandboxes                                 |
-| `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                    |
-| `CLASSIFICATION_BEDROCK_API_KEY`   | Classifier Amazon Bedrock API key (required when `classification_model` is a Bedrock id)        |
-| `OPENAI_API_KEY`                   | Optional OpenAI API key used when a session selects API-key authentication                      |
-| `XAI_API_KEY`                      | Optional xAI API key used when a session selects API-key authentication                         |
-| `DEEPSEEK_API_KEY`                 | DeepSeek API key (optional, required only for DeepSeek models)                                  |
-| `TOKEN_ENCRYPTION_KEY`             | Generated encryption key (OAuth tokens)                                                         |
-| `REPO_SECRETS_ENCRYPTION_KEY`      | Generated encryption key (repo secrets)                                                         |
-| `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` | Optional existing provider-account key override; Terraform generates one when omitted           |
-| `MODAL_API_SECRET`                 | Generated Modal API secret                                                                      |
-| `NEXTAUTH_SECRET`                  | Generated browser-auth secret (legacy Actions secret name)                                      |
-| `ALLOWED_USERS`                    | Comma-separated GitHub usernames (empty = list unused; see note below)                          |
-| `ALLOWED_EMAIL_DOMAINS`            | Comma-separated email domains (empty = list unused; see note below)                             |
-| `ALLOWED_EMAILS`                   | Comma-separated exact email addresses (for individual users on shared domains)                  |
-| `ALLOWED_GITHUB_ORGS`              | Comma-separated GitHub orgs whose active members can sign in                                    |
-| `UNSAFE_ALLOW_ALL_USERS`           | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)      |
-| `ENABLE_DURABLE_OBJECT_BINDINGS`   | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
-| `PI_DURABLE_ENABLED`               | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
-| `PI_WORKSPACE_MODE`                | Pi scratch workspace: `off` (default), `read_only`, or `writable`                               |
-| `PI_SANDBOX_EXECUTION_MODE`        | Pi execution capability: `off`, `read_only`, or `enabled`; no model tool is exposed yet         |
-| `ENABLE_SERVICE_BINDINGS`          | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
-| `ENABLE_GITHUB_BOT`                | `true` to deploy GitHub bot worker (or empty to skip)                                           |
-| `GH_WEBHOOK_SECRET`                | GitHub webhook secret (required if GitHub bot enabled)                                          |
-| `GH_BOT_USERNAME`                  | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)                   |
-| `APP_NAME`                         | Optional display name for whitelabeling (default: `Open-Inspect`)                               |
-| `APP_ICON_URL`                     | Optional URL to a custom logo/favicon (default: built-in icon)                                  |
+| Setting Name                              | Value                                                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`                    | Your Cloudflare API token                                                                       |
+| `CLOUDFLARE_ACCOUNT_ID`                   | Your Cloudflare account ID                                                                      |
+| `CLOUDFLARE_WORKER_SUBDOMAIN`             | Your workers.dev subdomain                                                                      |
+| `R2_MEDIA_LOCATION`                       | R2 location hint for the media bucket (defaults to `ENAM`)                                      |
+| `R2_MEDIA_BUCKET_NAME`                    | Optional media bucket name override for a pre-created bucket                                    |
+| `DEPLOYMENT_NAME`                         | Your deployment name                                                                            |
+| `TEAMS_ENFORCEMENT`                       | Session enforcement: `off`, `shadow` (default), or `on`; prefer a repository variable           |
+| `PI_DURABLE_ENABLED`                      | `true` enables Pi Durable after the additive `PiSessionDO` migration; defaults to `false`       |
+| `R2_ACCESS_KEY_ID`                        | R2 access key ID                                                                                |
+| `R2_SECRET_ACCESS_KEY`                    | R2 secret access key                                                                            |
+| `WEB_PLATFORM`                            | `vercel` or `cloudflare`                                                                        |
+| `VERCEL_API_TOKEN`                        | Vercel API token _(only if `web_platform = "vercel"`)_                                          |
+| `VERCEL_TEAM_ID`                          | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                    |
+| `VERCEL_PROJECT_ID`                       | Vercel project ID _(only if `web_platform = "vercel"`)_                                         |
+| `DOCS_SITE_ENABLED`                       | `true` keeps the docs site Vercel project (default: `false`; see `packages/docs/README.md`)     |
+| `DOCS_CUSTOM_DOMAIN`                      | Optional docs site hostname, e.g. `docs.example.com` (default: the vercel.app URL only)         |
+| `MODAL_TOKEN_ID`                          | Modal token ID                                                                                  |
+| `MODAL_TOKEN_SECRET`                      | Modal token secret                                                                              |
+| `MODAL_WORKSPACE`                         | Modal workspace name                                                                            |
+| `MODAL_ENVIRONMENT`                       | Modal environment name (defaults to `main`)                                                     |
+| `MODAL_ENVIRONMENT_WEB_SUFFIX`            | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty     |
+| `SANDBOX_PROVIDER`                        | `modal` (default), [`modal-vm`](MODAL_DOCKER.md), `daytona`, `vercel`, `opencomputer`, or `e2b` |
+| `SANDBOX_INACTIVITY_TIMEOUT_MS`           | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)            |
+| `SANDBOX_BOOT_TIMEOUT_MS`                 | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)       |
+| `DAYTONA_API_URL`                         | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                      |
+| `DAYTONA_API_KEY`                         | Daytona API key _(only if `sandbox_provider = "daytona"`)_                                      |
+| `DAYTONA_BASE_SNAPSHOT`                   | Daytona base snapshot name prefix _(only if `sandbox_provider = "daytona"`)_                    |
+| `DAYTONA_BASE_SNAPSHOT_MEMORY_GIB`        | Base snapshot memory in GiB (defaults to `2`)                                                   |
+| `DAYTONA_TARGET`                          | Optional Daytona target name                                                                    |
+| `DAYTONA_TOOLBOX_API_URL`                 | Optional Daytona toolbox proxy override; empty uses the proxy each sandbox reports              |
+| `DAYTONA_PREBUILDS_ENABLED`               | `true` to admit new Daytona prebuilt-image builds and boot from them (default: `false`)         |
+| `VERCEL_SANDBOX_TOKEN`                    | Vercel API token _(only if `sandbox_provider = "vercel"`)_                                      |
+| `VERCEL_SANDBOX_PROJECT_ID`               | Vercel project ID for sandbox sessions _(only if `sandbox_provider = "vercel"`)_                |
+| `VERCEL_SANDBOX_TEAM_ID`                  | Optional Vercel team/account ID for sandbox sessions                                            |
+| `VERCEL_BASE_SNAPSHOT_ID`                 | Optional manual Vercel base-runtime snapshot; skips Terraform-managed snapshot builds           |
+| `VERCEL_SANDBOX_RUNTIME`                  | Optional Vercel Sandbox runtime (defaults to `node24`)                                          |
+| `VERCEL_SNAPSHOT_EXPIRATION_MS`           | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)           |
+| `VERCEL_SANDBOX_API_BASE_URL`             | Optional advanced Vercel Sandbox API base URL override                                          |
+| `OPENCOMPUTER_API_KEY`                    | OpenComputer API key _(only if `sandbox_provider = "opencomputer"`)_                            |
+| `E2B_API_KEY`                             | E2B API key _(only if `sandbox_provider = "e2b"`)_                                              |
+| `GH_OAUTH_CLIENT_ID`                      | Optional GitHub sign-in client ID; set with `GH_OAUTH_CLIENT_SECRET`                            |
+| `GH_OAUTH_CLIENT_SECRET`                  | Optional GitHub sign-in client secret; set with `GH_OAUTH_CLIENT_ID`                            |
+| `GOOGLE_CLIENT_ID`                        | Optional Google sign-in client ID; set with `GOOGLE_CLIENT_SECRET`                              |
+| `GOOGLE_CLIENT_SECRET`                    | Optional Google sign-in client secret; set with `GOOGLE_CLIENT_ID`                              |
+| `GH_APP_ID`                               | Required GitHub App repository-access ID                                                        |
+| `GH_APP_PRIVATE_KEY`                      | Required GitHub App repository-access private key (PKCS#8 format)                               |
+| `GH_APP_INSTALLATION_ID`                  | Required GitHub App repository-access installation ID                                           |
+| `ENABLE_SLACK_BOT`                        | `true` to deploy Slack bot, `false` to skip (default: `true`)                                   |
+| `SLACK_BOT_TOKEN`                         | Slack bot token (required if enabled)                                                           |
+| `SLACK_SIGNING_SECRET`                    | Slack signing secret (required if enabled)                                                      |
+| `ENABLE_LINEAR_BOT`                       | `true` to deploy Linear bot, `false` to skip (default: `false`)                                 |
+| `LINEAR_CLIENT_ID`                        | Linear OAuth application client ID (required if Linear enabled)                                 |
+| `LINEAR_CLIENT_SECRET`                    | Linear OAuth application client secret (required if Linear enabled)                             |
+| `LINEAR_WEBHOOK_SECRET`                   | Linear webhook signing secret (required if Linear enabled)                                      |
+| `LINEAR_API_KEY`                          | Optional Linear API key used as a comment-posting fallback                                      |
+| `ANTHROPIC_API_KEY`                       | Optional; reaches Modal and OpenComputer sandboxes; classifier fallback                         |
+| `CLASSIFICATION_ANTHROPIC_API_KEY`        | Optional classifier-only Anthropic key; never reaches sandboxes                                 |
+| `CLASSIFICATION_OPENAI_API_KEY`           | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                    |
+| `CLASSIFICATION_BEDROCK_API_KEY`          | Classifier Amazon Bedrock API key (required when `classification_model` is a Bedrock id)        |
+| `OPENAI_API_KEY`                          | Optional OpenAI API key used when a session selects API-key authentication                      |
+| `XAI_API_KEY`                             | Optional xAI API key used when a session selects API-key authentication                         |
+| `DEEPSEEK_API_KEY`                        | DeepSeek API key (optional, required only for DeepSeek models)                                  |
+| `TOKEN_ENCRYPTION_KEY`                    | Generated encryption key (OAuth tokens)                                                         |
+| `REPO_SECRETS_ENCRYPTION_KEY`             | Generated encryption key (repo secrets)                                                         |
+| `PROVIDER_ACCOUNTS_ENCRYPTION_KEY`        | Optional existing provider-account key override; Terraform generates one when omitted           |
+| `MODAL_API_SECRET`                        | Generated Modal API secret                                                                      |
+| `NEXTAUTH_SECRET`                         | Generated browser-auth secret (legacy Actions secret name)                                      |
+| `ALLOWED_USERS`                           | Comma-separated GitHub usernames (empty = list unused; see note below)                          |
+| `ALLOWED_EMAIL_DOMAINS`                   | Comma-separated email domains (empty = list unused; see note below)                             |
+| `ALLOWED_EMAILS`                          | Comma-separated exact email addresses (for individual users on shared domains)                  |
+| `ALLOWED_GITHUB_ORGS`                     | Comma-separated GitHub orgs whose active members can sign in                                    |
+| `UNSAFE_ALLOW_ALL_USERS`                  | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)      |
+| `ENABLE_DURABLE_OBJECT_BINDINGS`          | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
+| `PI_DURABLE_ENABLED`                      | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
+| `PI_WORKSPACE_MODE`                       | Pi scratch workspace: `off` (default), `read_only`, or `writable`                               |
+| `PI_SANDBOX_EXECUTION_MODE`               | Pi execution capability: `off`, `read_only`, or `enabled`; no model tool is exposed yet         |
+| `PI_CODEMODE_MODE`                        | Native Pi Code Mode: `off` (default) or explicit paid-plan opt-in `paid`                        |
+| `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED` | Keep `false` until the protected Wrangler deployment is verified live                           |
+| `PI_CODEMODE_PAID_CANARY_VERIFIED`        | Keep `false` until migration, WASM, and CPU checks pass on a disposable paid account            |
+| `ENABLE_SERVICE_BINDINGS`                 | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
+| `ENABLE_GITHUB_BOT`                       | `true` to deploy GitHub bot worker (or empty to skip)                                           |
+| `GH_WEBHOOK_SECRET`                       | GitHub webhook secret (required if GitHub bot enabled)                                          |
+| `GH_BOT_USERNAME`                         | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)                   |
+| `APP_NAME`                                | Optional display name for whitelabeling (default: `Open-Inspect`)                               |
+| `APP_ICON_URL`                            | Optional URL to a custom logo/favicon (default: built-in icon)                                  |
 
 An empty allowlist only means that list is not used; it does not admit everyone. Terraform fails the
 plan unless at least one of `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_EMAILS`, or
@@ -1514,6 +1516,67 @@ sessions then receive only read tools, while sessions already snapshotted as wri
 operable. Set the mode to `off` in a later apply to disable the workspace for later sessions. Normal
 rollback never deletes the Pi class or its storage. Delete an existing writable session only when
 its workspace and conversation should be destroyed deliberately.
+
+Native Pi Code Mode is a separate opt-in. It runs model-written JavaScript in the private
+`pi-codemode-sandbox` Worker while tools remain in `PiSessionDO`. The composite policy permits only
+replay-safe read tools and default-denies unknown, unsafe-replay, mutation, sandbox-execution, and
+control effects. The native extension occupies the canonical `code_mode` slot and uses
+`PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS`. Model-powered globals remain registered for native replay
+compatibility, but their unsafe nested calls are denied. QuickJS WASM never enters the control-plane
+bundle.
+
+Cloudflare bills each execution as a Durable Object request and bills the sandbox for wall-clock
+duration, including time waiting on tools.
+
+### Preview-state ownership transfer
+
+If an earlier preview already placed `module.pi_codemode_sandbox_worker` in Terraform state and the
+external binding must remain available for latched-session replay:
+
+1. Set Code Mode admission to `off` and deploy/upgrade the same deterministic Worker through the
+   protected Wrangler workflow.
+2. Complete the live deployment proof, then set `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`
+   **before the first Terraform apply** that contains the ownership-transfer `removed` block.
+   Applying with the flag false would remove the retained external binding even though
+   `destroy = false` preserves the Worker.
+3. Run Terraform. It forgets the preview module without destroying the Worker and retains the
+   external binding. Continue with the paid canary before restoring admission.
+
+### Fresh Code Mode deployment
+
+1. Keep `PI_CODEMODE_MODE=off`, `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=false`, and
+   `PI_CODEMODE_PAID_CANARY_VERIFIED=false` during normal Terraform deployment. Terraform creates no
+   Code Mode Worker, version, WASM upload, or migration.
+2. Dispatch **Deploy Pi Code Mode Sandbox** with operation `deploy` and confirm the exact
+   `open-inspect-pi-codemode-sandbox-<DEPLOYMENT_NAME>` name. Wrangler uploads the private Worker,
+   QuickJS WASM, fixed 60000 ms CPU limit, and `CodemodeSandbox` v1 SQLite migration. The job uses
+   the protected `production` environment and fails unless the reviewed workflow runs from `main`;
+   Cloudflare credentials are scoped only to the final deploy/rollback step after validation.
+3. Complete `docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`. Then set
+   `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true` and run Terraform to add only the retained
+   external `CODEMODE_SANDBOX` binding. Keep admission off.
+4. Run the paid runtime canary. After it passes, set `PI_CODEMODE_PAID_CANARY_VERIFIED=true` and
+   `PI_CODEMODE_MODE=paid`, then apply Terraform.
+
+### Code Mode upgrade
+
+1. Set `PI_CODEMODE_MODE=off` first and retain the external binding for admitted replay.
+2. Dispatch the Wrangler workflow with operation `deploy`; Terraform never adopts its version.
+3. Record old/new version IDs and repeat the WASM, CPU, execution, abort, and replay checks before
+   restoring paid admission.
+
+Provider issues [#6852](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6852) and
+[#6404](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6404) remain live canary
+concerns. Local plans/workerd tests do not prove provider behavior, and this repository has no
+paid-account proof, so production admission remains blocked by default.
+
+### Code Mode rollback
+
+Set `PI_CODEMODE_MODE=off` and apply Terraform first. Keep
+`PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. Admitted
+tasks retain their durable memo and replay; new tasks are denied. To roll back the Worker version,
+dispatch the dedicated workflow with operation `rollback` and an exact known-good version ID. Never
+delete or import the Wrangler-owned Worker through Terraform during normal rollback.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
@@ -1699,15 +1762,17 @@ Terraform references the built worker bundles. Build them before running `terraf
 npm run build -w @open-inspect/shared
 
 # Build workers (required before Terraform)
-npm run build -w @open-inspect/control-plane -w @open-inspect/pi-codemode-sandbox -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
+npm run build -w @open-inspect/control-plane -w @open-inspect/slack-bot -w @open-inspect/github-bot -w @open-inspect/linear-bot
 
 # Verify bundles exist
 ls packages/control-plane/dist/index.js
-ls packages/pi-codemode-sandbox/dist/index.js packages/pi-codemode-sandbox/dist/quickjs.wasm
 ls packages/slack-bot/dist/index.js
 ls packages/github-bot/dist/index.js  # Only if enable_github_bot = true
 ls packages/linear-bot/dist/index.js  # Only if enable_linear_bot = true
 ```
+
+The Pi Code Mode sandbox is deliberately absent from this list. Its Wrangler-owned workflow builds
+and deploys that package independently; Terraform must not consume its bundle.
 
 ### Slack bot not responding
 

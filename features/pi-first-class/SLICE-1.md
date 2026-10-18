@@ -4,7 +4,8 @@
 
 Added a dedicated, private Cloudflare Worker that exports Pi Code Mode's official
 `CodemodeSandboxDurableObject` under the stable `CodemodeSandbox` class name. Wrangler compiles the
-QuickJS WASM import; Terraform uploads the JavaScript, source map, and WASM as one module Worker.
+QuickJS WASM import and directly owns the private Worker, version, WASM upload, and class migration.
+Terraform never creates or adopts this Worker; it later manages only a verified external binding.
 
 This slice does not bind the Worker to the control plane, install Code Mode in Pi, expose execution
 to users, or give the sandbox credentials, application storage, service bindings, or a public URL.
@@ -12,29 +13,28 @@ to users, or give the sandbox credentials, application storage, service bindings
 ## Deployment contract
 
 - `workers.dev` and preview URLs are disabled.
-- The `v1` class migration is deployed without a self-binding, avoiding provider issue #6852's
-  create-and-bind-in-one-version failure.
-- A deployed-version state check records migration completion on the following Terraform run.
-- Optional custom CPU limits are validated and staged as numeric JSON; unset Free-plan deployments
-  do not send an invalid `null` environment value or require a paid limit.
-- Rollback keeps the Worker/class in place; runtime admission remains absent.
+- The dedicated manual workflow invokes Wrangler with a deterministic deployment-scoped name.
+- One direct deploy owns the QuickJS WASM and `v1` SQLite migration with zero self-bindings, routes,
+  preview URLs, variables, secrets, or service bindings.
+- The CPU limit is fixed at 60000 ms and requires live paid-account verification.
+- Fresh deploys and upgrades use Wrangler deploy; version rollback uses Wrangler rollback.
+- Terraform's explicit verified-deployment input adds only the retained external binding.
 
-## Reusable Terraform support
+## Terraform boundary
 
-- File-backed additional Worker modules, including WASM and source maps.
 - External Durable Object namespace bindings with `script_name` and optional environment.
-- Migration-only exported classes without unused namespace bindings.
-- Nullable preview URL management, private workers.dev configuration, optional CPU limits, binding
-  name collision checks, and safe module-name validation.
+- A `removed` block forgets preview-era module state with `destroy = false` so Terraform does not
+  delete the Worker while ownership moves to Wrangler.
+- Normal Terraform plans contain no Code Mode Worker, version, WASM, or migration resource.
 
 ## Evidence
 
 - Sandbox build: 754.20 KiB upload; normalized `quickjs.wasm` 637,405 bytes.
 - Sandbox contract: 1 passed.
 - Cloudflare Worker module contracts: 6 passed.
-- Production Terraform contracts: 76 passed.
-- Terraform workflow/comment contracts: 28 passed.
+- Dedicated Wrangler owner contracts cover deterministic deploy/upgrade/rollback commands.
+- Production Terraform contracts prove default plans create no sandbox lifecycle resources.
 - Repository typecheck, lint, Prettier, Terraform fmt/validate, and README translations passed.
 - Final security review: no concrete blockers.
-- Issue #6852 re-review: its demonstrated failure requires a binding to the class created in the
-  same undeployed version; this migration-only Worker has zero bindings.
+- Provider issues #6852 and #6404 remain live-canary concerns; local contracts do not infer provider
+  behavior from their titles.

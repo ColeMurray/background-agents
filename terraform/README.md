@@ -418,10 +418,8 @@ variables.
 
 ### Worker deployment fails
 
-1. Build workers first:
-   `npm run build -w @open-inspect/control-plane -w @open-inspect/pi-codemode-sandbox`
-2. Check artifacts exist:
-   `ls packages/control-plane/dist/index.js packages/pi-codemode-sandbox/dist/{index.js,index.js.map,quickjs.wasm}`
+1. Build the Terraform-owned worker first: `npm run build -w @open-inspect/control-plane`
+2. Check the artifact exists: `ls packages/control-plane/dist/index.js`
 3. Verify Cloudflare API token permissions:
    - `Workers Scripts: Edit`
    - `Workers KV Storage: Edit`
@@ -432,19 +430,20 @@ variables.
 
 ### Enable or roll back Pi Code Mode
 
-Keep `pi_codemode_mode = "off"` for the initial sandbox Worker deployment. After that deployment has
-applied the `CodemodeSandbox` migration, set `pi_codemode_sandbox_migration_applied = true` and
-apply again to add the external `CODEMODE_SANDBOX` binding. Keep admission off until a disposable
-Workers Paid account proves that the live migration-only Worker has QuickJS WASM and zero
-self-bindings, the external binding executes a script, and the configured CPU limit is effective.
-Provider issues #6852 (migration + WASM) and #6404 (paid CPU limits) remain open; a plan cannot
-establish either live behavior. After recording that evidence, set
-`pi_codemode_paid_canary_verified = true`, set `pi_codemode_sandbox_cpu_ms`, and only then set
-`pi_codemode_mode = "paid"`. Terraform blocks `paid` without all three gates.
+Terraform never owns the Pi Code Mode sandbox Worker, version, WASM, or migration. Keep
+`pi_codemode_mode = "off"` and `pi_codemode_sandbox_deployment_verified = false`; then use the
+manual **Deploy Pi Code Mode Sandbox** workflow. Wrangler deploys the migration and WASM together
+under `open-inspect-pi-codemode-sandbox-<deployment_name>`. After recording the live proof in
+`docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`, set `pi_codemode_sandbox_deployment_verified = true`
+so Terraform adds only the external binding. The root's `removed` block forgets any preview-era
+Terraform module state with `destroy = false`; never remove that guard until affected states have
+migrated. Provider issues #6852 and #6404 remain open; a Terraform plan cannot establish live
+behavior. Set `pi_codemode_paid_canary_verified = true` and `pi_codemode_mode = "paid"` only after
+the canary.
 
-Rollback sets `pi_codemode_mode = "off"` but leaves `pi_codemode_sandbox_migration_applied = true`.
-Do not remove the external binding, private Worker, or class: sessions that already latched Code
-Mode require that runtime for replay, abort, and cleanup.
+Rollback sets `pi_codemode_mode = "off"` but leaves
+`pi_codemode_sandbox_deployment_verified = true`. Do not remove the external binding, private
+Worker, or class. Roll back its version only through the dedicated Wrangler workflow.
 
 ## Adding New Environments
 

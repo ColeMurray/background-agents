@@ -50,15 +50,15 @@ run "codemode_defaults_off_without_external_binding" {
 
   assert {
     condition     = !contains(module.control_plane_worker.binding_names, "CODEMODE_SANDBOX")
-    error_message = "The control plane must not bind the sandbox before its class migration is acknowledged."
+    error_message = "The control plane must not bind the sandbox before its Wrangler deployment is verified."
   }
 }
 
-run "migrated_sandbox_binding_survives_feature_rollback" {
+run "verified_sandbox_binding_survives_feature_rollback" {
   command = plan
 
   variables {
-    pi_codemode_sandbox_migration_applied = true
+    pi_codemode_sandbox_deployment_verified = true
   }
 
   assert {
@@ -76,10 +76,9 @@ run "paid_mode_connects_to_the_external_sandbox" {
   command = plan
 
   variables {
-    pi_codemode_mode                      = "paid"
-    pi_codemode_sandbox_migration_applied = true
-    pi_codemode_paid_canary_verified      = true
-    pi_codemode_sandbox_cpu_ms            = 60000
+    pi_codemode_mode                        = "paid"
+    pi_codemode_sandbox_deployment_verified = true
+    pi_codemode_paid_canary_verified        = true
   }
 
   assert {
@@ -90,13 +89,13 @@ run "paid_mode_connects_to_the_external_sandbox" {
   assert {
     condition = (
       module.control_plane_worker.external_durable_object_bindings["CODEMODE_SANDBOX"].class_name == "CodemodeSandbox" &&
-      module.control_plane_worker.external_durable_object_bindings["CODEMODE_SANDBOX"].script_name == module.pi_codemode_sandbox_worker.worker_name
+      module.control_plane_worker.external_durable_object_bindings["CODEMODE_SANDBOX"].script_name == "open-inspect-pi-codemode-sandbox-${var.deployment_name}"
     )
     error_message = "Code Mode must use the separately deployed sandbox Durable Object."
   }
 }
 
-run "paid_mode_requires_the_prior_sandbox_migration" {
+run "paid_mode_requires_the_verified_wrangler_deployment" {
   command = plan
 
   variables {
@@ -110,21 +109,8 @@ run "paid_mode_requires_a_live_paid_account_canary" {
   command = plan
 
   variables {
-    pi_codemode_mode                      = "paid"
-    pi_codemode_sandbox_migration_applied = true
-    pi_codemode_sandbox_cpu_ms            = 60000
-  }
-
-  expect_failures = [check.pi_codemode_paid_ready]
-}
-
-run "paid_mode_requires_a_canaried_cpu_limit" {
-  command = plan
-
-  variables {
-    pi_codemode_mode                      = "paid"
-    pi_codemode_sandbox_migration_applied = true
-    pi_codemode_paid_canary_verified      = true
+    pi_codemode_mode                        = "paid"
+    pi_codemode_sandbox_deployment_verified = true
   }
 
   expect_failures = [check.pi_codemode_paid_ready]

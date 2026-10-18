@@ -316,18 +316,15 @@ nextauth_secret = ""
 # Select "modal-vm" for Docker-capable VMs (deployment-wide; see docs/MODAL_DOCKER.md).
 sandbox_provider = "modal"
 
-# Optional paid-plan CPU limit for Pi Code Mode's isolated QuickJS Worker.
-# Leave unset on Workers Free. Set to 60000 before enabling Code Mode on a paid plan.
-# pi_codemode_sandbox_cpu_ms = 60000
-
 # Pi's credential-free durable scratch filesystem: "off", "read_only", or
 # "writable". Writable remains VFS-only: no shell, Git, network, mounts, or
 # publishing. Keep off unless you explicitly accept Cloudflare Computer's
 # preview status. Each Pi session snapshots this capability on first open.
 # pi_workspace_mode = "off"
-# Native Pi Durable Code Mode is separately billed by Cloudflare. Deploy the
-# sandbox migration first, then opt in explicitly with "paid".
+# Native Pi Durable Code Mode is separately billed. Its dedicated Wrangler
+# workflow owns the Worker, v1 migration, WASM, and fixed 60000 ms CPU limit.
 # pi_codemode_mode = "off"
+# pi_codemode_sandbox_deployment_verified = false
 # pi_codemode_paid_canary_verified = false
 
 # Platform for the web app deployment

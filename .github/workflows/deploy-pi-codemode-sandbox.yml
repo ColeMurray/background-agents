@@ -1,0 +1,65 @@
+name: Deploy Pi Code Mode Sandbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy/upgrade the sandbox, or roll it back to a known version
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+      rollback_version:
+        description: Required only for rollback; exact target Worker version ID
+        required: false
+        type: string
+      confirm_worker_name:
+        description: Exact open-inspect-pi-codemode-sandbox-<DEPLOYMENT_NAME> Worker name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-codemode-sandbox-${{ vars.DEPLOYMENT_NAME || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Wrangler-owned sandbox ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate sandbox bundle and ownership contracts
+        run: |
+          npm run build -w @open-inspect/pi-codemode-sandbox
+          npm test -w @open-inspect/pi-codemode-sandbox
+
+      - name: Deploy or roll back with Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOYMENT_NAME: ${{ vars.DEPLOYMENT_NAME || secrets.DEPLOYMENT_NAME }}
+          CONFIRM_WORKER_NAME: ${{ inputs.confirm_worker_name }}
+          OPERATION: ${{ inputs.operation }}
+          ROLLBACK_VERSION: ${{ inputs.rollback_version }}
+        run: bash scripts/deploy-pi-codemode-sandbox.sh "$OPERATION" "$ROLLBACK_VERSION"
+
+      - name: Print evidence checklist path
+        run: echo "Record live verification in docs/templates/PI_CODEMODE_SANDBOX_CANARY.md"

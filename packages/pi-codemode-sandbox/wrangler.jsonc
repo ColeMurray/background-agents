@@ -5,6 +5,7 @@
   "compatibility_date": "2026-10-18",
   "workers_dev": false,
   "preview_urls": false,
+  "limits": { "cpu_ms": 60000 },
   "migrations": [
     {
       "tag": "v1",

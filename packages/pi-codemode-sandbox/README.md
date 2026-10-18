@@ -2,16 +2,15 @@
 
 This package deploys Pi Code Mode's QuickJS runtime in a dedicated Cloudflare Worker. It is an
 execution boundary only: it has no public route, credentials, application storage, or network tools.
-The control plane will connect to its Durable Object through a cross-Worker binding in a later
-integration slice.
+The control plane connects to its Durable Object through a retained cross-Worker binding.
 
-Build the Terraform upload artifacts with:
+Validate the bundle locally with:
 
 ```bash
 npm run build -w @open-inspect/pi-codemode-sandbox
 ```
 
-Wrangler compiles the imported QuickJS WASM module. The post-build step gives that module a stable
-`dist/quickjs.wasm` name so Terraform can upload the JavaScript, source map, and WASM modules
-together. Production deployment remains Terraform-owned; do not run `wrangler deploy` without
-`--dry-run`.
+Wrangler is the sole production owner of this Worker, its versions, QuickJS WASM, and the
+`CodemodeSandbox` migration. Use the manual **Deploy Pi Code Mode Sandbox** workflow, which calls
+`scripts/deploy-pi-codemode-sandbox.sh` with a deterministic deployment-scoped name. Terraform must
+never create or adopt this Worker; it only adds the external binding after live verification.

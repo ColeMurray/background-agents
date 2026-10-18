@@ -19,18 +19,20 @@ Terraform also requires a disposable paid-account canary proof unavailable in th
   conflicting with writable/repository/external-action branches.
 - The native extension occupies the canonical `code_mode` slot and contributes
   `PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS` to the composite policy registry.
-- Model-powered Code Mode globals are disabled.
+- Model-powered globals remain registered for native replay compatibility; the composite policy
+  denies their unsafe nested calls.
 - The control plane uses the package's `/portable` runtime. The `/cloudflare` path is type-only and
   the build guard proves neither that runtime nor QuickJS WASM enters the control-plane bundle.
 
 ## Deployment and rollback
 
-The sandbox migration deploys before the control plane receives its external binding. Terraform
-rejects `paid` until the migration, a configured CPU limit, and a live paid-account canary are
-recorded. Provider issues #6852 and #6404 remain open, so local plan/workerd evidence is not live
-deployment proof. Rollback changes admission to `off` while retaining the Worker, class, binding,
-and installed extension. New calls are denied before the durable admission memo; admitted tasks
-retain that memo and replay.
+The dedicated Wrangler workflow is the sole owner of the private Worker, WASM, version, fixed CPU
+limit, and migration. Terraform creates none of them; after explicit live verification it manages
+only the retained external binding. Provider issues #6852 and #6404 remain open, so local
+plan/workerd evidence is not live deployment proof. Rollback changes admission to `off` while
+retaining the Worker, class, binding, and installed extension. New calls are denied before the
+durable admission memo; admitted tasks retain that memo and replay. Worker-version rollback also
+runs only through Wrangler.
 
 ## Evidence
 
@@ -42,6 +44,6 @@ retain that memo and replay.
 - Native `createCodemodeExtension()` SQLite tests for journal replay, completed nested-call
   reattachment, interrupted-call replay, and abort propagation.
 - PiSessionDO workerd assertions for model/callable tools, legacy backfill, and durable latch.
-- Terraform tests for default-off, two-phase binding, paid readiness, rollback retention, and
-  invalid modes.
+- Terraform tests prove default plans create no sandbox migration/version and cover verified
+  binding, paid readiness, rollback retention, and invalid modes.
 - Bundle metafile assertions excluding the Cloudflare runtime and WASM from the control plane.

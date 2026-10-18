@@ -56,9 +56,6 @@ const NOT_FROM_ENVIRONMENT = new Set([
   // auto tfvars that preserve the binding after admission is disabled.
   "pi_durable_binding_enabled",
   "mcp_connection_binding_enabled",
-  "pi_codemode_sandbox_migration_applied",
-  // Validated and written as numeric JSON by the migration staging step.
-  "pi_codemode_sandbox_cpu_ms",
   "project_root",
 ]);
 
@@ -250,36 +247,26 @@ test("McpConnectionDO migration refuses one-phase and pre-v4 upgrades", async ()
   assert.match(prePi.stderr, /requires the PiSessionDO v4 migration/);
 });
 
-test("Pi Code Mode sandbox migration completion follows a deployed version", () => {
+test("Pi Code Mode binding requires explicit Wrangler deployment verification", () => {
   assertInPlanAndApply(
-    'select(.module == "module.pi_codemode_sandbox_worker" and .type == "cloudflare_workers_deployment"',
-    "Code Mode sandbox deployed-version state lookup"
+    "TF_VAR_pi_codemode_sandbox_deployment_verified:",
+    "Code Mode Wrangler deployment verification"
   );
-  assertInPlanAndApply(
-    '"pi_codemode_sandbox_migration_applied":true',
-    "Code Mode sandbox migration completion"
-  );
+  assert.equal(workflow.includes("module.pi_codemode_sandbox_worker"), false);
+  assert.equal(workflow.includes("pi-codemode-sandbox-migration.auto.tfvars.json"), false);
 });
 
-test("control plane deployment waits for the external Code Mode owner", async () => {
+test("Terraform only consumes the verified Wrangler-owned Code Mode worker", async () => {
   const controlPlane = await readFile(
     new URL("../terraform/environments/production/workers-control-plane.tf", import.meta.url),
     "utf8"
   );
+  assert.match(controlPlane, /var\.pi_codemode_sandbox_deployment_verified \? \{/);
   assert.match(
     controlPlane,
-    /depends_on\s*=\s*\[[\s\S]*module\.pi_codemode_sandbox_worker,[\s\S]*\]/,
-    "the external binding must deploy only after the sandbox Worker deployment"
+    /script_name = "open-inspect-pi-codemode-sandbox-\$\{local\.name_suffix\}"/
   );
-});
-
-test("Pi Code Mode sandbox CPU limit is staged as optional numeric JSON", () => {
-  assertInPlanAndApply("PI_CODEMODE_SANDBOX_CPU_MS:", "Code Mode sandbox CPU input");
-  assertInPlanAndApply(
-    "PI_CODEMODE_SANDBOX_CPU_MS must be a positive integer",
-    "Code Mode sandbox CPU validation"
-  );
-  assertInPlanAndApply("pi-codemode-sandbox-cpu.auto.tfvars.json", "Code Mode sandbox CPU tfvars");
+  assert.doesNotMatch(controlPlane, /module\.pi_codemode_sandbox_worker/);
 });
 
 test("Terraform runs when root npm deployment inputs change", () => {
