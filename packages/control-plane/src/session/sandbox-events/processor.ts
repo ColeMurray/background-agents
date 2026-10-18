@@ -93,6 +93,9 @@ export class SessionSandboxEventProcessor {
         now,
         messageId: eventMessageId ?? processingMessage?.id ?? null,
         processingMessage,
+        ...(event.ackId?.startsWith("pi-projection:")
+          ? { projectionEventId: event.ackId.slice("pi-projection:".length) }
+          : {}),
       };
       fields = eventLogContext(event, context.messageId);
       await this.dispatch(event, context);

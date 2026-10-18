@@ -27,10 +27,7 @@ describe("translatePiEvents", () => {
         operationId: "message-1",
         timestamp: 123,
       })
-    ).toEqual([
-      expect.objectContaining({ type: "step_start", messageId: "message-1" }),
-      expect.objectContaining({ type: "token", content: "Hello", partId: "message-1" }),
-    ]);
+    ).toEqual([expect.objectContaining({ type: "token", content: "Hello", partId: "message-1" })]);
   });
 
   it("continues cumulative text across committed batches", () => {
@@ -160,6 +157,7 @@ describe("translatePiEvents", () => {
         toolName: "repository_list",
         taskId: 2,
         entry: {
+          id: 42,
           model: [
             {
               role: "toolResult",
@@ -191,6 +189,7 @@ describe("translatePiEvents", () => {
       {
         type: "message_end",
         entry: {
+          id: 42,
           kind: "pi.assistant",
           model: [
             {
@@ -217,18 +216,94 @@ describe("translatePiEvents", () => {
         operationId: "message-1",
         timestamp: 127,
       })
-    ).toContainEqual(
-      expect.objectContaining({
-        type: "step_finish",
-        tokens: {
-          input: 10,
-          output: 4,
-          reasoning: 2,
-          cache: { read: 3, write: 1 },
-          total: 20,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "step_start", stepId: "pi-entry:42" }),
+        expect.objectContaining({
+          type: "step_finish",
+          stepId: "pi-entry:42",
+          tokens: {
+            input: 10,
+            output: 4,
+            reasoning: 2,
+            cache: { read: 3, write: 1 },
+            total: 20,
+          },
+          reason: "stop",
+        }),
+      ])
+    );
+  });
+
+  it("reconstructs the final tool result from a settled operation snapshot", () => {
+    const snapshot = {
+      type: "snapshot",
+      entries: [
+        { id: 10, model: [{ role: "user", content: [{ type: "text", text: "question" }] }] },
+        {
+          id: 11,
+          model: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call-final",
+                  name: "repository_read",
+                  arguments: { path: "README.md" },
+                },
+              ],
+              stopReason: "toolUse",
+              usage: {
+                input: 2,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 3,
+              },
+            },
+          ],
         },
-        reason: "stop",
-      })
+        {
+          id: 12,
+          model: [
+            {
+              role: "toolResult",
+              toolCallId: "call-final",
+              toolName: "repository_read",
+              content: [{ type: "text", text: "contents" }],
+              isError: false,
+            },
+          ],
+        },
+      ],
+      tools: [],
+      nestedTools: [],
+      compactions: [],
+      inbox: [],
+      agent: {},
+      usage: { models: {}, tools: {} },
+    } as unknown as AgentEvent;
+
+    expect(
+      translatePiEvents(
+        [snapshot],
+        { text: "" },
+        {
+          sessionId: "session-1",
+          operationId: "message-1",
+          timestamp: 131,
+        }
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          callId: "call-final",
+          status: "completed",
+          output: "contents",
+        }),
+      ])
     );
   });
 

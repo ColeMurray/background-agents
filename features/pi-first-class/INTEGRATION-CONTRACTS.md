@@ -61,6 +61,7 @@ Import `@open-inspect/shared/pi-migration-reservations`. The reserved versions a
 | SessionDO |      59 | sandbox execution | lifecycle persistence                |
 | SessionDO |      60 | external actions  | approvals and execution persistence  |
 | SessionDO |      61 | core authority    | creation-time Pi capability snapshot |
+| SessionDO |      62 | Pi projection     | dispatch CAS and projection sequence |
 | D1        |    0090 | external actions  | long-lived external action authority |
 | D1        |    0091 | MCP               | long-lived MCP authority             |
 
@@ -70,8 +71,8 @@ SessionDO `SchemaMigration` entries set their `feature` owner. Reserved D1 files
 `-- pi-feature: <owner>`. `assertMigrationReservation` enforces owner, store, and version, rejecting
 unreserved or swapped claims. SessionDO's existing schema test and the D1 migration runner test pass
 the repository's artifacts through `validateMigrationArtifacts`; shared tests also reject duplicate
-reservations and duplicate artifact versions. Migration 61 is owned by core authority; later feature
-branches must not reuse it.
+reservations and duplicate artifact versions. Migration 61 is owned by core authority and migration
+62 by core Pi projection reliability; later feature branches must not reuse either slot.
 
 ## Extension assembly
 

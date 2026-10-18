@@ -5,6 +5,7 @@ import {
   PI_MIGRATION_RESERVATIONS,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   assertMigrationReservation,
@@ -19,9 +20,10 @@ describe("Pi migration reservations", () => {
       PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
       PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
       PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+      PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
       PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
       PI_D1_MCP_MIGRATION_VERSION,
-    ]).toEqual([58, 59, 60, 61, 90, 91]);
+    ]).toEqual([58, 59, 60, 61, 62, 90, 91]);
     expect(PI_MIGRATION_RESERVATIONS).toEqual([
       {
         store: "session_do",
@@ -46,6 +48,12 @@ describe("Pi migration reservations", () => {
         version: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
         feature: "coreAuthority",
         purpose: "creation-time Pi capability authority",
+      },
+      {
+        store: "session_do",
+        version: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+        feature: "piProjection",
+        purpose: "Pi dispatch CAS and projection sequence",
       },
       {
         store: "d1",
@@ -132,7 +140,7 @@ describe("Pi migration reservations", () => {
     ).toThrow("reserved for coreAuthority, not mcp");
     expect(() =>
       assertMigrationReservation({ store: "session_do", version: 62, feature: "mcp" })
-    ).toThrow("session_do migration 62 is not reserved");
+    ).toThrow("reserved for piProjection, not mcp");
   });
 
   it("requires an owner when an artifact occupies a reserved version", () => {

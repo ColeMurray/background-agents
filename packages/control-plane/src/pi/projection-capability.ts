@@ -3,18 +3,16 @@ import {
   type LifecycleJobContext,
   type LifecycleJobOutcome,
 } from "agents/lifecycle";
-import {
-  piRuntimeUsageSchema,
-  type PiRuntimeResult,
-  type PiRuntimeUsage,
-} from "./runtime-contract";
+import type { PiRuntimeResult } from "./runtime-contract";
 import {
   projectionAdmissionDeadline,
   projectionDeliveryDeadline,
   projectionRetryOutcome,
+  PermanentPiResultDeliveryError,
   RetryablePiProjectionError,
   shouldAwaitProjectionAdmission,
 } from "./projection-retry-policy";
+import { PermanentPiProjectionError } from "./projection-outbox";
 
 const POLL_INTERVAL_MS = 2_000;
 
@@ -23,13 +21,20 @@ interface ProjectionPayload {
   operationId: string;
   admissionDeadline: number;
   deliveryDeadline: number;
-  usageBaseline: PiRuntimeUsage;
 }
 
 interface PiProjectionCapabilityOptions {
   isPending(operationId: string): Promise<boolean>;
-  result(operationId: string, usageBaseline: PiRuntimeUsage): Promise<PiRuntimeResult>;
+  probe(operationId: string): Promise<{ status: "done" | "unanswered"; reason?: string }>;
+  checkpoint(operationId: string): Promise<void>;
+  finalize(operationId: string): Promise<void>;
+  drain(operationId: string): Promise<void>;
+  result(operationId: string): Promise<PiRuntimeResult>;
   deliver(sessionId: string, result: PiRuntimeResult): Promise<void>;
+  rejection(operationId: string): string | null;
+  recordRejection(operationId: string, error: PermanentPiResultDeliveryError): void;
+  reject(operationId: string, error: PermanentPiResultDeliveryError): Promise<void>;
+  fail(sessionId: string, operationId: string, error: PermanentPiProjectionError): Promise<void>;
 }
 
 function projectionPayload(value: unknown): ProjectionPayload {
@@ -47,16 +52,11 @@ function projectionPayload(value: unknown): ProjectionPayload {
   ) {
     throw new Error("Invalid Pi projection job payload");
   }
-  const usageBaseline = piRuntimeUsageSchema.safeParse(
-    "usageBaseline" in value ? value.usageBaseline : undefined
-  );
-  if (!usageBaseline.success) throw new Error("Invalid Pi projection usage baseline");
   return {
     sessionId: value.sessionId,
     operationId: value.operationId,
     admissionDeadline: value.admissionDeadline,
     deliveryDeadline: value.deliveryDeadline,
-    usageBaseline: usageBaseline.data,
   };
 }
 
@@ -92,23 +92,83 @@ export class PiProjectionCapability extends LifecycleCapability {
     if (context.job.fn !== "project")
       throw new Error(`Unknown Pi projection job ${context.job.fn}`);
     const payload = projectionPayload(context.job.payload);
+    const rejection = this.options.rejection(payload.operationId);
+    if (rejection !== null) {
+      try {
+        await this.options.reject(
+          payload.operationId,
+          new PermanentPiResultDeliveryError(rejection)
+        );
+      } catch (error) {
+        throw new RetryablePiProjectionError("Pi result rejection cleanup unavailable", {
+          cause: error,
+        });
+      }
+      return undefined;
+    }
     let pending: boolean;
     try {
       pending = await this.options.isPending(payload.operationId);
     } catch (error) {
       throw new RetryablePiProjectionError("Pi operation status unavailable", { cause: error });
     }
-    if (pending) return { rescheduleAt: Date.now() + POLL_INTERVAL_MS };
-    let result: PiRuntimeResult;
+    if (pending) {
+      try {
+        await this.options.checkpoint(payload.operationId);
+        await this.options.drain(payload.operationId);
+      } catch (error) {
+        if (error instanceof PermanentPiProjectionError) {
+          await this.options.fail(payload.sessionId, payload.operationId, error);
+          return undefined;
+        }
+        throw new RetryablePiProjectionError("Pi event projection unavailable", { cause: error });
+      }
+      return { rescheduleAt: Date.now() + POLL_INTERVAL_MS };
+    }
+    let probe: { status: "done" | "unanswered"; reason?: string };
     try {
-      result = await this.options.result(payload.operationId, payload.usageBaseline);
+      probe = await this.options.probe(payload.operationId);
     } catch (error) {
       throw new RetryablePiProjectionError("Pi operation result unavailable", { cause: error });
     }
-    if (shouldAwaitProjectionAdmission(result, payload.admissionDeadline)) {
+    if (shouldAwaitProjectionAdmission(probe, payload.admissionDeadline)) {
       return { rescheduleAt: Date.now() + POLL_INTERVAL_MS };
     }
-    await this.options.deliver(payload.sessionId, result);
+    try {
+      await this.options.finalize(payload.operationId);
+      await this.options.drain(payload.operationId);
+    } catch (error) {
+      if (error instanceof PermanentPiProjectionError) {
+        await this.options.fail(payload.sessionId, payload.operationId, error);
+        return undefined;
+      }
+      throw new RetryablePiProjectionError("Pi final event projection unavailable", {
+        cause: error,
+      });
+    }
+    let result: PiRuntimeResult;
+    try {
+      result = await this.options.result(payload.operationId);
+    } catch (error) {
+      throw new RetryablePiProjectionError("Pi operation result unavailable", { cause: error });
+    }
+    try {
+      await this.options.deliver(payload.sessionId, result);
+    } catch (error) {
+      if (error instanceof PermanentPiResultDeliveryError) {
+        this.options.recordRejection(payload.operationId, error);
+        try {
+          await this.options.reject(payload.operationId, error);
+        } catch (cleanupError) {
+          throw new RetryablePiProjectionError("Pi result rejection cleanup unavailable", {
+            cause: cleanupError,
+          });
+        }
+        return undefined;
+      }
+      if (error instanceof RetryablePiProjectionError) throw error;
+      throw new RetryablePiProjectionError("Pi result delivery unavailable", { cause: error });
+    }
     return undefined;
   }
 

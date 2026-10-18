@@ -10,6 +10,8 @@ export interface PiRuntimePrompt {
   content: string;
   model: string;
   reasoningEffort?: string | null;
+  /** Refuse admission when the pinned server catalog cannot price this model. */
+  requirePricing?: boolean;
 }
 
 export interface PiRuntimeReceipt {
@@ -34,6 +36,8 @@ export interface PiRuntimeResult {
   text: string;
   reason?: string;
   usage?: PiRuntimeUsage;
+  /** Server-calculated from the pinned model catalog and trusted token usage. */
+  costUsd: number;
 }
 
 export const piRuntimeUsageSchema = z.object({
@@ -51,12 +55,27 @@ export const piRuntimeResultSchema = z.object({
   text: z.string(),
   reason: z.string().optional(),
   usage: piRuntimeUsageSchema.optional(),
+  costUsd: z.number().nonnegative(),
 }) satisfies z.ZodType<PiRuntimeResult>;
+
+export type PiRuntimeOperationStatus =
+  | { status: "not_found" }
+  | { status: "queued" }
+  | { status: "running" }
+  | { status: "settled"; result: PiRuntimeResult };
+
+export const piRuntimeOperationStatusSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("not_found") }),
+  z.object({ status: z.literal("queued") }),
+  z.object({ status: z.literal("running") }),
+  z.object({ status: z.literal("settled"), result: piRuntimeResultSchema }),
+]) satisfies z.ZodType<PiRuntimeOperationStatus>;
 
 /** Session-scoped port for the separate Pi Durable Object namespace. */
 export interface PiRuntimeDispatch {
   initialize(sessionId: string, snapshot: PiFeatureCapabilitySnapshot): Promise<void>;
   submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt>;
+  lookup(sessionId: string, operationId: string): Promise<PiRuntimeOperationStatus>;
   abort(sessionId: string, operationId?: string): Promise<boolean>;
   status(sessionId: string): Promise<{ busy: boolean; pending: number }>;
   refreshDiff(sessionId: string): Promise<void>;

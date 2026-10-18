@@ -14,6 +14,10 @@ import { SessionInternalPaths } from "../../src/session/contracts";
 import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
 import type { PiRuntimeDispatch } from "../../src/pi/runtime-contract";
+import {
+  PermanentPiResultDeliveryError,
+  RetryablePiProjectionError,
+} from "../../src/pi/projection-retry-policy";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
@@ -788,6 +792,163 @@ describe("PiSessionDO", () => {
     expect(vfsTables).toEqual([]);
   });
 
+  it("looks up and deduplicates an admitted operation through the real Pi store", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-operation-lookup");
+    await stub.status(sessionName);
+    const faux = fauxProvider();
+    faux.setResponses([fauxAssistantMessage("durable answer")]);
+    const realSessionNamespace = await runInPiSessionDO(stub, (instance) => {
+      (faux.provider as unknown as { id: string }).id = "openai-codex";
+      (faux.provider.getModels()[0] as unknown as { provider: string }).provider = "openai-codex";
+      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const real = piEnv.SESSION;
+      piEnv.SESSION = {
+        getByName: () => ({
+          fetch: async (request: Request) =>
+            new URL(request.url).pathname === SessionInternalPaths.piCredential
+              ? Response.json({
+                  access_token: "fake-access-token",
+                  expires_in: 3_600,
+                  credential_version: 1,
+                })
+              : Response.json({ status: "projected" }),
+        }),
+      };
+      return real;
+    });
+    const prompt = {
+      sessionId: sessionName,
+      messageId: "message-deduplicated",
+      content: "answer once",
+      model: "openai/faux-1",
+      requirePricing: false,
+    };
+
+    try {
+      let frozenResult: Awaited<ReturnType<typeof stub.lookup>> | undefined;
+      await expect(stub.lookup(sessionName, prompt.messageId)).resolves.toEqual({
+        status: "not_found",
+      });
+      await expect(stub.submit(prompt)).resolves.toMatchObject({ accepted: true });
+      await expect(stub.submit(prompt)).resolves.toMatchObject({ accepted: false });
+      await vi.waitFor(async () => {
+        const lookup = await stub.lookup(sessionName, prompt.messageId);
+        frozenResult = lookup;
+        expect(lookup).toMatchObject({
+          status: "settled",
+          result: {
+            operationId: prompt.messageId,
+            status: "unanswered",
+            reason: "model_error",
+            costUsd: 0,
+          },
+        });
+      });
+      const before = await runInDurableObject(stub, (_instance, state) =>
+        state.storage.sql
+          .exec<{ cost_usd: number; captured_at: number }>(
+            `SELECT cost_usd, captured_at FROM oi_pi_projection_finalization
+             WHERE operation_id = ?`,
+            prompt.messageId
+          )
+          .toArray()
+      );
+      await runInPiSessionDO(stub, async (instance) => {
+        const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+        const newer = await root.submit(
+          {
+            type: "write",
+            requestId: "newer-display-entry",
+            entry: {
+              kind: "test.newer-user",
+              model: [{ role: "user", content: "newer turn", timestamp: Date.now() }],
+            },
+          },
+          BACKGROUND_CONTEXT
+        );
+        await newer.wait(BACKGROUND_CONTEXT);
+        (
+          instance as unknown as {
+            accountingTotals(): Promise<{
+              usage: {
+                input: number;
+                output: number;
+                cacheRead: number;
+                cacheWrite: number;
+                total: number;
+              };
+              costUsd: number;
+            }>;
+          }
+        ).accountingTotals = async () => ({
+          usage: { input: 999_999, output: 999, cacheRead: 0, cacheWrite: 0, total: 1_000_998 },
+          costUsd: 999,
+        });
+      });
+
+      const retry = await stub.lookup(sessionName, prompt.messageId);
+      expect(retry).toEqual(frozenResult);
+
+      await expect(
+        runInDurableObject(stub, (_instance, state) =>
+          state.storage.sql
+            .exec<{ cost_usd: number; captured_at: number }>(
+              `SELECT cost_usd, captured_at FROM oi_pi_projection_finalization
+               WHERE operation_id = ?`,
+              prompt.messageId
+            )
+            .toArray()
+        )
+      ).resolves.toEqual(before);
+      await runInPiSessionDO(stub, async (instance, state) => {
+        state.storage.sql.exec(
+          `UPDATE cf_agents_jobs SET time = 0
+           WHERE capability = 'pi-projection' AND id = ?`,
+          prompt.messageId
+        );
+        await (instance as unknown as { alarm(): Promise<void> }).alarm();
+      });
+      await expect(
+        runInDurableObject(stub, (_instance, state) =>
+          state.storage.get<{ projectedCostUsd: number }>(
+            `open-inspect:operation:${prompt.messageId}`
+          )
+        )
+      ).resolves.toMatchObject({ projectedCostUsd: 0 });
+    } finally {
+      await runInPiSessionDO(stub, (instance) => {
+        (instance as unknown as { env: { SESSION: unknown } }).env.SESSION = realSessionNamespace;
+      });
+    }
+  });
+
+  it("fails closed before model admission when a cost-capped model is unpriced", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-unpriced-cap");
+    await stub.status(sessionName);
+    const faux = fauxProvider();
+    faux.setResponses([fauxAssistantMessage("must not run")]);
+    await runInPiSessionDO(stub, (instance) => {
+      (faux.provider as unknown as { id: string }).id = "openai-codex";
+      (faux.provider.getModels()[0] as unknown as { provider: string }).provider = "openai-codex";
+      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
+    });
+
+    await expect(
+      stub.submit({
+        sessionId: sessionName,
+        messageId: "message-unpriced",
+        content: "do not admit",
+        model: "openai/faux-1",
+        requirePricing: true,
+      })
+    ).resolves.toMatchObject({ accepted: false });
+    expect(faux.state.callCount).toBe(0);
+    await expect(stub.lookup(sessionName, "message-unpriced")).resolves.toEqual({
+      status: "not_found",
+    });
+  });
+
   it("installs repository and subagent extensions for a repository-backed session", async () => {
     const { sessionName, stub: sessionStub } = await initSession({
       sessionName: `pi-repository-${crypto.randomUUID()}`,
@@ -1274,6 +1435,7 @@ describe("PiSessionDO", () => {
         .map((row) => row.name)
     );
     expect(tables.some((name) => name.startsWith("pi_"))).toBe(false);
+    expect(tables.some((name) => name.startsWith("oi_pi_"))).toBe(false);
     expect(
       tables.some(
         (name) =>
@@ -1296,6 +1458,7 @@ describe("PiSessionDO", () => {
         .map((row) => row.name)
     );
     expect(tables.some((name) => name.startsWith("pi_"))).toBe(false);
+    expect(tables.some((name) => name.startsWith("oi_pi_"))).toBe(false);
     expect(
       tables.some(
         (name) =>
@@ -1304,7 +1467,7 @@ describe("PiSessionDO", () => {
     ).toBe(false);
   });
 
-  it("preserves the first projection baseline when scheduling the same operation again", async () => {
+  it("keeps one projection job when the same operation is scheduled again", async () => {
     const { sessionName, stub } = await initializedPiStub("pi-projection");
     await stub.status(sessionName);
 
@@ -1312,24 +1475,10 @@ describe("PiSessionDO", () => {
       await instance.projector.schedule({
         sessionId: sessionName,
         operationId: "message-1",
-        usageBaseline: {
-          input: 1,
-          output: 2,
-          cacheRead: 3,
-          cacheWrite: 4,
-          total: 10,
-        },
       });
       await instance.projector.schedule({
         sessionId: sessionName,
         operationId: "message-1",
-        usageBaseline: {
-          input: 100,
-          output: 200,
-          cacheRead: 300,
-          cacheWrite: 400,
-          total: 1_000,
-        },
       });
     });
 
@@ -1341,8 +1490,437 @@ describe("PiSessionDO", () => {
         .toArray()
     );
     expect(JSON.parse(jobs[0]?.payload ?? "null")).toMatchObject({
-      usageBaseline: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+      sessionId: sessionName,
+      operationId: "message-1",
     });
+  });
+
+  it("classifies terminal result 409 as permanent and 500 as retryable", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-result-delivery-classification");
+    await stub.status(sessionName);
+
+    const outcomes = await runInPiSessionDO(stub, async (instance) => {
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const original = piEnv.SESSION;
+      const statuses = [409, 500];
+      let attempts = 0;
+      piEnv.SESSION = {
+        getByName: () => ({
+          fetch: async () => new Response(null, { status: statuses[attempts++]! }),
+        }),
+      };
+      const deliver = (
+        instance as unknown as {
+          deliverResult(
+            targetSessionId: string,
+            result: {
+              operationId: string;
+              status: "done";
+              text: string;
+              costUsd: number;
+            }
+          ): Promise<void>;
+        }
+      ).deliverResult.bind(instance);
+      try {
+        const errors: unknown[] = [];
+        for (const operationId of ["permanent", "retryable"]) {
+          try {
+            await deliver(sessionName, { operationId, status: "done", text: "", costUsd: 0 });
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        return { attempts, errors };
+      } finally {
+        piEnv.SESSION = original;
+      }
+    });
+
+    expect(outcomes.attempts).toBe(2);
+    expect(outcomes.errors[0]).toBeInstanceOf(PermanentPiResultDeliveryError);
+    expect(outcomes.errors[1]).toBeInstanceOf(RetryablePiProjectionError);
+  });
+
+  it("retries terminal rejection cleanup without redelivering the rejected result", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-result-rejection-cleanup");
+    await stub.status(sessionName);
+    const operationId = "cleanup-after-409";
+
+    const outcome = await runInPiSessionDO(stub, async (instance, state) => {
+      await state.storage.put(`open-inspect:operation:${operationId}`, {
+        model: "openai/gpt-5.6-sol",
+        baseline: {
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUsd: 0,
+        },
+        projectedCostUsd: 0,
+      });
+      instance.projectionOutbox.markFinalized(
+        operationId,
+        {
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUsd: 0,
+        },
+        1
+      );
+      await instance.projector.schedule({ sessionId: sessionName, operationId });
+      state.storage.sql.exec(
+        `UPDATE cf_agents_jobs
+         SET time = 0, payload = json_set(payload, '$.admissionDeadline', 0)
+         WHERE capability = 'pi-projection' AND id = ?`,
+        operationId
+      );
+      const internals = instance as unknown as {
+        deliverResult(): Promise<void>;
+        settleOperationMetadata(targetOperationId: string): Promise<void>;
+        alarm(): Promise<void>;
+      };
+      let deliveries = 0;
+      internals.deliverResult = async () => {
+        deliveries += 1;
+        throw new PermanentPiResultDeliveryError("Pi result delivery rejected (409)");
+      };
+      const settle = internals.settleOperationMetadata.bind(instance);
+      let cleanups = 0;
+      internals.settleOperationMetadata = async (targetOperationId) => {
+        cleanups += 1;
+        if (cleanups === 1) throw new Error("transient cleanup failure");
+        await settle(targetOperationId);
+      };
+
+      await internals.alarm();
+      const afterFirst = state.storage.sql
+        .exec<{ id: string }>(
+          `SELECT id FROM cf_agents_jobs
+           WHERE capability = 'pi-projection' AND id = ?`,
+          operationId
+        )
+        .toArray();
+      state.storage.sql.exec(
+        `UPDATE cf_agents_jobs SET time = 0
+         WHERE capability = 'pi-projection' AND id = ?`,
+        operationId
+      );
+      await internals.alarm();
+      const afterSecond = state.storage.sql
+        .exec<{ id: string }>(
+          `SELECT id FROM cf_agents_jobs
+           WHERE capability = 'pi-projection' AND id = ?`,
+          operationId
+        )
+        .toArray();
+      return {
+        deliveries,
+        cleanups,
+        afterFirst,
+        afterSecond,
+        metadata: await state.storage.get<{ settledAt?: number }>(
+          `open-inspect:operation:${operationId}`
+        ),
+      };
+    });
+
+    expect(outcome.deliveries).toBe(1);
+    expect(outcome.cleanups).toBe(2);
+    // Lifecycle may consume its configured retry inside the same alarm turn.
+    expect(outcome.afterFirst).toEqual([]);
+    expect(outcome.afterSecond).toEqual([]);
+    expect(outcome.metadata?.settledAt).toEqual(expect.any(Number));
+  });
+
+  it("drains an undelivered Pi projection through Lifecycle after object eviction", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-projection-outbox-eviction-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    await queryDO(
+      sessionStub,
+      `INSERT INTO pi_operation_dispatch
+       (operation_id, state, last_projection_sequence, created_at, updated_at)
+       VALUES ('message-1', 'admitted', 0, 1, 1)`
+    );
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, async (instance, state) => {
+      await state.storage.put("open-inspect:operation:message-1", {
+        model: "openai/gpt-5.6-sol",
+        baseline: {
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUsd: 0,
+        },
+        projectedCostUsd: 0,
+      });
+      instance.projectionOutbox.enqueue(
+        "message-1:token",
+        "message-1",
+        {
+          type: "token",
+          sandboxId: `pi:${sessionName}`,
+          timestamp: 1,
+          messageId: "message-1",
+          content: "final",
+          partId: "entry-1",
+        },
+        1
+      );
+      await instance.projector.schedule({
+        sessionId: sessionName,
+        operationId: "message-1",
+      });
+      state.storage.sql.exec(
+        `UPDATE cf_agents_jobs
+         SET time = 0, payload = json_set(payload, '$.admissionDeadline', 0)
+         WHERE capability = 'pi-projection' AND id = 'message-1'`
+      );
+    });
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: projection eviction"))
+    ).rejects.toThrow();
+
+    const restored = piStub(sessionName);
+    await runInPiSessionDO(restored, async (instance) => {
+      await (instance as unknown as { alarm(): Promise<void> }).alarm();
+    });
+    await expect(
+      runInPiSessionDO(restored, (instance) => instance.projectionOutbox.pending("message-1"))
+    ).resolves.toBe(0);
+    await expect(
+      queryDO<{ last_projection_sequence: number }>(
+        sessionStub,
+        `SELECT last_projection_sequence FROM pi_operation_dispatch
+         WHERE operation_id = 'message-1'`
+      )
+    ).resolves.toEqual([{ last_projection_sequence: 2 }]);
+    await expect(
+      runInDurableObject(restored, (_instance, state) =>
+        state.storage.sql
+          .exec(
+            `SELECT id FROM cf_agents_jobs
+             WHERE capability = 'pi-projection' AND id = 'message-1'`
+          )
+          .toArray()
+      )
+    ).resolves.toEqual([]);
+  });
+
+  it("persists the authoritative operation cost high-water across relay eviction", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-cost-high-water");
+    await stub.status(sessionName);
+    const key = "open-inspect:operation:message-cost";
+    const observed = await runInPiSessionDO(stub, async (instance, state) => {
+      await state.storage.put(key, {
+        model: "openai/gpt-5.6-sol",
+        baseline: {
+          usage: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0, total: 11 },
+          costUsd: 1,
+        },
+        projectedCostUsd: 0.5,
+      });
+      const internals = instance as unknown as {
+        accountingTotals(): Promise<{
+          usage: {
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite: number;
+            total: number;
+          };
+          costUsd: number;
+        }>;
+        checkpointAccounting(operationId: string): Promise<void>;
+      };
+      internals.accountingTotals = async () => ({
+        usage: { input: 110, output: 11, cacheRead: 0, cacheWrite: 0, total: 121 },
+        costUsd: 3.5,
+      });
+      await internals.checkpointAccounting("message-cost");
+      return state.storage.get<{ projectedCostUsd: number }>(key);
+    });
+    expect(observed?.projectedCostUsd).toBe(2.5);
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: cost relay eviction"))
+    ).rejects.toThrow();
+
+    await expect(
+      runInDurableObject(piStub(sessionName), (_instance, state) =>
+        state.storage.get<{ projectedCostUsd: number }>(key)
+      )
+    ).resolves.toMatchObject({ projectedCostUsd: 2.5 });
+  });
+
+  it("drops a stale pending checkpoint when A finalizes while global B accounting is read", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-stale-accounting-checkpoint");
+    await stub.status(sessionName);
+    const key = "open-inspect:operation:message-a";
+    let releaseAccounting!: (value: {
+      usage: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+      costUsd: number;
+    }) => void;
+    const accounting = new Promise<{
+      usage: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+      costUsd: number;
+    }>((resolve) => {
+      releaseAccounting = resolve;
+    });
+    let accountingStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      accountingStarted = resolve;
+    });
+
+    let checkpoint!: Promise<void>;
+    await runInPiSessionDO(stub, async (instance, state) => {
+      await state.storage.put(key, {
+        model: "openai/gpt-5.6-sol",
+        baseline: {
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUsd: 0,
+        },
+        projectedCostUsd: 0,
+      });
+      const internals = instance as unknown as {
+        accountingTotals(): Promise<{
+          usage: {
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite: number;
+            total: number;
+          };
+          costUsd: number;
+        }>;
+        checkpointAccounting(operationId: string): Promise<void>;
+      };
+      internals.accountingTotals = async () => {
+        accountingStarted();
+        return accounting;
+      };
+      checkpoint = internals.checkpointAccounting("message-a");
+    });
+    await started;
+    await runInPiSessionDO(stub, (instance) => {
+      instance.projectionOutbox.markFinalized(
+        "message-a",
+        {
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+          costUsd: 0.01,
+        },
+        1
+      );
+    });
+    releaseAccounting({
+      usage: { input: 1_000, output: 100, cacheRead: 0, cacheWrite: 0, total: 1_100 },
+      costUsd: 10,
+    });
+    await checkpoint;
+
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.get<{ projectedCostUsd: number }>(key)
+      )
+    ).resolves.toMatchObject({ projectedCostUsd: 0 });
+    await expect(
+      runInPiSessionDO(stub, (instance) => instance.projectionOutbox.pending("message-a"))
+    ).resolves.toBe(0);
+  });
+
+  it("keeps the relay open when the projector runs before slow durable admission", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-slow-admission");
+    await stub.status(sessionName);
+    const operationId = "slow-admission-operation";
+    const result = await runInPiSessionDO(stub, async (instance, state) => {
+      let releaseAdmission!: () => void;
+      const admissionReleased = new Promise<void>((resolve) => {
+        releaseAdmission = resolve;
+      });
+      let admissionStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        admissionStarted = resolve;
+      });
+      const harness = instance.harness as unknown as {
+        submit: PiSessionDO["harness"]["submit"];
+      };
+      const submit = harness.submit.bind(instance.harness);
+      harness.submit = async (...args) => {
+        admissionStarted();
+        await admissionReleased;
+        return submit(...args);
+      };
+      const submission = instance.submit({
+        sessionId: sessionName,
+        messageId: operationId,
+        content: "admit after projector alarm",
+        model: "openai/gpt-5.6-sol",
+        requirePricing: false,
+      });
+      await started;
+      state.storage.sql.exec(
+        `UPDATE cf_agents_jobs SET time = 0
+         WHERE capability = 'pi-projection' AND id = ?`,
+        operationId
+      );
+      await (instance as unknown as { alarm(): Promise<void> }).alarm();
+      const finalizedBeforeAdmission = instance.projectionOutbox.isFinalized(operationId);
+
+      releaseAdmission();
+      const receipt = await submission;
+      await instance.harness.wait(operationId, { session: "1" });
+      const lookup = await instance.lookup(sessionName, operationId);
+      return {
+        finalizedBeforeAdmission,
+        receipt,
+        lookup,
+        finalAccounting: instance.projectionOutbox.finalAccounting(operationId),
+      };
+    });
+
+    expect(result.finalizedBeforeAdmission).toBe(false);
+    expect(result.receipt).toMatchObject({ accepted: true, operationId });
+    expect(result.lookup).toMatchObject({ status: "settled" });
+    expect(result.finalAccounting).not.toBeNull();
+  });
+
+  it("bounds settled Pi operation accounting metadata", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-metadata-retention");
+    await stub.status(sessionName);
+
+    const retained = await runInPiSessionDO(stub, async (instance, state) => {
+      for (let index = 0; index < 130; index++) {
+        await state.storage.put(`open-inspect:operation:retained-${index}`, {
+          model: "openai/gpt-5.6-sol",
+          baseline: {
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            costUsd: 0,
+          },
+          projectedCostUsd: 0,
+          settledAt: index,
+        });
+      }
+      await (
+        instance as unknown as { settleOperationMetadata(operationId: string): Promise<void> }
+      ).settleOperationMetadata("retained-129");
+      return state.storage.list({ prefix: "open-inspect:operation:" });
+    });
+
+    expect(retained.size).toBe(128);
+    expect(retained.has("open-inspect:operation:retained-0")).toBe(false);
+    expect(retained.has("open-inspect:operation:retained-129")).toBe(true);
   });
 
   it("permanently disables lifecycle alarms before deleting the Pi object", async () => {
@@ -1352,13 +1930,6 @@ describe("PiSessionDO", () => {
       await instance.projector.schedule({
         sessionId: sessionName,
         operationId: "message-1",
-        usageBaseline: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
       });
     });
     await expect(

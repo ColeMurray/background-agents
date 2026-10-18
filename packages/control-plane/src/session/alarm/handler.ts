@@ -26,6 +26,8 @@ export interface AlarmHandlerDeps {
   redriveIdleQueue?: () => Promise<void>;
   /** Command deadlines share this Durable Object's one alarm slot. */
   sandboxCommandDeadlines?: () => Promise<void>;
+  /** Reconcile a Pi stop fence without invoking sandbox termination. */
+  reconcilePiStop?: () => Promise<boolean>;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
   now: () => number;
@@ -63,7 +65,9 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         if (projectionFailure) throw projectionFailure.error;
         return;
       }
-      await deps.executionStop.recoverStopConfirmationTimeout();
+      if (!(await deps.reconcilePiStop?.())) {
+        await deps.executionStop.recoverStopConfirmationTimeout();
+      }
       await deps.externalActions?.recoverDue();
       const externalActionDeadline = deps.externalActions?.nextDeadline() ?? null;
       if (externalActionDeadline !== null) {

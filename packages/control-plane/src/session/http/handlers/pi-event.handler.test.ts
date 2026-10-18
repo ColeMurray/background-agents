@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MessageRepository } from "../../message-repository";
 import { PiEventHandler } from "./pi-event.handler";
 
-function request(operationId = "message-1"): Request {
+function request(operationId = "message-1", sequence = 1, displayId = "message-1:token") {
   return new Request("http://session/internal/pi-event", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": operationId },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Pi-Operation-ID": operationId,
+      "X-Pi-Projection-ID": displayId,
+      "X-Pi-Projection-Sequence": String(sequence),
+    },
     body: JSON.stringify({
       type: "token",
       sandboxId: "pi:session-1",
@@ -18,29 +22,84 @@ function request(operationId = "message-1"): Request {
 }
 
 describe("PiEventHandler", () => {
-  it("projects events only for the active Pi operation", async () => {
+  it("acknowledges each immutable sequence once", async () => {
+    let lastProjectionSequence = 0;
+    const operations = {
+      get: vi.fn(() => ({
+        operationId: "message-1",
+        state: "admitted" as const,
+        lastProjectionSequence,
+      })),
+      advanceProjection: vi.fn((_operationId: string, expected: number, sequence: number) => {
+        if (lastProjectionSequence !== expected) return false;
+        lastProjectionSequence = sequence;
+        return true;
+      }),
+    };
     const processEvent = vi.fn(async () => {});
     const handler = new PiEventHandler(
-      { getProcessingMessage: () => ({ id: "message-1" }) } as MessageRepository,
+      operations,
       processEvent,
-      () => true
+      () => true,
+      () => 456
     );
 
     expect((await handler.handle(request())).status).toBe(200);
     expect(processEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "token", messageId: "message-1" })
+      expect.objectContaining({
+        type: "token",
+        messageId: "message-1",
+        ackId: "pi-projection:message-1:token",
+      })
     );
+    expect(operations.advanceProjection).toHaveBeenCalledWith("message-1", 0, 1, 456);
+
+    expect(await (await handler.handle(request())).json()).toEqual({
+      status: "already_projected",
+    });
+    expect(processEvent).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects events for a different operation", async () => {
+  it("accepts a late projection for a known old operation while a newer one processes", async () => {
+    const operations = {
+      get: () => ({
+        operationId: "message-a",
+        state: "settled" as const,
+        lastProjectionSequence: 0,
+      }),
+      advanceProjection: vi.fn(() => true),
+    };
     const processEvent = vi.fn(async () => {});
-    const handler = new PiEventHandler(
-      { getProcessingMessage: () => ({ id: "message-1" }) } as MessageRepository,
+    const handler = new PiEventHandler(operations, processEvent, () => true);
+
+    const response = await handler.handle(request("message-a", 1, "message-a:tool:final"));
+
+    expect(response.status).toBe(200);
+    expect(processEvent).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unknown operation and an out-of-order sequence deterministically", async () => {
+    const processEvent = vi.fn(async () => {});
+    const unknown = new PiEventHandler(
+      { get: () => null, advanceProjection: vi.fn(() => false) },
       processEvent,
       () => true
     );
+    expect((await unknown.handle(request())).status).toBe(409);
 
-    expect((await handler.handle(request("other"))).status).toBe(409);
+    const gap = new PiEventHandler(
+      {
+        get: () => ({
+          operationId: "message-1",
+          state: "admitted" as const,
+          lastProjectionSequence: 1,
+        }),
+        advanceProjection: vi.fn(() => false),
+      },
+      processEvent,
+      () => true
+    );
+    expect((await gap.handle(request("message-1", 3))).status).toBe(409);
     expect(processEvent).not.toHaveBeenCalled();
   });
 });

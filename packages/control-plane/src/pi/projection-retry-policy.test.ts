@@ -3,6 +3,7 @@ import {
   projectionAdmissionDeadline,
   projectionDeliveryDeadline,
   projectionRetryOutcome,
+  PermanentPiResultDeliveryError,
   RetryablePiProjectionError,
   shouldAwaitProjectionAdmission,
 } from "./projection-retry-policy";
@@ -20,6 +21,13 @@ describe("projectionRetryOutcome", () => {
     ).toBeUndefined();
     expect(
       projectionRetryOutcome(new RetryablePiProjectionError("expired"), 1_000, () => 1_000)
+    ).toBeUndefined();
+    expect(
+      projectionRetryOutcome(
+        new PermanentPiResultDeliveryError("result rejected (409)"),
+        2_000,
+        () => 1_000
+      )
     ).toBeUndefined();
   });
 

@@ -6,10 +6,11 @@ export const PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID = 58;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID = 59;
 export const PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID = 60;
 export const PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID = 61;
+export const PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID = 62;
 export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_MIGRATION_VERSION = 91;
 
-export type PiMigrationOwner = PiFeatureId | "coreAuthority";
+export type PiMigrationOwner = PiFeatureId | "coreAuthority" | "piProjection";
 
 export interface MigrationReservation {
   readonly store: MigrationStore;
@@ -55,6 +56,12 @@ export const PI_MIGRATION_RESERVATIONS = [
     version: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
     feature: "coreAuthority",
     purpose: "creation-time Pi capability authority",
+  },
+  {
+    store: "session_do",
+    version: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+    feature: "piProjection",
+    purpose: "Pi dispatch CAS and projection sequence",
   },
   {
     store: "d1",

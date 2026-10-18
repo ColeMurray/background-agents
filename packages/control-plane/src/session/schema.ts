@@ -61,6 +61,14 @@ const PI_RESULT_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS pi_result_recei
   projected_at INTEGER NOT NULL
 );`;
 
+const PI_PROJECTION_RELIABILITY_TABLES_SQL = `CREATE TABLE IF NOT EXISTS pi_operation_dispatch (
+  operation_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('dispatching', 'ambiguous', 'admitted', 'stopping', 'settled')),
+  last_projection_sequence INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`;
+
 const EXTERNAL_ACTIONS_TABLES_SQL = `CREATE TABLE IF NOT EXISTS external_actions (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
@@ -356,6 +364,9 @@ ${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
 -- Acknowledges a Pi result only after all SessionDO projection work finishes.
 ${PI_RESULT_RECEIPTS_TABLE_SQL}
 
+-- Durable Pi dispatch CAS and one acknowledged projection sequence.
+${PI_PROJECTION_RELIABILITY_TABLES_SQL}
+
 -- SessionDO-authoritative approvals, dispatch leases, and external-effect history.
 ${EXTERNAL_ACTIONS_TABLES_SQL}
 
@@ -412,6 +423,7 @@ import { createLogger } from "../logger";
 import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
 } from "@open-inspect/shared/pi-migration-reservations";
@@ -945,6 +957,12 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Persist creation-time Pi capability authority",
     feature: "coreAuthority",
     run: "ALTER TABLE session ADD COLUMN pi_feature_capability_snapshot TEXT",
+  },
+  {
+    id: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+    description: "Persist Pi dispatch CAS and projection sequence",
+    feature: "piProjection",
+    run: PI_PROJECTION_RELIABILITY_TABLES_SQL,
   },
 ];
 

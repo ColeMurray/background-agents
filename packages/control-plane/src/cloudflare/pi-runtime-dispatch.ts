@@ -9,6 +9,7 @@ export function createDurableObjectPiRuntimeDispatch(
   return {
     initialize: (sessionId, snapshot) => stub(sessionId).initialize(sessionId, snapshot),
     submit: (input: PiRuntimePrompt) => stub(input.sessionId).submit(input),
+    lookup: (sessionId, operationId) => stub(sessionId).lookup(sessionId, operationId),
     abort: (sessionId, operationId) => stub(sessionId).abort(sessionId, operationId),
     status: (sessionId) => stub(sessionId).status(sessionId),
     refreshDiff: (sessionId) => stub(sessionId).refreshDiff(sessionId),

@@ -31,25 +31,30 @@ export class SandboxStreamingEventHandler {
   ) {}
 
   handleToken(event: Extract<SandboxEvent, { type: "token" }>, context: SandboxEventContext): void {
+    let changed = true;
     if (context.messageId) {
-      this.eventRepository.upsertTokenEvent(context.messageId, event, context.now);
+      changed = this.eventRepository.upsertTokenEvent(context.messageId, event, context.now);
     }
-    this.messenger.broadcast({ type: "sandbox_event", event });
+    if (!context.projectionEventId || changed) {
+      this.messenger.broadcast({ type: "sandbox_event", event });
+    }
   }
 
   handleContextCompacted(
     event: Extract<SandboxEvent, { type: "context_compacted" }>,
     context: SandboxEventContext
   ): void {
-    const eventId = generateId();
-    this.eventRepository.createContextCompactionEvent({
+    const eventId = context.projectionEventId ?? generateId();
+    const changed = this.eventRepository.createContextCompactionEvent({
       id: eventId,
       type: event.type,
       data: JSON.stringify(event),
       messageId: event.messageId,
       createdAt: context.now,
     });
-    this.messenger.broadcast({ type: "sandbox_event", event });
+    if (!context.projectionEventId || changed) {
+      this.messenger.broadcast({ type: "sandbox_event", event });
+    }
   }
 
   async handleStep(
@@ -90,12 +95,19 @@ export class SandboxStreamingEventHandler {
   ): void {
     this.updateLastActivity(context.now);
     const messageId = context.messageId;
+    let changed = true;
     if (messageId) {
-      this.eventRepository.upsertToolCallEvent(messageId, event, context.now);
+      changed = this.eventRepository.upsertToolCallEvent(messageId, event, context.now);
     }
-    this.messenger.broadcast({ type: "sandbox_event", event });
+    if (!context.projectionEventId || changed) {
+      this.messenger.broadcast({ type: "sandbox_event", event });
+    }
 
-    if (messageId && !event.truncated?.fields.some((field) => field.startsWith("args."))) {
+    if (
+      (!context.projectionEventId || changed) &&
+      messageId &&
+      !event.truncated?.fields.some((field) => field.startsWith("args."))
+    ) {
       this.backgroundTasks.submit(() => this.callbackService.notifyToolCall(messageId, event), {
         name: "callback.notify_tool_call",
         context: { message_id: messageId },
@@ -109,7 +121,9 @@ export class SandboxStreamingEventHandler {
    * terminal events, which additionally settle `SandboxPushService`).
    */
   recordTimelineEvent(event: SandboxEvent, context: SandboxEventContext): void {
-    persistSandboxEvent(this.eventRepository, event, context);
-    this.messenger.broadcast({ type: "sandbox_event", event });
+    const changed = persistSandboxEvent(this.eventRepository, event, context);
+    if (!context.projectionEventId || changed) {
+      this.messenger.broadcast({ type: "sandbox_event", event });
+    }
   }
 }

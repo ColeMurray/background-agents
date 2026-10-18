@@ -4,6 +4,7 @@ import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
+  normalizeTokenUsage,
   piFeatureCapabilitySnapshotSchema,
   type PiFeatureCapabilitySnapshot,
   type ToolEffectRegistration,
@@ -17,6 +18,7 @@ import {
   Harness,
   type AgentEvent,
   type AgentEventStream,
+  type EntryRecord,
 } from "@earendil-works/pi-durable";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
@@ -24,12 +26,16 @@ import { Lifecycle } from "agents/lifecycle";
 import { SessionInternalPaths } from "../session/contracts";
 import { CodexBrokerCredentialStore } from "../pi/codex-credential-store";
 import { PiProjectionCapability } from "../pi/projection-capability";
-import { RetryablePiProjectionError } from "../pi/projection-retry-policy";
+import {
+  PermanentPiResultDeliveryError,
+  RetryablePiProjectionError,
+} from "../pi/projection-retry-policy";
 import { translatePiEvents } from "../pi/event-translator";
 import {
   toPiModel,
   toPiThinkingLevel,
   type PiRuntimePrompt,
+  type PiRuntimeOperationStatus,
   type PiRuntimeReceipt,
   type PiRuntimeResult,
   type PiRuntimeUsage,
@@ -82,8 +88,17 @@ import {
   createPiCodeModePolicyState,
 } from "../pi/codemode-extension";
 import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
+import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import { createPiDeploymentEmergencyPolicy } from "../pi/deployment-emergency-policy";
 import { fetchPiCapabilityAuthority } from "../pi/capability-authority-client";
+import { PermanentPiProjectionError, PiProjectionOutbox } from "../pi/projection-outbox";
+import { piAgentEventIdentity, piProjectionIdentity } from "../pi/projection-identity";
+import { calculatePiUsageCost, hasTrustedPiPricing } from "../pi/pricing";
+import {
+  operationAccountingDelta,
+  summarizePiUsage,
+  type PiAccountingSnapshot,
+} from "../pi/accounting";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
 
@@ -91,8 +106,15 @@ const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
-const EVENT_DELIVERY_ATTEMPTS = 3;
-const EVENT_DELIVERY_RETRY_MS = 100;
+const OPERATION_METADATA_PREFIX = "open-inspect:operation:";
+const MAX_OPERATION_METADATA_TOMBSTONES = 128;
+
+interface PiOperationMetadata {
+  readonly model: string;
+  readonly baseline: PiAccountingSnapshot;
+  readonly projectedCostUsd: number;
+  readonly settledAt?: number;
+}
 /** OpenCode-free, sandbox-free Pi runtime for one Open-Inspect session. */
 export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly credentials = new CodexBrokerCredentialStore((version, signal) =>
@@ -107,6 +129,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private harnessOpened = false;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
+  readonly projectionOutbox = new PiProjectionOutbox(
+    this.ctx.storage.sql,
+    (sequence, displayId, operationId, event) =>
+      this.deliverEventProjection(sequence, displayId, operationId, event)
+  );
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
       const snapshot = await readPiFeatureCapabilitySnapshot(this.ctx.storage);
@@ -283,10 +310,48 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       (await this.harness.pending({ session: ROOT_SESSION })).some(
         (operation) => operation.operationId === operationId
       ),
-    result: (operationId, usageBaseline) => this.waitForResult(operationId, usageBaseline),
+    probe: async (operationId) => {
+      const result = await this.harness.wait(operationId, { session: ROOT_SESSION });
+      return {
+        status: result.status,
+        ...(result.status === "unanswered" ? { reason: result.reason } : {}),
+      };
+    },
+    finalize: (operationId) => this.captureFinalProjection(operationId),
+    checkpoint: (operationId) => this.checkpointAccounting(operationId),
+    drain: (operationId) => this.projectionOutbox.drain(operationId),
+    result: (operationId) => this.waitForResult(operationId),
     deliver: async (sessionId, result) => {
       await this.stopEventRelay(result.operationId);
+      // Stopping waits for the final live listener batch, which may have
+      // enqueued after the projector's pre-terminal drain.
+      await this.projectionOutbox.drain(result.operationId);
       await this.deliverResult(sessionId, result);
+      this.projectionOutbox.complete(result.operationId);
+      await this.settleOperationMetadata(result.operationId);
+    },
+    rejection: (operationId) => this.projectionOutbox.resultRejection(operationId),
+    recordRejection: (operationId, error) =>
+      this.projectionOutbox.markResultRejected(operationId, error.message),
+    reject: async (operationId) => {
+      this.projectionOutbox.complete(operationId);
+      await this.settleOperationMetadata(operationId);
+    },
+    fail: async (sessionId, operationId, error) => {
+      await this.stopEventRelay(operationId);
+      await this.harness.abort({ session: ROOT_SESSION, operationId }).catch(() => false);
+      const accounting = await this.observeOperationAccounting(operationId);
+      const finalized = this.projectionOutbox.finalAccounting(operationId);
+      await this.deliverResult(sessionId, {
+        operationId,
+        status: "unanswered",
+        text: "",
+        reason: error.message,
+        usage: finalized?.usage ?? accounting.usage,
+        costUsd: finalized?.costUsd ?? accounting.costUsd,
+      });
+      this.projectionOutbox.complete(operationId);
+      await this.settleOperationMetadata(operationId);
     },
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.projector);
@@ -341,11 +406,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       await this.ensureSession(input.sessionId);
       await this.configure(input);
       await this.ensureSession(input.sessionId);
+      const baseline = await this.accountingTotals();
+      await this.rememberOperation(input, baseline);
       await this.startEventRelay(input.sessionId, input.messageId);
       await this.projector.schedule({
         sessionId: input.sessionId,
         operationId: input.messageId,
-        usageBaseline: await this.usageTotals(),
       });
       await this.ensureSession(input.sessionId);
     } catch {
@@ -363,19 +429,40 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     return { operationId: receipt.operationId, accepted: receipt.accepted };
   }
 
-  private async waitForResult(
-    operationId: string,
-    usageBaseline: PiRuntimeUsage
-  ): Promise<PiRuntimeResult> {
+  private async waitForResult(operationId: string): Promise<PiRuntimeResult> {
     const result = await this.harness.wait(operationId, { session: ROOT_SESSION });
-    const usage =
-      result.status === "done" ? subtractUsage(await this.usageTotals(), usageBaseline) : undefined;
+    const accounting = this.projectionOutbox.finalAccounting(operationId);
+    if (!accounting) throw new Error("Pi operation final projection is unavailable");
     return {
       operationId,
       status: result.status,
       text: result.status === "done" ? (result.text ?? "") : "",
       ...(result.status === "unanswered" ? { reason: result.reason } : {}),
-      ...(usage ? { usage } : {}),
+      usage: accounting.usage,
+      costUsd: accounting.costUsd,
+    };
+  }
+
+  async lookup(sessionId: string, operationId: string): Promise<PiRuntimeOperationStatus> {
+    await this.ensureSession(sessionId);
+    const pending = (await this.harness.pending({ session: ROOT_SESSION })).find(
+      (operation) => operation.operationId === operationId
+    );
+    if (pending) return { status: pending.status };
+    const result = await this.harness.wait(operationId, { session: ROOT_SESSION });
+    if (result.status === "unanswered" && result.reason === "not_found") {
+      return { status: "not_found" };
+    }
+    const metadata = await this.operationMetadata(operationId);
+    if (!metadata) throw new Error("Pi operation pricing metadata is unavailable");
+    await this.captureFinalProjection(operationId);
+    await this.projector.schedule({
+      sessionId,
+      operationId,
+    });
+    return {
+      status: "settled",
+      result: await this.waitForResult(operationId),
     };
   }
 
@@ -467,7 +554,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async configure(
-    input: Pick<PiRuntimePrompt, "model" | "reasoningEffort">
+    input: Pick<PiRuntimePrompt, "model" | "reasoningEffort" | "requirePricing">
   ): Promise<void> {
     const pi = await this.harness.pi();
     const conversation = await pi.root(BACKGROUND_CONTEXT);
@@ -480,26 +567,83 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       },
       BACKGROUND_CONTEXT
     );
+    if (input.requirePricing) this.requirePricedModel(input.model);
   }
 
-  private async usageTotals(): Promise<PiRuntimeUsage> {
-    const state = await (await this.harness.pi()).usage(BACKGROUND_CONTEXT);
-    const total: PiRuntimeUsage = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    };
-    for (const usage of [...Object.values(state.models), ...Object.values(state.tools)]) {
-      total.input += usage.input;
-      total.output += usage.output;
-      total.cacheRead += usage.cacheRead;
-      total.cacheWrite += usage.cacheWrite;
-      total.total += usage.totalTokens;
-      if (usage.reasoning !== undefined) total.reasoning = (total.reasoning ?? 0) + usage.reasoning;
+  private requirePricedModel(modelId: string): void {
+    if (!hasTrustedPiPricing(this.models, modelId)) {
+      throw new Error(`Pi model ${modelId} has no trusted server pricing`);
     }
-    return total;
+  }
+
+  private async rememberOperation(
+    input: Pick<PiRuntimePrompt, "messageId" | "model">,
+    baseline: PiAccountingSnapshot
+  ): Promise<void> {
+    const key = `${OPERATION_METADATA_PREFIX}${input.messageId}`;
+    const existing = await this.ctx.storage.get<PiOperationMetadata>(key);
+    if (existing) {
+      if (existing.model !== input.model) throw new Error("Pi operation model mismatch");
+      return;
+    }
+    await this.ctx.storage.put(key, {
+      model: input.model,
+      baseline,
+      projectedCostUsd: 0,
+    });
+  }
+
+  private operationMetadata(operationId: string): Promise<PiOperationMetadata | undefined> {
+    return this.ctx.storage.get<PiOperationMetadata>(`${OPERATION_METADATA_PREFIX}${operationId}`);
+  }
+
+  private async settleOperationMetadata(operationId: string): Promise<void> {
+    const key = `${OPERATION_METADATA_PREFIX}${operationId}`;
+    const metadata = await this.ctx.storage.get<PiOperationMetadata>(key);
+    if (!metadata) return;
+    await this.ctx.storage.put(key, { ...metadata, settledAt: Date.now() });
+    const entries = await this.ctx.storage.list<PiOperationMetadata>({
+      prefix: OPERATION_METADATA_PREFIX,
+    });
+    const expired = [...entries.entries()]
+      .filter((entry): entry is [string, PiOperationMetadata & { settledAt: number }] =>
+        Number.isFinite(entry[1].settledAt)
+      )
+      .sort(
+        (left, right) => right[1].settledAt - left[1].settledAt || right[0].localeCompare(left[0])
+      )
+      .slice(MAX_OPERATION_METADATA_TOMBSTONES);
+    if (expired.length > 0) await this.ctx.storage.delete(expired.map(([storedKey]) => storedKey));
+  }
+
+  private async accountingTotals(): Promise<PiAccountingSnapshot> {
+    return summarizePiUsage(await (await this.harness.pi()).usage(BACKGROUND_CONTEXT));
+  }
+
+  private async observeOperationAccounting(
+    operationId: string
+  ): Promise<PiAccountingSnapshot & { changed: boolean }> {
+    const current = await this.accountingTotals();
+    const key = `${OPERATION_METADATA_PREFIX}${operationId}`;
+    const metadata = await this.ctx.storage.get<PiOperationMetadata>(key);
+    if (!metadata) throw new Error("Pi operation accounting metadata is unavailable");
+    const delta = operationAccountingDelta(current, {
+      usage: metadata.baseline.usage,
+      costUsd: metadata.baseline.costUsd,
+    });
+    const costUsd = Math.max(metadata.projectedCostUsd, delta.costUsd);
+    return { usage: delta.usage, costUsd, changed: costUsd > metadata.projectedCostUsd };
+  }
+
+  private async recordProjectedCost(operationId: string, costUsd: number): Promise<void> {
+    const key = `${OPERATION_METADATA_PREFIX}${operationId}`;
+    await this.ctx.storage.transaction(async (transaction) => {
+      const metadata = await transaction.get<PiOperationMetadata>(key);
+      if (!metadata) throw new Error("Pi operation accounting metadata is unavailable");
+      if (costUsd > metadata.projectedCostUsd) {
+        await transaction.put(key, { ...metadata, projectedCostUsd: costUsd });
+      }
+    });
   }
 
   private async ensureSession(sessionId: string): Promise<void> {
@@ -878,16 +1022,46 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   ): Promise<void> {
     if (this.eventStreams.has(operationId)) return;
     const stream = await this.harness.session(ROOT_SESSION).events(BACKGROUND_CONTEXT);
+    const metadata = await this.operationMetadata(operationId);
+    if (!metadata) throw new Error("Pi operation metadata is unavailable");
     const state = { text: "", tools: new Map() };
     const queue = (events: readonly AgentEvent[]) => {
       const previous = (this.eventRelayWork.get(operationId) ?? Promise.resolve()).catch(() => {});
       const work = previous.then(async () => {
-        const translated = translatePiEvents(events, state, {
-          sessionId,
-          operationId,
-          timestamp: Date.now() / 1_000,
-        });
-        for (const event of translated) await this.deliverEvent(sessionId, operationId, event);
+        for (const source of events) {
+          const translated = translatePiEvents([source], state, {
+            sessionId,
+            operationId,
+            timestamp: Date.now() / 1_000,
+          });
+          const sourceIdentity = piAgentEventIdentity(source);
+          const accounting =
+            source.type === "usage_changed" ||
+            source.type === "snapshot" ||
+            source.type === "tool_execution_end" ||
+            source.type === "compaction_end" ||
+            translated.some((event) => event.type === "step_finish")
+              ? await this.observeOperationAccounting(operationId)
+              : undefined;
+          for (const event of translated) {
+            this.projectionOutbox.enqueue(
+              piProjectionIdentity(operationId, event, sourceIdentity),
+              operationId,
+              this.priceStepEvent(event, metadata.model, accounting?.costUsd),
+              Date.now()
+            );
+          }
+          if (accounting?.changed) {
+            const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
+            this.projectionOutbox.enqueue(
+              piProjectionIdentity(operationId, event),
+              operationId,
+              event,
+              Date.now()
+            );
+            await this.recordProjectedCost(operationId, accounting.costUsd);
+          }
+        }
       });
       this.eventRelayWork.set(operationId, work);
       return work;
@@ -896,6 +1070,108 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (options.recoverSnapshot) void queue([stream.snapshot]).catch(() => {});
     stream.start((events) => queue(events).catch(() => {}));
     void stream.closed.then(() => this.eventStreams.delete(operationId));
+  }
+
+  private async captureFinalProjection(operationId: string): Promise<void> {
+    if (this.projectionOutbox.isFinalized(operationId)) return;
+    await this.stopEventRelay(operationId);
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const metadata = await this.operationMetadata(operationId);
+    if (!metadata) throw new Error("Pi operation metadata is unavailable");
+    const entries = await this.operationEntries(operationId);
+    const state = { text: "", tools: new Map() };
+    const translated = translatePiEvents([settledOperationSnapshot(entries)], state, {
+      sessionId,
+      operationId,
+      timestamp: Date.now() / 1_000,
+    });
+    const accounting = await this.observeOperationAccounting(operationId);
+    for (const event of translated) {
+      this.projectionOutbox.enqueue(
+        piProjectionIdentity(operationId, event),
+        operationId,
+        this.priceStepEvent(event, metadata.model, accounting.costUsd),
+        Date.now(),
+        `final:${piProjectionIdentity(operationId, event)}`
+      );
+    }
+    const accountingEvent = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
+    this.projectionOutbox.enqueue(
+      piProjectionIdentity(operationId, accountingEvent),
+      operationId,
+      accountingEvent,
+      Date.now(),
+      "final:accounting"
+    );
+    await this.recordProjectedCost(operationId, accounting.costUsd);
+    this.projectionOutbox.markFinalized(operationId, accounting, Date.now());
+  }
+
+  private async checkpointAccounting(operationId: string): Promise<void> {
+    if (this.projectionOutbox.isFinalized(operationId)) return;
+    const accounting = await this.observeOperationAccounting(operationId);
+    // accountingTotals() spans every Pi conversation. A may settle while that
+    // read is in flight and B may then add usage; never attribute that snapshot
+    // back to finalized A.
+    if (this.projectionOutbox.isFinalized(operationId)) return;
+    if (!accounting.changed) return;
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
+    this.projectionOutbox.enqueue(
+      piProjectionIdentity(operationId, event),
+      operationId,
+      event,
+      Date.now()
+    );
+    await this.recordProjectedCost(operationId, accounting.costUsd);
+  }
+
+  private async operationEntries(operationId: string): Promise<EntryRecord[]> {
+    const pi = await this.harness.pi();
+    const submission = (await pi.inspect(BACKGROUND_CONTEXT)).submissions.find(
+      (candidate) => candidate.requestId === operationId
+    );
+    if (!submission || submission.type !== "input" || submission.entry === undefined) return [];
+    const conversation = await pi.conversation(submission.conversationId, BACKGROUND_CONTEXT);
+    if (!conversation) throw new Error("Pi operation conversation is unavailable");
+    const entries: EntryRecord[] = [];
+    let cursor: Parameters<typeof conversation.entries>[2];
+    for (;;) {
+      const page = await conversation.entries(
+        {
+          minEntryId: submission.entry,
+          ...(submission.status === "done" ? { maxEntryId: submission.answer } : {}),
+          order: "ascending",
+        },
+        100,
+        cursor,
+        BACKGROUND_CONTEXT
+      );
+      entries.push(...page.items);
+      if (page.next === undefined) return entries;
+      cursor = page.next;
+    }
+  }
+
+  private priceStepEvent(
+    event: ReturnType<typeof translatePiEvents>[number],
+    model: string,
+    messageCostUsd: number | undefined
+  ): ReturnType<typeof translatePiEvents>[number] {
+    if (event.type !== "step_finish" || !event.tokens) return event;
+    const tokens = normalizeTokenUsage(event.tokens);
+    const usage: PiRuntimeUsage = {
+      input: tokens.inputTokens ?? 0,
+      output: tokens.outputTokens ?? 0,
+      reasoning: tokens.reasoningTokens ?? undefined,
+      cacheRead: tokens.cacheReadTokens ?? 0,
+      cacheWrite: tokens.cacheWriteTokens ?? 0,
+      total: tokens.totalTokens ?? 0,
+    };
+    const cost = calculatePiUsageCost(this.models, model, usage);
+    return { ...event, cost, ...(messageCostUsd === undefined ? {} : { messageCostUsd }) };
   }
 
   private async stopEventRelay(operationId: string): Promise<void> {
@@ -913,35 +1189,31 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
   }
 
-  private async deliverEvent(
-    sessionId: string,
+  private async deliverEventProjection(
+    sequence: number,
+    displayId: string,
     operationId: string,
     event: ReturnType<typeof translatePiEvents>[number]
   ): Promise<void> {
-    let failure: unknown;
-    for (let attempt = 1; attempt <= EVENT_DELIVERY_ATTEMPTS; attempt++) {
-      try {
-        const response = await this.env.SESSION.getByName(sessionId).fetch(
-          new Request(`http://session${SessionInternalPaths.piEvent}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Pi-Operation-ID": operationId,
-            },
-            body: JSON.stringify(event),
-          })
-        );
-        if (response.ok) return;
-        failure = new Error(`Pi event delivery rejected (${response.status})`);
-        if (response.status < 500) break;
-      } catch (error) {
-        failure = error;
-      }
-      if (attempt < EVENT_DELIVERY_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, EVENT_DELIVERY_RETRY_MS * attempt));
-      }
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piEvent}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+          "X-Pi-Projection-ID": displayId,
+          "X-Pi-Projection-Sequence": String(sequence),
+        },
+        body: JSON.stringify(event),
+      })
+    );
+    if (response.status >= 500)
+      throw new Error(`Pi event delivery unavailable (${response.status})`);
+    if (!response.ok) {
+      throw new PermanentPiProjectionError(`Pi event delivery rejected (${response.status})`);
     }
-    throw failure instanceof Error ? failure : new Error("Pi event delivery failed");
   }
 
   private async deliverResult(sessionId: string, result: PiRuntimeResult): Promise<void> {
@@ -968,7 +1240,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (response.status >= 500) {
       throw new RetryablePiProjectionError(`Pi result delivery failed (${response.status})`);
     }
-    if (!response.ok) throw new Error(`Pi result delivery rejected (${response.status})`);
+    if (!response.ok) {
+      throw new PermanentPiResultDeliveryError(`Pi result delivery rejected (${response.status})`);
+    }
   }
 }
 
@@ -982,15 +1256,31 @@ function declaredEffects(extension: {
   });
 }
 
-function subtractUsage(current: PiRuntimeUsage, baseline: PiRuntimeUsage): PiRuntimeUsage {
+function accountingProjectionEvent(
+  sessionId: string,
+  operationId: string,
+  messageCostUsd: number
+): Extract<SandboxIngressEvent, { type: "step_finish" }> {
   return {
-    input: Math.max(0, current.input - baseline.input),
-    output: Math.max(0, current.output - baseline.output),
-    cacheRead: Math.max(0, current.cacheRead - baseline.cacheRead),
-    cacheWrite: Math.max(0, current.cacheWrite - baseline.cacheWrite),
-    total: Math.max(0, current.total - baseline.total),
-    ...(current.reasoning === undefined && baseline.reasoning === undefined
-      ? {}
-      : { reasoning: Math.max(0, (current.reasoning ?? 0) - (baseline.reasoning ?? 0)) }),
+    type: "step_finish",
+    sandboxId: `pi:${sessionId}`,
+    timestamp: Date.now() / 1_000,
+    messageId: operationId,
+    stepId: `${operationId}:accounting`,
+    cost: null,
+    messageCostUsd,
+  };
+}
+
+function settledOperationSnapshot(entries: readonly EntryRecord[]): AgentEvent {
+  return {
+    type: "snapshot",
+    entries,
+    tools: [],
+    nestedTools: [],
+    compactions: [],
+    inbox: [],
+    agent: {},
+    usage: { models: {}, tools: {} },
   };
 }

@@ -23,6 +23,12 @@ import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
+import type { PiRuntimeDispatch } from "../pi/runtime-contract";
+import type {
+  PiDispatchRecord,
+  PiDispatchState,
+  PiOperationRepository,
+} from "./pi-operation-repository";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -261,15 +267,22 @@ function buildQueue(
   );
   const piRuntime = {
     initialize: vi.fn(async () => {}),
-    submit: vi.fn(async () => ({
+    submit: vi.fn<PiRuntimeDispatch["submit"]>(async () => ({
       operationId: "msg-1",
       accepted: true,
       rejected: undefined as string | undefined,
     })),
     abort: vi.fn(async () => true),
+    lookup: vi.fn<PiRuntimeDispatch["lookup"]>(async () => ({ status: "running" })),
     status: vi.fn(async () => ({ busy: false, pending: 0 })),
     refreshDiff: vi.fn(async () => {}),
     destroy: vi.fn(async () => {}),
+  };
+  const piOperations = {
+    begin: vi.fn(() => true),
+    get: vi.fn<(operationId: string) => PiDispatchRecord | null>(() => null),
+    transition: vi.fn<PiOperationRepository["transition"]>(() => true),
+    settle: vi.fn<PiOperationRepository["settle"]>(() => true),
   };
 
   const alarmScheduler = createEarliestAlarmScheduler(
@@ -317,6 +330,7 @@ function buildQueue(
     "github",
     alarmScheduler,
     executionStop,
+    piOperations,
     () => executionTimeoutMs,
     mayDispatch,
     getSandboxPromptBlockReason,
@@ -342,11 +356,52 @@ function buildQueue(
     getProviderAuthenticationError,
     projectTerminalMessage,
     piRuntime,
+    piOperations,
     log,
     setExecutionTimeoutMs(value: number) {
       executionTimeoutMs = value;
     },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function installPiOperationState(
+  h: ReturnType<typeof buildQueue>,
+  initial: PiDispatchState | null = null
+) {
+  let state = initial;
+  h.piOperations.get.mockImplementation((operationId: string) =>
+    state === null ? null : { operationId, state, lastProjectionSequence: 0 }
+  );
+  h.piOperations.begin.mockImplementation(() => {
+    if (state !== null) return false;
+    state = "dispatching";
+    return true;
+  });
+  h.piOperations.transition.mockImplementation(
+    (_operationId: string, expected: readonly PiDispatchState[], next: PiDispatchState) => {
+      if (state === null || !expected.includes(state)) return false;
+      state = next;
+      return true;
+    }
+  );
+  h.piOperations.settle.mockImplementation(
+    (_operationId: string, expected: readonly PiDispatchState[]) => {
+      if (state === null || !expected.includes(state)) return false;
+      state = "settled";
+      return true;
+    }
+  );
+  return () => state;
 }
 
 describe("SessionMessageQueue", () => {
@@ -398,6 +453,235 @@ describe("SessionMessageQueue", () => {
       "prompt.dispatch",
       expect.objectContaining({ outcome: "ambiguous", message_id: "msg-1" })
     );
+  });
+
+  it("waits for an in-flight submit before concurrent stop can conclude not_found", async () => {
+    const h = buildQueue();
+    installPiOperationState(h);
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.repository.getMessageById.mockReturnValue(createMessage());
+    const submission = deferred<Awaited<ReturnType<typeof h.piRuntime.submit>>>();
+    h.piRuntime.submit.mockReturnValue(submission.promise);
+    h.piRuntime.lookup.mockResolvedValue({
+      status: "settled",
+      result: {
+        operationId: "msg-1",
+        status: "unanswered",
+        text: "",
+        reason: "aborted",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        costUsd: 0,
+      },
+    });
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => {
+      h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(null);
+      return {
+        messageId: event.messageId,
+        messageCreatedAt: 1,
+        messageStartedAt: 1,
+        completedAt,
+        status: "failed",
+      };
+    });
+
+    const dispatch = h.queue.processMessageQueue();
+    await vi.waitFor(() => expect(h.piRuntime.submit).toHaveBeenCalledOnce());
+    const stopping = h.queue.stopPiExecution();
+    await Promise.resolve();
+    expect(h.piRuntime.lookup).not.toHaveBeenCalled();
+    expect(h.piRuntime.abort).not.toHaveBeenCalled();
+
+    submission.resolve({ operationId: "msg-1", accepted: true, rejected: undefined });
+    await Promise.all([dispatch, stopping]);
+
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "msg-1");
+    expect(h.piRuntime.lookup).toHaveBeenCalledWith("s1", "msg-1");
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledOnce();
+  });
+
+  it("registers the submit barrier before deferred alarm scheduling and never overlaps A with B", async () => {
+    const h = buildQueue();
+    installPiOperationState(h);
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    const messageA = createMessage({ id: "message-a" });
+    const messageB = createMessage({ id: "message-b", created_at: 2 });
+    h.repository.getNextPendingMessage
+      .mockReturnValueOnce(messageA)
+      .mockReturnValueOnce(messageB)
+      .mockReturnValue(null);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: messageA.id,
+      created_at: 1,
+    });
+    h.repository.getMessageById.mockReturnValue(messageA);
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => {
+      h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(null);
+      return {
+        messageId: event.messageId,
+        messageCreatedAt: 1,
+        messageStartedAt: 1,
+        completedAt,
+        status: "failed",
+      };
+    });
+    h.piRuntime.submit.mockImplementation(async (input) => ({
+      operationId: input.messageId,
+      accepted: true,
+      rejected: undefined,
+    }));
+    h.piRuntime.lookup.mockResolvedValue({
+      status: "settled",
+      result: {
+        operationId: messageA.id,
+        status: "unanswered",
+        text: "",
+        reason: "aborted",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        costUsd: 0,
+      },
+    });
+    const alarm = deferred<void>();
+    h.setAlarm.mockReturnValue(alarm.promise);
+
+    const dispatchA = h.queue.processMessageQueue();
+    await vi.waitFor(() => expect(h.setAlarm).toHaveBeenCalled());
+    expect(h.piRuntime.submit).not.toHaveBeenCalled();
+    const stoppingA = h.queue.stopPiExecution();
+    await Promise.resolve();
+    expect(h.piRuntime.abort).not.toHaveBeenCalled();
+    expect(h.piRuntime.lookup).not.toHaveBeenCalled();
+    expect(h.piRuntime.submit).not.toHaveBeenCalled();
+
+    alarm.resolve();
+    await Promise.all([dispatchA, stoppingA]);
+
+    expect(h.piRuntime.submit.mock.calls.map(([input]) => input.messageId)).toEqual([
+      "message-a",
+      "message-b",
+    ]);
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "message-a");
+  });
+
+  it("keeps stopping when a stale accepted-submit continuation resumes", async () => {
+    const h = buildQueue();
+    const state = installPiOperationState(h);
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    const submission = deferred<Awaited<ReturnType<typeof h.piRuntime.submit>>>();
+    h.piRuntime.submit.mockReturnValue(submission.promise);
+    h.piRuntime.lookup.mockResolvedValue({ status: "running" });
+
+    const dispatch = h.queue.processMessageQueue();
+    await vi.waitFor(() => expect(h.piRuntime.submit).toHaveBeenCalledOnce());
+    const stopping = h.queue.stopPiExecution();
+    submission.resolve({ operationId: "msg-1", accepted: true, rejected: undefined });
+    await Promise.all([dispatch, stopping]);
+
+    expect(state()).toBe("stopping");
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "msg-1");
+  });
+
+  it("waits for an in-flight submit throw before stop accepts not_found", async () => {
+    const h = buildQueue();
+    const state = installPiOperationState(h);
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.repository.getMessageById.mockReturnValue(createMessage());
+    const submission = deferred<Awaited<ReturnType<typeof h.piRuntime.submit>>>();
+    h.piRuntime.submit.mockReturnValue(submission.promise);
+    h.piRuntime.lookup.mockResolvedValue({ status: "not_found" });
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => ({
+      messageId: event.messageId,
+      messageCreatedAt: 1,
+      messageStartedAt: 1,
+      completedAt,
+      status: "failed",
+    }));
+
+    const dispatch = h.queue.processMessageQueue();
+    await vi.waitFor(() => expect(h.piRuntime.submit).toHaveBeenCalledOnce());
+    const stopping = h.queue.stopPiExecution();
+    submission.reject(new Error("submit RPC failed"));
+    await Promise.all([dispatch, stopping]);
+
+    expect(state()).toBe("settled");
+    expect(h.piRuntime.lookup).toHaveBeenCalledWith("s1", "msg-1");
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles stopping from durable lookup after eviction removes the submit barrier", async () => {
+    const h = buildQueue();
+    const state = installPiOperationState(h, "stopping");
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.repository.getMessageById.mockReturnValue(createMessage());
+    h.piRuntime.lookup.mockResolvedValue({ status: "not_found" });
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => ({
+      messageId: event.messageId,
+      messageCreatedAt: 1,
+      messageStartedAt: 1,
+      completedAt,
+      status: "failed",
+    }));
+
+    await h.queue.processMessageQueue();
+
+    expect(state()).toBe("settled");
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "msg-1");
+    expect(h.piRuntime.lookup).toHaveBeenCalledWith("s1", "msg-1");
+  });
+
+  it("restores dispatching after eviction only when durable lookup proves not_found", async () => {
+    const h = buildQueue();
+    const state = installPiOperationState(h, "dispatching");
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.piRuntime.lookup.mockResolvedValue({ status: "not_found" });
+    h.repository.updateMessageToPending.mockImplementation(() => {
+      h.repository.getProcessingMessage.mockReturnValue(null);
+    });
+
+    await h.queue.processMessageQueue();
+
+    expect(state()).toBe("dispatching");
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+  });
+
+  it("does not convert a natural done result into stopped when abort returns false", async () => {
+    const h = buildQueue();
+    const state = installPiOperationState(h, "admitted");
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.piRuntime.abort.mockResolvedValue(false);
+    h.piRuntime.lookup.mockResolvedValue({
+      status: "settled",
+      result: {
+        operationId: "msg-1",
+        status: "done",
+        text: "natural completion",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        costUsd: 0.001,
+      },
+    });
+
+    await h.queue.stopPiExecution();
+
+    expect(state()).toBe("stopping");
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.piOperations.settle).not.toHaveBeenCalled();
   });
 
   it("settles a definite Pi pre-admission rejection immediately", async () => {
@@ -456,11 +740,11 @@ describe("SessionMessageQueue", () => {
     h.queue.cancelExecution();
     await h.backgroundTasks.settle();
 
-    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1");
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "msg-1");
     expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
-  it("reconciles a timed-out Pi message even when best-effort abort fails", async () => {
+  it("retains the Pi stop fence when abort is ambiguous", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
@@ -468,11 +752,153 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.failStuckProcessingMessage();
 
-    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
+    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
+      "msg-1",
+      expect.any(Number)
+    );
+    expect(h.piRuntime.lookup).toHaveBeenCalledWith("s1", "msg-1");
     expect(h.log.warn).toHaveBeenCalledWith(
       "pi.abort_failed",
       expect.objectContaining({ message_id: "msg-1", error_type: "Error" })
     );
+  });
+
+  it("restores an ambiguously dispatched Pi prompt only after lookup proves not_found", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.piOperations.get.mockReturnValue({
+      operationId: "msg-1",
+      state: "ambiguous",
+      lastProjectionSequence: 0,
+    });
+    h.piRuntime.lookup.mockResolvedValue({ status: "not_found" });
+    h.repository.updateMessageToPending.mockImplementation(() => {
+      h.repository.getProcessingMessage.mockReturnValue(null);
+    });
+    h.repository.getNextPendingMessage.mockReturnValue(null);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+    expect(h.piOperations.transition).toHaveBeenCalledWith(
+      "msg-1",
+      ["dispatching", "ambiguous"],
+      "dispatching",
+      expect.any(Number)
+    );
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
+  });
+
+  it("keeps an ambiguously dispatched Pi prompt claimed when lookup proves it is running", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.piOperations.get.mockReturnValue({
+      operationId: "msg-1",
+      state: "ambiguous",
+      lastProjectionSequence: 0,
+    });
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(h.piOperations.transition).toHaveBeenCalledWith(
+      "msg-1",
+      ["dispatching", "ambiguous"],
+      "admitted",
+      expect.any(Number)
+    );
+  });
+
+  it("does not emit the started callback again when the same operation id is redriven", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+    h.piOperations.get.mockReturnValue({
+      operationId: "msg-1",
+      state: "dispatching",
+      lastProjectionSequence: 0,
+    });
+
+    await h.queue.processMessageQueue();
+    await h.backgroundTasks.settle();
+
+    expect(h.piRuntime.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-1" })
+    );
+    expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the queue fenced when Pi reports abort false while the operation still runs", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.repository.getMessageById.mockReturnValue(createMessage());
+    h.piRuntime.abort.mockResolvedValue(false);
+    h.piOperations.get.mockReturnValue({
+      operationId: "msg-1",
+      state: "stopping",
+      lastProjectionSequence: 0,
+    });
+
+    await h.queue.stopPiExecution();
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalled();
+    expect(h.piRuntime.lookup).toHaveBeenCalledWith("s1", "msg-1");
+  });
+
+  it("pumps the next prompt only after an exact Pi abort is confirmed settled", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(createSession({ harness: "pi" }));
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({ id: "msg-1", created_at: 1 });
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageById.mockReturnValue(createMessage());
+    h.piOperations.get.mockReturnValue({
+      operationId: "msg-1",
+      state: "stopping",
+      lastProjectionSequence: 0,
+    });
+    h.piRuntime.lookup.mockResolvedValue({
+      status: "settled",
+      result: {
+        operationId: "msg-1",
+        status: "unanswered",
+        text: "",
+        reason: "aborted",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        costUsd: 0,
+      },
+    });
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => {
+      h.repository.getProcessingMessage.mockReturnValue(null);
+      h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(null);
+      return {
+        messageId: event.messageId,
+        messageCreatedAt: 1,
+        messageStartedAt: 1,
+        completedAt,
+        status: "failed",
+      };
+    });
+
+    await h.queue.stopPiExecution();
+
+    expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "msg-1");
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-1", success: false }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.piOperations.settle).toHaveBeenCalledWith("msg-1", ["stopping"], expect.any(Number));
   });
 
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
@@ -569,7 +995,12 @@ describe("SessionMessageQueue", () => {
       observeExecutionCost: vi.fn(() => {
         session.budget_exhausted = 1;
         session.total_cost = 10;
-        return { warningEvent: null, stopPreparation: null, statusChanged: true };
+        return {
+          warningEvent: null,
+          stopPreparation: null,
+          statusChanged: true,
+          piStopReason: null,
+        };
       }),
       deliverTransition: vi.fn(async () => {}),
     };

@@ -451,7 +451,8 @@ export class MessageRepository {
 
       const status = event.success ? "completed" : "failed";
       this.sql.exec(
-        `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
+        `UPDATE messages SET status = ?, completed_at = ?, error_message = ?,
+         stop_confirmation_deadline = NULL WHERE id = ?`,
         status,
         completedAt,
         event.success ? null : (event.error ?? null),

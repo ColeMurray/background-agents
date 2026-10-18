@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toPiModel, toPiThinkingLevel } from "./runtime-contract";
+import { piRuntimeOperationStatusSchema, toPiModel, toPiThinkingLevel } from "./runtime-contract";
 
 describe("Pi runtime contract", () => {
   it("maps Open-Inspect OpenAI model ids to Pi's Codex provider", () => {
@@ -21,5 +21,30 @@ describe("Pi runtime contract", () => {
     expect(toPiThinkingLevel("max")).toBe("max");
     expect(toPiThinkingLevel(undefined)).toBeUndefined();
     expect(() => toPiThinkingLevel("ultra")).toThrow("Unsupported Pi thinking level");
+  });
+
+  it("requires terminal data only for settled operation lookups", () => {
+    expect(piRuntimeOperationStatusSchema.parse({ status: "not_found" })).toEqual({
+      status: "not_found",
+    });
+    expect(piRuntimeOperationStatusSchema.parse({ status: "queued" })).toEqual({
+      status: "queued",
+    });
+    expect(piRuntimeOperationStatusSchema.parse({ status: "running" })).toEqual({
+      status: "running",
+    });
+    expect(() => piRuntimeOperationStatusSchema.parse({ status: "settled" })).toThrow();
+    expect(
+      piRuntimeOperationStatusSchema.parse({
+        status: "settled",
+        result: {
+          operationId: "message-1",
+          status: "done",
+          text: "answer",
+          usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+          costUsd: 0.000025,
+        },
+      })
+    ).toMatchObject({ status: "settled", result: { operationId: "message-1" } });
   });
 });

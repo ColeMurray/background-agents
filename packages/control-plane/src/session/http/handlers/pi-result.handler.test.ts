@@ -19,6 +19,7 @@ function buildHandler() {
   const processEvent = vi.fn(async () => {});
   const receipts = { has: vi.fn(() => false), record: vi.fn() };
   const recoverTerminal = vi.fn(async () => {});
+  const settleOperation = vi.fn();
   return {
     handler: new PiResultHandler(
       messages as unknown as MessageRepository,
@@ -27,12 +28,14 @@ function buildHandler() {
       recoverTerminal,
       () => true,
       () => "session-1",
-      () => 1_234_000
+      () => 1_234_000,
+      settleOperation
     ),
     messages,
     processEvent,
     receipts,
     recoverTerminal,
+    settleOperation,
   };
 }
 
@@ -40,7 +43,7 @@ describe("PiResultHandler", () => {
   it("projects a terminal answer through the normalized event processor", async () => {
     const h = buildHandler();
     const response = await h.handler.handle(
-      request({ operationId: "message-1", status: "done", text: "Answer" })
+      request({ operationId: "message-1", status: "done", text: "Answer", costUsd: 0 })
     );
 
     expect(response.status).toBe(200);
@@ -57,6 +60,32 @@ describe("PiResultHandler", () => {
       expect.objectContaining({ type: "execution_complete", success: true })
     );
     expect(h.receipts.record).toHaveBeenCalledWith("message-1", 1_234_000);
+    expect(h.settleOperation).toHaveBeenCalledWith("message-1", 1_234_000);
+  });
+
+  it("projects the server-calculated turn cost once on terminal completion", async () => {
+    const h = buildHandler();
+    const response = await h.handler.handle(
+      request({
+        operationId: "message-1",
+        status: "done",
+        text: "Answer",
+        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 },
+        costUsd: 0.000123,
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(h.processEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "step_finish" })
+    );
+    expect(h.processEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "execution_complete",
+        messageId: "message-1",
+        messageCostUsd: 0.000123,
+      })
+    );
   });
 
   it("acknowledges a replay after the message already settled", async () => {
@@ -65,7 +94,7 @@ describe("PiResultHandler", () => {
     h.messages.getMessageById.mockReturnValue({ status: "completed", error_message: null });
 
     const response = await h.handler.handle(
-      request({ operationId: "message-1", status: "done", text: "Answer" })
+      request({ operationId: "message-1", status: "done", text: "Answer", costUsd: 0 })
     );
 
     expect(await response.json()).toEqual({ status: "recovered" });
@@ -86,7 +115,7 @@ describe("PiResultHandler", () => {
     });
 
     const response = await h.handler.handle(
-      request({ operationId: "message-1", status: "done", text: "Late answer" })
+      request({ operationId: "message-1", status: "done", text: "Late answer", costUsd: 0 })
     );
 
     expect(await response.json()).toEqual({ status: "recovered" });
@@ -97,10 +126,35 @@ describe("PiResultHandler", () => {
     });
   });
 
+  it("derives current processing state when old A settles after B starts", async () => {
+    const h = buildHandler();
+    h.messages.getProcessingMessage.mockReturnValue({ id: "message-b" });
+    h.messages.getMessageById.mockReturnValue({ status: "completed", error_message: null });
+    const processingStates: boolean[] = [];
+    const handler = new PiResultHandler(
+      h.messages as unknown as MessageRepository,
+      h.processEvent,
+      h.receipts,
+      async () => {
+        processingStates.push(h.messages.getProcessingMessage() !== null);
+      },
+      () => true,
+      () => "session-1",
+      () => 1_234_000
+    );
+
+    const response = await handler.handle(
+      request({ operationId: "message-a", status: "done", text: "late", costUsd: 0 })
+    );
+
+    expect(response.status).toBe(200);
+    expect(processingStates).toEqual([true]);
+  });
+
   it("rejects a result that does not own the processing claim", async () => {
     const h = buildHandler();
     const response = await h.handler.handle(
-      request({ operationId: "other", status: "done", text: "Answer" })
+      request({ operationId: "other", status: "done", text: "Answer", costUsd: 0 })
     );
 
     expect(response.status).toBe(409);
@@ -120,7 +174,7 @@ describe("PiResultHandler", () => {
     );
 
     const response = await handler.handle(
-      request({ operationId: "message-1", status: "done", text: "Answer" })
+      request({ operationId: "message-1", status: "done", text: "Answer", costUsd: 0 })
     );
 
     expect(response.status).toBe(409);
@@ -132,11 +186,30 @@ describe("PiResultHandler", () => {
     h.receipts.has.mockReturnValue(true);
 
     const response = await h.handler.handle(
-      request({ operationId: "message-1", status: "done", text: "Answer" })
+      request({ operationId: "message-1", status: "done", text: "Answer", costUsd: 0 })
     );
 
     expect(await response.json()).toEqual({ status: "already_projected" });
     expect(h.processEvent).not.toHaveBeenCalled();
     expect(h.recoverTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not replay callbacks when A's result response is lost and B is already processing", async () => {
+    const h = buildHandler();
+    await h.handler.handle(
+      request({ operationId: "message-1", status: "done", text: "Answer", costUsd: 0.001 })
+    );
+    const processedCalls = h.processEvent.mock.calls.length;
+    h.receipts.has.mockReturnValue(true);
+    h.messages.getProcessingMessage.mockReturnValue({ id: "message-2" });
+
+    const replay = await h.handler.handle(
+      request({ operationId: "message-1", status: "done", text: "Answer", costUsd: 0.001 })
+    );
+
+    expect(await replay.json()).toEqual({ status: "already_projected" });
+    expect(h.processEvent).toHaveBeenCalledTimes(processedCalls);
+    expect(h.recoverTerminal).not.toHaveBeenCalled();
+    expect(h.messages.getProcessingMessage()).toEqual({ id: "message-2" });
   });
 });

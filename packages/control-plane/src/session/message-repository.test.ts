@@ -640,6 +640,7 @@ describe("MessageRepository", () => {
       status: "completed",
     });
     expect(transactionSyncCalls).toBe(1);
+    expect(mock.calls[1].query).toContain("stop_confirmation_deadline = NULL");
     expect(mock.calls[2].params[0]).toBe("execution_complete:msg-1");
   });
 

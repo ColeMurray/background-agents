@@ -10,6 +10,14 @@ export class RetryablePiProjectionError extends Error {
   }
 }
 
+/** SessionDO deterministically rejected a terminal result; retrying cannot change the outcome. */
+export class PermanentPiResultDeliveryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentPiResultDeliveryError";
+  }
+}
+
 export function projectionRetryOutcome(
   error: unknown,
   deliveryDeadline: number,

@@ -62,6 +62,24 @@ Rule: tick only with evidence on the same line.
       emergency-policy phase before feature delegates, no speculative future-feature seams, and no
       duplicate feature installation path
 
+### Integration phase 2: core Pi reliability
+
+- [x] Exact prompt reconciliation — migration 62 dispatch fence plus `lookup` statuses; focused
+      queue tests cover ambiguous not-found, running-after-response-loss, and same-ID redrive
+- [x] Stop and queue fence — exact operation abort; success, false, and throw paths covered without
+      releasing later prompts while outcome is ambiguous
+- [x] Durable event projection — immutable operation-local outbox sequence, one SessionDO cursor,
+      operation-scoped final capture, final tool upsert, permanent-4xx classification, and real
+      Lifecycle eviction drain
+- [x] Trusted Pi cost — persisted PiHarness usage/cost baseline and high-water across all
+      conversations/tasks/tools, request-tier preservation, cost-cap fail-closed, and exact Pi abort
+      on a running tiny-budget crossing
+- [x] Full Phase 2 revalidation after final reliability review — `/simplify`; shared 1,303;
+      control-plane unit 5,047/1 skipped; full workerd 2,452/1 skipped; web 2,525; Slack callback
+      42; Linear callback 26; root build/typecheck, lint, format, SQL portability, migration tests,
+      and diff check green
+- [x] Amended commit — this Phase 2 commit
+
 ### Slice 1: isolated Code Mode sandbox infrastructure
 
 - [x] Tests pinning existing behavior — RED: missing package/Worker/Terraform contracts failed

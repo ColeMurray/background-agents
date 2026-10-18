@@ -32,8 +32,10 @@ Web / Slack / Automations
 
 - Provision Pi sessions without creating a sandbox row or warming E2B.
 - Preserve Open-Inspect's existing session, team, visibility, participant, message, callback, and
-  audit contracts, plus token usage accounting. Codex subscription requests have no provider dollar
-  charge, so dollar budgets remain explicitly unavailable as they are for the native Codex harness.
+  audit contracts, plus token usage accounting. Pi's pinned provider prices each model request;
+  PiHarness durably accumulates those costs across root/child conversations, tools, and compaction.
+  Open-Inspect records an operation baseline and monotonic delta. It is a budget estimate, not a
+  provider invoice; a cost-capped session fails closed when its model has no trusted price.
 - Stream Pi activity through the existing normalized sandbox-event contract so current web and bot
   clients continue to work.
 - Keep D1 as the authority for provider accounts. No refresh token, GitHub App private key, or
@@ -178,6 +180,7 @@ Introduce a control-plane port instead of coupling session services to a Durable
 ```typescript
 interface PiRuntimeDispatch {
   submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt>;
+  lookup(sessionId: string, operationId: string): Promise<PiRuntimeOperationStatus>;
   abort(sessionId: string, operationId?: string): Promise<boolean>;
   status(sessionId: string): Promise<PiRuntimeStatus>;
 }
@@ -201,6 +204,20 @@ Sandbox behavior remains byte-for-byte compatible. The Pi dispatcher:
 An ambiguous response is recovered by looking up Pi's receipt by request id, never by resubmitting
 with a new id.
 
+SessionDO migration 62 persists one outer dispatch fence and its acknowledged projection sequence.
+Every transition is expected-state/CAS: stale submit or lookup continuations cannot move `stopping`
+back to `admitted`. While the current object has a submit RPC in flight, stop waits on that exact
+promise before abort/lookup can prove absence; after eviction, durable lookup is the proof. A stop
+settles locally only for `not_found` or an authoritative `unanswered: aborted|withdrawn` result.
+Natural `done` and other unanswered results use the canonical terminal result path. The next prompt
+is pumped only after that path or confirmed withdrawal completes. Late results derive
+`processing_status` from the current message row, so an older operation cannot publish false idle
+while newer work runs.
+
+The projection alarm probes settlement before final capture. A transient `not_found` inside the
+admission grace period reschedules with the relay open and accounting unfrozen; finalization begins
+only after admission/settlement is authoritative.
+
 ## Event translation
 
 Pi's snapshot-plus-events stream is translated into the existing Open-Inspect event vocabulary:
@@ -219,6 +236,23 @@ Pi's snapshot-plus-events stream is translated into the existing Open-Inspect ev
 
 Every translated event includes the Open-Inspect message id and a deterministic event identity or
 monotonic sequence. Replayed Pi commits must upsert rather than duplicate timeline records.
+
+PiSessionDO first appends translated events to an immutable, operation-local sequence in its SQLite
+projection outbox. Streaming versions may share one canonical display identity, but never one
+delivery sequence. Compactions include Pi's task identity. SessionDO advances the single sequence on
+the migration-62 operation row after canonical event upsert; known old operations remain acceptable
+while newer work runs. At settlement PiSessionDO stops the live relay, captures the exact
+submission-entry range once, records its per-request cost, drains all prior rows, and only then
+sends the terminal result. Accounting checkpoints run only while the operation is pending; terminal
+retries read the latched final usage/cost snapshot and never sample global usage from newer work.
+Lifecycle alarms resume the same rows after eviction. Transport and 5xx errors retry; deterministic
+4xx errors become a bounded permanent diagnostic and fail the operation closed. Bounded
+operation/result tombstones replace per-event receipt growth.
+
+Terminal result delivery uses the same classification: transport and 5xx remain retryable, while a
+SessionDO 4xx is permanent, performs bounded projection/accounting cleanup, and never schedules a
+duplicate callback or result delivery. The permanent rejection is durably marked before cleanup; a
+transient cleanup failure retries cleanup only.
 
 ## Codex subscription brokerage
 
@@ -356,7 +390,7 @@ Add structured fields:
 - recovery count and wake reason
 - tool replay classification
 - provider broker latency/version
-- token usage (Codex subscription requests do not expose dollar cost)
+- token usage and server-calculated catalog cost (explicitly not a provider invoice)
 - sandbox avoidance count
 - sandbox child escalation count
 
@@ -376,6 +410,10 @@ Never log prompt contents or credentials.
 Rollback disables new Pi admission while retaining the `PI_SESSION` binding so existing sessions can
 continue, stop, and delete. Removing the Durable Object class or deleting its storage is a separate,
 deliberate migration and is never part of rollback.
+
+Rollback also retains SessionDO migration 62 and the PiSessionDO outbox tables. Disabling new
+admission must not remove lookup, exact-operation abort, receipt acknowledgement, Lifecycle drain,
+or terminal projection code needed by already-admitted sessions.
 
 ## Phased pull requests
 

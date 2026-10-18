@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   validateMigrationArtifacts,
@@ -31,7 +32,37 @@ it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
     },
     { id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID, feature: "externalActions" },
     { id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID, feature: "coreAuthority" },
+    { id: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID, feature: "piProjection" },
   ]);
+});
+
+it("adds the minimal durable Pi operation reconciliation row", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(
+      ({ id }) => id !== PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID
+    )) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+
+    applyMigrations(createDatabaseSql(db));
+
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'pi_%'").all()
+    ).toEqual([{ name: "pi_operation_dispatch" }]);
+    expect(db.prepare("PRAGMA table_info(pi_operation_dispatch)").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "state" }),
+        expect.objectContaining({ name: "last_projection_sequence" }),
+      ])
+    );
+  } finally {
+    db.close();
+  }
 });
 
 it("adds the creation-time Pi capability snapshot without backfilling legacy sessions", () => {

@@ -1,5 +1,7 @@
 import type { SqlStorage } from "./sql-storage";
 
+const MAX_PI_RESULT_RECEIPTS = 128;
+
 export class PiResultReceiptRepository {
   constructor(private readonly sql: SqlStorage) {}
 
@@ -16,6 +18,13 @@ export class PiResultReceiptRepository {
       "INSERT OR IGNORE INTO pi_result_receipts (operation_id, projected_at) VALUES (?, ?)",
       operationId,
       projectedAt
+    );
+    this.sql.exec(
+      `DELETE FROM pi_result_receipts WHERE operation_id NOT IN (
+         SELECT operation_id FROM pi_result_receipts
+         ORDER BY projected_at DESC, operation_id DESC LIMIT ?
+       )`,
+      MAX_PI_RESULT_RECEIPTS
     );
   }
 }

@@ -42,7 +42,8 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly offerFallbackTitle: (title: string) => void
+    private readonly offerFallbackTitle: (title: string) => void,
+    private readonly callbackBeforeProjection: () => boolean = () => false
   ) {}
 
   /**
@@ -75,6 +76,17 @@ export class SandboxExecutionEventHandler {
         budgetTransition: this.budget.observeExecutionCost(event, context.now),
       };
     });
+    if (completion && this.callbackBeforeProjection()) {
+      // Schedule the canonical callback immediately after the terminal commit.
+      // Pi result retries recover projections/status only and never enqueue it again.
+      this.backgroundTasks.submit(
+        () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+        {
+          name: "callback.notify_complete",
+          context: { message_id: event.messageId },
+        }
+      );
+    }
     await this.budget.deliverTransition(budgetTransition);
     if (completion) {
       await this.projectTerminalMessage(
@@ -105,13 +117,15 @@ export class SandboxExecutionEventHandler {
         isProcessing: this.messageRepository.getProcessingMessage() !== null,
       });
       this.broadcastPromptQueue();
-      this.backgroundTasks.submit(
-        () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
-        {
-          name: "callback.notify_complete",
-          context: { message_id: event.messageId },
-        }
-      );
+      if (!this.callbackBeforeProjection()) {
+        this.backgroundTasks.submit(
+          () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+          {
+            name: "callback.notify_complete",
+            context: { message_id: event.messageId },
+          }
+        );
+      }
       await this.statusService.reconcileAfterExecution(event.success);
     } else {
       this.log.info("prompt.complete", {

@@ -17,7 +17,8 @@ export class PiResultHandler {
     }) => Promise<void>,
     private readonly isPiSession: () => boolean,
     private readonly getSessionId: () => string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly settleOperation: (operationId: string, settledAt: number) => void = () => {}
   ) {}
 
   async handle(request: Request): Promise<Response> {
@@ -39,7 +40,9 @@ export class PiResultHandler {
           success: message.status === "completed",
           ...(message.error_message ? { error: message.error_message } : {}),
         });
-        this.receipts.record(result.operationId, this.now());
+        const settledAt = this.now();
+        this.receipts.record(result.operationId, settledAt);
+        this.settleOperation(result.operationId, settledAt);
         return Response.json({ status: "recovered" });
       }
       return Response.json({ error: "Pi operation is not processing" }, { status: 409 });
@@ -55,23 +58,6 @@ export class PiResultHandler {
         messageId: result.operationId,
         content: result.text,
         partId: result.operationId,
-      });
-    }
-    if (result.usage) {
-      await this.processEvent({
-        type: "step_finish",
-        sandboxId,
-        timestamp,
-        messageId: result.operationId,
-        stepId: result.operationId,
-        cost: null,
-        tokens: {
-          total: result.usage.total,
-          input: result.usage.input,
-          output: result.usage.output,
-          ...(result.usage.reasoning === undefined ? {} : { reasoning: result.usage.reasoning }),
-          cache: { read: result.usage.cacheRead, write: result.usage.cacheWrite },
-        },
       });
     }
     const success = result.status === "done";
@@ -90,9 +76,12 @@ export class PiResultHandler {
       timestamp,
       messageId: result.operationId,
       success,
+      messageCostUsd: result.costUsd,
       ...(success ? {} : { error: result.reason ?? "Pi execution did not complete" }),
     });
-    this.receipts.record(result.operationId, this.now());
+    const settledAt = this.now();
+    this.receipts.record(result.operationId, settledAt);
+    this.settleOperation(result.operationId, settledAt);
     return Response.json({ status: "projected" });
   }
 }

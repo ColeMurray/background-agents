@@ -28,6 +28,9 @@ export function translatePiEvents(
   for (const event of events) {
     switch (event.type) {
       case "snapshot": {
+        if (!event.run && !event.generation) {
+          translated.push(...settledSnapshotEvents(event, state, envelope));
+        }
         const partial = event.generation?.message;
         const recoveredText = partial ? assistantText(partial) : state.text;
         if (partial && recoveredText !== state.text) {
@@ -76,13 +79,6 @@ export function translatePiEvents(
         break;
       }
       case "turn_start":
-        translated.push({
-          type: "step_start",
-          sandboxId: `pi:${envelope.sessionId}`,
-          timestamp: envelope.timestamp,
-          messageId: envelope.operationId,
-          stepId: envelope.operationId,
-        });
         break;
       case "message_update":
         for (const change of event.changes) {
@@ -101,12 +97,25 @@ export function translatePiEvents(
       case "message_end": {
         const message = event.entry.model?.[0];
         if (message?.role !== "assistant") break;
+        const stepId = `pi-entry:${String(event.entry.id ?? envelope.operationId)}`;
+        const text = assistantText(message);
+        if (text && text !== state.text) {
+          state.text = text;
+          translated.push(tokenEvent(text, envelope));
+        }
+        translated.push({
+          type: "step_start",
+          sandboxId: `pi:${envelope.sessionId}`,
+          timestamp: envelope.timestamp,
+          messageId: envelope.operationId,
+          stepId,
+        });
         translated.push({
           type: "step_finish",
           sandboxId: `pi:${envelope.sessionId}`,
           timestamp: envelope.timestamp,
           messageId: envelope.operationId,
-          stepId: envelope.operationId,
+          stepId,
           tokens: {
             input: message.usage.input,
             output: message.usage.output,
@@ -223,6 +232,74 @@ function tokenEvent(
     content,
     partId: envelope.operationId,
   };
+}
+
+function settledSnapshotEvents(
+  snapshot: SnapshotEvent,
+  state: PiEventTranslationState,
+  envelope: { sessionId: string; operationId: string; timestamp: number }
+): SandboxIngressEvent[] {
+  let start = -1;
+  for (let index = snapshot.entries.length - 1; index >= 0; index--) {
+    if (snapshot.entries[index]?.model?.[0]?.role === "user") {
+      start = index;
+      break;
+    }
+  }
+  if (start < 0) return [];
+  const projected: SandboxIngressEvent[] = [];
+  const calls = new Map<string, PiToolTranslationState>();
+  for (const entry of snapshot.entries.slice(start + 1)) {
+    const message = entry.model?.[0];
+    if (message?.role === "assistant") {
+      const text = assistantText(message);
+      if (text) {
+        state.text = text;
+        projected.push(tokenEvent(text, envelope));
+      }
+      const stepId = `pi-entry:${String(entry.id ?? envelope.operationId)}`;
+      projected.push({
+        type: "step_start",
+        sandboxId: `pi:${envelope.sessionId}`,
+        timestamp: envelope.timestamp,
+        messageId: envelope.operationId,
+        stepId,
+      });
+      projected.push({
+        type: "step_finish",
+        sandboxId: `pi:${envelope.sessionId}`,
+        timestamp: envelope.timestamp,
+        messageId: envelope.operationId,
+        stepId,
+        tokens: {
+          input: message.usage.input,
+          output: message.usage.output,
+          ...(message.usage.reasoning === undefined ? {} : { reasoning: message.usage.reasoning }),
+          cache: { read: message.usage.cacheRead, write: message.usage.cacheWrite },
+          total: message.usage.totalTokens,
+        },
+        reason: message.stopReason,
+      });
+      for (const part of message.content) {
+        if (part.type !== "toolCall") continue;
+        calls.set(part.id, { tool: part.name, args: part.arguments, output: "" });
+      }
+      continue;
+    }
+    if (message?.role !== "toolResult") continue;
+    const call = calls.get(message.toolCallId) ?? {
+      tool: message.toolName,
+      args: {},
+      output: "",
+    };
+    call.output = message.content
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("");
+    projected.push(
+      toolEvent(call, message.toolCallId, message.isError ? "failed" : "completed", envelope)
+    );
+  }
+  return projected;
 }
 
 function assistantText(message: AssistantMessage): string {

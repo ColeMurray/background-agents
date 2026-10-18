@@ -181,6 +181,7 @@ import { PiCredentialService } from "./pi-credential-service";
 import { PiResultHandler } from "./http/handlers/pi-result.handler";
 import { PiEventHandler } from "./http/handlers/pi-event.handler";
 import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
+import { PiOperationRepository } from "./pi-operation-repository";
 import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
 import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
@@ -530,6 +531,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     recordTerminalMessage
   );
+  const piOperations = new PiOperationRepository(sql);
   const shutdown = new SandboxShutdownCoordinator({
     log,
     store: new SandboxShutdownRepository(sql),
@@ -615,6 +617,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     scmProviderName,
     alarmScheduler,
     executionStop,
+    piOperations,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
     () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
@@ -640,7 +643,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const stopExecution = async () => {
     const session = sessionCoreRepository.getSession();
     if (session?.harness === "pi" && env.PI_SESSION) {
-      await messageQueue.failStuckProcessingMessage("Execution was stopped");
+      await messageQueue.stopPiExecution("Execution was stopped");
       return;
     }
     await executionStop.stop();
@@ -663,7 +666,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     executionStop,
     () => messageQueue.processMessageQueue(),
-    generateId
+    generateId,
+    {
+      isPiSession,
+      stopPiExecution: async (reason) => {
+        // Do not call back into PiSessionDO while acknowledging Pi's outbox
+        // fetch; a settled abort may need that same relay to close first.
+        backgroundTasks.submit(() => messageQueue.stopPiExecution(reason), {
+          name: "pi.budget_stop",
+        });
+      },
+    }
   );
 
   const updateLastActivity = (timestamp: number) => {
@@ -706,7 +719,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-    }
+    },
+    isPiSession
   );
   const piSandboxExecution = new PiSandboxExecutionCoordinator({
     commands: sandboxCommandRepository,
@@ -768,16 +782,25 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new PiResultReceiptRepository(sql),
     async (result) => {
       await terminalMessageProjection.flushPending();
-      await callbackService.notifyComplete(result.operationId, result.success, result.error);
       await statusService.reconcileAfterExecution(result.success);
-      messenger.broadcast({ type: "processing_status", isProcessing: false });
+      messenger.broadcast({
+        type: "processing_status",
+        isProcessing: messageRepository.getProcessingMessage() !== null,
+      });
       messageQueue.broadcastPromptQueue();
       await messageQueue.processMessageQueue();
     },
     isPiSession,
-    getPublicSessionId
+    getPublicSessionId,
+    Date.now,
+    (operationId, settledAt) =>
+      piOperations.settle(
+        operationId,
+        ["dispatching", "ambiguous", "admitted", "stopping"],
+        settledAt
+      )
   );
-  const piEventHandler = new PiEventHandler(messageRepository, processPiEvent, isPiSession);
+  const piEventHandler = new PiEventHandler(piOperations, processPiEvent, isPiSession);
   const alarmHandler = createAlarmHandler({
     repository: messageRepository,
     messageQueue,
@@ -801,6 +824,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       lifecycleManager.handleShutdownAlarm(allowCaptureRetry),
     redriveIdleQueue: () => lifecycleManager.redriveIdleQueue(),
     sandboxCommandDeadlines: () => piSandboxExecution.handleAlarm(),
+    reconcilePiStop: async () => {
+      if (!isPiSession()) return false;
+      await messageQueue.processMessageQueue();
+      return true;
+    },
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
