@@ -2,7 +2,7 @@
 
 Workspace: repository root on `feat/pi-repository-editing`
 
-Base: `9fbdecf0`
+Base: `03343fc6` (`feat/pi-first-class`, canonical capabilities/effects/assembler prerequisite)
 
 Started: 2026-10-18
 
@@ -23,9 +23,9 @@ Rule: tick only with evidence on the same line.
       observed in provider, repository-tools, bridge, and SessionDiff suites
 - [x] GREEN implementation — full SHA-1/SHA-256 IDs, exact modes, 40-file batches, crash-safe
       SessionDO baseline reuse
-- [x] Focused tests and typecheck green — 243 focused control-plane tests; shared and all four
-      control-plane TypeScript projects clean
-- [x] Committed — `56ba3875` (`feat: add Pi repository editing overlay`)
+- [x] Focused tests and typecheck green — focused control-plane merge-gate suites; shared and all
+      four control-plane TypeScript projects clean
+- [x] Committed — `debbba59` (`feat: add Pi repository editing overlay`, rebased)
 
 ## Slice 2: VFS overlay and diff publication
 
@@ -37,12 +37,12 @@ Rule: tick only with evidence on the same line.
       batches, branch-move crash recovery, SessionDiff publication/retry
 - [x] Security/deep audit and simplify pass — watchdog P1-P3 and cross-cutting blockers reconciled;
       no Computer Git/network/credentials and unknown tools fail closed
-- [x] Committed — `56ba3875` (`feat: add Pi repository editing overlay`)
+- [x] Committed — `efe030a7` (`fix: harden Pi repository editing boundaries`, rebased)
 
 ## Finish
 
 - [x] Documentation states rollout flag and limitations — `SLICE.md`, `SPEC-MAP.md`, and
       `docs/GETTING_STARTED.md`
-- [x] Git branch and implementation commit verified — `feat/pi-repository-editing` at `56ba3875`;
-      final ledger commit follows
+- [x] Git branch and rebased commits verified — `feat/pi-repository-editing` is based on `03343fc6`;
+      canonical-adoption follow-up commit follows
 - [x] No push performed — local worktree only

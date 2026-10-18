@@ -15,9 +15,11 @@ Computer Git or an execution/network backend.
 
 The writable tool surface is deliberately small: Computer's generic `write`, `edit`, and `delete`
 tools admitted through the shared `local_mutation` classification and a bounded UTF-8 repository
-guard. They are unsafe-replay Pi tools. Each mutation reconciles the session-global net overlay and
-publishes it through the existing SessionDiff store. Browser retries route to PiSessionDO for Pi
-sessions and keep the existing sandbox command path for other harnesses.
+guard. The canonical composite policy supplies callers and unsafe replay metadata. One FIFO remains
+held from guard preparation through actual Computer execution, reconciliation, canonical bundle
+assembly, and SessionDO publication, so a later mutation cannot publish behind an older result.
+Browser retries route to PiSessionDO for Pi sessions and keep the existing sandbox command path for
+other harnesses.
 
 ## Limits
 
@@ -29,8 +31,9 @@ sessions and keep the existing sandbox command path for other harnesses.
 
 ## Verification
 
-- Focused control-plane tests: 243 passed, including the Worker bundle contract.
-- Shared package tests: 1,268 passed.
+- Focused control-plane tests include the Worker bundle and canonical extension-policy contracts.
+- Shared package tests: 1,280 passed.
+- Focused web selector/link tests: 9 passed.
 - PiSessionDO workerd integration tests: 17 passed, including real invalid UTF-8 bytes, 51-file
   batching, baseline crash recovery after a branch move, mutation, SessionDiff publication, and
   retry routing without a sandbox.

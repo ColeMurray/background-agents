@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
+  PI_REPOSITORY_EDITING_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
   SANDBOX_EXECUTION_TOOL_EFFECT,
   TOOL_CALLERS,
@@ -76,5 +77,16 @@ describe("Pi tool effect registry", () => {
         replay: "unsafe",
       },
     ]);
+  });
+
+  it("declares repository mutations with canonical local effects and unsafe replay", () => {
+    expect(PI_REPOSITORY_EDITING_TOOL_EFFECT_REGISTRATIONS).toEqual(
+      ["write", "edit", "delete"].map((name) => ({
+        name,
+        effect: "local_mutation",
+        callers: ["model", "tools"],
+        replay: "unsafe",
+      }))
+    );
   });
 });
