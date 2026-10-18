@@ -144,6 +144,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
+    pi_feature_capability_snapshot: null,
     created_at: 1,
     updated_at: 1,
     ...overrides,

@@ -31,10 +31,7 @@ function call(name: string, nested = false): ToolHookCall {
 describe("createOpenInspectCodemodeExtension", () => {
   it("matches the canonical Code Mode effect registrations", () => {
     const sandbox = { start: () => undefined, close: async () => {} } as never;
-    const extension = createOpenInspectCodemodeExtension(
-      sandbox,
-      createPiCodeModePolicyState(true)
-    );
+    const extension = createOpenInspectCodemodeExtension(sandbox, createPiCodeModePolicyState());
 
     expect(extension.name).toBe("codemode");
     expect(
@@ -49,7 +46,7 @@ describe("createOpenInspectCodemodeExtension", () => {
   });
 
   it("limits only active Code Mode nested calls to replay-safe reads", async () => {
-    const state = createPiCodeModePolicyState(true);
+    const state = createPiCodeModePolicyState();
     state.activeCallIds.add("parent");
     const delegate = createPiCodeModePolicyDelegate(state);
     const api = {} as HookApi;
@@ -63,19 +60,5 @@ describe("createOpenInspectCodemodeExtension", () => {
     await expect(
       delegate.beforeTool?.(call("unstable", true), effects.get("unstable")!, api, context)
     ).resolves.toEqual({ block: "Code Mode may call only replay-safe read tools" });
-  });
-
-  it("denies new calls during rollback but admits a memoized replay", async () => {
-    const delegate = createPiCodeModePolicyDelegate(createPiCodeModePolicyState(false));
-    const declaration = effects.get("codemode")!;
-    const deniedApi = { memo: async () => undefined } as unknown as HookApi;
-    await expect(
-      delegate.beforeTool?.(call("codemode"), declaration, deniedApi, context)
-    ).resolves.toEqual({ block: "Code Mode is disabled for new calls by deployment policy" });
-
-    const replayApi = { memo: async () => true } as unknown as HookApi;
-    await expect(
-      delegate.beforeTool?.(call("codemode"), declaration, replayApi, context)
-    ).resolves.toBeUndefined();
   });
 });

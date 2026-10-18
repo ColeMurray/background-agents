@@ -1,5 +1,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { z } from "zod";
+import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -54,6 +55,7 @@ export const piRuntimeResultSchema = z.object({
 
 /** Session-scoped port for the separate Pi Durable Object namespace. */
 export interface PiRuntimeDispatch {
+  initialize(sessionId: string, snapshot: PiFeatureCapabilitySnapshot): Promise<void>;
   submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt>;
   abort(sessionId: string, operationId?: string): Promise<boolean>;
   status(sessionId: string): Promise<{ busy: boolean; pending: number }>;

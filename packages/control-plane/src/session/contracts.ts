@@ -108,6 +108,7 @@ export const SessionInternalPaths = {
   verifySandboxToken: "/internal/verify-sandbox-token",
   openaiTokenRefresh: "/internal/openai-token-refresh",
   piCredential: "/internal/pi-credential",
+  piCapabilityAuthority: "/internal/pi-capability-authority",
   piContext: "/internal/pi-context",
   piRepositoryTool: "/internal/pi-repository-tool",
   piRepositoryMaterialization: "/internal/pi-repository-materialization",

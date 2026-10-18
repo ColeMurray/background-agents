@@ -12,6 +12,8 @@ import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { Env } from "../../src/types";
+import type { SessionDOInternals } from "./session-do-access";
 
 /**
  * The test D1 binding viewed through the engine-neutral interface, so tests
@@ -247,6 +249,7 @@ export async function initSession(overrides?: {
   canonicalUserId?: string;
   scmLogin?: string;
   providerAuth?: SessionModelProviderAuthInput[];
+  configureSessionEnv?: (env: Env) => void;
 }) {
   const defaults = {
     sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
@@ -258,7 +261,11 @@ export async function initSession(overrides?: {
   };
   const id = env.SESSION.idFromName(defaults.sessionName);
   const stub = env.SESSION.get(id);
-  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const {
+    providerAuth = TEST_SESSION_PROVIDER_AUTH,
+    configureSessionEnv,
+    ...doDefaults
+  } = defaults;
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: defaults.sessionName,
@@ -290,6 +297,11 @@ export async function initSession(overrides?: {
     createdAt: now,
     updatedAt: now,
   });
+  if (configureSessionEnv) {
+    await runInSessionDO(stub, (instance) => {
+      configureSessionEnv((instance as unknown as SessionDOInternals).appEnv);
+    });
+  }
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

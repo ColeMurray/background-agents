@@ -70,6 +70,7 @@ export function createMockSession(overrides: Partial<SessionRow> = {}): SessionR
     budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
+    pi_feature_capability_snapshot: null,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
     ...overrides,

@@ -72,6 +72,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
+    pi_feature_capability_snapshot: null,
     created_at: 1000,
     updated_at: 1000,
     ...overrides,
@@ -259,6 +260,7 @@ function buildQueue(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
   const piRuntime = {
+    initialize: vi.fn(async () => {}),
     submit: vi.fn(async () => ({
       operationId: "msg-1",
       accepted: true,

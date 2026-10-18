@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS session (
   max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
   budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
+  pi_feature_capability_snapshot TEXT,              -- Exact creation-time Pi capability snapshot; NULL for non-Pi and legacy sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CHECK (
@@ -408,12 +409,13 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
-import type { PiFeatureId } from "@open-inspect/shared/pi-feature-capabilities";
 import {
+  PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
 } from "@open-inspect/shared/pi-migration-reservations";
+import type { PiMigrationOwner } from "@open-inspect/shared/pi-migration-reservations";
 import type { SqlStorage } from "./sql-storage";
 
 const schemaLog = createLogger("schema");
@@ -430,7 +432,7 @@ export interface SchemaMigration {
   readonly id: number;
   readonly description: string;
   /** Required when `id` is reserved by PI_MIGRATION_RESERVATIONS. */
-  readonly feature?: PiFeatureId;
+  readonly feature?: PiMigrationOwner;
   readonly run: string | ((sql: SqlStorage) => void);
 }
 
@@ -937,6 +939,12 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         "CREATE INDEX IF NOT EXISTS idx_external_action_audit_outbox_due ON external_action_audit_outbox(next_attempt_at, id)"
       );
     },
+  },
+  {
+    id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+    description: "Persist creation-time Pi capability authority",
+    feature: "coreAuthority",
+    run: "ALTER TABLE session ADD COLUMN pi_feature_capability_snapshot TEXT",
   },
 ];
 

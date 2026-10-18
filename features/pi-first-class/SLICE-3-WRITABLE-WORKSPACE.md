@@ -29,11 +29,11 @@ execution backend, shell, Git, network, mounts, assets, publishing, or raw Works
 ## Rollout and rollback
 
 The deployment default remains `off`. `read_only` remains available as the lower-risk canary mode.
-Set `writable` only after accepting Cloudflare Computer 0.5.1's preview status. Each session durably
-snapshots its capability on first open, so a later deployment change cannot silently upgrade or
-downgrade it after eviction. Roll back first to `read_only` for later sessions, then optionally to
-`off`. Normal rollback keeps the Pi Durable Object binding and storage so existing sessions can
-continue and be deleted normally.
+Set `writable` only after accepting Cloudflare Computer 0.5.1's preview status. SessionDO durably
+snapshots capability during creation, before the first prompt, so a later deployment change cannot
+silently install or remove extensions after eviction. During a rollback existing tools stay
+installed, reads succeed, and current policy denies new mutations. Normal rollback keeps the Pi
+Durable Object binding and storage so existing sessions can continue and be deleted normally.
 
 ## Validation
 
@@ -68,8 +68,8 @@ workerd test then verifies the write, edit, read, and delete results and persist
    contents or an edit diff, and no sandbox or terminal controls appear.
 4. Ask: `Recursively delete /workspace/scratch.` Confirm the tool fails and the session can still
    write and read `/workspace/scratch/kept.txt` afterward.
-5. Set `PI_WORKSPACE_MODE=read_only` and apply Terraform. Confirm the existing session remains
-   writable, then open a new Pi session and confirm it has reads while write, edit, and delete are
-   absent.
+5. Set `PI_WORKSPACE_MODE=read_only` and apply Terraform. Confirm the existing session's read tools
+   still succeed, but new write, edit, and delete calls are denied by emergency policy. Then open a
+   new Pi session and confirm it has reads while the mutation tools are absent.
 6. Set the mode to `off` if the canary should end. Do not remove the `PI_SESSION` binding or delete
    Durable Object storage as part of rollback.

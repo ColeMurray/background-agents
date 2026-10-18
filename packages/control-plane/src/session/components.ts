@@ -183,6 +183,7 @@ import { PiEventHandler } from "./http/handlers/pi-event.handler";
 import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
 import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
+import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 import { ExternalActionGateway } from "./external-action-gateway";
 import { ExternalActionDefinitionRegistry } from "./external-action-definitions";
@@ -960,7 +961,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       }),
     generateId,
     Date.now,
-    env.PI_SESSION
+    env.PI_SESSION,
+    () => createPiDeploymentCapabilitySnapshot(env)
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,
@@ -1140,6 +1142,20 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
     piCredential: (request) => piBridgeHandler.credential(request),
+    piCapabilityAuthority: () => {
+      const session = sessionCoreRepository.getSession();
+      if (!session) return Response.json({ error: "Session is not initialized" }, { status: 404 });
+      if (session.harness !== "pi") {
+        return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
+      }
+      return Response.json(
+        {
+          snapshot: sessionCoreRepository.getPiFeatureCapabilitySnapshot(),
+          current: createPiDeploymentCapabilitySnapshot(env),
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    },
     piContext: (request) => piBridgeHandler.context(request),
     piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
     piRepositoryMaterialization: (request) => piBridgeHandler.repositoryMaterialization(request),

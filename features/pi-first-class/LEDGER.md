@@ -37,6 +37,31 @@ Rule: tick only with evidence on the same line.
 
 ## Phase 3: Slices
 
+### Integration phase 1: creation-time Pi authority and emergency deny
+
+- [x] Additive core-authority reservation and SessionDO migration 61 — exact complete snapshot is
+      persisted at new-session initialization; legacy rows remain `NULL`
+- [x] Identity-first Pi initialization — exact-snapshot duplicate succeeds; identity or snapshot
+      mismatch fails closed; a bounded in-process retry survives Pi commit followed by response loss
+- [x] Public creation fault proof — production `POST /sessions` succeeds after the first initialize
+      response is lost and leaves matching D1, SessionDO, and Pi capability state
+- [x] Legacy and eviction behavior — unopened legacy Pi opens all-off; malformed state fails closed;
+      blank objects obtain SessionDO's exact snapshot; concurrent early status/submit cannot poison
+      retry; already-stored snapshots and installed implementations survive eviction
+- [x] Dynamic emergency policy — new scratch/repository mutations and fresh top-level Code Mode
+      calls consult bounded, abortable SessionDO deployment policy; reads remain operable
+- [x] Native Code Mode recovery boundary — call-phase crash recovery reruns current deny;
+      execute-phase recovery follows Pi Durable's committed intent without an Open-Inspect allow
+      memo
+- [x] Rollback contract — production Terraform test retains `PI_SESSION` with new admission off; no
+      binding, class, replay, status, cancellation, or revocation implementation was removed
+- [x] Validation — shared 1,303/1,303; full control-plane unit 5,008 passed/1 skipped; full workerd
+      2,443 passed/1 skipped; focused Code Mode workerd 6/6; production Terraform 9/9; root
+      typecheck, lint, format check, SQL portability, and full build green
+- [x] `/simplify` — one shared mode normalizer, one SessionDO snapshot authority, one composite
+      emergency-policy phase before feature delegates, no speculative future-feature seams, and no
+      duplicate feature installation path
+
 ### Slice 1: isolated Code Mode sandbox infrastructure
 
 - [x] Tests pinning existing behavior — RED: missing package/Worker/Terraform contracts failed
@@ -109,7 +134,7 @@ Rule: tick only with evidence on the same line.
 - [x] Existing tool exposure pinned — focused extension and PiSessionDO workerd assertions
 - [x] Remote sandbox/runtime contract — portable `RemoteCodemodeSandbox`; external DO binding only
 - [x] Native `createCodemodeExtension()` integration — canonical capability snapshot, `code_mode`
-      slot/effects, composite policy delegate, durable emergency-admission memo
+      slot/effects, composite policy delegate, and Pi Durable-native call/execute recovery boundary
 - [ ] Nested event projection remains part of Slice 5; replay, abort, fingerprint, and close are
       covered here by native SQLite replay tests and the compiled two-Worker restart lane
 - [x] Deep audit — architecture and sandbox watchdog corrections incorporated; live provider proof

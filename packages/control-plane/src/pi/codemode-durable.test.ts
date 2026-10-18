@@ -15,6 +15,7 @@ import {
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   createRegistry,
   defineExtension,
@@ -33,6 +34,7 @@ import {
 } from "./codemode-extension";
 import { assemblePiExtensions } from "./extension-assembler";
 import { createPiToolPolicyExtension } from "./tool-policy-extension";
+import { createPiDeploymentEmergencyPolicy } from "./deployment-emergency-policy";
 
 const directories: string[] = [];
 
@@ -46,10 +48,16 @@ async function databasePath(label: string): Promise<string> {
   return join(directory, "pi.sqlite");
 }
 
-function registryWith(sandbox: CodemodeSandbox, read: ToolRegistration, admitNewCalls = true) {
+type CodeModeAdmission = boolean | ((signal: AbortSignal | undefined) => Promise<boolean>);
+
+function registryWith(
+  sandbox: CodemodeSandbox,
+  read: ToolRegistration,
+  admission: CodeModeAdmission = true
+) {
   const registry = createRegistry();
   const readExtension = defineExtension({ name: "test.read", tools: [read] });
-  const codeModePolicy = createPiCodeModePolicyState(admitNewCalls);
+  const codeModePolicy = createPiCodeModePolicyState();
   const codeMode = createOpenInspectCodemodeExtension(sandbox, codeModePolicy);
   const assembly = assemblePiExtensions(
     [
@@ -57,7 +65,14 @@ function registryWith(sandbox: CodemodeSandbox, read: ToolRegistration, admitNew
         slot: "policy",
         effects: [],
         createExtension: (effects) =>
-          createPiToolPolicyExtension(effects, [createPiCodeModePolicyDelegate(codeModePolicy)]),
+          createPiToolPolicyExtension(
+            effects,
+            [createPiCodeModePolicyDelegate(codeModePolicy)],
+            createPiDeploymentEmergencyPolicy(async (signal) => {
+              const admit = typeof admission === "boolean" ? admission : await admission(signal);
+              return resolvePiFeatureCapabilities({ codeMode: admit ? "enabled" : "off" });
+            })
+          ),
       },
       {
         slot: "core",
@@ -102,7 +117,7 @@ function readTool(
 }
 
 describe("native durable Code Mode", () => {
-  it("replays its journal and reattaches completed nested calls after restart", async () => {
+  it("continues execute-phase replay under current emergency deny", async () => {
     const path = await databasePath("codemode-replay");
     let firstReads = 0;
     let secondReads = 0;
@@ -183,6 +198,52 @@ describe("native durable Code Mode", () => {
     await replayHarness.close(BACKGROUND_CONTEXT);
   }, 20_000);
 
+  it("reruns current emergency policy for call-phase recovery before durable intent", async () => {
+    const path = await databasePath("codemode-call-phase");
+    const read = readTool(async () => ({ output: [{ type: "text", text: "unused" }] }));
+    const crash = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", CALL_PHASE_CRASH_SCRIPT, path],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 }
+    );
+    expect(crash.status, crash.stderr).toBe(17);
+
+    const replaySandbox = new CodemodeSandbox();
+    const replayModels = createModels();
+    const replayFaux = fauxProvider();
+    replayModels.setProvider(replayFaux.provider);
+    replayFaux.setResponses([fauxAssistantMessage("finished")]);
+    const replayStorage = await openNodeSqliteStorage(path);
+    const replayHarness = await Harness.open(
+      replayStorage,
+      { models: replayModels, registry: registryWith(replaySandbox, read, false) },
+      BACKGROUND_CONTEXT
+    );
+    replayHarness.resume();
+    const replayRoot = await replayHarness.root(BACKGROUND_CONTEXT);
+    const submission = await replayStorage.submissionByRequest(
+      replayRoot.id,
+      "codemode-call-phase",
+      BACKGROUND_CONTEXT
+    );
+    if (!submission) throw new Error("Crash fixture did not persist its submission");
+    const resumed = await replayHarness.submission(submission.id, BACKGROUND_CONTEXT);
+    await expect(resumed?.wait(BACKGROUND_CONTEXT)).resolves.toMatchObject({ status: "done" });
+    const view = await replayRoot.context(BACKGROUND_CONTEXT);
+    const result = view.messages.find(
+      (message) => message.role === "toolResult" && message.toolName === "codemode"
+    );
+    expect(result?.role).toBe("toolResult");
+    expect(
+      result?.role === "toolResult"
+        ? result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+        : ""
+    ).toContain("disabled for new calls by deployment policy");
+
+    await replaySandbox.close();
+    await replayHarness.close(BACKGROUND_CONTEXT);
+  }, 20_000);
+
   it("aborts the active script and its nested call", async () => {
     const path = await databasePath("codemode-abort");
     let nestedSignal: AbortSignal | undefined;
@@ -233,3 +294,41 @@ describe("native durable Code Mode", () => {
     await harness.close(BACKGROUND_CONTEXT);
   }, 20_000);
 });
+
+const CALL_PHASE_CRASH_SCRIPT = String.raw`
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { CodemodeSandbox } from "@earendil-works/pi-codemode";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
+import { createRegistry, defineExtension, Harness, hook, ToolTask } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+
+const path = process.argv[1];
+const models = createModels();
+const faux = fauxProvider();
+models.setProvider(faux.provider);
+faux.setResponses([
+  fauxAssistantMessage(fauxToolCall("codemode", { code: "return 1;" }), { stopReason: "toolUse" }),
+]);
+const registry = createRegistry();
+registry.install(defineExtension({
+  name: "test.crash-before-codemode-intent",
+  hooks: [hook(ToolTask, {
+    beforeTool(call) {
+      if (call.name === "codemode") process.exit(17);
+    },
+  })],
+}));
+registry.install(createCodemodeExtension({ sandbox: new CodemodeSandbox() }));
+const harness = await Harness.open(await openNodeSqliteStorage(path), { models, registry }, BACKGROUND_CONTEXT);
+const root = await harness.root(BACKGROUND_CONTEXT, {
+  agent: { model: { provider: "faux", modelId: "faux-1" } },
+});
+await root.submit(
+  { type: "input", content: "crash before intent", requestId: "codemode-call-phase" },
+  BACKGROUND_CONTEXT,
+);
+await new Promise((resolve) => setTimeout(resolve, 5_000));
+process.exit(18);
+`;

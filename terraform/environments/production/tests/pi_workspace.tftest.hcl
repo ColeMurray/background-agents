@@ -54,6 +54,20 @@ run "workspace_defaults_off" {
   }
 }
 
+run "pi_binding_survives_admission_rollback" {
+  command = plan
+
+  variables {
+    pi_durable_enabled         = false
+    pi_durable_binding_enabled = true
+  }
+
+  assert {
+    condition     = contains(module.control_plane_worker.binding_names, "PI_SESSION")
+    error_message = "PI_SESSION must remain installed when new Pi admission is rolled back."
+  }
+}
+
 run "sandbox_execution_defaults_off" {
   command = plan
 

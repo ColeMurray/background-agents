@@ -19,6 +19,12 @@ export interface PiToolPolicyDelegate {
     api: HookApi,
     context: Context
   ): Promise<{ readonly block: string } | undefined>;
+  memoFinalAllow?(
+    call: ToolHookCall,
+    declaration: ToolEffectRegistration,
+    api: HookApi,
+    context: Context
+  ): Promise<void>;
   afterTool?(
     call: ToolHookCall,
     declaration: ToolEffectRegistration,
@@ -28,10 +34,21 @@ export interface PiToolPolicyDelegate {
   ): Promise<ToolExecutionResult>;
 }
 
+/** Broad deployment denial runs before feature delegates; durable allow memos run only after them. */
+export interface PiToolEmergencyPolicy {
+  beforeFeatureDelegates(
+    call: ToolHookCall,
+    declaration: ToolEffectRegistration,
+    api: HookApi,
+    context: Context
+  ): Promise<{ readonly block: string } | undefined>;
+}
+
 /** Default-deny policy over the exact effect registry assembled for this Pi runtime. */
 export function createPiToolPolicyExtension(
   effects: ReadonlyMap<string, ToolEffectRegistration>,
-  delegates: readonly PiToolPolicyDelegate[] = []
+  delegates: readonly PiToolPolicyDelegate[] = [],
+  emergencyPolicy?: PiToolEmergencyPolicy
 ) {
   return defineExtension({
     name: PI_TOOL_POLICY_EXTENSION_NAME,
@@ -44,9 +61,19 @@ export function createPiToolPolicyExtension(
           if (!declaration.callers.includes(caller)) {
             return { block: `Pi tool caller is not allowed: ${caller} -> ${call.name}` };
           }
+          const emergencyDecision = await emergencyPolicy?.beforeFeatureDelegates(
+            call,
+            declaration,
+            api,
+            context
+          );
+          if (emergencyDecision !== undefined) return emergencyDecision;
           for (const delegate of delegates) {
             const decision = await delegate.beforeTool?.(call, declaration, api, context);
             if (decision !== undefined) return decision;
+          }
+          for (const delegate of delegates) {
+            await delegate.memoFinalAllow?.(call, declaration, api, context);
           }
           return undefined;
         },

@@ -36,6 +36,8 @@ describe("workspace mutation policy delegate", () => {
     await expect(
       delegate.beforeTool?.(toolCall, declaration("write", "local_mutation"), api, context)
     ).resolves.toBeUndefined();
+    expect(memo).not.toHaveBeenCalled();
+    await delegate.memoFinalAllow?.(toolCall, declaration("write", "local_mutation"), api, context);
     expect(memo).toHaveBeenCalledWith(
       "open-inspect.workspace-policy.before",
       {
@@ -132,7 +134,11 @@ describe("workspace mutation policy delegate", () => {
 
   it("contributes optional before and after hooks to the composite policy", () => {
     expect(createWorkspaceMutationPolicyDelegate()).toEqual(
-      expect.objectContaining({ beforeTool: expect.any(Function), afterTool: expect.any(Function) })
+      expect.objectContaining({
+        beforeTool: expect.any(Function),
+        memoFinalAllow: expect.any(Function),
+        afterTool: expect.any(Function),
+      })
     );
   });
 });

@@ -11,7 +11,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
-import type { ComputerWorkspaceMode } from "./computer-workspace-mode";
+import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
 import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
@@ -44,7 +44,7 @@ const mutationEffects = new Map(
  */
 export function createComputerWorkspaceCapability(
   workspace: Workspace,
-  mode: Exclude<ComputerWorkspaceMode, "off">,
+  mode: Exclude<FeatureCapabilityMode, "off">,
   mutations = new WorkspaceMutationFifo()
 ) {
   const writable = mode === "enabled";

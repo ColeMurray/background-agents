@@ -25,18 +25,14 @@ export function createWorkspaceMutationPolicyDelegate(): PiToolPolicyDelegate {
       if (declaration.effect !== "local_mutation") return;
       if (targetsRepositoryOverlay(call)) return;
       const decision = mutationDecision(call);
-      await api.memo(
-        BEFORE_MEMO,
-        {
-          version: 1,
-          scope: "scratch",
-          decision: decision.allowed ? "allow" : "deny",
-          tool: call.name,
-          ...decision.metadata,
-        },
-        context
-      );
-      return decision.allowed ? undefined : { block: decision.reason };
+      if (decision.allowed) return;
+      await memoDecision(api, context, call, decision);
+      return { block: decision.reason };
+    },
+    async memoFinalAllow(call, declaration, api, context) {
+      if (declaration.effect !== "local_mutation" || targetsRepositoryOverlay(call)) return;
+      const decision = mutationDecision(call);
+      if (decision.allowed) await memoDecision(api, context, call, decision);
     },
     async afterTool(call, declaration, result, api, context) {
       if (declaration.effect !== "local_mutation" || targetsRepositoryOverlay(call)) {
@@ -57,6 +53,25 @@ export function createWorkspaceMutationPolicyDelegate(): PiToolPolicyDelegate {
       return result;
     },
   };
+}
+
+async function memoDecision(
+  api: Parameters<NonNullable<PiToolPolicyDelegate["beforeTool"]>>[2],
+  context: Parameters<NonNullable<PiToolPolicyDelegate["beforeTool"]>>[3],
+  call: ToolHookCall,
+  decision: MutationDecision
+): Promise<void> {
+  await api.memo(
+    BEFORE_MEMO,
+    {
+      version: 1,
+      scope: "scratch",
+      decision: decision.allowed ? "allow" : "deny",
+      tool: call.name,
+      ...decision.metadata,
+    },
+    context
+  );
 }
 
 function mutationDecision(call: ToolHookCall): MutationDecision {

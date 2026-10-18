@@ -100,6 +100,7 @@ export function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS)
     SCM_PROVIDER: "github",
     PI_DURABLE_ENABLED: "true",
     PI_SESSION: {
+      initialize: vi.fn(),
       submit: vi.fn(),
       abort: vi.fn(),
       status: vi.fn(),

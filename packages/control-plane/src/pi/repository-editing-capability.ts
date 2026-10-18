@@ -185,22 +185,30 @@ function targetsRepository(args: Record<string, unknown>): boolean {
 
 function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): PiToolPolicyDelegate {
   return {
-    async beforeTool(call, declaration, api, context) {
+    async beforeTool(call, declaration) {
       if (declaration.effect !== "local_mutation") return;
       const path =
         typeof call.arguments.path === "string"
           ? normalizeWorkspaceAbsolutePath(call.arguments.path)
           : null;
       if (path?.startsWith(`${REPOSITORY_ROOT}/`)) {
-        await api.memo(
-          "open-inspect.repository-policy.before",
-          { version: 1, scope: "repository", decision: "allow", tool: call.name, path },
-          context
-        );
         return;
       }
       if (scratchWritable) return;
       return { block: "Scratch workspace is read-only" };
+    },
+    async memoFinalAllow(call, declaration, api, context) {
+      if (declaration.effect !== "local_mutation") return;
+      const path =
+        typeof call.arguments.path === "string"
+          ? normalizeWorkspaceAbsolutePath(call.arguments.path)
+          : null;
+      if (!path?.startsWith(`${REPOSITORY_ROOT}/`)) return;
+      await api.memo(
+        "open-inspect.repository-policy.before",
+        { version: 1, scope: "repository", decision: "allow", tool: call.name, path },
+        context
+      );
     },
     async afterTool(call, declaration, result, api, context) {
       if (declaration.effect !== "local_mutation") return result;
@@ -241,6 +249,11 @@ function combinePolicies(...delegates: PiToolPolicyDelegate[]): PiToolPolicyDele
           next = await delegate.afterTool(call, declaration, next, api, context);
       }
       return next;
+    },
+    async memoFinalAllow(call, declaration, api, context) {
+      for (const delegate of delegates) {
+        await delegate.memoFinalAllow?.(call, declaration, api, context);
+      }
     },
   };
 }

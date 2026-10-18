@@ -29,13 +29,27 @@ Import `@open-inspect/shared/pi-feature-capabilities`. The canonical, independen
 `PiFeatureCapabilityMatrix` requires an explicit `off`, `read_only`, or `enabled` value for each.
 Unknown and omitted deployment values resolve to `off`.
 
-`PiSessionDO` creates one versioned `PiFeatureCapabilitySnapshot` and durably latches it before VFS
-construction or registry assembly. Deployment flags therefore admit capabilities only for new
-sessions; changing them does not uninstall code needed to replay an existing session. Emergency deny
-belongs in the composite invocation policy and must block execution without removing the latched
-extension or replay implementation. An `off` capability contributes no extension, tool, or effect
-declaration. Any enabled contribution with tools requires the composite policy; mutation and
-sandbox-execution contributions are rejected without it.
+During a new Pi session's `/internal/init`, `SessionDO` resolves one complete, versioned
+`PiFeatureCapabilitySnapshot`, persists its exact JSON under additive migration 61, and calls
+`PiSessionDO.initialize(sessionId, snapshot)` before creation succeeds. A repeated initialize is
+idempotent only for the same identity and exact snapshot; SessionDO retries one unavailable response
+before failing creation. A blank Pi object obtains the persisted snapshot from SessionDO authority,
+so an early status or submit cannot install a deployment-derived or legacy value. A legacy SessionDO
+row without durable capability authority opens all-off, while an already-open session keeps its
+stored snapshot across eviction.
+
+Deployment flags therefore admit extensions only for new sessions. Current deployment policy is also
+consulted before every new scratch mutation, repository mutation, and top-level Code Mode call. That
+emergency deny blocks the effect without uninstalling the latched extension or its
+status/cancel/revoke/replay implementation. A durably admitted Code Mode replay remains operable. Pi
+Durable's own tool checkpoint is the sole recovery authority: recovery still in `call` reruns
+current policy, while recovery after the durable `execute` intent follows the native replay rule and
+bypasses `beforeTool`. There is no separate Code Mode admission memo. Broad caller/effect denial
+runs before feature delegates, and feature allow memos are written only after every delegate allows.
+An `off` capability contributes no extension, tool, or effect declaration. Any enabled contribution
+with tools requires the composite policy; mutation and sandbox-execution contributions are rejected
+without it. Every live emergency-policy lookup combines the tool abort signal with the single named
+lookup timeout and fails closed.
 
 ## Migration reservations
 
@@ -46,6 +60,7 @@ Import `@open-inspect/shared/pi-migration-reservations`. The reserved versions a
 | SessionDO |      58 | sandbox execution | request persistence                  |
 | SessionDO |      59 | sandbox execution | lifecycle persistence                |
 | SessionDO |      60 | external actions  | approvals and execution persistence  |
+| SessionDO |      61 | core authority    | creation-time Pi capability snapshot |
 | D1        |    0090 | external actions  | long-lived external action authority |
 | D1        |    0091 | MCP               | long-lived MCP authority             |
 
@@ -55,7 +70,8 @@ SessionDO `SchemaMigration` entries set their `feature` owner. Reserved D1 files
 `-- pi-feature: <owner>`. `assertMigrationReservation` enforces owner, store, and version, rejecting
 unreserved or swapped claims. SessionDO's existing schema test and the D1 migration runner test pass
 the repository's artifacts through `validateMigrationArtifacts`; shared tests also reject duplicate
-reservations and duplicate artifact versions. This contracts branch creates no schema migration.
+reservations and duplicate artifact versions. Migration 61 is owned by core authority; later feature
+branches must not reuse it.
 
 ## Extension assembly
 

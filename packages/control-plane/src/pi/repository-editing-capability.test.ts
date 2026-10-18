@@ -143,6 +143,8 @@ describe("repository editing workspace capability", () => {
     await expect(
       delegate.beforeTool?.(toolCall, declaration(), api, hookContext)
     ).resolves.toBeUndefined();
+    expect(memo).not.toHaveBeenCalled();
+    await delegate.memoFinalAllow?.(toolCall, declaration(), api, hookContext);
     await expect(
       delegate.afterTool?.(toolCall, declaration(), result, api, hookContext)
     ).resolves.toBe(result);

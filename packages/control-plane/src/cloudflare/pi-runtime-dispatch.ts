@@ -7,6 +7,7 @@ export function createDurableObjectPiRuntimeDispatch(
 ): PiRuntimeDispatch {
   const stub = (sessionId: string) => namespace.getByName(sessionId);
   return {
+    initialize: (sessionId, snapshot) => stub(sessionId).initialize(sessionId, snapshot),
     submit: (input: PiRuntimePrompt) => stub(input.sessionId).submit(input),
     abort: (sessionId, operationId) => stub(sessionId).abort(sessionId, operationId),
     status: (sessionId) => stub(sessionId).status(sessionId),

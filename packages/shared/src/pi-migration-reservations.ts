@@ -5,13 +5,16 @@ export type MigrationStore = "session_do" | "d1";
 export const PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID = 58;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID = 59;
 export const PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID = 60;
+export const PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID = 61;
 export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_MIGRATION_VERSION = 91;
+
+export type PiMigrationOwner = PiFeatureId | "coreAuthority";
 
 export interface MigrationReservation {
   readonly store: MigrationStore;
   readonly version: number;
-  readonly feature: PiFeatureId;
+  readonly feature: PiMigrationOwner;
   readonly purpose: string;
 }
 
@@ -19,7 +22,7 @@ export interface MigrationArtifact {
   readonly store: MigrationStore;
   readonly version: number;
   readonly name: string;
-  readonly feature?: PiFeatureId;
+  readonly feature?: PiMigrationOwner;
 }
 
 export type MigrationReservationClaim = Pick<MigrationReservation, "store" | "version" | "feature">;
@@ -46,6 +49,12 @@ export const PI_MIGRATION_RESERVATIONS = [
     version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
     feature: "externalActions",
     purpose: "external action approvals and execution",
+  },
+  {
+    store: "session_do",
+    version: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+    feature: "coreAuthority",
+    purpose: "creation-time Pi capability authority",
   },
   {
     store: "d1",

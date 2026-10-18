@@ -4,6 +4,8 @@ import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
+  piFeatureCapabilitySnapshotSchema,
+  type PiFeatureCapabilitySnapshot,
   type ToolEffectRegistration,
 } from "@open-inspect/shared";
 import { RemoteCodemodeSandbox } from "@earendil-works/pi-codemode/portable";
@@ -51,7 +53,6 @@ import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
 import { createComputerWorkspaceCapability } from "../pi/computer-workspace-extension";
-import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
 import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
@@ -63,7 +64,11 @@ import {
   createPiToolPolicyExtension,
   type PiToolPolicyDelegate,
 } from "../pi/tool-policy-extension";
-import { latchPiFeatureCapabilitySnapshot } from "../pi/capability-snapshot";
+import {
+  PI_FEATURE_CAPABILITY_SNAPSHOT_KEY,
+  PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT,
+  readPiFeatureCapabilitySnapshot,
+} from "../pi/capability-snapshot";
 import { PiRepositoryWorkspace } from "../pi/repository-workspace";
 import { z } from "zod";
 import {
@@ -77,23 +82,14 @@ import {
   createPiCodeModePolicyState,
 } from "../pi/codemode-extension";
 import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
+import { createPiDeploymentEmergencyPolicy } from "../pi/deployment-emergency-policy";
+import { fetchPiCapabilityAuthority } from "../pi/capability-authority-client";
 
-type PiWorkerBindings = Pick<
-  WorkerBindings,
-  | "SESSION"
-  | "PI_WORKSPACE_MODE"
-  | "PI_REPOSITORY_EDITING_MODE"
-  | "PI_CODE_MODE"
-  | "PI_SANDBOX_EXECUTION_MODE"
-  | "PI_EXTERNAL_ACTIONS_MODE"
-  | "PI_MCP_MODE"
-  | "CODEMODE_SANDBOX"
->;
+type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
-const CAPABILITY_ELIGIBILITY_KEY = "open-inspect:capability-eligibility";
 const ROOT_SESSION = "1";
 const EVENT_DELIVERY_ATTEMPTS = 3;
 const EVENT_DELIVERY_RETRY_MS = 100;
@@ -113,21 +109,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
+      const snapshot = await readPiFeatureCapabilitySnapshot(this.ctx.storage);
+      if (!snapshot) throw new Error("Pi Durable capability authority is not initialized");
+      const { capabilities } = snapshot;
       const sessionContext = await this.fetchSessionContext();
-      const eligible =
-        (await this.ctx.storage.get<{ version: 1 }>(CAPABILITY_ELIGIBILITY_KEY))?.version === 1;
-      const { capabilities } = await latchPiFeatureCapabilitySnapshot(this.ctx.storage, {
-        workspace: eligible ? resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE) : "off",
-        repositoryEditing: eligible ? this.env.PI_REPOSITORY_EDITING_MODE : "off",
-        codeMode: eligible ? this.env.PI_CODE_MODE : "off",
-        sandboxExecution: eligible ? this.env.PI_SANDBOX_EXECUTION_MODE : "off",
-        externalActions: eligible ? this.env.PI_EXTERNAL_ACTIONS_MODE : "off",
-        mcp: eligible ? this.env.PI_MCP_MODE : "off",
-      });
-      const codeModePolicy = createPiCodeModePolicyState(
-        this.env.PI_CODE_MODE?.trim().toLowerCase() === "enabled"
-      );
+      const codeModePolicy = createPiCodeModePolicyState();
       const codeModePolicyDelegate = createPiCodeModePolicyDelegate(codeModePolicy);
+      const emergencyPolicy = createPiDeploymentEmergencyPolicy(
+        async (signal) =>
+          (await this.fetchCapabilityAuthorityForStoredSession(signal)).current.capabilities
+      );
       const core = createOpenInspectExtension({
         repositories: sessionContext.repositories,
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
@@ -154,7 +145,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               effects,
               workspacePolicyDelegate
                 ? [externalActionDelegate, workspacePolicyDelegate, codeModePolicyDelegate]
-                : [externalActionDelegate, codeModePolicyDelegate]
+                : [externalActionDelegate, codeModePolicyDelegate],
+              emergencyPolicy
             );
           },
         },
@@ -299,10 +291,41 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.projector);
 
+  async initialize(sessionId: string, input: PiFeatureCapabilitySnapshot): Promise<void> {
+    const snapshot = piFeatureCapabilitySnapshotSchema.parse(input);
+    await this.ctx.storage.transaction(async (transaction) => {
+      if ((await transaction.get<string>(DELETION_STATE_KEY)) !== undefined) {
+        throw new Error("Pi Durable session was deleted");
+      }
+      const [storedSessionId, storedSnapshotValue] = await Promise.all([
+        transaction.get<string>(SESSION_ID_KEY),
+        transaction.get<unknown>(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY),
+      ]);
+      if (storedSessionId === undefined && storedSnapshotValue === undefined) {
+        await transaction.put({
+          [SESSION_ID_KEY]: sessionId,
+          [PI_FEATURE_CAPABILITY_SNAPSHOT_KEY]: snapshot,
+        });
+        return;
+      }
+      if (storedSessionId !== sessionId) {
+        throw new Error("Pi Durable Object session identity mismatch");
+      }
+      if (storedSnapshotValue === undefined) {
+        throw new Error("Pi Durable Object capability snapshot mismatch");
+      }
+      const storedSnapshot = piFeatureCapabilitySnapshotSchema.parse(storedSnapshotValue);
+      if (JSON.stringify(storedSnapshot) !== JSON.stringify(snapshot)) {
+        throw new Error("Pi Durable Object capability snapshot mismatch");
+      }
+    });
+  }
+
   async onStart(): Promise<void> {
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) return;
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) return;
+    await this.ensureSession(sessionId);
     const pending = await this.harness.pending({ session: ROOT_SESSION });
     await Promise.all(
       pending.map((operation) =>
@@ -483,15 +506,63 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) {
       throw new Error("Pi Durable session was deleted");
     }
-    const stored = await this.ctx.storage.get<string>(SESSION_ID_KEY);
-    if (stored === undefined) {
-      await this.ctx.storage.put({
-        [SESSION_ID_KEY]: sessionId,
-        [CAPABILITY_ELIGIBILITY_KEY]: { version: 1 },
-      });
+    const [storedSessionId, storedSnapshotValue] = await Promise.all([
+      this.ctx.storage.get<string>(SESSION_ID_KEY),
+      this.ctx.storage.get<unknown>(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY),
+    ]);
+    if (storedSessionId !== undefined && storedSessionId !== sessionId) {
+      throw new Error("Pi Durable Object session identity mismatch");
+    }
+    if (storedSessionId !== undefined && storedSnapshotValue !== undefined) {
+      piFeatureCapabilitySnapshotSchema.parse(storedSnapshotValue);
       return;
     }
-    if (stored !== sessionId) throw new Error("Pi Durable Object session identity mismatch");
+    if (storedSessionId === undefined && storedSnapshotValue !== undefined) {
+      throw new Error("Pi Durable Object session identity mismatch");
+    }
+
+    const authority = await this.fetchCapabilityAuthority(sessionId);
+    const authoritativeSnapshot = authority.snapshot ?? PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT;
+    await this.ctx.storage.transaction(async (transaction) => {
+      if ((await transaction.get<string>(DELETION_STATE_KEY)) !== undefined) {
+        throw new Error("Pi Durable session was deleted");
+      }
+      const [storedSessionId, storedSnapshotValue] = await Promise.all([
+        transaction.get<string>(SESSION_ID_KEY),
+        transaction.get<unknown>(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY),
+      ]);
+      if (storedSessionId === undefined) {
+        if (storedSnapshotValue !== undefined) {
+          throw new Error("Pi Durable Object session identity mismatch");
+        }
+        await transaction.put({
+          [SESSION_ID_KEY]: sessionId,
+          [PI_FEATURE_CAPABILITY_SNAPSHOT_KEY]: authoritativeSnapshot,
+        });
+        return;
+      }
+      if (storedSessionId !== sessionId) {
+        throw new Error("Pi Durable Object session identity mismatch");
+      }
+      if (storedSnapshotValue === undefined) {
+        await transaction.put(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY, authoritativeSnapshot);
+        return;
+      }
+      const storedSnapshot = piFeatureCapabilitySnapshotSchema.parse(storedSnapshotValue);
+      if (JSON.stringify(storedSnapshot) !== JSON.stringify(authoritativeSnapshot)) {
+        throw new Error("Pi Durable Object capability snapshot mismatch");
+      }
+    });
+  }
+
+  private async fetchCapabilityAuthorityForStoredSession(signal?: AbortSignal) {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    return this.fetchCapabilityAuthority(sessionId, signal);
+  }
+
+  private fetchCapabilityAuthority(sessionId: string, signal?: AbortSignal) {
+    return fetchPiCapabilityAuthority(this.env.SESSION.getByName(sessionId), signal);
   }
 
   private async fetchCodexCredential(rejectedCredentialVersion?: number, signal?: AbortSignal) {

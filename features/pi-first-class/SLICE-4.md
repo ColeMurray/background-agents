@@ -10,9 +10,9 @@ Terraform also requires a disposable paid-account canary proof unavailable in th
 
 ## Capability and policy
 
-- Capability-era sessions durably latch workspace and Code Mode in one snapshot the first time Pi
-  opens. Legacy Pi state without the eligibility marker backfills to all-off; later flags cannot
-  widen it.
+- Capability-era sessions durably latch workspace and Code Mode in one SessionDO-owned snapshot at
+  creation, and Pi initialization completes before creation succeeds. Unopened legacy Pi state
+  without a snapshot opens all-off; already-open state keeps its durable snapshot.
 - Open-Inspect tools consume the shared effect classification contract. A mandatory
   `ToolTask.beforeTool` hook permits replay-safe `read` and default-denies unknown, unsafe, or
   effectful nested calls through the central extension assembler, without naming tools or
@@ -30,9 +30,11 @@ The dedicated Wrangler workflow is the sole owner of the private Worker, WASM, v
 limit, and migration. Terraform creates none of them; after explicit live verification it manages
 only the retained external binding. Provider issues #6852 and #6404 remain open, so local
 plan/workerd evidence is not live deployment proof. Rollback changes admission to `off` while
-retaining the Worker, class, binding, and installed extension. New calls are denied before the
-durable admission memo; admitted tasks retain that memo and replay. Worker-version rollback also
-runs only through Wrangler.
+retaining `PI_SESSION`, the Worker, class, external binding, and installed extension. Fresh calls
+are denied while they remain in Pi Durable's `call` phase. Recovery after Pi Durable has committed
+its native `execute` intent bypasses `beforeTool` and follows the native replay contract; no
+Open-Inspect Code Mode admission memo exists. Worker-version rollback also runs only through
+Wrangler.
 
 ## Evidence
 
@@ -41,8 +43,8 @@ runs only through Wrangler.
   abort propagation, close behavior, and PiSessionDO teardown of active/interrupted scripts.
 - A combined PiHarness → native extension → remote DO → authorized read test crosses a forced
   Durable Object restart and verifies the resumed transcript.
-- Native `createCodemodeExtension()` SQLite tests for journal replay, completed nested-call
-  reattachment, interrupted-call replay, and abort propagation.
+- Native `createCodemodeExtension()` SQLite tests for call-phase crash denial, execute-phase replay,
+  completed nested-call reattachment, interrupted-call replay, and abort propagation.
 - PiSessionDO workerd assertions for model/callable tools, legacy backfill, and durable latch.
 - Terraform tests prove default plans create no sandbox migration/version and cover verified
   binding, paid readiness, rollback retention, and invalid modes.

@@ -1,7 +1,6 @@
 import {
   createPiFeatureCapabilitySnapshot,
   piFeatureCapabilitySnapshotSchema,
-  type PiFeatureCapabilityInput,
   type PiFeatureCapabilitySnapshot,
 } from "@open-inspect/shared/pi-feature-capabilities";
 
@@ -9,18 +8,14 @@ export const PI_FEATURE_CAPABILITY_SNAPSHOT_KEY = "open-inspect:feature-capabili
 
 export interface PiFeatureCapabilityStorage {
   get(key: string): Promise<unknown>;
-  put(key: string, value: unknown): Promise<void>;
 }
 
-/** Latch admission flags once; later deployment changes cannot uninstall replay code. */
-export async function latchPiFeatureCapabilitySnapshot(
-  storage: PiFeatureCapabilityStorage,
-  input: PiFeatureCapabilityInput
-): Promise<PiFeatureCapabilitySnapshot> {
-  const stored = await storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY);
-  if (stored !== undefined) return piFeatureCapabilitySnapshotSchema.parse(stored);
+export const PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT = createPiFeatureCapabilitySnapshot({});
 
-  const snapshot = createPiFeatureCapabilitySnapshot(input);
-  await storage.put(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY, snapshot);
-  return snapshot;
+/** Read durable authority without inferring anything from the current deployment. */
+export async function readPiFeatureCapabilitySnapshot(
+  storage: PiFeatureCapabilityStorage
+): Promise<PiFeatureCapabilitySnapshot | undefined> {
+  const stored = await storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY);
+  return stored === undefined ? undefined : piFeatureCapabilitySnapshotSchema.parse(stored);
 }

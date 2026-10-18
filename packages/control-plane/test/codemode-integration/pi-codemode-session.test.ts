@@ -10,7 +10,8 @@ import { abortAllDurableObjects, env, runInDurableObject } from "cloudflare:test
 import { describe, expect, it } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
-import { initSession } from "../integration/helpers";
+import { initSession, queryDO } from "../integration/helpers";
+import { runInSessionDO } from "../integration/session-do-access";
 import { defineExtension, defineTool, type Registry } from "@earendil-works/pi-durable";
 import type { RemoteCodemodeSandbox } from "@earendil-works/pi-codemode/portable";
 import type { Workspace } from "@cloudflare/computer";
@@ -23,6 +24,60 @@ interface PiSessionInternals {
 }
 
 describe("PiSessionDO native Code Mode", () => {
+  it("keeps Code Mode installed but denies a fresh call when deployment policy flips off", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-codemode-emergency-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    await runInSessionDO(sessionStub, (instance) => {
+      (instance as unknown as { appEnv: { PI_CODE_MODE?: string } }).appEnv.PI_CODE_MODE = "off";
+    });
+    if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
+    const stub = env.PI_SESSION.getByName(sessionName);
+    await stub.status(sessionName);
+
+    const result = await runInDurableObject(stub, async (instance) => {
+      if (!(instance instanceof PiSessionDO)) throw new Error("Expected PiSessionDO instance");
+      const internals = instance as unknown as PiSessionInternals;
+      const faux = fauxProvider();
+      internals.models.setProvider(faux.provider);
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("codemode", { code: "return 1;" }), {
+          stopReason: "toolUse",
+        }),
+        fauxAssistantMessage("done"),
+      ]);
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      const selected = await root.agent(BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      const submission = await root.submit(
+        { type: "input", content: "run new code", requestId: "codemode-emergency" },
+        BACKGROUND_CONTEXT
+      );
+      await submission.wait(BACKGROUND_CONTEXT);
+      const view = await root.context(BACKGROUND_CONTEXT);
+      const toolResult = [...view.messages]
+        .reverse()
+        .find((message) => message.role === "toolResult" && message.toolName === "codemode");
+      return {
+        installed: selected.tools.some(({ name }) => name === "codemode"),
+        text:
+          toolResult?.role === "toolResult"
+            ? toolResult.content
+                .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                .join("\n")
+            : "",
+      };
+    });
+
+    expect(result.installed).toBe(true);
+    expect(result.text).toContain("disabled for new calls by deployment policy");
+  });
+
   it("latches the paid capability and exposes only read-only tools to scripts", async () => {
     const { sessionName } = await initSession({
       sessionName: `pi-codemode-${crypto.randomUUID()}`,
@@ -84,9 +139,14 @@ describe("PiSessionDO native Code Mode", () => {
     });
     if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
     const stub = env.PI_SESSION.getByName(sessionName);
-    await runInDurableObject(stub, (_instance, state) =>
-      state.storage.put("open-inspect:session-id", sessionName)
+    await queryDO(
+      env.SESSION.getByName(sessionName),
+      "UPDATE session SET pi_feature_capability_snapshot = NULL"
     );
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.deleteAll();
+      await state.storage.put("open-inspect:session-id", sessionName);
+    });
 
     await stub.status(sessionName);
 

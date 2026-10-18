@@ -54,6 +54,13 @@ describe("Pi feature capability contracts", () => {
     });
   });
 
+  it("normalizes the deployment workspace writable alias exactly once", () => {
+    expect(resolvePiFeatureCapabilities({ workspace: " WrItAbLe " }).workspace).toBe("enabled");
+    expect(resolvePiFeatureCapabilities({ repositoryEditing: "writable" }).repositoryEditing).toBe(
+      "off"
+    );
+  });
+
   it("creates one validated versioned snapshot for durable per-session latching", () => {
     const snapshot = createPiFeatureCapabilitySnapshot({ workspace: "read_only" });
 

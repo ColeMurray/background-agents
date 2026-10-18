@@ -56,7 +56,7 @@ export function resolvePiFeatureCapabilities(
   input: PiFeatureCapabilityInput
 ): PiFeatureCapabilityMatrix {
   return {
-    workspace: resolveFeatureCapability(input.workspace),
+    workspace: resolveFeatureCapability(input.workspace, { writableAlias: true }),
     repositoryEditing: resolveFeatureCapability(input.repositoryEditing),
     codeMode: resolveFeatureCapability(input.codeMode),
     sandboxExecution: resolveFeatureCapability(input.sandboxExecution),
@@ -75,7 +75,11 @@ export function createPiFeatureCapabilitySnapshot(
   };
 }
 
-function resolveFeatureCapability(value: string | undefined): FeatureCapabilityMode {
+function resolveFeatureCapability(
+  value: string | undefined,
+  options: { readonly writableAlias?: boolean } = {}
+): FeatureCapabilityMode {
   const normalized = value?.trim().toLowerCase();
+  if (options.writableAlias && normalized === "writable") return "enabled";
   return normalized === "read_only" || normalized === "enabled" ? normalized : "off";
 }

@@ -103,9 +103,9 @@ export interface EnvConfig {
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
   TEAMS_ENFORCEMENT?: string; // "off" | "shadow" (default) | "on"
   PI_DURABLE_ENABLED?: string; // "true" enables the optional PiSessionDO runtime
-  PI_WORKSPACE_MODE?: string; // New-session admission: "off" | "read_only" | "enabled" (or "writable" alias)
-  PI_REPOSITORY_EDITING_MODE?: string; // New-session admission only
-  PI_CODE_MODE?: string; // New-session admission only
+  PI_WORKSPACE_MODE?: string; // Creation admission plus live scratch-mutation emergency deny; supports "writable" as "enabled"
+  PI_REPOSITORY_EDITING_MODE?: string; // Creation admission plus live repository-mutation emergency deny
+  PI_CODE_MODE?: string; // Creation admission plus live deny for top-level calls still in Pi's call phase
   PI_SANDBOX_EXECUTION_MODE?: string; // New-session admission only
   PI_EXTERNAL_ACTIONS_MODE?: string; // New-session admission only
   PI_MCP_MODE?: string; // New-session admission only

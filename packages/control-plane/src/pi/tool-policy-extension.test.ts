@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import { createPiToolPolicyExtension, type PiToolPolicyDelegate } from "./tool-policy-extension";
+import type { PiToolEmergencyPolicy } from "./tool-policy-extension";
 
 const effects = createToolEffectRegistry([
   { name: "model_tool", effect: "control", callers: ["model"], replay: "safe" },
@@ -91,6 +92,41 @@ describe("createPiToolPolicyExtension", () => {
     await expect(hook(call("model_tool"), api, context)).resolves.toBeUndefined();
     expect(workspace).toHaveBeenCalledOnce();
     expect(externalAction).toHaveBeenCalledOnce();
+  });
+
+  it("runs broad emergency denial before delegates and memos only the final allow", async () => {
+    const order: string[] = [];
+    const emergency: PiToolEmergencyPolicy = {
+      beforeFeatureDelegates: vi.fn(async () => {
+        order.push("emergency");
+        return undefined;
+      }),
+    };
+    const delegate: PiToolPolicyDelegate = {
+      beforeTool: vi.fn(async () => {
+        order.push("delegate");
+        return undefined;
+      }),
+    };
+    const extension = createPiToolPolicyExtension(effects, [delegate], emergency);
+    const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
+
+    await expect(hook(call("model_tool"), api, context)).resolves.toBeUndefined();
+    expect(order).toEqual(["emergency", "delegate"]);
+  });
+
+  it("does not write a feature allow memo when a later delegate denies", async () => {
+    const memoFinalAllow = vi.fn(async () => undefined);
+    const extension = createPiToolPolicyExtension(effects, [
+      { beforeTool: async () => undefined, memoFinalAllow },
+      { beforeTool: async () => ({ block: "later denial" }) },
+    ]);
+    const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
+
+    await expect(hook(call("model_tool"), api, context)).resolves.toEqual({
+      block: "later denial",
+    });
+    expect(memoFinalAllow).not.toHaveBeenCalled();
   });
 
   it("replaces a successful-looking result when any afterTool delegate throws", async () => {

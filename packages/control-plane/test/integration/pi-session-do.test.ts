@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { initSession, queryDO } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
@@ -10,6 +11,15 @@ import type { SourceControlProvider } from "../../src/source-control";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import { SessionInternalPaths } from "../../src/session/contracts";
+import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
+import type { PiRuntimeDispatch } from "../../src/pi/runtime-contract";
+import type { MutableModels } from "@earendil-works/pi-ai/models";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
@@ -58,7 +68,469 @@ async function executeWorkspaceTool(
   return tool.execute(args, { callId } as ToolExecutionApi, BACKGROUND_CONTEXT);
 }
 
+async function executeAgentTool(
+  instance: PiSessionDO,
+  name: string,
+  args: Record<string, JsonValue>,
+  requestId: string
+) {
+  const models = (instance as unknown as { models: MutableModels }).models;
+  const faux = fauxProvider();
+  models.setProvider(faux.provider);
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+  await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+  const submission = await root.submit(
+    { type: "input", content: `call ${name}`, requestId },
+    BACKGROUND_CONTEXT
+  );
+  await submission.wait(BACKGROUND_CONTEXT);
+  const view = await root.context(BACKGROUND_CONTEXT);
+  const result = [...view.messages]
+    .reverse()
+    .find((message) => message.role === "toolResult" && message.toolName === name);
+  if (!result || result.role !== "toolResult") throw new Error(`Missing ${name} tool result`);
+  return result;
+}
+
 describe("PiSessionDO", () => {
+  it("initializes idempotently only for the exact session identity and snapshot", async () => {
+    const sessionName = `pi-initialize-${crypto.randomUUID()}`;
+    const stub = piStub(sessionName);
+    const snapshot = createPiFeatureCapabilitySnapshot({ workspace: "enabled" });
+
+    await expect(stub.initialize(sessionName, snapshot)).resolves.toBeUndefined();
+    await expect(stub.initialize(sessionName, snapshot)).resolves.toBeUndefined();
+    const mismatch = await runInPiSessionDO(stub, async (instance) => {
+      try {
+        await instance.initialize(
+          sessionName,
+          createPiFeatureCapabilitySnapshot({ workspace: "off" })
+        );
+        return "accepted";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect(mismatch).toContain("capability snapshot mismatch");
+    const identityMismatch = await runInPiSessionDO(stub, async (instance) => {
+      try {
+        await instance.initialize(`${sessionName}-other`, snapshot);
+        return "accepted";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect(identityMismatch).toContain("session identity mismatch");
+  });
+
+  it("keeps an initialized capability snapshot across eviction", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-snapshot-eviction");
+    await stub.status(sessionName);
+    const before = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+    );
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: snapshot eviction"))
+    ).rejects.toThrow();
+    const restored = piStub(sessionName);
+    await restored.status(sessionName);
+
+    await expect(
+      runInDurableObject(restored, (_instance, state) =>
+        state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+      )
+    ).resolves.toEqual(before);
+  });
+
+  it("persists the exact creation snapshot in SessionDO before the first Pi prompt", async () => {
+    const { stub } = await initSession({
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+
+    const rows = await queryDO<{ pi_feature_capability_snapshot: string }>(
+      stub,
+      "SELECT pi_feature_capability_snapshot FROM session"
+    );
+    expect(JSON.parse(rows[0]!.pi_feature_capability_snapshot)).toEqual({
+      version: 1,
+      capabilities: {
+        workspace: "enabled",
+        repositoryEditing: "enabled",
+        codeMode: "off",
+        sandboxExecution: "enabled",
+        externalActions: "enabled",
+        mcp: "off",
+      },
+    });
+  });
+
+  it("retries initialization after a lost response without re-resolving deployment flags", async () => {
+    const { sessionName, stub } = await initSession({
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    await runInSessionDO(stub, (instance) => {
+      const sessionEnv = (instance as unknown as { appEnv: Record<string, string> }).appEnv;
+      sessionEnv.PI_WORKSPACE_MODE = "off";
+      sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
+    });
+
+    const retry = await stub.fetch("http://internal/internal/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionName,
+        repoOwner: null,
+        repoName: null,
+        userId: "user-1",
+        harness: "pi",
+        model: "openai/gpt-5.6-sol",
+      }),
+    });
+
+    expect(retry.status).toBe(200);
+    await expect(piStub(sessionName).status(sessionName)).resolves.toEqual({
+      busy: false,
+      pending: 0,
+    });
+    await expect(
+      runInDurableObject(piStub(sessionName), (_instance, state) =>
+        state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+      )
+    ).resolves.toMatchObject({ capabilities: { workspace: "enabled" } });
+  });
+
+  it("fails a creation retry closed when SessionDO's stored snapshot is malformed", async () => {
+    const { sessionName, stub } = await initSession({
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    await queryDO(
+      stub,
+      "UPDATE session SET pi_feature_capability_snapshot = ?",
+      JSON.stringify({ version: 999, capabilities: {} })
+    );
+
+    const outcome = await runInSessionDO(stub, async (instance) => {
+      try {
+        const response = await instance.fetch(
+          new Request("http://internal/internal/init", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionName,
+              repoOwner: null,
+              repoName: null,
+              userId: "user-1",
+              harness: "pi",
+              model: "openai/gpt-5.6-sol",
+            }),
+          })
+        );
+        return `response:${response.status}`;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    expect(outcome).toContain("Malformed persisted Pi capability snapshot");
+  });
+
+  it("keeps an all-off creation snapshot after deployment flags enable before first prompt", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      configureSessionEnv: (sessionEnv) => {
+        sessionEnv.PI_WORKSPACE_MODE = "off";
+        sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
+        sessionEnv.PI_CODE_MODE = "off";
+        sessionEnv.PI_SANDBOX_EXECUTION_MODE = "off";
+        sessionEnv.PI_EXTERNAL_ACTIONS_MODE = "off";
+        sessionEnv.PI_MCP_MODE = "off";
+      },
+    });
+    await runInSessionDO(sessionStub, (instance) => {
+      const sessionEnv = (instance as unknown as { appEnv: Record<string, string> }).appEnv;
+      sessionEnv.PI_WORKSPACE_MODE = "writable";
+      sessionEnv.PI_REPOSITORY_EDITING_MODE = "enabled";
+      sessionEnv.PI_CODE_MODE = "enabled";
+    });
+
+    await piStub(sessionName).status(sessionName);
+    const tools = await runInPiSessionDO(piStub(sessionName), async (instance) => {
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
+    });
+    expect(tools).toEqual(["subagent"]);
+  });
+
+  it("does not let an early blank open poison a committed creation snapshot", async () => {
+    const sessionName = `pi-blank-race-${crypto.randomUUID()}`;
+    if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
+    const actualPi = createDurableObjectPiRuntimeDispatch(env.PI_SESSION);
+    let initializeAvailable = false;
+    const switchablePi: PiRuntimeDispatch = {
+      ...actualPi,
+      initialize: async (id, snapshot) => {
+        if (!initializeAvailable) throw new Error("Pi initialize unavailable");
+        await actualPi.initialize(id, snapshot);
+      },
+    };
+    await expect(
+      initSession({
+        sessionName,
+        harness: "pi",
+        model: "openai/gpt-5.6-sol",
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        configureSessionEnv: (sessionEnv) => {
+          sessionEnv.PI_SESSION = switchablePi;
+        },
+      })
+    ).rejects.toThrow("Init failed: 503");
+
+    const earlyStub = piStub(sessionName);
+    const [earlyStatus, earlySubmit] = await Promise.all([
+      earlyStub.status(sessionName),
+      earlyStub.submit({
+        sessionId: sessionName,
+        messageId: "early-submit",
+        content: "do not run",
+        model: "anthropic/not-supported-by-pi",
+      }),
+    ]);
+    expect(earlyStatus).toEqual({ busy: false, pending: 0 });
+    expect(earlySubmit).toMatchObject({ accepted: false });
+
+    const sessionStub = env.SESSION.getByName(sessionName);
+    initializeAvailable = true;
+    const retry = await sessionStub.fetch("http://internal/internal/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionName,
+        repoOwner: null,
+        repoName: null,
+        userId: "user-1",
+        harness: "pi",
+        model: "openai/gpt-5.6-sol",
+      }),
+    });
+    expect(retry.status).toBe(200);
+
+    const rows = await queryDO<{ pi_feature_capability_snapshot: string }>(
+      sessionStub,
+      "SELECT pi_feature_capability_snapshot FROM session"
+    );
+    const expected = JSON.parse(rows[0]!.pi_feature_capability_snapshot);
+    await expect(
+      runInDurableObject(piStub(sessionName), (_instance, state) =>
+        state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+      )
+    ).resolves.toEqual(expected);
+  });
+
+  it("fails unopened legacy and malformed durable capability state closed", async () => {
+    const legacy = await initializedPiStub("pi-legacy-unopened");
+    const legacySessionStub = env.SESSION.getByName(legacy.sessionName);
+    await queryDO(legacySessionStub, "UPDATE session SET pi_feature_capability_snapshot = NULL");
+    await runInDurableObject(legacy.stub, async (_instance, state) => {
+      await state.storage.deleteAll();
+      await state.storage.put("open-inspect:session-id", legacy.sessionName);
+    });
+
+    await legacy.stub.status(legacy.sessionName);
+    await expect(
+      runInDurableObject(legacy.stub, (_instance, state) =>
+        state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+      )
+    ).resolves.toEqual(createPiFeatureCapabilitySnapshot({}));
+
+    const malformedName = `pi-malformed-${crypto.randomUUID()}`;
+    const malformed = piStub(malformedName);
+    await runInDurableObject(malformed, async (_instance, state) => {
+      await state.storage.put({
+        "open-inspect:session-id": malformedName,
+        [PI_FEATURE_CAPABILITY_SNAPSHOT_KEY]: { version: 999, capabilities: {} },
+      });
+    });
+    const malformedResult = await runInPiSessionDO(malformed, async (instance) => {
+      try {
+        await instance.status(malformedName);
+        return "accepted";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect(malformedResult).not.toBe("accepted");
+  });
+
+  it("retains installed workspace tools but emergency-denies new mutations after Pi eviction", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-emergency-workspace-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, (instance) =>
+      workspaceOf(instance).fs.writeFile("/workspace/scratch/readable.txt", "still readable")
+    );
+    await runInSessionDO(sessionStub, (instance) => {
+      const sessionEnv = (instance as unknown as { appEnv: Record<string, string> }).appEnv;
+      sessionEnv.PI_WORKSPACE_MODE = "off";
+    });
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: emergency policy eviction"))
+    ).rejects.toThrow();
+    const restored = piStub(sessionName);
+    await restored.status(sessionName);
+
+    const results = await runInPiSessionDO(restored, async (instance) => ({
+      write: await executeAgentTool(
+        instance,
+        "write",
+        { path: "blocked.txt", content: "blocked" },
+        "emergency-write"
+      ),
+      read: await executeAgentTool(instance, "read", { path: "readable.txt" }, "emergency-read"),
+    }));
+    expect(results.write.isError).toBe(true);
+    expect(results.write.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("deployment policy") }),
+      ])
+    );
+    expect(results.read.isError).not.toBe(true);
+    expect(results.read.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("still readable") }),
+      ])
+    );
+  });
+
+  it("aborts a hung emergency-policy lookup so session destruction can finish", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-policy-abort");
+    await stub.status(sessionName);
+
+    const outcome = await runInPiSessionDO(stub, async (instance) => {
+      let lookupStarted: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        lookupStarted = resolve;
+      });
+      let releaseLookup: (() => void) | undefined;
+      let lookupAborted = false;
+      const fakeSessionNamespace = {
+        getByName: () => ({
+          fetch: (request: Request) =>
+            new Promise<Response>((_resolve, reject) => {
+              lookupStarted?.();
+              releaseLookup = () => reject(new Error("test lookup released"));
+              request.signal.addEventListener(
+                "abort",
+                () => {
+                  lookupAborted = true;
+                  reject(request.signal.reason);
+                },
+                { once: true }
+              );
+            }),
+        }),
+      };
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const realSessionNamespace = piEnv.SESSION;
+      piEnv.SESSION = fakeSessionNamespace;
+
+      const models = (instance as unknown as { models: MutableModels }).models;
+      const faux = fauxProvider();
+      models.setProvider(faux.provider);
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("write", { path: "blocked.txt", content: "blocked" }), {
+          stopReason: "toolUse",
+        }),
+      ]);
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      await root.submit(
+        { type: "input", content: "start mutation", requestId: "policy-abort" },
+        BACKGROUND_CONTEXT
+      );
+      await started;
+      piEnv.SESSION = realSessionNamespace;
+
+      const destroying = instance.destroy(sessionName);
+      const result = await Promise.race([
+        destroying.then(() => "destroyed" as const),
+        new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 250)),
+      ]);
+      if (result === "timed_out") {
+        releaseLookup?.();
+        await destroying.catch(() => {});
+      }
+      return { result, lookupAborted };
+    });
+
+    expect(outcome).toEqual({ result: "destroyed", lookupAborted: true });
+  });
+
+  it("times out a hung emergency-policy lookup and denies the mutation", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-policy-timeout");
+    await stub.status(sessionName);
+
+    const result = await runInPiSessionDO(stub, async (instance) => {
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const realSessionNamespace = piEnv.SESSION;
+      piEnv.SESSION = {
+        getByName: () => ({
+          fetch: (request: Request) =>
+            new Promise<Response>((_resolve, reject) => {
+              request.signal.addEventListener("abort", () => reject(request.signal.reason), {
+                once: true,
+              });
+            }),
+        }),
+      };
+      try {
+        return await executeAgentTool(
+          instance,
+          "write",
+          { path: "blocked.txt", content: "blocked" },
+          "policy-timeout"
+        );
+      } finally {
+        piEnv.SESSION = realSessionNamespace;
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("timed out") }),
+      ])
+    );
+  });
+
   it("creates a Pi SessionDO aggregate without any sandbox row", async () => {
     const { stub } = await initSession({
       harness: "pi",
@@ -467,6 +939,74 @@ describe("PiSessionDO", () => {
       new Request(`http://session${SessionInternalPaths.diffRetry}`, { method: "POST" })
     );
     expect(retry.status).toBe(202);
+  });
+
+  it("emergency-denies repository mutations after eviction while repository reads still work", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-emergency-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({
+          entries: [
+            {
+              path: "src/app.ts",
+              type: "file",
+              blobId: "blob-app",
+              mode: "100644",
+              sizeBytes: 18,
+              executable: false,
+            },
+          ],
+          truncated: false,
+        }),
+        readBlob: async () => new TextEncoder().encode("export const x=1;\n"),
+      } as unknown as SourceControlProvider;
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+    await runInSessionDO(sessionStub, (instance) => {
+      const sessionEnv = (instance as unknown as { appEnv: Record<string, string> }).appEnv;
+      sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
+    });
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: repository policy eviction"))
+    ).rejects.toThrow();
+    const restored = piStub(sessionName);
+    await restored.status(sessionName);
+
+    const results = await runInPiSessionDO(restored, async (instance) => ({
+      write: await executeAgentTool(
+        instance,
+        "write",
+        { path: "/workspace/repos/0/src/app.ts", content: "export const x=2;\n" },
+        "emergency-repository-write"
+      ),
+      read: await executeAgentTool(
+        instance,
+        "read",
+        { path: "/workspace/repos/0/src/app.ts" },
+        "emergency-repository-read"
+      ),
+    }));
+    expect(results.write.isError).toBe(true);
+    expect(results.write.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("deployment policy") }),
+      ])
+    );
+    expect(results.read.isError).not.toBe(true);
+    expect(results.read.content).toEqual(
+      expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("x=1") })])
+    );
   });
 
   it("deletes an evicted repository workspace without rematerializing provider data", async () => {

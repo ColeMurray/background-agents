@@ -50,6 +50,7 @@ export interface SessionInternalRouteHandlers {
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
   piCredential: SessionInternalRouteHandler;
+  piCapabilityAuthority: SessionInternalRouteHandler;
   piContext: SessionInternalRouteHandler;
   piRepositoryTool: SessionInternalRouteHandler;
   piRepositoryMaterialization: SessionInternalRouteHandler;
@@ -145,6 +146,11 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.piCredential,
       handler: handlers.piCredential,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piCapabilityAuthority,
+      handler: handlers.piCapabilityAuthority,
     },
     { method: "POST", path: SessionInternalPaths.piContext, handler: handlers.piContext },
     {

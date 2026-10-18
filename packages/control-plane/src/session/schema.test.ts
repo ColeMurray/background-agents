@@ -4,6 +4,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import {
+  PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
@@ -29,7 +30,32 @@ it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
       feature: "sandboxExecution",
     },
     { id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID, feature: "externalActions" },
+    { id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID, feature: "coreAuthority" },
   ]);
+});
+
+it("adds the creation-time Pi capability snapshot without backfilling legacy sessions", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+    db.exec("INSERT INTO session (id) VALUES ('legacy')");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(
+      ({ id }) => id !== PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID
+    )) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+
+    applyMigrations(createDatabaseSql(db));
+
+    expect(db.prepare("SELECT pi_feature_capability_snapshot FROM session").get()).toEqual({
+      pi_feature_capability_snapshot: null,
+    });
+  } finally {
+    db.close();
+  }
 });
 
 /**

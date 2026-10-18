@@ -1518,13 +1518,23 @@ FIFO, policy, redaction, and SessionDiff publication order. Scratch remains gove
 `PI_WORKSPACE_MODE`, including its durable aggregate quota when writable. Repository bytes cross
 SessionDO in bounded batches and never carry source-control credentials.
 
-Each Pi session durably snapshots its workspace capability on first open. Changing
-`PI_WORKSPACE_MODE` never silently upgrades or downgrades an existing session after eviction. To
-roll back writable mode, set `PI_WORKSPACE_MODE=read_only` and apply Terraform; newly opened
-sessions then receive only read tools, while sessions already snapshotted as writable remain
-operable. Set the mode to `off` in a later apply to disable the workspace for later sessions. Normal
-rollback never deletes the Pi class or its storage. Delete an existing writable session only when
-its workspace and conversation should be destroyed deliberately.
+SessionDO resolves and persists the complete Pi capability snapshot during creation, then
+initializes PiSessionDO with that exact value before reporting success. One unavailable initialize
+response is retried with the same identity and snapshot. A blank Pi object reads SessionDO's
+persisted authority before opening, so an early status or submit cannot poison later initialization.
+Changing a mode never silently installs or removes an extension for an existing session after
+eviction. An unopened legacy Pi session whose SessionDO row has no snapshot opens all-off; an
+already-open session keeps its PiSessionDO snapshot.
+
+For emergency rollback, lower the relevant mode and apply Terraform. New scratch and repository
+mutations consult current deployment policy on every invocation and are denied immediately, while
+reads continue. A top-level Code Mode recovery still in Pi Durable's `call` phase reruns current
+policy and can be denied. Recovery after Pi Durable committed its native `execute` intent follows
+the native replay contract without a second Open-Inspect admission memo. Policy lookups are bounded
+and cancel with the tool, so cancellation and deletion do not wait on a hung SessionDO call. Keep
+`PI_SESSION` and any required external bindings installed while admission is off; removing them
+strands existing sessions. Delete a session only when its workspace and conversation should be
+destroyed deliberately.
 
 Native Pi Code Mode is a separate opt-in. It runs model-written JavaScript in the private
 `pi-codemode-sandbox` Worker while tools remain in `PiSessionDO`. The composite policy permits only
@@ -1589,12 +1599,14 @@ paid-account proof, so production admission remains blocked by default.
 ### Code Mode rollback
 
 Set `PI_CODEMODE_MODE=off` and apply Terraform first. Keep
-`PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. Admitted
-tasks retain their durable memo and replay; new tasks are denied. To roll back the Worker version,
-dispatch the dedicated workflow with operation `rollback` and an exact known-good version ID. Never
-delete or import the Wrangler-owned Worker through Terraform during normal rollback. Before
-restoring paid admission, set both version variables to the rollback target and ensure the recorded
-canary evidence covers that exact version.
+`PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. A
+recovering top-level Code Mode task still in Pi Durable's `call` phase reruns current policy and is
+denied. A task that already committed Pi Durable's `execute` checkpoint follows the native replay
+contract without rerunning `beforeTool`. To roll back the Worker version, dispatch the dedicated
+workflow with operation `rollback` and an exact known-good version ID. Never delete or import the
+Wrangler-owned Worker through Terraform during normal rollback. Before restoring paid admission, set
+both version variables to the rollback target and ensure the recorded canary evidence covers that
+exact version.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
