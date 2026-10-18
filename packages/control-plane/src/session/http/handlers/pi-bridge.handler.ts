@@ -2,6 +2,9 @@ import type { SessionSkillStore } from "../../../db/session-skills";
 import type { PiRepositoryTools } from "../../../pi/repository-tools";
 import {
   piRepositoryToolRequestSchema,
+  piRepositoryMaterializationBatchSchema,
+  piRepositoryMaterializationManifestSchema,
+  piRepositoryMaterializationRequestSchema,
   piSessionContextRequestSchema,
   piSessionContextSchema,
 } from "../../../pi/session-context-contract";
@@ -41,13 +44,19 @@ interface ExternalActionBridge {
   nextDeadline?(): number | null;
   scheduleReconciliation?(deadline: number): Promise<void>;
 }
+import type { SessionDiffService } from "../../diffs/service";
+import { SourceControlProviderError } from "../../../source-control";
 
 interface PiBridgeHandlerOptions {
   sessions: Pick<SessionCoreRepository, "getSession" | "getSessionRepositories">;
   messages: Pick<MessageRepository, "getProcessingMessage">;
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
-  repositories: Pick<PiRepositoryTools, "pin" | "restore" | "list" | "read">;
+  repositories: Pick<
+    PiRepositoryTools,
+    "pin" | "restore" | "list" | "read" | "prepareMaterialization" | "materializeBatch"
+  >;
+  diffs: Pick<SessionDiffService, "claimBaselines">;
   externalActions?: ExternalActionBridge;
   getSessionId(): string;
 }
@@ -95,17 +104,95 @@ export class PiBridgeHandler {
       return Response.json({ error: "Invalid Pi session context request" }, { status: 400 });
     }
     const sessionId = this.options.getSessionId();
+    const session = this.options.sessions.getSession();
+    const sessionRepositories = this.options.sessions.getSessionRepositories();
+    const claimedPins = sessionRepositories.map((repository) => ({
+      position: repository.position,
+      repoOwner: repository.repoOwner,
+      repoName: repository.repoName,
+      commitSha:
+        repository.row?.base_sha ?? (repository.isPrimary ? (session?.base_sha ?? null) : null),
+    }));
+    const completeClaimedPins = claimedPins.every((pin) => pin.commitSha !== null)
+      ? claimedPins.map((pin) => ({ ...pin, commitSha: pin.commitSha! }))
+      : null;
     const [repositories, skills] = await Promise.all([
       parsed.data.repositoryPins
         ? this.options.repositories.restore(parsed.data.repositoryPins)
-        : this.options.repositories.pin(),
+        : completeClaimedPins
+          ? this.options.repositories.restore(completeClaimedPins)
+          : this.options.repositories.pin(),
       this.options.skills.getSandboxInstallation(sessionId),
     ]);
+    this.options.diffs.claimBaselines(
+      repositories.map(({ position, repoOwner, repoName, commitSha }) => ({
+        position,
+        repoOwner,
+        repoName,
+        baseSha: commitSha,
+      }))
+    );
     const context = piSessionContextSchema.parse({
       repositories,
       skills,
     });
     return Response.json(context, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  async repositoryMaterialization(request: Request): Promise<Response> {
+    if (this.options.sessions.getSession()?.harness !== "pi") {
+      return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
+    }
+    const parsed = piRepositoryMaterializationRequestSchema.safeParse(
+      await request.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return Response.json(
+        { error: "Invalid Pi repository materialization request" },
+        { status: 400 }
+      );
+    }
+    const repository = this.options.sessions
+      .getSessionRepositories()
+      .find((candidate) => candidate.position === parsed.data.repository);
+    const claimedBaseline =
+      repository?.row?.base_sha ??
+      (repository?.isPrimary ? (this.options.sessions.getSession()?.base_sha ?? null) : null);
+    if (!claimedBaseline || claimedBaseline.toLowerCase() !== parsed.data.commitSha.toLowerCase()) {
+      return Response.json(
+        { error: "Repository materialization does not match the claimed session baseline" },
+        { status: 409 }
+      );
+    }
+    try {
+      const target = {
+        repository: parsed.data.repository,
+        commitSha: parsed.data.commitSha,
+      };
+      const materialization =
+        parsed.data.operation === "manifest"
+          ? piRepositoryMaterializationManifestSchema.parse(
+              await this.options.repositories.prepareMaterialization(target)
+            )
+          : piRepositoryMaterializationBatchSchema.parse(
+              await this.options.repositories.materializeBatch({
+                ...target,
+                offset: parsed.data.offset,
+              })
+            );
+      return Response.json(materialization, { headers: { "Cache-Control": "no-store" } });
+    } catch (error) {
+      if (error instanceof SourceControlProviderError && error.errorType === "transient") {
+        return Response.json(
+          { error: "Repository provider is temporarily unavailable" },
+          { status: 503, headers: { "Retry-After": "1" } }
+        );
+      }
+      return Response.json(
+        { error: error instanceof Error ? error.message : "Repository materialization failed" },
+        { status: 400 }
+      );
+    }
   }
 
   async repositoryTool(request: Request): Promise<Response> {

@@ -2,22 +2,60 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { PiBridgeHandler } from "./pi-bridge.handler";
 import { ExternalActionDefinitionRegistry } from "../../external-action-definitions";
+import { SourceControlProviderError } from "../../../source-control";
+import type { PiPinnedRepository } from "../../../pi/repository-tools";
 
-function harness() {
-  const pin = vi.fn(async () => []);
+function harness(options: { claimedBaseline?: boolean } = {}) {
+  const fullSha = "a".repeat(40);
+  const pin = vi.fn(async (): Promise<PiPinnedRepository[]> => []);
   const restore = vi.fn(() => [
     {
       repoOwner: "acme",
       repoName: "widgets",
       position: 0,
       baseBranch: "main",
-      commitSha: "original-sha",
+      commitSha: fullSha,
     },
   ]);
+  const claimBaselines = vi.fn();
+  const prepareMaterialization = vi.fn(async () => ({
+    version: 1 as const,
+    repository: {
+      position: 0,
+      repoOwner: "acme",
+      repoName: "widgets",
+      commitSha: fullSha,
+      root: "/workspace/repos/0",
+    },
+    files: [],
+  }));
+  const materializeBatch = vi.fn(async () => ({
+    version: 1 as const,
+    repository: {
+      position: 0,
+      repoOwner: "acme",
+      repoName: "widgets",
+      commitSha: fullSha,
+      root: "/workspace/repos/0",
+    },
+    offset: 0,
+    nextOffset: null,
+    files: [],
+  }));
   const handler = new PiBridgeHandler({
     sessions: {
-      getSession: () => ({ harness: "pi" }) as never,
-      getSessionRepositories: () => [],
+      getSession: () =>
+        ({ harness: "pi", base_sha: options.claimedBaseline ? fullSha : null }) as never,
+      getSessionRepositories: () =>
+        [
+          {
+            position: 0,
+            repoOwner: "acme",
+            repoName: "widgets",
+            isPrimary: true,
+            row: { base_sha: options.claimedBaseline ? fullSha : null },
+          },
+        ] as never,
     },
     messages: { getProcessingMessage: () => null },
     credentials: { getOpenAIAccess: vi.fn() },
@@ -27,10 +65,21 @@ function harness() {
       restore,
       list: vi.fn(),
       read: vi.fn(),
+      prepareMaterialization,
+      materializeBatch,
     },
+    diffs: { claimBaselines },
     getSessionId: () => "session-1",
   });
-  return { handler, pin, restore };
+  return {
+    handler,
+    pin,
+    restore,
+    claimBaselines,
+    prepareMaterialization,
+    materializeBatch,
+    fullSha,
+  };
 }
 
 function externalActionHarness(
@@ -128,6 +177,7 @@ describe("PiBridgeHandler context", () => {
     expect(response.status).toBe(200);
     expect(h.pin).toHaveBeenCalledOnce();
     expect(h.restore).not.toHaveBeenCalled();
+    expect(h.claimBaselines).toHaveBeenCalledWith([]);
   });
 
   it("restores durable repository pins without resolving branch heads", async () => {
@@ -137,7 +187,7 @@ describe("PiBridgeHandler context", () => {
         repoOwner: "acme",
         repoName: "widgets",
         position: 0,
-        commitSha: "original-sha",
+        commitSha: h.fullSha,
       },
     ];
 
@@ -153,8 +203,99 @@ describe("PiBridgeHandler context", () => {
     expect(h.restore).toHaveBeenCalledWith(repositoryPins);
     expect(h.pin).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      repositories: [expect.objectContaining({ commitSha: "original-sha" })],
+      repositories: [expect.objectContaining({ commitSha: h.fullSha })],
     });
+  });
+
+  it("recovers SessionDO baselines after a crash before Pi persisted its pins", async () => {
+    const h = harness({ claimedBaseline: true });
+    h.pin.mockResolvedValueOnce([
+      {
+        repoOwner: "acme",
+        repoName: "widgets",
+        position: 0,
+        baseBranch: "main",
+        commitSha: "b".repeat(40),
+      },
+    ]);
+
+    const response = await h.handler.context(
+      new Request("http://session/internal/pi-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(h.pin).not.toHaveBeenCalled();
+    expect(h.restore).toHaveBeenCalledWith([
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "widgets",
+        commitSha: h.fullSha,
+      },
+    ]);
+    expect(h.claimBaselines).toHaveBeenCalledWith([
+      expect.objectContaining({ baseSha: h.fullSha }),
+    ]);
+  });
+
+  it("returns one credential-free materialization only for a Pi session", async () => {
+    const h = harness({ claimedBaseline: true });
+
+    const response = await h.handler.repositoryMaterialization(
+      new Request("http://session/internal/pi-repository-materialization", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation: "manifest", repository: 0, commitSha: h.fullSha }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(h.prepareMaterialization).toHaveBeenCalledWith({
+      repository: 0,
+      commitSha: h.fullSha,
+    });
+    expect(JSON.stringify(await response.json())).not.toMatch(/token|credential|authorization/i);
+  });
+
+  it("rejects materialization at a full SHA other than SessionDO's claimed baseline", async () => {
+    const h = harness({ claimedBaseline: true });
+
+    const response = await h.handler.repositoryMaterialization(
+      new Request("http://session/internal/pi-repository-materialization", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operation: "manifest",
+          repository: 0,
+          commitSha: "b".repeat(40),
+        }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(h.prepareMaterialization).not.toHaveBeenCalled();
+  });
+
+  it("marks transient provider materialization failures as retryable", async () => {
+    const h = harness({ claimedBaseline: true });
+    h.prepareMaterialization.mockRejectedValueOnce(
+      new SourceControlProviderError("provider unavailable", "transient", 503)
+    );
+
+    const response = await h.handler.repositoryMaterialization(
+      new Request("http://session/internal/pi-repository-materialization", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation: "manifest", repository: 0, commitSha: h.fullSha }),
+      })
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("1");
   });
 });
 

@@ -34,8 +34,15 @@ import {
 } from "../pi/runtime-contract";
 import type { WorkerBindings } from "./platform";
 import {
+  piRepositoryMaterializationBatchSchema,
+  piRepositoryMaterializationManifestSchema,
+  piRepositoryMaterializationSchema,
+  PI_REPOSITORY_MAX_BYTES,
+  PI_REPOSITORY_MAX_FILES,
   piRepositoryPinsSchema,
   piSessionContextSchema,
+  type PiRepositoryMaterialization,
+  type PiRepositoryMaterializationManifest,
   type PiSessionContext,
 } from "../pi/session-context-contract";
 import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-inspect-extension";
@@ -50,6 +57,7 @@ import {
   type PiToolPolicyDelegate,
 } from "../pi/tool-policy-extension";
 import { latchPiFeatureCapabilitySnapshot } from "../pi/capability-snapshot";
+import { PiRepositoryWorkspace } from "../pi/repository-workspace";
 import { z } from "zod";
 import {
   externalActionStatusResponseSchema,
@@ -90,6 +98,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly registry = createRegistry();
   private workspace: Workspace | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
+  private repositoryWorkspace: PiRepositoryWorkspace | undefined;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   readonly harness = new PiHarness({
@@ -311,10 +320,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       this.codemodeSandbox = undefined;
       await this.workspace?.close();
       this.workspace = undefined;
+      this.repositoryWorkspace = undefined;
       this.credentials.clear();
       await this.ctx.storage.deleteAll();
       await this.ctx.storage.put(DELETION_STATE_KEY, "destroyed");
     });
+  }
+
+  async refreshDiff(sessionId: string): Promise<void> {
+    await this.ensureSession(sessionId);
+    await this.harness.pi();
+    if (!this.repositoryWorkspace) throw new Error("Pi repository editing is not enabled");
+    await this.captureAndPublishDiff(null);
   }
 
   private async openWorkspace(writable: boolean): Promise<Workspace> {
@@ -325,6 +342,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     });
     try {
       await workspace.fs.mkdir(COMPUTER_SCRATCH_ROOT, { recursive: true });
+      await workspace.fs.mkdir("/workspace/repos", { recursive: true });
     } catch (error) {
       await workspace.close().catch(() => {});
       throw error;
@@ -582,6 +600,126 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return externalActionStatusResponseSchema.parse(await response.json());
+  }
+
+  private async fetchRepositoryMaterializationManifest(
+    repository: number,
+    commitSha: string
+  ): Promise<PiRepositoryMaterializationManifest> {
+    return piRepositoryMaterializationManifestSchema.parse(
+      await this.fetchRepositoryMaterializationPart({
+        operation: "manifest",
+        repository,
+        commitSha,
+      })
+    );
+  }
+
+  private async fetchRepositoryMaterialization(
+    manifest: PiRepositoryMaterializationManifest
+  ): Promise<PiRepositoryMaterialization> {
+    const repository = manifest.repository.position;
+    const commitSha = manifest.repository.commitSha;
+    const files: PiRepositoryMaterialization["files"] = [];
+    let offset = 0;
+    let totalBytes = 0;
+    while (offset < manifest.files.length) {
+      const batch = piRepositoryMaterializationBatchSchema.parse(
+        await this.fetchRepositoryMaterializationPart({
+          operation: "files",
+          repository,
+          commitSha,
+          offset,
+        })
+      );
+      if (
+        batch.offset !== offset ||
+        JSON.stringify(batch.repository) !== JSON.stringify(manifest.repository)
+      ) {
+        throw new Error("Repository materialization batch does not match its manifest");
+      }
+      if (batch.files.length === 0) {
+        throw new Error("Repository materialization batch made no progress");
+      }
+      const expected = manifest.files.slice(offset, offset + batch.files.length);
+      for (const [index, file] of batch.files.entries()) {
+        const metadata = expected[index];
+        if (
+          !metadata ||
+          metadata.path !== file.path ||
+          metadata.blobId !== file.blobId ||
+          metadata.mode !== file.mode ||
+          (metadata.sizeBytes !== null && metadata.sizeBytes !== file.sizeBytes)
+        ) {
+          throw new Error("Repository materialization file does not match its manifest");
+        }
+        totalBytes += file.sizeBytes;
+        if (totalBytes > PI_REPOSITORY_MAX_BYTES) {
+          throw new Error(
+            `Repository exceeds the ${PI_REPOSITORY_MAX_BYTES} byte materialization limit`
+          );
+        }
+        files.push(file);
+      }
+      const expectedNext = offset + batch.files.length;
+      if (batch.nextOffset !== (expectedNext < manifest.files.length ? expectedNext : null)) {
+        throw new Error("Repository materialization batch cursor is invalid");
+      }
+      offset = expectedNext;
+    }
+    return piRepositoryMaterializationSchema.parse({
+      version: 1,
+      repository: manifest.repository,
+      files,
+    });
+  }
+
+  private async fetchRepositoryMaterializationPart(
+    body: Record<string, unknown>
+  ): Promise<unknown> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piRepositoryMaterialization}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    );
+    if (!response.ok) throw new Error(`Repository materialization failed (${response.status})`);
+    return response.json();
+  }
+
+  private async captureAndPublishDiff(triggerMessageId?: string | null): Promise<void> {
+    if (!this.repositoryWorkspace) throw new Error("Pi repository editing is not enabled");
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
+    const bundle = await this.repositoryWorkspace.captureDiff(
+      triggerMessageId === undefined ? (operation?.operationId ?? null) : triggerMessageId
+    );
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.diffStore}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bundle),
+      })
+    );
+    if (!response.ok) {
+      const message = `Pi diff publication failed (${response.status})`;
+      await this.recordDiffFailure(sessionId, message).catch(() => {});
+      throw new Error(message);
+    }
+  }
+
+  private async recordDiffFailure(sessionId: string, error: string): Promise<void> {
+    await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.diffFailure}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ error }),
+      })
+    );
   }
 
   private async startEventRelay(

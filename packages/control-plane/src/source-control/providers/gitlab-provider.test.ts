@@ -1329,14 +1329,27 @@ describe("managed-skill repository reads", () => {
   });
 
   it("resolves commits with the deployment PAT", async () => {
+    const sha = "a".repeat(40);
+    mockFetch.mockResolvedValueOnce(makeResponse({ id: sha }));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "main" }, repositoryScope)
+    ).resolves.toEqual({ sha });
+    expect(mockFetch.mock.calls[0][1].headers).toMatchObject({
+      Authorization: `Bearer ${fakeConfig.accessToken}`,
+    });
+  });
+
+  it("rejects an abbreviated commit response", async () => {
     mockFetch.mockResolvedValueOnce(makeResponse({ id: "abc123" }));
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
     await expect(
       provider.resolveCommit({ owner: "acme", name: "skills", ref: "main" }, repositoryScope)
-    ).resolves.toEqual({ sha: "abc123" });
-    expect(mockFetch.mock.calls[0][1].headers).toMatchObject({
-      Authorization: `Bearer ${fakeConfig.accessToken}`,
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("full Git object SHA"),
+      errorType: "permanent",
     });
   });
 
@@ -1359,12 +1372,52 @@ describe("managed-skill repository reads", () => {
       repositoryScope
     );
 
-    expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
-      { type: "file", executable: false },
-      { type: "file", executable: true },
-      { type: "other", executable: false },
-      { type: "other", executable: false },
+    expect(tree.entries.map(({ type, mode, executable }) => ({ type, mode, executable }))).toEqual([
+      { type: "file", mode: "100644", executable: false },
+      { type: "file", mode: "100755", executable: true },
+      { type: "other", mode: "120000", executable: false },
+      { type: "other", mode: "160000", executable: false },
     ]);
+  });
+
+  it("rejects malformed provider Git modes", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse([{ path: "SKILL.md", type: "blob", mode: "644", id: "file" }])
+    );
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    await expect(
+      provider.listTree(
+        { owner: "acme", name: "skills", commitSha: "a".repeat(40) },
+        repositoryScope
+      )
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  it("stops paginating when a caller's exact tree bound is reached", async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify(
+          Array.from({ length: 100 }, (_, index) => ({
+            path: `file-${index}.txt`,
+            type: "blob",
+            mode: "100644",
+            id: `blob-${index}`,
+          }))
+        ),
+        { headers: { "content-type": "application/json", "x-next-page": "2" } }
+      )
+    );
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    const tree = await provider.listTree(
+      { owner: "acme", name: "skills", commitSha: "a".repeat(40), maxEntries: 50 },
+      repositoryScope
+    );
+
+    expect(tree).toMatchObject({ truncated: true });
+    expect(tree.entries).toHaveLength(50);
+    expect(mockFetch).toHaveBeenCalledOnce();
   });
 
   it("scopes recursive tree reads to a repository-relative path", async () => {

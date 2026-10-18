@@ -174,6 +174,8 @@ export interface RepositoryTreeEntry {
   type: "file" | "directory" | "other";
   /** Provider blob ID, for files. */
   blobId: string;
+  /** Exact six-digit Git tree mode reported by the provider. */
+  mode: string;
   /**
    * Byte size when the provider reports one, otherwise null. Null means
    * unknown, never zero — a caller enforcing a size budget cannot treat a
@@ -445,7 +447,11 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError
    */
   listTree(
-    config: GetRepositoryConfig & { commitSha: string; path?: string | null },
+    config: GetRepositoryConfig & {
+      commitSha: string;
+      path?: string | null;
+      maxEntries?: number;
+    },
     scope: CredentialScope
   ): Promise<RepositoryTree>;
 

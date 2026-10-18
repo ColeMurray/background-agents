@@ -44,7 +44,9 @@ const nonEmptyIdSchema = z.string().trim().min(1).max(200);
 // contract the routes enforce, or an accepted bundle could publish files
 // whose patch URLs the routes reject.
 const sessionDiffIdSchema = z.string().regex(SESSION_DIFF_ID_PATTERN);
-const gitShaSchema = z.string().regex(/^[0-9a-f]{40,64}$/i, "Expected a Git object SHA");
+const gitShaSchema = z
+  .string()
+  .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i, "Expected a full Git object SHA");
 const repositoryOwnerSchema = z.string().trim().min(1).max(300);
 const repositoryNameSchema = z
   .string()

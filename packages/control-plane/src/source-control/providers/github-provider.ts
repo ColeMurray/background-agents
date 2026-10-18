@@ -34,6 +34,7 @@ import {
   parseProviderResponse,
 } from "../errors";
 import { classifyGitTreeEntry } from "./git-tree";
+import { requireFullGitObjectId } from "../git-object-id";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -229,7 +230,7 @@ const githubTreeSchema = z.object({
   tree: z.array(
     z.object({
       path: z.string(),
-      mode: z.string(),
+      mode: z.string().regex(/^[0-7]{6}$/),
       type: z.string(),
       sha: z.string(),
       size: z.number().int().nonnegative().optional(),
@@ -808,8 +809,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
       if (response.status === 404) return null;
       if (!response.ok) throw await githubResponseError(response, "resolve commit");
-      const sha = (await response.text()).trim();
-      if (!sha) throw new Error("GitHub returned an empty commit SHA");
+      const sha = requireFullGitObjectId(await response.text());
       return { sha };
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;
@@ -822,7 +822,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   }
 
   async listTree(
-    config: GetRepositoryConfig & { commitSha: string; path?: string | null },
+    config: GetRepositoryConfig & {
+      commitSha: string;
+      path?: string | null;
+      maxEntries?: number;
+    },
     scope: CredentialScope
   ): Promise<RepositoryTree> {
     const scopedPath = config.path?.trim() || null;
@@ -851,17 +855,20 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       "list repository tree"
     );
     const prefix = scopedPath ? `${scopedPath}/` : "";
+    const entries = data.tree.map((entry) => ({
+      path: `${prefix}${entry.path}`,
+      type: classifyGitTreeEntry(entry.type, entry.mode),
+      blobId: entry.sha,
+      mode: entry.mode,
+      sizeBytes: entry.size ?? null,
+      executable: entry.mode === "100755",
+    }));
+    const callerTruncated = config.maxEntries !== undefined && entries.length > config.maxEntries;
     return {
-      truncated: data.truncated === true,
+      truncated: data.truncated === true || callerTruncated,
       // GitHub reports blob sizes in the tree, so callers get a usable
       // pre-download budget check from listTree alone.
-      entries: data.tree.map((entry) => ({
-        path: `${prefix}${entry.path}`,
-        type: classifyGitTreeEntry(entry.type, entry.mode),
-        blobId: entry.sha,
-        sizeBytes: entry.size ?? null,
-        executable: entry.mode === "100755",
-      })),
+      entries: callerTruncated ? entries.slice(0, config.maxEntries) : entries,
     };
   }
 

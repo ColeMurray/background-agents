@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { initSession, queryDO } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -9,6 +9,7 @@ import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
+import { SessionInternalPaths } from "../../src/session/contracts";
 
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
@@ -328,7 +329,21 @@ describe("PiSessionDO", () => {
     await runInSessionDO(sessionStub, (instance) => {
       componentsOf(instance).sourceControlProvider = {
         name: "github",
-        resolveCommit: async () => ({ sha: "abc123" }),
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({
+          entries: [
+            {
+              path: "src/app.ts",
+              type: "file",
+              blobId: "blob-app",
+              mode: "100644",
+              sizeBytes: 18,
+              executable: false,
+            },
+          ],
+          truncated: false,
+        }),
+        readBlob: async () => new TextEncoder().encode("export const x=1;\n"),
       } as unknown as SourceControlProvider;
     });
     const stub = piStub(sessionName);
@@ -386,7 +401,210 @@ describe("PiSessionDO", () => {
         repoOwner: "acme",
         repoName: "widgets",
         position: 0,
-        commitSha: "abc123",
+        commitSha: "a".repeat(40),
+      },
+    ]);
+  });
+
+  it("publishes guarded repository mutations through the SessionDiff service", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-edit-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({
+          entries: [
+            {
+              path: "src/app.ts",
+              type: "file",
+              blobId: "blob-app",
+              mode: "100644",
+              sizeBytes: 18,
+              executable: false,
+            },
+          ],
+          truncated: false,
+        }),
+        readBlob: async () => new TextEncoder().encode("export const x=1;\n"),
+      } as unknown as SourceControlProvider;
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+
+    const result = await runInPiSessionDO(stub, (instance) =>
+      executeWorkspaceTool(
+        instance,
+        "write",
+        { path: "/workspace/repos/0/src/app.ts", content: "export const x=2;\n" },
+        "integration-write"
+      )
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    const rows = await queryDO<{ bundle_json: string }>(
+      sessionStub,
+      "SELECT bundle_json FROM session_diff WHERE singleton = 1"
+    );
+    expect(JSON.parse(rows[0]?.bundle_json ?? "null")).toMatchObject({
+      repositories: [
+        {
+          baseSha: "a".repeat(40),
+          files: [expect.objectContaining({ path: "src/app.ts", status: "modified" })],
+        },
+      ],
+    });
+
+    const retry = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.diffRetry}`, { method: "POST" })
+    );
+    expect(retry.status).toBe(202);
+  });
+
+  it("rejects invalid UTF-8 provider bytes before mutating the real Computer VFS", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-binary-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({
+          entries: [
+            {
+              path: "invalid.bin",
+              type: "file",
+              blobId: "blob-invalid",
+              mode: "100644",
+              sizeBytes: 1,
+              executable: false,
+            },
+          ],
+          truncated: false,
+        }),
+        readBlob: async () => new Uint8Array([0xff]),
+      } as unknown as SourceControlProvider;
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+
+    await expect(
+      runInPiSessionDO(stub, (instance) =>
+        executeWorkspaceTool(
+          instance,
+          "write",
+          { path: "/workspace/repos/0/invalid.bin", content: "replacement\n" },
+          "integration-invalid-utf8"
+        )
+      )
+    ).rejects.toThrow("UTF-8 text");
+    const bytes = await runInPiSessionDO(stub, async (instance) => {
+      const stream = await workspaceOf(instance).fs.readFile("/workspace/repos/0/invalid.bin");
+      const reader = stream.getReader();
+      const chunk = await reader.read();
+      return chunk.value;
+    });
+    expect(bytes).toEqual(new Uint8Array([0xff]));
+  });
+
+  it("materializes 51 provider files through bounded SessionDO batches", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-batches-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    const readBlob = vi.fn(async () => new TextEncoder().encode("x"));
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit: async () => ({ sha: "a".repeat(40) }),
+        listTree: async () => ({
+          entries: Array.from({ length: 51 }, (_, index) => ({
+            path: `file-${index}.txt`,
+            type: "file",
+            blobId: `blob-${index}`,
+            mode: "100644",
+            sizeBytes: 1,
+            executable: false,
+          })),
+          truncated: false,
+        }),
+        readBlob,
+      } as unknown as SourceControlProvider;
+    });
+    const stub = piStub(sessionName);
+
+    await stub.status(sessionName);
+
+    const result = await runInPiSessionDO(stub, (instance) =>
+      executeWorkspaceTool(instance, "read", { path: "/workspace/repos/0/file-50.txt" }, "read-51")
+    );
+    expect(result).toMatchObject({ isError: false });
+    expect(readBlob).toHaveBeenCalledTimes(51);
+  });
+
+  it("recovers a claimed baseline when Pi crashes before persisting its pins", async () => {
+    const { sessionName, stub: sessionStub } = await initSession({
+      sessionName: `pi-repository-pin-crash-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: "acme",
+      repoName: "widgets",
+      repoId: 123,
+      defaultBranch: "main",
+    });
+    const firstSha = "a".repeat(40);
+    const movedSha = "b".repeat(40);
+    const resolveCommit = vi.fn(async () => ({ sha: firstSha }));
+    await runInSessionDO(sessionStub, (instance) => {
+      componentsOf(instance).sourceControlProvider = {
+        name: "github",
+        resolveCommit,
+        listTree: async () => ({ entries: [], truncated: false }),
+        readBlob: async () => new Uint8Array(),
+      } as unknown as SourceControlProvider;
+    });
+    const claimed = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.piContext}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+    );
+    expect(claimed.status).toBe(200);
+    resolveCommit.mockResolvedValue({ sha: movedSha });
+
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+
+    expect(resolveCommit).toHaveBeenCalledOnce();
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.get("open-inspect:repository-pins")
+      )
+    ).resolves.toEqual([
+      {
+        repoOwner: "acme",
+        repoName: "widgets",
+        position: 0,
+        commitSha: firstSha,
       },
     ]);
   });

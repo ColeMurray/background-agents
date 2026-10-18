@@ -45,6 +45,7 @@ function fakeProvider(
       path,
       type: "file",
       blobId,
+      mode: file.executable ? "100755" : "100644",
       sizeBytes: overrides.sizelessTree ? null : bytes.byteLength,
       executable: file.executable ?? false,
     });
@@ -54,6 +55,7 @@ function fakeProvider(
       path,
       type: "other",
       blobId: `other-${path}`,
+      mode: "120000",
       sizeBytes: null,
       executable: false,
     });

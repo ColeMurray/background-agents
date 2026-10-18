@@ -34,6 +34,7 @@ import {
   parseProviderResponse,
 } from "../errors";
 import { classifyGitTreeEntry } from "./git-tree";
+import { requireFullGitObjectId } from "../git-object-id";
 import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
@@ -174,7 +175,7 @@ const gitlabTreeSchema = z.array(
     id: z.string(),
     path: z.string(),
     type: z.string(),
-    mode: z.string(),
+    mode: z.string().regex(/^[0-7]{6}$/),
   })
 );
 
@@ -635,11 +636,24 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       gitlabCommitSchema,
       "Failed to resolve commit"
     );
-    return { sha: data.id };
+    try {
+      return { sha: requireFullGitObjectId(data.id) };
+    } catch (error) {
+      throw new SourceControlProviderError(
+        `Failed to resolve commit: ${error instanceof Error ? error.message : String(error)}`,
+        "permanent",
+        undefined,
+        error instanceof Error ? error : undefined
+      );
+    }
   }
 
   async listTree(
-    config: GetRepositoryConfig & { commitSha: string; path?: string | null },
+    config: GetRepositoryConfig & {
+      commitSha: string;
+      path?: string | null;
+      maxEntries?: number;
+    },
     _scope: CredentialScope
   ): Promise<RepositoryTree> {
     const projectPath = encodeProjectPath(config.owner, config.name);
@@ -672,11 +686,20 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
           path: entry.path,
           type: classifyGitTreeEntry(entry.type, entry.mode),
           blobId: entry.id,
+          mode: entry.mode,
           sizeBytes: null,
           executable: entry.mode === "100755",
         });
       }
-      if (response.headers.get("x-next-page")?.trim() === "" || data.length < PER_PAGE) {
+      const nextPage = response.headers.get("x-next-page")?.trim() ?? "";
+      if (
+        config.maxEntries !== undefined &&
+        entries.length >= config.maxEntries &&
+        nextPage !== ""
+      ) {
+        return { entries: entries.slice(0, config.maxEntries), truncated: true };
+      }
+      if (nextPage === "" || data.length < PER_PAGE) {
         return { entries, truncated: false };
       }
     }

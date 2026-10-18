@@ -266,6 +266,7 @@ function buildQueue(
     })),
     abort: vi.fn(async () => true),
     status: vi.fn(async () => ({ busy: false, pending: 0 })),
+    refreshDiff: vi.fn(async () => {}),
     destroy: vi.fn(async () => {}),
   };
 

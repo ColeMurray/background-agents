@@ -57,6 +57,7 @@ export interface PiRuntimeDispatch {
   submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt>;
   abort(sessionId: string, operationId?: string): Promise<boolean>;
   status(sessionId: string): Promise<{ busy: boolean; pending: number }>;
+  refreshDiff(sessionId: string): Promise<void>;
   destroy(sessionId: string): Promise<void>;
 }
 

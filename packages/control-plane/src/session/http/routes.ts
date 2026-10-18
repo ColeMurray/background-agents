@@ -52,6 +52,7 @@ export interface SessionInternalRouteHandlers {
   piCredential: SessionInternalRouteHandler;
   piContext: SessionInternalRouteHandler;
   piRepositoryTool: SessionInternalRouteHandler;
+  piRepositoryMaterialization: SessionInternalRouteHandler;
   piExternalActionPrepare: SessionInternalRouteHandler;
   piExternalActionStatus: SessionInternalRouteHandler;
   piExternalActionExecute: SessionInternalRouteHandler;
@@ -150,6 +151,11 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.piRepositoryTool,
       handler: handlers.piRepositoryTool,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piRepositoryMaterialization,
+      handler: handlers.piRepositoryMaterialization,
     },
     {
       method: "POST",

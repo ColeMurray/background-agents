@@ -487,7 +487,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new SessionDiffStore(sql),
     sessionCoreRepository,
     messenger,
-    log
+    log,
+    () => generateId(),
+    () => Date.now(),
+    env.PI_SESSION
+      ? async () => {
+          const sessionId = getPublicSessionId();
+          await env.PI_SESSION!.refreshDiff(sessionId);
+        }
+      : undefined
   );
   const diffsHandler = new SessionDiffsHandler(diffService);
   const eventStream = new SessionEventStream(eventRepository);
@@ -886,6 +894,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     credentials: piCredentialService,
     skills: new SessionSkillStore(db),
     repositories: piRepositoryTools,
+    diffs: diffService,
     externalActions: {
       // PiSessionDO's durably latched `externalActions` capability controls
       // preparation. SessionDO keeps the gateway reachable so an emergency
@@ -1137,6 +1146,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piCredential: (request) => piBridgeHandler.credential(request),
     piContext: (request) => piBridgeHandler.context(request),
     piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
+    piRepositoryMaterialization: (request) => piBridgeHandler.repositoryMaterialization(request),
     piExternalActionPrepare: (request) => piBridgeHandler.externalActionPrepare(request),
     piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
