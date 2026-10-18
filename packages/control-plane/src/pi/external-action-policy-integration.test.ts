@@ -65,7 +65,10 @@ describe("Pi external action approval integration", () => {
         restore: vi.fn(() => []),
         list: vi.fn(),
         read: vi.fn(),
+        prepareMaterialization: vi.fn(),
+        materializeBatch: vi.fn(),
       },
+      diffs: { claimBaselines: vi.fn() },
       externalActions: {
         enabled: true,
         gateway,

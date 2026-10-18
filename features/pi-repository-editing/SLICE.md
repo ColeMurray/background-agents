@@ -31,10 +31,8 @@ other harnesses.
 
 ## Verification
 
-- Focused control-plane tests include the Worker bundle and canonical extension-policy contracts.
-- Shared package tests: 1,280 passed.
-- Focused web selector/link tests: 9 passed.
-- PiSessionDO workerd integration tests: 17 passed, including real invalid UTF-8 bytes, 51-file
-  batching, baseline crash recovery after a branch move, mutation, SessionDiff publication, and
-  retry routing without a sandbox.
-- Docs tests: 44 passed. Terraform workspace-mode tests: 4 passed.
+- Control-plane full suite: 4,902 passed, 1 skipped.
+- Shared full suite: 1,293 passed. Web full suite: 2,525 passed.
+- Focused Pi/diff/MCP/external-action workerd suite: 78 passed.
+- Docs tests: 44 passed; the webpack production build also passed.
+- Terraform production suite: 80 passed. Terraform workflow contracts: 31 passed.

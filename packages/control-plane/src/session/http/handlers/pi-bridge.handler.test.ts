@@ -149,7 +149,10 @@ function externalActionHarness(
       restore: vi.fn(() => []),
       list: vi.fn(),
       read: vi.fn(),
+      prepareMaterialization: vi.fn(),
+      materializeBatch: vi.fn(),
     },
+    diffs: { claimBaselines: vi.fn() },
     getSessionId: () => "session-1",
     externalActions: {
       enabled,
