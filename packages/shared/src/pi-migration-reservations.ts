@@ -2,6 +2,12 @@ import type { PiFeatureId } from "./pi-feature-capabilities";
 
 export type MigrationStore = "session_do" | "d1";
 
+export const PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID = 58;
+export const PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID = 59;
+export const PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID = 60;
+export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 90;
+export const PI_D1_MCP_MIGRATION_VERSION = 91;
+
 export interface MigrationReservation {
   readonly store: MigrationStore;
   readonly version: number;
@@ -13,7 +19,10 @@ export interface MigrationArtifact {
   readonly store: MigrationStore;
   readonly version: number;
   readonly name: string;
+  readonly feature?: PiFeatureId;
 }
+
+export type MigrationReservationClaim = Pick<MigrationReservation, "store" | "version" | "feature">;
 
 /**
  * Reserved migration numbers for the parallel first-class Pi feature branches.
@@ -22,29 +31,34 @@ export interface MigrationArtifact {
 export const PI_MIGRATION_RESERVATIONS = [
   {
     store: "session_do",
-    version: 58,
-    feature: "sandbox_execution",
+    version: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+    feature: "sandboxExecution",
     purpose: "sandbox execution requests",
   },
   {
     store: "session_do",
-    version: 59,
-    feature: "sandbox_execution",
+    version: PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+    feature: "sandboxExecution",
     purpose: "sandbox execution lifecycle",
   },
   {
     store: "session_do",
-    version: 60,
-    feature: "external_actions",
+    version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+    feature: "externalActions",
     purpose: "external action approvals and execution",
   },
   {
     store: "d1",
-    version: 90,
-    feature: "external_actions",
+    version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+    feature: "externalActions",
     purpose: "external action authority",
   },
-  { store: "d1", version: 91, feature: "mcp", purpose: "MCP authority" },
+  {
+    store: "d1",
+    version: PI_D1_MCP_MIGRATION_VERSION,
+    feature: "mcp",
+    purpose: "MCP authority",
+  },
 ] as const satisfies readonly MigrationReservation[];
 
 export function validateMigrationReservations(reservations: readonly MigrationReservation[]): void {
@@ -53,6 +67,34 @@ export function validateMigrationReservations(reservations: readonly MigrationRe
 
 export function validateMigrationArtifacts(artifacts: readonly MigrationArtifact[]): void {
   validateUniqueVersions(artifacts, "artifact");
+  for (const artifact of artifacts) {
+    const reservation = findMigrationReservation(artifact);
+    if (reservation && artifact.feature === undefined) {
+      throw new Error(
+        `Reserved ${artifact.store} migration artifact ${artifact.version} must declare feature ${reservation.feature}`
+      );
+    }
+    if (artifact.feature !== undefined) {
+      assertMigrationReservation({
+        store: artifact.store,
+        version: artifact.version,
+        feature: artifact.feature,
+      });
+    }
+  }
+}
+
+/** Prove that a feature owns this exact migration slot before materializing its artifact. */
+export function assertMigrationReservation(claim: MigrationReservationClaim): void {
+  const reservation = findMigrationReservation(claim);
+  if (!reservation) {
+    throw new Error(`${claim.store} migration ${claim.version} is not reserved`);
+  }
+  if (reservation.feature !== claim.feature) {
+    throw new Error(
+      `${claim.store} migration ${claim.version} is reserved for ${reservation.feature}, not ${claim.feature}`
+    );
+  }
 }
 
 function validateUniqueVersions(
@@ -66,3 +108,13 @@ function validateUniqueVersions(
     seen.add(key);
   }
 }
+
+function findMigrationReservation(
+  claim: Pick<MigrationReservation, "store" | "version">
+): MigrationReservation | undefined {
+  return PI_MIGRATION_RESERVATIONS.find(
+    ({ store, version }) => store === claim.store && version === claim.version
+  );
+}
+
+validateMigrationReservations(PI_MIGRATION_RESERVATIONS);

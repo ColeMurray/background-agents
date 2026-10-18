@@ -1,8 +1,11 @@
-export type ComputerWorkspaceMode = "off" | "read_only";
+import {
+  resolvePiFeatureCapabilities,
+  type FeatureCapabilityMode,
+} from "@open-inspect/shared/pi-feature-capabilities";
 
-/** Unknown deployment values fail closed instead of widening Pi's capabilities. */
+export type ComputerWorkspaceMode = FeatureCapabilityMode;
+
+/** Backward-compatible wrapper around the canonical shared capability resolver. */
 export function resolveComputerWorkspaceMode(value: string | undefined): ComputerWorkspaceMode {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "read_only") return normalized;
-  return "off";
+  return resolvePiFeatureCapabilities({ workspace: value }).workspace;
 }

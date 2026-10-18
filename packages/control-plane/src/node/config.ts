@@ -95,6 +95,11 @@ const ENV_CONFIG_KEYS = {
   TEAMS_ENFORCEMENT: true,
   PI_DURABLE_ENABLED: true,
   PI_WORKSPACE_MODE: true,
+  PI_REPOSITORY_EDITING_MODE: true,
+  PI_CODE_MODE: true,
+  PI_SANDBOX_EXECUTION_MODE: true,
+  PI_EXTERNAL_ACTIONS_MODE: true,
+  PI_MCP_MODE: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 

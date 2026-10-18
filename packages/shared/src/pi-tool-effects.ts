@@ -29,8 +29,8 @@ export interface ToolEffectRegistration {
 
 /**
  * Effect declarations for the stable Pi tools that predate feature extensions.
- * Feature implementations append their own declarations through
- * createToolEffectRegistry before installing tools.
+ * PiSessionDO selects declarations from this catalog for each active contribution;
+ * assemblePiExtensions composes the exact runtime registry.
  */
 export const PI_TOOL_EFFECT_REGISTRATIONS = [
   {
@@ -50,6 +50,35 @@ export const PI_TOOL_EFFECT_REGISTRATIONS = [
   { name: "ls", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
   { name: "find", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
   { name: "grep", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
+  { name: "activate_skill", effect: "control", callers: ["model", "tools"], replay: "safe" },
+  {
+    name: "read_skill_resource",
+    effect: "local_read",
+    callers: ["model", "tools"],
+    replay: "safe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
+/** Declarations that must accompany Pi Durable's native Code Mode extension. */
+export const PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "codemode",
+    effect: "sandbox_execution",
+    callers: ["model"],
+    replay: "safe",
+  },
+  {
+    name: "pi.codemode.models.classify",
+    effect: "external_read",
+    callers: ["tools"],
+    replay: "unsafe",
+  },
+  {
+    name: "pi.codemode.models.generateImages",
+    effect: "external_read",
+    callers: ["tools"],
+    replay: "unsafe",
+  },
 ] as const satisfies readonly ToolEffectRegistration[];
 
 /** Build a lookup while rejecting accidental tool shadowing across extensions. */

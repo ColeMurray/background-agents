@@ -1,38 +1,56 @@
 import { describe, expect, it } from "vitest";
 import {
+  PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+  PI_D1_MCP_MIGRATION_VERSION,
   PI_MIGRATION_RESERVATIONS,
+  PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+  assertMigrationReservation,
   validateMigrationArtifacts,
   validateMigrationReservations,
 } from "./pi-migration-reservations";
 
 describe("Pi migration reservations", () => {
   it("assigns the cross-cutting feature migration ranges", () => {
+    expect([
+      PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+      PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+      PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+      PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+      PI_D1_MCP_MIGRATION_VERSION,
+    ]).toEqual([58, 59, 60, 90, 91]);
     expect(PI_MIGRATION_RESERVATIONS).toEqual([
       {
         store: "session_do",
-        version: 58,
-        feature: "sandbox_execution",
+        version: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+        feature: "sandboxExecution",
         purpose: "sandbox execution requests",
       },
       {
         store: "session_do",
-        version: 59,
-        feature: "sandbox_execution",
+        version: PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+        feature: "sandboxExecution",
         purpose: "sandbox execution lifecycle",
       },
       {
         store: "session_do",
-        version: 60,
-        feature: "external_actions",
+        version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+        feature: "externalActions",
         purpose: "external action approvals and execution",
       },
       {
         store: "d1",
-        version: 90,
-        feature: "external_actions",
+        version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+        feature: "externalActions",
         purpose: "external action authority",
       },
-      { store: "d1", version: 91, feature: "mcp", purpose: "MCP authority" },
+      {
+        store: "d1",
+        version: PI_D1_MCP_MIGRATION_VERSION,
+        feature: "mcp",
+        purpose: "MCP authority",
+      },
     ]);
     expect(() => validateMigrationReservations(PI_MIGRATION_RESERVATIONS)).not.toThrow();
   });
@@ -43,8 +61,8 @@ describe("Pi migration reservations", () => {
         ...PI_MIGRATION_RESERVATIONS,
         {
           store: "session_do",
-          version: 58,
-          feature: "external_actions",
+          version: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+          feature: "externalActions",
           purpose: "collision",
         },
       ])
@@ -54,9 +72,74 @@ describe("Pi migration reservations", () => {
   it("rejects duplicate migration artifacts even when their names differ", () => {
     expect(() =>
       validateMigrationArtifacts([
-        { store: "d1", version: 90, name: "0090_external_actions.sql" },
-        { store: "d1", version: 90, name: "0090_other.sql" },
+        {
+          store: "d1",
+          version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+          name: "0090_external_actions.sql",
+        },
+        {
+          store: "d1",
+          version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+          name: "0090_other.sql",
+        },
       ])
     ).toThrow("Duplicate d1 migration artifact 90");
+  });
+
+  it("rejects wrong, swapped, and unreserved feature claims", () => {
+    expect(() =>
+      assertMigrationReservation({
+        store: "session_do",
+        version: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+        feature: "externalActions",
+      })
+    ).toThrow("reserved for sandboxExecution, not externalActions");
+    expect(() =>
+      assertMigrationReservation({
+        store: "session_do",
+        version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+        feature: "sandboxExecution",
+      })
+    ).toThrow("reserved for externalActions, not sandboxExecution");
+    expect(() =>
+      assertMigrationReservation({
+        store: "d1",
+        version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+        feature: "mcp",
+      })
+    ).toThrow("reserved for externalActions, not mcp");
+    expect(() =>
+      assertMigrationReservation({
+        store: "d1",
+        version: PI_D1_MCP_MIGRATION_VERSION,
+        feature: "externalActions",
+      })
+    ).toThrow("reserved for mcp, not externalActions");
+    expect(() =>
+      assertMigrationReservation({ store: "session_do", version: 61, feature: "mcp" })
+    ).toThrow("session_do migration 61 is not reserved");
+  });
+
+  it("requires an owner when an artifact occupies a reserved version", () => {
+    expect(() =>
+      validateMigrationArtifacts([
+        {
+          store: "d1",
+          version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+          name: "0090_external_actions.sql",
+        },
+      ])
+    ).toThrow("Reserved d1 migration artifact 90 must declare feature externalActions");
+
+    expect(() =>
+      validateMigrationArtifacts([
+        {
+          store: "d1",
+          version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+          name: "0090_external_actions.sql",
+          feature: "externalActions",
+        },
+      ])
+    ).not.toThrow();
   });
 });

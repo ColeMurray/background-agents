@@ -98,6 +98,7 @@ describe("applyMigrations", () => {
           store: "session_do",
           version: migration.id,
           name: migration.description,
+          feature: migration.feature,
         }))
       )
     ).not.toThrow();

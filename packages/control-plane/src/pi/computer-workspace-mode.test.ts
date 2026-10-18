@@ -10,6 +10,10 @@ describe("resolveComputerWorkspaceMode", () => {
     expect(resolveComputerWorkspaceMode(value)).toBe("read_only");
   });
 
+  it("delegates enabled mode to the canonical capability resolver", () => {
+    expect(resolveComputerWorkspaceMode("enabled")).toBe("enabled");
+  });
+
   it("keeps the future writable value disabled", () => {
     expect(resolveComputerWorkspaceMode("writable")).toBe("off");
   });

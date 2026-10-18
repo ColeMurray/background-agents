@@ -7,6 +7,7 @@ import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
+import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
@@ -229,12 +230,16 @@ describe("PiSessionDO", () => {
     const stub = piStub(sessionName);
     await stub.status(sessionName);
 
-    const tools = await runInPiSessionDO(stub, async (instance) => {
+    const agent = await runInPiSessionDO(stub, async (instance) => {
       const pi = await instance.harness.pi();
       const root = await pi.root(BACKGROUND_CONTEXT);
-      return (await root.agent(BACKGROUND_CONTEXT)).tools.map((tool) => tool.name);
+      const selected = await root.agent(BACKGROUND_CONTEXT);
+      return {
+        tools: selected.tools.map((tool) => tool.name),
+        extensions: selected.extensions.map(({ name }) => name),
+      };
     });
-    expect(tools).toEqual([
+    expect(agent.tools).toEqual([
       "repository_list",
       "repository_read",
       "subagent",
@@ -243,6 +248,27 @@ describe("PiSessionDO", () => {
       "find",
       "grep",
     ]);
+    expect(agent.extensions).toEqual([
+      "open-inspect.tool-policy",
+      "open-inspect",
+      "open-inspect.subagent",
+      "open-inspect.workspace",
+    ]);
+    await expect(
+      runInDurableObject(stub, (_instance, state) =>
+        state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
+      )
+    ).resolves.toEqual({
+      version: 1,
+      capabilities: {
+        workspace: "read_only",
+        repositoryEditing: "off",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+      },
+    });
     await expect(
       runInDurableObject(stub, (_instance, state) =>
         state.storage.get("open-inspect:repository-pins")

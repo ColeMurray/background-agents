@@ -291,6 +291,7 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
+import type { PiFeatureId } from "@open-inspect/shared/pi-feature-capabilities";
 import type { SqlStorage } from "./sql-storage";
 
 const schemaLog = createLogger("schema");
@@ -306,6 +307,8 @@ const schemaLog = createLogger("schema");
 export interface SchemaMigration {
   readonly id: number;
   readonly description: string;
+  /** Required when `id` is reserved by PI_MIGRATION_RESERVATIONS. */
+  readonly feature?: PiFeatureId;
   readonly run: string | ((sql: SqlStorage) => void);
 }
 

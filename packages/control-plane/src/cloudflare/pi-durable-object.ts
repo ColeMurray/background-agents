@@ -1,6 +1,7 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
+import { PI_TOOL_EFFECT_REGISTRY, type ToolEffectRegistration } from "@open-inspect/shared";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
@@ -35,11 +36,21 @@ import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
 import { createComputerWorkspaceExtension } from "../pi/computer-workspace-extension";
-import { resolveComputerWorkspaceMode } from "../pi/computer-workspace-mode";
 import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extension-assembler";
+import { createPiToolPolicyExtension } from "../pi/tool-policy-extension";
+import { latchPiFeatureCapabilitySnapshot } from "../pi/capability-snapshot";
 import { z } from "zod";
 
-type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "PI_WORKSPACE_MODE">;
+type PiWorkerBindings = Pick<
+  WorkerBindings,
+  | "SESSION"
+  | "PI_WORKSPACE_MODE"
+  | "PI_REPOSITORY_EDITING_MODE"
+  | "PI_CODE_MODE"
+  | "PI_SANDBOX_EXECUTION_MODE"
+  | "PI_EXTERNAL_ACTIONS_MODE"
+  | "PI_MCP_MODE"
+>;
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
@@ -60,33 +71,55 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
       const sessionContext = await this.fetchSessionContext();
+      const { capabilities } = await latchPiFeatureCapabilitySnapshot(this.ctx.storage, {
+        workspace: this.env.PI_WORKSPACE_MODE,
+        repositoryEditing: this.env.PI_REPOSITORY_EDITING_MODE,
+        codeMode: this.env.PI_CODE_MODE,
+        sandboxExecution: this.env.PI_SANDBOX_EXECUTION_MODE,
+        externalActions: this.env.PI_EXTERNAL_ACTIONS_MODE,
+        mcp: this.env.PI_MCP_MODE,
+      });
+      const core = createOpenInspectExtension({
+        repositories: sessionContext.repositories,
+        invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
+      });
+      const delegation = createSubagentExtension();
       const extensions: PiExtensionContribution[] = [
         {
-          slot: "core",
-          extension: createOpenInspectExtension({
-            repositories: sessionContext.repositories,
-            invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
-          }),
+          slot: "policy",
+          effects: [],
+          createExtension: createPiToolPolicyExtension,
         },
-        { slot: "delegation", extension: createSubagentExtension() },
+        { slot: "core", extension: core, effects: declaredEffects(core) },
+        {
+          slot: "delegation",
+          extension: delegation,
+          effects: declaredEffects(delegation),
+        },
       ];
       if (sessionContext.skills && sessionContext.skills.skills.length > 0) {
+        const skills = await createManagedSkillsExtension([
+          skillSourceFromInstallation(sessionContext.skills),
+        ]);
         extensions.push({
           slot: "skills",
-          extension: await createManagedSkillsExtension([
-            skillSourceFromInstallation(sessionContext.skills),
-          ]),
+          extension: skills,
+          effects: declaredEffects(skills),
         });
       }
-      const workspaceMode = resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE);
-      if (workspaceMode === "read_only") {
+      if (capabilities.workspace !== "off") {
         const workspace = await this.openWorkspace();
+        const workspaceExtension = createComputerWorkspaceExtension(workspace);
         extensions.push({
           slot: "workspace",
-          extension: createComputerWorkspaceExtension(workspace),
+          feature: "workspace",
+          minimumCapability: "read_only",
+          extension: workspaceExtension,
+          effects: declaredEffects(workspaceExtension),
         });
       }
-      for (const extension of assemblePiExtensions(extensions)) this.registry.install(extension);
+      const assembly = assemblePiExtensions(extensions, capabilities);
+      for (const extension of assembly.extensions) this.registry.install(extension);
       this.models.setProvider(openaiCodexProvider());
       return Harness.open(
         storage,
@@ -504,6 +537,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     if (!response.ok) throw new Error(`Pi result delivery rejected (${response.status})`);
   }
+}
+
+function declaredEffects(extension: {
+  readonly tools?: readonly { readonly name: string }[];
+}): ToolEffectRegistration[] {
+  return (extension.tools ?? []).map(({ name }) => {
+    const declaration = PI_TOOL_EFFECT_REGISTRY.get(name);
+    if (!declaration) throw new Error(`Pi tool has no effect declaration: ${name}`);
+    return declaration;
+  });
 }
 
 function subtractUsage(current: PiRuntimeUsage, baseline: PiRuntimeUsage): PiRuntimeUsage {

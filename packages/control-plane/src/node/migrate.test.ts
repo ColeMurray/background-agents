@@ -1,9 +1,18 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { PI_FEATURE_IDS, type PiFeatureId } from "@open-inspect/shared/pi-feature-capabilities";
 import { validateMigrationArtifacts } from "@open-inspect/shared/pi-migration-reservations";
 import { buildSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -43,6 +52,7 @@ describe("applyMigrations", () => {
           store: "d1",
           version: Number(file.version),
           name: file.name,
+          feature: readMigrationFeature(file.path),
         }))
       )
     ).not.toThrow();
@@ -430,6 +440,14 @@ describe("applyMigrations", () => {
     }
   });
 });
+
+function readMigrationFeature(path: string): PiFeatureId | undefined {
+  const declared = /^-- pi-feature: ([^\r\n]+)\r?\n/.exec(readFileSync(path, "utf8"))?.[1];
+  if (declared === undefined) return undefined;
+  const feature = PI_FEATURE_IDS.find((feature) => feature === declared);
+  if (!feature) throw new Error(`Migration ${path} declares unknown Pi feature ${declared}`);
+  return feature;
+}
 
 function mkdirMigrations(directory: string, files: Record<string, string>): void {
   mkdirSync(directory);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
   TOOL_CALLERS,
   TOOL_EFFECT_KINDS,
@@ -35,6 +36,12 @@ describe("Pi tool effect registry", () => {
       replay: "safe",
     });
     expect(PI_TOOL_EFFECT_REGISTRY.get("read")?.effect).toBe("local_read");
+    expect(PI_TOOL_EFFECT_REGISTRY.get("activate_skill")).toMatchObject({
+      effect: "control",
+      callers: ["model", "tools"],
+      replay: "safe",
+    });
+    expect(PI_TOOL_EFFECT_REGISTRY.get("read_skill_resource")?.effect).toBe("local_read");
   });
 
   it("rejects duplicate tool names across feature extension registrations", () => {
@@ -44,5 +51,28 @@ describe("Pi tool effect registry", () => {
         [{ name: "publish", effect: "control", callers: ["tools"], replay: "safe" }]
       )
     ).toThrow('Duplicate Pi tool effect registration: "publish"');
+  });
+
+  it("declares Code Mode and its reserved internal model tools before exposure", () => {
+    expect(PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS).toEqual([
+      {
+        name: "codemode",
+        effect: "sandbox_execution",
+        callers: ["model"],
+        replay: "safe",
+      },
+      {
+        name: "pi.codemode.models.classify",
+        effect: "external_read",
+        callers: ["tools"],
+        replay: "unsafe",
+      },
+      {
+        name: "pi.codemode.models.generateImages",
+        effect: "external_read",
+        callers: ["tools"],
+        replay: "unsafe",
+      },
+    ]);
   });
 });
