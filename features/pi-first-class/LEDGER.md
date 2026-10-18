@@ -56,6 +56,9 @@ Rule: tick only with evidence on the same line.
       README translations, clean `npm ci`
 - [x] Committed — `ea447fda` (`feat: add isolated Pi Code Mode sandbox`)
 - [x] Slice report — `features/pi-first-class/SLICE-1.md`
+- [x] Ownership correction — unsupported Terraform Worker/version ownership removed; dedicated
+      Wrangler fresh/upgrade/rollback workflow is sole owner, Terraform retains only verified
+      binding
 
 ### Slice 2: read-only durable Computer VFS workspace
 
@@ -103,15 +106,19 @@ Rule: tick only with evidence on the same line.
 
 ### Slice 4: Pi Durable Code Mode integration
 
-- [ ] Existing tool exposure pinned
-- [ ] Remote sandbox/runtime contract
-- [ ] Native `createCodemodeExtension()` integration
-- [ ] Nested replay/abort/fingerprint/event tests
-- [ ] Deep audit
-- [ ] `/simplify`
-- [ ] Narrow validation green
+- [x] Existing tool exposure pinned — focused extension and PiSessionDO workerd assertions
+- [x] Remote sandbox/runtime contract — portable `RemoteCodemodeSandbox`; external DO binding only
+- [x] Native `createCodemodeExtension()` integration — canonical capability snapshot, `code_mode`
+      slot/effects, composite policy delegate, durable emergency-admission memo
+- [ ] Nested event projection remains part of Slice 5; replay, abort, fingerprint, and close are
+      covered here by native SQLite replay tests and the compiled two-Worker restart lane
+- [x] Deep audit — architecture and sandbox watchdog corrections incorporated; live provider proof
+      remains an explicit canary blocker
+- [x] `/simplify` — canonical capability snapshot, assembler slot/effects, and composite policy only
+- [x] Narrow validation green — unit, native durable replay, two-Worker workerd, Terraform, build,
+      typecheck, lint, format, docs
 - [ ] Committed
-- [ ] Slice report
+- [x] Slice report — `features/pi-first-class/SLICE-4.md`
 
 ### Slice 5: Pi-native inbox, conversation, and event fidelity
 

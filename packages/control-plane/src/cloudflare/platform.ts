@@ -12,6 +12,7 @@ import { createQueueJobs, type JobQueueBindings } from "./job-queue";
 import { R2ObjectStorage } from "./object-storage";
 import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
 import { createDurableObjectPiRuntimeDispatch } from "./pi-runtime-dispatch";
+import type { CodemodeSandboxDurableObject } from "@earendil-works/pi-codemode/cloudflare";
 import type { PiSessionDO } from "./pi-durable-object";
 import type { McpConnectionDO } from "./mcp-connection-durable-object";
 import { createMcpConnectionBrokerDispatch } from "./mcp-connection-dispatch";
@@ -21,6 +22,8 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
   PI_SESSION?: DurableObjectNamespace<PiSessionDO>;
   MCP_CONNECTION?: DurableObjectNamespace<McpConnectionDO>;
+  /** External, separately deployed VM object. Never adapt this into the application Platform. */
+  CODEMODE_SANDBOX?: DurableObjectNamespace<CodemodeSandboxDurableObject>;
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
@@ -41,6 +44,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     SESSION,
     PI_SESSION,
     MCP_CONNECTION,
+    CODEMODE_SANDBOX: _CODEMODE_SANDBOX,
     REPOS_CACHE,
     MEDIA_BUCKET,
     SLACK_BOT,
@@ -71,6 +75,6 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
 // of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
-  Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings>,
+  Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX">,
   keyof EnvConfig
 >;

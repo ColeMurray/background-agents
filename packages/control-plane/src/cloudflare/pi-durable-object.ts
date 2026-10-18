@@ -1,7 +1,12 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
-import { PI_TOOL_EFFECT_REGISTRY, type ToolEffectRegistration } from "@open-inspect/shared";
+import {
+  PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
+  PI_TOOL_EFFECT_REGISTRY,
+  type ToolEffectRegistration,
+} from "@open-inspect/shared";
+import { RemoteCodemodeSandbox } from "@earendil-works/pi-codemode/portable";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
@@ -51,6 +56,11 @@ import {
   type ExternalActionPrepareRequest,
 } from "@open-inspect/shared";
 import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
+import {
+  createOpenInspectCodemodeExtension,
+  createPiCodeModePolicyDelegate,
+  createPiCodeModePolicyState,
+} from "../pi/codemode-extension";
 
 type PiWorkerBindings = Pick<
   WorkerBindings,
@@ -61,11 +71,13 @@ type PiWorkerBindings = Pick<
   | "PI_SANDBOX_EXECUTION_MODE"
   | "PI_EXTERNAL_ACTIONS_MODE"
   | "PI_MCP_MODE"
+  | "CODEMODE_SANDBOX"
 >;
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
+const CAPABILITY_ELIGIBILITY_KEY = "open-inspect:capability-eligibility";
 const ROOT_SESSION = "1";
 const EVENT_DELIVERY_ATTEMPTS = 3;
 const EVENT_DELIVERY_RETRY_MS = 100;
@@ -77,19 +89,26 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly models = createModels({ credentials: this.credentials });
   private readonly registry = createRegistry();
   private workspace: Workspace | undefined;
+  private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
       const sessionContext = await this.fetchSessionContext();
+      const eligible =
+        (await this.ctx.storage.get<{ version: 1 }>(CAPABILITY_ELIGIBILITY_KEY))?.version === 1;
       const { capabilities } = await latchPiFeatureCapabilitySnapshot(this.ctx.storage, {
-        workspace: resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE),
-        repositoryEditing: this.env.PI_REPOSITORY_EDITING_MODE,
-        codeMode: this.env.PI_CODE_MODE,
-        sandboxExecution: this.env.PI_SANDBOX_EXECUTION_MODE,
-        externalActions: this.env.PI_EXTERNAL_ACTIONS_MODE,
-        mcp: this.env.PI_MCP_MODE,
+        workspace: eligible ? resolveComputerWorkspaceMode(this.env.PI_WORKSPACE_MODE) : "off",
+        repositoryEditing: eligible ? this.env.PI_REPOSITORY_EDITING_MODE : "off",
+        codeMode: eligible ? this.env.PI_CODE_MODE : "off",
+        sandboxExecution: eligible ? this.env.PI_SANDBOX_EXECUTION_MODE : "off",
+        externalActions: eligible ? this.env.PI_EXTERNAL_ACTIONS_MODE : "off",
+        mcp: eligible ? this.env.PI_MCP_MODE : "off",
       });
+      const codeModePolicy = createPiCodeModePolicyState(
+        this.env.PI_CODE_MODE?.trim().toLowerCase() === "enabled"
+      );
+      const codeModePolicyDelegate = createPiCodeModePolicyDelegate(codeModePolicy);
       const core = createOpenInspectExtension({
         repositories: sessionContext.repositories,
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
@@ -114,8 +133,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             return createPiToolPolicyExtension(
               effects,
               workspacePolicyDelegate
-                ? [externalActionDelegate, workspacePolicyDelegate]
-                : [externalActionDelegate]
+                ? [externalActionDelegate, workspacePolicyDelegate, codeModePolicyDelegate]
+                : [externalActionDelegate, codeModePolicyDelegate]
             );
           },
         },
@@ -153,6 +172,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           minimumCapability: "read_only",
           extension: capability.extension,
           effects: capability.effects,
+        });
+      }
+      if (capabilities.codeMode === "enabled") {
+        const sandbox = await this.openCodemodeSandbox();
+        extensions.push({
+          slot: "code_mode",
+          feature: "codeMode",
+          minimumCapability: "enabled",
+          extension: createOpenInspectCodemodeExtension(sandbox, codeModePolicy),
+          effects: PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
         });
       }
       const assembly = assemblePiExtensions(extensions, capabilities);
@@ -278,6 +307,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
       await this.lifecycle.disableAlarms();
       await this.harness.dispose();
+      await this.codemodeSandbox?.close();
+      this.codemodeSandbox = undefined;
       await this.workspace?.close();
       this.workspace = undefined;
       this.credentials.clear();
@@ -300,6 +331,19 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     this.workspace = writable ? createQuotaWorkspace(workspace, this.ctx.storage) : workspace;
     return this.workspace;
+  }
+
+  private async openCodemodeSandbox(): Promise<RemoteCodemodeSandbox> {
+    if (this.codemodeSandbox) return this.codemodeSandbox;
+    const namespace = this.env.CODEMODE_SANDBOX;
+    if (!namespace) throw new Error("Code Mode sandbox binding is unavailable");
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const sandbox = new RemoteCodemodeSandbox({
+      remote: () => namespace.getByName(sessionId),
+    });
+    this.codemodeSandbox = sandbox;
+    return sandbox;
   }
 
   private async configure(
@@ -344,7 +388,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     const stored = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (stored === undefined) {
-      await this.ctx.storage.put(SESSION_ID_KEY, sessionId);
+      await this.ctx.storage.put({
+        [SESSION_ID_KEY]: sessionId,
+        [CAPABILITY_ELIGIBILITY_KEY]: { version: 1 },
+      });
       return;
     }
     if (stored !== sessionId) throw new Error("Pi Durable Object session identity mismatch");

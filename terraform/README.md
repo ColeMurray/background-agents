@@ -430,6 +430,22 @@ variables.
    - `Queues: Edit`
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
+### Enable or roll back Pi Code Mode
+
+Keep `pi_codemode_mode = "off"` for the initial sandbox Worker deployment. After that deployment has
+applied the `CodemodeSandbox` migration, set `pi_codemode_sandbox_migration_applied = true` and
+apply again to add the external `CODEMODE_SANDBOX` binding. Keep admission off until a disposable
+Workers Paid account proves that the live migration-only Worker has QuickJS WASM and zero
+self-bindings, the external binding executes a script, and the configured CPU limit is effective.
+Provider issues #6852 (migration + WASM) and #6404 (paid CPU limits) remain open; a plan cannot
+establish either live behavior. After recording that evidence, set
+`pi_codemode_paid_canary_verified = true`, set `pi_codemode_sandbox_cpu_ms`, and only then set
+`pi_codemode_mode = "paid"`. Terraform blocks `paid` without all three gates.
+
+Rollback sets `pi_codemode_mode = "off"` but leaves `pi_codemode_sandbox_migration_applied = true`.
+Do not remove the external binding, private Worker, or class: sessions that already latched Code
+Mode require that runtime for replay, abort, and cleanup.
+
 ## Adding New Environments
 
 To add a staging environment:

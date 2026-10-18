@@ -261,6 +261,18 @@ test("Pi Code Mode sandbox migration completion follows a deployed version", () 
   );
 });
 
+test("control plane deployment waits for the external Code Mode owner", async () => {
+  const controlPlane = await readFile(
+    new URL("../terraform/environments/production/workers-control-plane.tf", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    controlPlane,
+    /depends_on\s*=\s*\[[\s\S]*module\.pi_codemode_sandbox_worker,[\s\S]*\]/,
+    "the external binding must deploy only after the sandbox Worker deployment"
+  );
+});
+
 test("Pi Code Mode sandbox CPU limit is staged as optional numeric JSON", () => {
   assertInPlanAndApply("PI_CODEMODE_SANDBOX_CPU_MS:", "Code Mode sandbox CPU input");
   assertInPlanAndApply(

@@ -15,6 +15,7 @@ const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 // automation (see Scheduler.tick tests). vite 7 used the CJS build,
 // which interops correctly. Test-only — production bundles via esbuild/wrangler.
 const luxonCjsEntry = createRequire(__filename).resolve("luxon");
+const codeModeIntegration = process.env.PI_CODEMODE_INTEGRATION === "true";
 
 /** Generate a random base64-encoded 32-byte AES key for tests. */
 function generateTestEncryptionKey(): string {
@@ -49,6 +50,31 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
+          ...(codeModeIntegration
+            ? {
+                durableObjects: {
+                  CODEMODE_SANDBOX: {
+                    className: "CodemodeSandbox",
+                    scriptName: "open-inspect-pi-codemode-sandbox-test",
+                    useSQLite: true,
+                  },
+                },
+                workers: [
+                  {
+                    name: "open-inspect-pi-codemode-sandbox-test",
+                    scriptPath: path.resolve(__dirname, "../pi-codemode-sandbox/dist/index.js"),
+                    modules: true,
+                    modulesRoot: path.resolve(__dirname, "../pi-codemode-sandbox/dist"),
+                    modulesRules: [
+                      { type: "CompiledWasm" as const, include: ["**/*.wasm"], fallthrough: true },
+                    ],
+                    additionalUnboundDurableObjects: [
+                      { className: "CodemodeSandbox", useSQLite: true },
+                    ],
+                  },
+                ],
+              }
+            : {}),
           async outboundService(request: Request) {
             const url = new URL(request.url);
             if (url.hostname.endsWith(".modal.run")) {
@@ -186,9 +212,10 @@ export default defineConfig({
             SLACK_BOT_TOKEN: "xoxb-test-integration",
             WEB_APP_URL: "https://app.test.local",
             APP_NAME: "Open-Inspect",
-            PI_WORKSPACE_MODE: "writable",
-            PI_SANDBOX_EXECUTION_MODE: "enabled",
-            PI_EXTERNAL_ACTIONS_MODE: "enabled",
+            PI_WORKSPACE_MODE: codeModeIntegration ? "read_only" : "writable",
+            PI_SANDBOX_EXECUTION_MODE: codeModeIntegration ? "off" : "enabled",
+            PI_CODE_MODE: codeModeIntegration ? "enabled" : "off",
+            PI_EXTERNAL_ACTIONS_MODE: codeModeIntegration ? "off" : "enabled",
             TEST_MIGRATIONS: migrations,
           },
         },
@@ -196,7 +223,11 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ["test/integration/**/*.test.ts"],
+    include: [
+      codeModeIntegration
+        ? "test/codemode-integration/**/*.test.ts"
+        : "test/integration/**/*.test.ts",
+    ],
     setupFiles: ["test/integration/apply-migrations.ts"],
     onUnhandledError(error) {
       // Better Auth implements redirects and invalid-token responses as thrown

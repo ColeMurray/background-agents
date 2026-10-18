@@ -47,3 +47,14 @@ output "binding_names" {
   description = "Names of all bindings enabled on the current Worker version."
   value       = sort(nonsensitive(local.binding_names))
 }
+
+output "external_durable_object_bindings" {
+  description = "Configured external Durable Object identities, excluding runtime values and secrets."
+  value = {
+    for name, binding in var.external_durable_objects : name => {
+      class_name  = binding.class_name
+      script_name = binding.script_name
+      environment = binding.environment
+    }
+  }
+}

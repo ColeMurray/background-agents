@@ -63,3 +63,15 @@ resource "terraform_data" "sign_in_provider_gate" {
     }
   }
 }
+
+# The sandbox class must exist in a completed deployment before the control
+# plane can reference it. This also makes the billed mode an explicit opt-in.
+check "pi_codemode_paid_ready" {
+  assert {
+    condition = var.pi_codemode_mode != "paid" || (
+      var.pi_codemode_sandbox_deployment_verified &&
+      var.pi_codemode_paid_canary_verified
+    )
+    error_message = "pi_codemode_mode = 'paid' requires a verified Wrangler-owned sandbox deployment plus a disposable paid-account canary proving migration, WASM execution, and the configured CPU limit."
+  }
+}

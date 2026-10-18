@@ -267,6 +267,12 @@ jobs:
       - name: Run Pi Code Mode sandbox infrastructure contracts
         run: npm test -w @open-inspect/pi-codemode-sandbox
 
+      # Separate from test-cp-integration so each --shard invocation remains
+      # exactly one half of the established suite instead of recursively
+      # launching this unsharded auxiliary-Worker lane.
+      - name: Run Pi Code Mode two-Worker integration tests
+        run: npm run test:integration:codemode -w @open-inspect/control-plane
+
   test-cp-integration:
     name: Test (control-plane integration ${{ matrix.shard }})
     runs-on: ubuntu-latest

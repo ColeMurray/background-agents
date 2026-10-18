@@ -40,3 +40,21 @@ test("the Code Mode sandbox is an isolated, private Worker", async () => {
     assert.equal(config[forbiddenKey], undefined);
   }
 });
+
+test("the real two-Worker lane does not replace integration sharding", async () => {
+  const [controlPlane, workflow] = await Promise.all([
+    read("packages/control-plane/package.json").then(JSON.parse),
+    read(".github/workflows/ci.yml"),
+  ]);
+
+  assert.equal(
+    controlPlane.scripts["test:integration"],
+    "vitest run --config vitest.integration.config.ts"
+  );
+  assert.match(
+    controlPlane.scripts["test:integration:codemode"],
+    /PI_CODEMODE_INTEGRATION=true vitest run/
+  );
+  assert.equal(workflow.split("Run Pi Code Mode two-Worker integration tests").length - 1, 1);
+  assert.match(workflow, /test:integration[^\n]+--shard=\$\{\{ matrix\.shard \}\}/);
+});

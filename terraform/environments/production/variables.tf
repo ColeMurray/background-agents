@@ -793,21 +793,27 @@ variable "pi_sandbox_execution_mode" {
   }
 }
 
-variable "pi_codemode_sandbox_migration_applied" {
-  description = "Record that the Pi Code Mode sandbox v1 class migration has been deployed so later versions omit it"
+variable "pi_codemode_mode" {
+  description = "Pi Durable Code Mode admission: off, or paid after accepting Durable Object duration billing"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "paid"], var.pi_codemode_mode)
+    error_message = "pi_codemode_mode must be 'off' or 'paid'."
+  }
+}
+
+variable "pi_codemode_paid_canary_verified" {
+  description = "Explicit proof that the migration, WASM execution, and effective CPU limit passed on a disposable paid Cloudflare account"
   type        = bool
   default     = false
 }
 
-variable "pi_codemode_sandbox_cpu_ms" {
-  description = "Optional paid-plan CPU limit for each Pi Code Mode sandbox invocation, in milliseconds"
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.pi_codemode_sandbox_cpu_ms == null || var.pi_codemode_sandbox_cpu_ms > 0
-    error_message = "pi_codemode_sandbox_cpu_ms must be null or greater than zero."
-  }
+variable "pi_codemode_sandbox_deployment_verified" {
+  description = "Explicit proof that the deployment-scoped Pi Code Mode sandbox was deployed by its dedicated Wrangler workflow"
+  type        = bool
+  default     = false
 }
 
 variable "sandbox_boot_timeout_ms" {

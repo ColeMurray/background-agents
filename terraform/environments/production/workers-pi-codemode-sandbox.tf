@@ -20,9 +20,11 @@ module "pi_codemode_sandbox_worker" {
     }
   }
 
-  # Keep this migration-only: provider issue #6852 rejects a version that both
-  # creates a class and binds that class before the version is deployed.
-  # The control plane's external binding lands only after this deployment.
+  # Keep this migration-only: provider issue #6852 reports failures around
+  # Durable Object migrations plus WASM and newly-created self-bindings. Local
+  # plans cannot establish live provider behavior, so paid admission separately
+  # requires the disposable-account canary. The control plane's external
+  # binding lands only after this deployment; this Worker has zero self-bindings.
   emit_durable_object_migration = !var.pi_codemode_sandbox_migration_applied
   migration_tag                 = "v1"
   new_sqlite_classes            = ["CodemodeSandbox"]

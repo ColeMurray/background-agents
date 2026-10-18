@@ -106,6 +106,7 @@ module "control_plane_worker" {
       PI_DURABLE_ENABLED            = { value = tostring(local.pi_durable_available) }
       PI_WORKSPACE_MODE             = { value = var.pi_workspace_mode }
       PI_SANDBOX_EXECUTION_MODE     = { value = var.pi_sandbox_execution_mode }
+      PI_CODE_MODE                  = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
@@ -232,6 +233,16 @@ module "control_plane_worker" {
     var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {},
     var.mcp_connection_binding_enabled ? { MCP_CONNECTION = { class_name = "McpConnectionDO" } } : {}
   )
+
+  # Terraform never owns this Worker. Add only after the protected Wrangler
+  # workflow's deployment and live verification succeed; retain while admission
+  # is off so latched sessions can replay, abort, and delete during rollback.
+  external_durable_objects = var.pi_codemode_sandbox_deployment_verified ? {
+    CODEMODE_SANDBOX = {
+      class_name  = "CodemodeSandbox"
+      script_name = "open-inspect-pi-codemode-sandbox-${local.name_suffix}"
+    }
+  } : {}
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
 

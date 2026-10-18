@@ -325,6 +325,10 @@ sandbox_provider = "modal"
 # publishing. Keep off unless you explicitly accept Cloudflare Computer's
 # preview status. Each Pi session snapshots this capability on first open.
 # pi_workspace_mode = "off"
+# Native Pi Durable Code Mode is separately billed by Cloudflare. Deploy the
+# sandbox migration first, then opt in explicitly with "paid".
+# pi_codemode_mode = "off"
+# pi_codemode_paid_canary_verified = false
 
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
