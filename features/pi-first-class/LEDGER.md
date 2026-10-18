@@ -98,7 +98,7 @@ Rule: tick only with evidence on the same line.
 - [x] Narrow and full relevant validation green — 4,824 control-plane unit tests, 15 PiSessionDO
       workerd tests, 4 workspace Terraform tests, 44 docs tests, docs build, root typecheck, lint,
       format, Terraform validate/fmt, and Worker bundle boundary
-- [ ] Committed
+- [x] Committed — `a31f6099`, `c015abd1`, `08e7b712`
 - [x] Slice report — `features/pi-first-class/SLICE-3.md`
 
 ### Slice 4: Pi Durable Code Mode integration
@@ -188,10 +188,10 @@ Rule: tick only with evidence on the same line.
 
 ## Done / skipped on purpose / left
 
-| Requirement                   | Status             | Evidence or reason                                             |
-| ----------------------------- | ------------------ | -------------------------------------------------------------- |
-| Pi durable runtime foundation | Done in base       | PR #2431, base `d1ffd951`                                      |
-| Writable workspace            | Implemented        | Slice 3; final audit/validation pending                        |
-| Durable Code Mode             | Left               | Slices 1 and 4                                                 |
-| MCP/OAuth                     | Left               | Slices 6 and 7; requires guarded restore support in Agents SDK |
-| Native Linux builds           | Skipped by default | Explicit linked sandbox escalation only                        |
+| Requirement                   | Status             | Evidence or reason                                              |
+| ----------------------------- | ------------------ | --------------------------------------------------------------- |
+| Pi durable runtime foundation | Done in base       | PR #2431, base `d1ffd951`                                       |
+| Writable workspace            | Done               | Slice 3; implementation, policy, audit, and validation complete |
+| Durable Code Mode             | Left               | Slices 1 and 4                                                  |
+| MCP/OAuth                     | Left               | Slices 6 and 7; requires guarded restore support in Agents SDK  |
+| Native Linux builds           | Skipped by default | Explicit linked sandbox escalation only                         |
