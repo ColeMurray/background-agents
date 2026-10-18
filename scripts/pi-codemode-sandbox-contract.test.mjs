@@ -69,6 +69,25 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /operation:/);
   assert.match(workflow, /scripts\/deploy-pi-codemode-sandbox\.sh/);
+  assert.match(workflow, /environment:\s*production/);
+  assert.match(workflow, /github\.ref/);
+  assert.match(workflow, /refs\/heads\/main/);
+  const guard = workflow.indexOf("Guard reviewed default branch");
+  const validation = workflow.indexOf("Validate sandbox bundle and ownership contracts");
+  const token = workflow.indexOf("CLOUDFLARE_API_TOKEN");
+  const deployment = workflow.indexOf("Deploy or roll back with Wrangler");
+  assert.ok(guard >= 0 && guard < validation, "the main-branch guard must run before validation");
+  assert.ok(
+    validation < deployment && deployment < token,
+    "secrets must be scoped after validation"
+  );
+  assert.doesNotMatch(workflow.slice(0, deployment), /secrets\.|CLOUDFLARE_API_TOKEN/);
+  const tokenLines = workflow.split("\n").filter((line) => line.includes("CLOUDFLARE_API_TOKEN"));
+  assert.equal(tokenLines.length, 1);
+  assert.match(
+    tokenLines[0],
+    /^\s+CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}$/
+  );
   assert.match(deployScript, /open-inspect-pi-codemode-sandbox-\$\{deployment_name\}/);
   assert.match(deployScript, /wrangler.*deploy/);
   assert.match(deployScript, /wrangler.*rollback/);
@@ -79,6 +98,25 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
     ownership,
     /removed\s*\{[\s\S]*from\s*=\s*module\.pi_codemode_sandbox_worker[\s\S]*destroy\s*=\s*false/
   );
+});
+
+test("the runbook uses explicit Wrangler verification and protects preview-state transfer", async () => {
+  const [gettingStarted, evidence] = await Promise.all([
+    read("docs/GETTING_STARTED.md"),
+    read("docs/templates/PI_CODEMODE_SANDBOX_CANARY.md"),
+  ]);
+
+  assert.doesNotMatch(gettingStarted, /pi_codemode_sandbox_migration_applied/);
+  assert.doesNotMatch(gettingStarted, /detects the deployed sandbox version/i);
+  assert.match(gettingStarted, /PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true/);
+  const transfer = gettingStarted.indexOf("Preview-state ownership transfer");
+  const requiredFlag = gettingStarted.indexOf(
+    "PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true",
+    transfer
+  );
+  const firstApply = gettingStarted.indexOf("first Terraform apply", transfer);
+  assert.ok(transfer >= 0 && requiredFlag > transfer && firstApply > requiredFlag);
+  assert.match(evidence, /PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true/);
 });
 
 test("the owner script renders deterministic fresh, upgrade, and rollback commands", async () => {

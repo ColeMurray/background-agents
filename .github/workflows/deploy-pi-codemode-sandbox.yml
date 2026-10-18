@@ -30,8 +30,18 @@ jobs:
   deploy:
     name: Wrangler-owned sandbox ${{ inputs.operation }}
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 10
     steps:
+      - name: Guard reviewed default branch
+        env:
+          REVIEWED_WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          if [[ "$REVIEWED_WORKFLOW_REF" != "refs/heads/main" ]]; then
+            echo "Sandbox deployment requires reviewed workflow code from refs/heads/main" >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
