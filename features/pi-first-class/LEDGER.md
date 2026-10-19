@@ -153,8 +153,9 @@ Rule: tick only with evidence on the same line.
 - [x] Remote sandbox/runtime contract — portable `RemoteCodemodeSandbox`; external DO binding only
 - [x] Native `createCodemodeExtension()` integration — canonical capability snapshot, `code_mode`
       slot/effects, composite policy delegate, and Pi Durable-native call/execute recovery boundary
-- [ ] Nested event projection remains part of Slice 5; replay, abort, fingerprint, and close are
-      covered here by native SQLite replay tests and the compiled two-Worker restart lane
+- [x] Nested event projection completed in go-live Slice 5; Code Mode and nested calls project under
+      the canonical SessionDO operation with model-written source redacted. Replay, abort,
+      fingerprint, and close remain covered by native SQLite and compiled two-Worker lanes
 - [x] Deep audit — architecture and sandbox watchdog corrections incorporated; live provider proof
       remains an explicit canary blocker
 - [x] `/simplify` — canonical capability snapshot, assembler slot/effects, and composite policy only

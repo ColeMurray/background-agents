@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { verifyPiCodemodeAttestation } from "./attest-pi-codemode-sandbox.mjs";
 
 const execFileAsync = promisify(execFile);
 const repositoryDirectory = fileURLToPath(new URL("../", import.meta.url));
@@ -19,10 +20,11 @@ function parseJsonc(text) {
 }
 
 test("the Code Mode sandbox is an isolated, private Worker", async () => {
-  const [source, config, packageJson] = await Promise.all([
+  const [source, config, packageJson, manifestScript] = await Promise.all([
     read("packages/pi-codemode-sandbox/src/index.ts"),
     read("packages/pi-codemode-sandbox/wrangler.jsonc").then(parseJsonc),
     read("packages/pi-codemode-sandbox/package.json").then(JSON.parse),
+    read("packages/pi-codemode-sandbox/scripts/artifact-manifest.mjs"),
   ]);
 
   assert.match(
@@ -33,6 +35,10 @@ test("the Code Mode sandbox is an isolated, private Worker", async () => {
   assert.match(source, /new Response\("Not found", \{ status: 404 \}\)/);
   assert.equal(packageJson.dependencies["@earendil-works/pi-codemode"], "1.3.0");
   assert.match(packageJson.scripts.build, /wrangler deploy --dry-run --outdir dist/);
+  assert.match(packageJson.scripts.build, /artifact-manifest\.mjs/);
+  assert.match(packageJson.scripts["verify:artifact"], /--verify/);
+  assert.match(manifestScript, /\[\s*\{ path: "index\.js"/);
+  assert.match(manifestScript, /\{ path: "quickjs\.wasm"/);
 
   assert.equal(config.workers_dev, false);
   assert.equal(config.preview_urls, false);
@@ -59,8 +65,9 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
       terraformFiles.map((name) => readFile(new URL(name, terraformDirectory), "utf8"))
     )
   ).join("\n");
-  const [workflow, terraform, ownership, deployScript] = await Promise.all([
+  const [workflow, terraformWorkflow, terraform, ownership, deployScript] = await Promise.all([
     read(".github/workflows/deploy-pi-codemode-sandbox.yml"),
+    read(".github/workflows/terraform.yml"),
     read("terraform/environments/production/workers-control-plane.tf"),
     read("terraform/environments/production/moved.tf"),
     read("scripts/deploy-pi-codemode-sandbox.sh"),
@@ -82,14 +89,25 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
   assert.match(workflow, /actions\/checkout@[0-9a-f]{40} # v7/);
   assert.match(workflow, /actions\/setup-node@[0-9a-f]{40} # v7/);
   assert.doesNotMatch(workflow, /uses:\s+[^\s]+@v\d+\s*$/m);
+  assert.doesNotMatch(terraformWorkflow, /uses:\s+[^\s]+@v\d+\s*$/m);
+  for (const privilegedWorkflow of [workflow, terraformWorkflow]) {
+    for (const line of privilegedWorkflow.split("\n").filter((value) => /uses:/.test(value))) {
+      assert.match(line, /uses:\s+[^\s]+@[0-9a-f]{40}(?:\s+#\s+v\d+)?$/);
+    }
+    assert.match(
+      privilegedWorkflow,
+      /group:\s+production-infrastructure-\$\{\{ vars\.DEPLOYMENT_NAME \|\| github\.repository \}\}/
+    );
+  }
   const guard = workflow.indexOf("Guard reviewed default branch");
   const validation = workflow.indexOf("Validate sandbox bundle and ownership contracts");
+  const artifact = workflow.indexOf("Preserve exact sandbox artifact evidence");
   const token = workflow.indexOf("CLOUDFLARE_API_TOKEN");
   const deployment = workflow.indexOf("Deploy or roll back with Wrangler");
   assert.ok(guard >= 0 && guard < validation, "the main-branch guard must run before validation");
   assert.ok(
-    validation < deployment && deployment < token,
-    "secrets must be scoped after validation"
+    validation < artifact && artifact < deployment && deployment < token,
+    "the exact artifact must be preserved before deployment secrets are scoped"
   );
   assert.doesNotMatch(workflow.slice(0, deployment), /secrets\.|CLOUDFLARE_API_TOKEN/);
   const tokenLines = workflow.split("\n").filter((line) => line.includes("CLOUDFLARE_API_TOKEN"));
@@ -100,6 +118,9 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
   );
   assert.match(deployScript, /open-inspect-pi-codemode-sandbox-\$\{deployment_name\}/);
   assert.match(deployScript, /wrangler.*deploy/);
+  assert.match(deployScript, /artifact-manifest\.mjs" --verify/);
+  assert.match(deployScript, /--no-bundle/);
+  assert.match(deployScript, /artifact-sha256=\$artifact_sha256/);
   assert.match(deployScript, /wrangler.*rollback/);
   assert.doesNotMatch(terraform, /module "pi_codemode_sandbox_worker"/);
   assert.doesNotMatch(terraformRoot, /module "pi_codemode_sandbox_worker"/);
@@ -108,6 +129,91 @@ test("Wrangler is the sole production owner of the deployment-scoped sandbox", a
     ownership,
     /removed\s*\{[\s\S]*from\s*=\s*module\.pi_codemode_sandbox_worker[\s\S]*destroy\s*=\s*false/
   );
+});
+
+test("the canary attests one exact private Cloudflare version and canonical runtime path", () => {
+  const digest = "a".repeat(64);
+  const manifest = {
+    version: 1,
+    artifactSha256: digest,
+    modules: [
+      {
+        path: "index.js",
+        contentType: "application/javascript+module",
+        bytes: 10,
+        sha256: "b".repeat(64),
+      },
+      { path: "quickjs.wasm", contentType: "application/wasm", bytes: 20, sha256: "c".repeat(64) },
+    ],
+  };
+  const observation = {
+    versionId: "version-1",
+    deploymentVersions: [{ versionId: "version-1", percentage: 100 }],
+    deploymentMessage: `Open-Inspect Pi Code Mode artifact-sha256=${digest}`,
+    etag: "cloudflare-etag",
+    cpuMs: 60_000,
+    migrationTag: "v1",
+    exports: {
+      CodemodeSandbox: { type: "durable-object", storage: "sqlite", state: "created" },
+    },
+    bindings: [],
+    routes: [],
+    customDomains: [],
+    schedules: [],
+    secrets: [],
+    workersDev: false,
+    previewUrls: false,
+    runtime: {
+      sessionId: "session-1",
+      operationId: "message-1",
+      boundedScript: "passed",
+      nestedAuthorizedRead: "passed",
+      abort: "passed",
+      directPiAccess: false,
+      timelineEventIds: ["tool-1", "nested-1", "abort-1"],
+    },
+  };
+
+  assert.deepEqual(verifyPiCodemodeAttestation(manifest, observation), {
+    artifactSha256: digest,
+    modules: manifest.modules.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 })),
+    versionId: "version-1",
+    etag: "cloudflare-etag",
+    sessionId: "session-1",
+    operationId: "message-1",
+  });
+  assert.throws(
+    () =>
+      verifyPiCodemodeAttestation(manifest, {
+        ...observation,
+        deploymentVersions: [{ versionId: "version-1", percentage: 99 }],
+      }),
+    /not one version at 100%/
+  );
+  assert.throws(
+    () => verifyPiCodemodeAttestation(manifest, { ...observation, routes: [{ pattern: "*" }] }),
+    /routes must be empty/
+  );
+  assert.throws(
+    () =>
+      verifyPiCodemodeAttestation(manifest, {
+        ...observation,
+        runtime: { ...observation.runtime, transcript: "must not be recorded" },
+      }),
+    /canonical SessionDO path/
+  );
+});
+
+test("the attestation canary is read-only and never deploys", async () => {
+  const source = await read("scripts/attest-pi-codemode-sandbox.mjs");
+  assert.doesNotMatch(source, /wrangler|method:\s*["'](?:POST|PUT|PATCH|DELETE)/i);
+  assert.match(source, /\/deployments/);
+  assert.match(source, /\/versions\//);
+  assert.match(source, /\/subdomain/);
+  assert.match(source, /\/secrets/);
+  assert.match(source, /\/workers\/domains/);
+  assert.match(source, /\/workers\/routes/);
+  assert.match(source, /\/schedules/);
 });
 
 test("the runbook uses explicit Wrangler verification and protects preview-state transfer", async () => {
@@ -154,9 +260,12 @@ test("the owner script renders deterministic fresh, upgrade, and rollback comman
       env,
     });
     const deploy = (await readFile(log, "utf8")).trim().split("\n");
-    assert.deepEqual(deploy.slice(0, 2), ["deploy", "--config"]);
+    assert.equal(deploy[0], "deploy");
+    assert.match(deploy[1], /packages\/pi-codemode-sandbox\/dist\/index\.js$/);
     assert.ok(deploy.includes("open-inspect-pi-codemode-sandbox-canary-7"));
+    assert.ok(deploy.includes("--no-bundle"));
     assert.ok(deploy.includes("--strict"));
+    assert.ok(deploy.some((value) => value.includes("artifact-sha256=")));
 
     await execFileAsync(
       "bash",

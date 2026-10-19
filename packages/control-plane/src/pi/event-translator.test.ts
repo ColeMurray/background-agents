@@ -474,4 +474,52 @@ describe("translatePiEvents", () => {
       }),
     ]);
   });
+
+  it("projects Code Mode and nested activity under one canonical SessionDO operation", () => {
+    const translated = translatePiEvents(
+      [
+        {
+          type: "tool_execution_start",
+          toolCallId: "codemode-1",
+          toolName: "codemode",
+          args: {
+            code: "const sensitiveScriptSource = true; return await tools.read({ path: 'README.md' });",
+          },
+          taskId: 10,
+        },
+        {
+          type: "tool_execution_start",
+          toolCallId: "read-1",
+          parentToolCallId: "codemode-1",
+          toolName: "read",
+          args: { path: "README.md" },
+          taskId: 11,
+          parentTaskId: 10,
+        },
+      ] as unknown as AgentEvent[],
+      { text: "" },
+      { sessionId: "session-1", operationId: "message-1", timestamp: 140 }
+    );
+
+    expect(translated).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        tool: "codemode",
+        callId: "codemode-1",
+        args: { code: "[redacted]" },
+        messageId: "message-1",
+        sandboxId: "pi:session-1",
+      }),
+      expect.objectContaining({
+        type: "tool_call",
+        tool: "read",
+        callId: "read-1",
+        messageId: "message-1",
+        sandboxId: "pi:session-1",
+        isSubtask: true,
+        taskCallId: "codemode-1",
+      }),
+    ]);
+    expect(JSON.stringify(translated)).not.toContain("sensitiveScriptSource");
+  });
 });

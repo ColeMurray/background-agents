@@ -53,7 +53,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform-${{ github.ref }}
+  group: production-infrastructure-${{ vars.DEPLOYMENT_NAME || github.repository }}
   cancel-in-progress: false # Don't cancel terraform operations
 
 env:
@@ -103,10 +103,10 @@ jobs:
       cloudflare-worker-test: ${{ steps.cloudflare_worker_test.outcome }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -157,10 +157,10 @@ jobs:
       outcome: ${{ steps.plan.outcome }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -177,7 +177,7 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
           # Capture output as a file, not the wrapper's multiline step outputs.
@@ -374,7 +374,7 @@ jobs:
 
       - name: Upload Plan Comment
         if: steps.prepare_comment.conclusion == 'success'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: terraform-plan-comment
           path: ${{ env.TF_WORKING_DIR }}/plan_comment.txt
@@ -396,7 +396,7 @@ jobs:
     # No checkout or execution of PR code. Artifacts are read only as comment data.
     steps:
       - name: Post Validation Results
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           HAS_SECRETS: ${{ needs.check-secrets.outputs.has-secrets }}
           CHECK_SECRETS_RESULT: ${{ needs.check-secrets.result }}
@@ -459,14 +459,14 @@ jobs:
 
       - name: Download Plan Comment
         if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: terraform-plan-comment
           path: ${{ runner.temp }}/terraform-plan-comment
 
       - name: Post Plan Results
         if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           PLAN_COMMENT_PATH: ${{ runner.temp }}/terraform-plan-comment/plan_comment.txt
         with:
@@ -497,10 +497,10 @@ jobs:
     environment: production
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -517,14 +517,14 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
       - name: Install Modal and Python dependencies
         run: uv sync --frozen
         working-directory: packages/modal-infra
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 

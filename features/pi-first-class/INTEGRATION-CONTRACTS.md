@@ -52,11 +52,14 @@ Deployment flags therefore admit extensions only for new sessions. Current deplo
 consulted before every new scratch mutation, repository mutation, and top-level Code Mode call. That
 emergency deny blocks the effect without uninstalling the latched extension or its
 status/cancel/revoke/replay implementation. A durably admitted Code Mode replay remains operable. Pi
-Durable's own tool checkpoint is the sole recovery authority: recovery still in `call` reruns
-current policy, while recovery after the durable `execute` intent follows the native replay rule and
-bypasses `beforeTool`. There is no separate Code Mode admission memo. Broad caller/effect denial
-runs before feature delegates, and feature allow memos are written only after every delegate allows.
-An `off` capability contributes no extension, tool, or effect declaration. Any enabled contribution
+Durable's own tool checkpoint remains the recovery boundary: recovery still in `call` reruns current
+policy, while recovery after the durable `execute` intent follows the native replay rule and
+bypasses `beforeTool`. Code Mode records a task-bound absolute deadline before its session-wide
+queue and a separate admission memo only after the queued call rechecks current deployment
+authority. Execute- phase replay consumes that memo without admitting new work. Nested authority
+matches both the authoritative parent task ID and call identity. Broad caller/effect denial runs
+before feature delegates, and feature allow memos are written only after every delegate allows. An
+`off` capability contributes no extension, tool, or effect declaration. Any enabled contribution
 with tools requires the composite policy; mutation and sandbox-execution contributions are rejected
 without it. Every live emergency-policy lookup combines the tool abort signal with the single named
 lookup timeout and fails closed.

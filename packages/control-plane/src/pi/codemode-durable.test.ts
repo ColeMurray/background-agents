@@ -57,7 +57,15 @@ function registryWith(
 ) {
   const registry = createRegistry();
   const readExtension = defineExtension({ name: "test.read", tools: [read] });
-  const codeModePolicy = createPiCodeModePolicyState();
+  const resolveAdmission = async (signal: AbortSignal | undefined) =>
+    typeof admission === "boolean" ? admission : await admission(signal);
+  const codeModePolicy = createPiCodeModePolicyState({
+    authorizeStart: async (signal) => {
+      if (!(await resolveAdmission(signal))) {
+        throw new Error("Code Mode is disabled for new calls by deployment policy");
+      }
+    },
+  });
   const codeMode = createOpenInspectCodemodeExtension(sandbox, codeModePolicy);
   const assembly = assemblePiExtensions(
     [
@@ -69,7 +77,7 @@ function registryWith(
             effects,
             [createPiCodeModePolicyDelegate(codeModePolicy)],
             createPiDeploymentEmergencyPolicy(async (signal) => {
-              const admit = typeof admission === "boolean" ? admission : await admission(signal);
+              const admit = await resolveAdmission(signal);
               return resolvePiFeatureCapabilities({ codeMode: admit ? "enabled" : "off" });
             })
           ),

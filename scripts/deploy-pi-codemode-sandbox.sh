@@ -26,6 +26,7 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 config="$repo_root/packages/pi-codemode-sandbox/wrangler.jsonc"
+artifact_dir="$repo_root/packages/pi-codemode-sandbox/dist"
 if [[ -n "${WRANGLER_BIN:-}" ]]; then
   wrangler=("$WRANGLER_BIN")
 else
@@ -34,13 +35,17 @@ fi
 
 case "$operation" in
   deploy)
+    artifact_sha256="$(node "$repo_root/packages/pi-codemode-sandbox/scripts/artifact-manifest.mjs" --verify)"
     # Wrangler owns the script, version, WASM module, and v1 class migration in
-    # one direct Workers Script deployment. Terraform must never deploy it.
-    "${wrangler[@]}" deploy \
+    # one direct Workers Script deployment. The workflow builds once; this
+    # command deploys those exact bytes without rebundling. Terraform must
+    # never deploy it.
+    "${wrangler[@]}" deploy "$artifact_dir/index.js" \
       --config "$config" \
       --name "$worker_name" \
+      --no-bundle \
       --strict \
-      --message "Open-Inspect Pi Code Mode sandbox"
+      --message "Open-Inspect Pi Code Mode artifact-sha256=$artifact_sha256"
     ;;
   rollback)
     if [[ -z "$rollback_version" ]]; then

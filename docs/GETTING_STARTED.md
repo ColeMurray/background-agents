@@ -1543,9 +1543,10 @@ already-open session keeps its PiSessionDO snapshot.
 For emergency rollback, lower the relevant mode and apply Terraform. New scratch and repository
 mutations consult current deployment policy on every invocation and are denied immediately, while
 reads continue. A top-level Code Mode recovery still in Pi Durable's `call` phase reruns current
-policy and can be denied. Recovery after Pi Durable committed its native `execute` intent follows
-the native replay contract without a second Open-Inspect admission memo. Policy lookups are bounded
-and cancel with the tool, so cancellation and deletion do not wait on a hung SessionDO call. Keep
+policy and can be denied. Before first execution, Open-Inspect records task-bound deadline and
+admission memos. Recovery after Pi Durable committed its native `execute` intent follows the native
+replay contract using that admission instead of admitting new work. Policy lookups are bounded and
+cancel with the tool, so cancellation and deletion do not wait on a hung SessionDO call. Keep
 `PI_SESSION` and any required external bindings installed while admission is off; removing them
 strands existing sessions. Delete a session only when its workspace and conversation should be
 destroyed deliberately.
@@ -1556,7 +1557,14 @@ replay-safe read tools and default-denies unknown, unsafe-replay, mutation, sand
 control effects. The native extension occupies the canonical `code_mode` slot and uses
 `PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS`. Model-powered globals remain registered for native replay
 compatibility, but their unsafe nested calls are denied. QuickJS WASM never enters the control-plane
-bundle.
+bundle. Parent `taskId` plus parent call identity, rather than a globally reusable call string,
+authorizes nested reads. One abort-aware FIFO serializes Code Mode across every conversation in the
+session. Its persisted absolute deadline includes queue time, defaults to 60 seconds, and is clamped
+to five minutes. Session deletion rejects queued work and drains the active host invocation.
+
+Code Mode produces no public transcript or parallel activity store. Its top-level and nested tool
+events use the existing Pi event projector and therefore appear only under the canonical SessionDO
+message/operation and shared timeline.
 
 Cloudflare bills each execution as a Durable Object request and bills the sandbox for wall-clock
 duration, including time waiting on tools.
@@ -1583,15 +1591,22 @@ external binding must remain available for latched-session replay:
    Code Mode Worker, version, WASM upload, or migration.
 2. Dispatch **Deploy Pi Code Mode Sandbox** with operation `deploy` and confirm the exact
    `open-inspect-pi-codemode-sandbox-<DEPLOYMENT_NAME>` name. Wrangler uploads the private Worker,
-   QuickJS WASM, fixed 60000 ms CPU limit, and `CodemodeSandbox` v1 SQLite migration. The job uses
-   the protected `production` environment and fails unless the reviewed workflow runs from `main`;
-   Cloudflare credentials are scoped only to the final deploy/rollback step after validation.
+   QuickJS WASM, fixed 60000 ms CPU limit, and `CodemodeSandbox` v1 SQLite migration. The workflow
+   builds once, records exact JS/WASM SHA-256 hashes, preserves that immutable artifact, and deploys
+   those bytes with bundling disabled. The job uses the protected `production` environment and fails
+   unless the reviewed workflow runs from `main`; Cloudflare credentials are scoped only to the
+   final deploy/rollback step after validation.
 3. Record the deployed version ID as `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, complete the deployment
    portion of `docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`, then set
    `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true` and run Terraform to add only the retained
    external `CODEMODE_SANDBOX` binding. Keep admission off.
-4. Run the paid runtime canary against that exact version. After it passes, set
-   `PI_CODEMODE_PAID_CANARY_VERSION` to the same version ID,
+4. Run the paid runtime canary through an ordinary authorized SessionDO prompt. Save bounded-script,
+   nested-read, abort, and canonical timeline IDs in a credential-free runtime evidence JSON file.
+   Run `scripts/attest-pi-codemode-sandbox.mjs` with the artifact manifest, runtime evidence, exact
+   version, Worker name, and all managed zone IDs. The read-only script verifies one version at 100%
+   traffic, the artifact digest annotation, Cloudflare etag, CPU/migration/export, and absence of
+   bindings, routes, custom domains, secrets, workers.dev, and previews. It never deploys. After it
+   passes, set `PI_CODEMODE_PAID_CANARY_VERSION` to the same version ID,
    `PI_CODEMODE_PAID_CANARY_VERIFIED=true`, and `PI_CODEMODE_MODE=paid`, then apply Terraform. The
    hard Terraform gate refuses admission when the two version IDs differ.
 
@@ -1601,9 +1616,9 @@ external binding must remain available for latched-session replay:
    Terraform while retaining the external binding. The deployment workflow refuses a deploy or
    rollback while paid admission or the old canary approval remains active.
 2. Dispatch the Wrangler workflow with operation `deploy`; Terraform never adopts its version.
-3. Set `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION` to the new version ID. Repeat the WASM, CPU,
-   execution, abort, and replay checks, then set `PI_CODEMODE_PAID_CANARY_VERSION` to that same ID
-   before restoring paid admission.
+3. Set `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION` to the new version ID. Repeat exact artifact,
+   Cloudflare attestation, execution, nested-read, abort, replay, and canonical-timeline checks,
+   then set `PI_CODEMODE_PAID_CANARY_VERSION` to that same ID before restoring paid admission.
 
 Provider issues [#6852](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6852) and
 [#6404](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6404) remain live canary
@@ -1616,11 +1631,11 @@ Set `PI_CODEMODE_MODE=off` and apply Terraform first. Keep
 `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. A
 recovering top-level Code Mode task still in Pi Durable's `call` phase reruns current policy and is
 denied. A task that already committed Pi Durable's `execute` checkpoint follows the native replay
-contract without rerunning `beforeTool`. To roll back the Worker version, dispatch the dedicated
-workflow with operation `rollback` and an exact known-good version ID. Never delete or import the
-Wrangler-owned Worker through Terraform during normal rollback. Before restoring paid admission, set
-both version variables to the rollback target and ensure the recorded canary evidence covers that
-exact version.
+contract using its durable admission memo without rerunning `beforeTool`. To roll back the Worker
+version, dispatch the dedicated workflow with operation `rollback` and an exact known-good version
+ID. Never delete or import the Wrangler-owned Worker through Terraform during normal rollback.
+Before restoring paid admission, set both version variables to the rollback target and ensure the
+recorded canary evidence covers that exact version.
 
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi

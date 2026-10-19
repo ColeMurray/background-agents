@@ -102,7 +102,21 @@ describe("PiSessionDO native Code Mode", () => {
       };
     });
 
-    expect(agent.modelTools).toEqual(["subagent", "read", "ls", "find", "grep", "codemode"]);
+    expect(agent.modelTools).toEqual([
+      "subagent",
+      "list_agents",
+      "send_agent_message",
+      "get_last_message",
+      "follow_up_agent",
+      "steer_agent",
+      "cancel_agent",
+      "inspect_agents",
+      "read",
+      "ls",
+      "find",
+      "grep",
+      "codemode",
+    ]);
     expect(agent.callableTools).toEqual([
       "read",
       "ls",
@@ -189,7 +203,7 @@ describe("PiSessionDO native Code Mode", () => {
       interruptedReadStarted = resolve;
     });
 
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
       if (!(instance instanceof PiSessionDO)) throw new Error("Expected PiSessionDO instance");
       const internals = instance as unknown as PiSessionInternals;
       await instance.status(sessionName);
@@ -228,6 +242,14 @@ describe("PiSessionDO native Code Mode", () => {
       ]);
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
       await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      await state.storage.put("open-inspect:operation:remote-restart", {
+        model: "openai/gpt-5.6-sol",
+        baseline: {
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUsd: 0,
+        },
+        projectedCostUsd: 0,
+      });
       await root.submit(
         { type: "input", content: "read after restart", requestId: "remote-restart" },
         BACKGROUND_CONTEXT

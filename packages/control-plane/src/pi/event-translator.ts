@@ -345,6 +345,7 @@ function toolEvent(
 }
 
 function redactToolArguments(tool: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (tool === "codemode") return { code: REDACTED };
   if (tool === "write" && "content" in args) {
     return { path: args.path, content: REDACTED };
   }

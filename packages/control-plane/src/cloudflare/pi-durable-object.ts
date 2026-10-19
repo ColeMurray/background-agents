@@ -100,6 +100,7 @@ import {
 } from "@open-inspect/shared";
 import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
 import {
+  PiCodeModeExecutionCoordinator,
   createOpenInspectCodemodeExtension,
   createPiCodeModePolicyDelegate,
   createPiCodeModePolicyState,
@@ -168,6 +169,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly registry = createRegistry();
   private workspace: WorkspaceToolFacade | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
+  private codeModeCoordinator: PiCodeModeExecutionCoordinator | undefined;
   private rawWorkspace: Workspace | undefined;
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
   private repositoryWorkspaceInitialization: Promise<PiRepositoryWorkspace> | undefined;
@@ -201,12 +203,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       if (!snapshot) throw new Error("Pi Durable capability authority is not initialized");
       const { capabilities } = snapshot;
       const sessionContext = await this.fetchSessionContext("bootstrap");
-      const codeModePolicy = createPiCodeModePolicyState();
+      const currentCapabilities = async (signal?: AbortSignal) =>
+        (await this.fetchCapabilityAuthorityForStoredSession(signal)).current.capabilities;
+      const codeModeCoordinator = new PiCodeModeExecutionCoordinator();
+      this.codeModeCoordinator = codeModeCoordinator;
+      const codeModePolicy = createPiCodeModePolicyState({
+        coordinator: codeModeCoordinator,
+        authorizeStart: async (signal) => {
+          if ((await currentCapabilities(signal)).codeMode !== "enabled") {
+            throw new Error("Code Mode is disabled for new calls by deployment policy");
+          }
+        },
+      });
       const codeModePolicyDelegate = createPiCodeModePolicyDelegate(codeModePolicy);
-      const emergencyPolicy = createPiDeploymentEmergencyPolicy(
-        async (signal) =>
-          (await this.fetchCapabilityAuthorityForStoredSession(signal)).current.capabilities
-      );
+      const emergencyPolicy = createPiDeploymentEmergencyPolicy(currentCapabilities);
       const core = createOpenInspectExtension({
         repositories: sessionContext.repositories,
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
@@ -988,7 +998,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       this.repositoryWorkspaceAbort.abort(new Error("Pi Durable session was deleted"));
       if (this.harnessOpened) await this.harness.dispose();
       this.harnessOpened = false;
+      const codeModeDrain = this.codeModeCoordinator?.close(
+        new Error("Pi Durable session was deleted")
+      );
       await this.codemodeSandbox?.close();
+      await codeModeDrain;
+      this.codeModeCoordinator = undefined;
       this.codemodeSandbox = undefined;
       await this.rawWorkspace?.close();
       this.workspace = undefined;

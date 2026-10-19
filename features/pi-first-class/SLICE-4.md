@@ -31,10 +31,11 @@ limit, and migration. Terraform creates none of them; after explicit live verifi
 only the retained external binding. Provider issues #6852 and #6404 remain open, so local
 plan/workerd evidence is not live deployment proof. Rollback changes admission to `off` while
 retaining `PI_SESSION`, the Worker, class, external binding, and installed extension. Fresh calls
-are denied while they remain in Pi Durable's `call` phase. Recovery after Pi Durable has committed
-its native `execute` intent bypasses `beforeTool` and follows the native replay contract; no
-Open-Inspect Code Mode admission memo exists. Worker-version rollback also runs only through
-Wrangler.
+are denied while they remain in Pi Durable's `call` phase. Go-live Slice 5 adds a task-bound
+deadline before the session queue and records admission only after the queued call's current-policy
+recheck. Recovery after Pi Durable has committed its native `execute` intent bypasses `beforeTool`,
+consumes that admission, and follows the native replay contract. Worker-version rollback also runs
+only through Wrangler.
 
 ## Evidence
 
