@@ -101,6 +101,10 @@ export class SessionSnapshotReader {
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
       executionBackend: session.harness === "pi" ? "durable" : "sandbox",
+      piFeatureCapabilities:
+        session.harness === "pi"
+          ? this.deps.sessionCoreRepository.getPiFeatureCapabilitySnapshot()
+          : null,
       sandboxPreservation: this.deps.getShutdown?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,

@@ -945,6 +945,17 @@ describe("PiSessionDO", () => {
           },
         });
       });
+      const piStored = await runInDurableObject(stub, (_instance, state) => {
+        const tables = state.storage.sql
+          .exec<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'"
+          )
+          .toArray();
+        return tables.flatMap(({ name }) =>
+          state.storage.sql.exec(`SELECT * FROM "${name.replaceAll('"', '""')}"`).toArray()
+        );
+      });
+      expect(JSON.stringify(piStored)).not.toContain("fake-access-token");
       const before = await runInDurableObject(stub, (_instance, state) =>
         state.storage.sql
           .exec<{ cost_usd: number; captured_at: number }>(

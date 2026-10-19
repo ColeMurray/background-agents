@@ -1,5 +1,6 @@
 import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
+import { piFeatureCapabilitySnapshotSchema } from "../pi-feature-capabilities";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";
@@ -35,6 +36,7 @@ const sessionStateSchema = z.object({
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
   executionBackend: z.enum(["sandbox", "durable"]).optional(),
+  piFeatureCapabilities: piFeatureCapabilitySnapshotSchema.nullable().optional(),
   sandboxPreservation: sandboxShutdownSchema.nullable().optional(),
   messageCount: z.number(),
   createdAt: z.number(),

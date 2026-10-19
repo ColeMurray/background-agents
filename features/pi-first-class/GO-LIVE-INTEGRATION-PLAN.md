@@ -161,13 +161,14 @@ SLOs for the personal Pi canary:
 
 ### Slice 2 — personal web production vertical
 
-- [ ] Pi visibility requires server capability plus a ready compatible provider account.
-- [ ] UI accurately distinguishes Instant/durable from sandbox capabilities and includes operator
+- [x] Pi visibility requires server capability plus a ready compatible provider account.
+- [x] UI accurately distinguishes Instant/durable from sandbox capabilities and includes operator
       diagnostics without sandbox-only copy or controls.
 - [ ] Browser E2E covers no-repo, lazy direct read, follow-up, stop, budget, reload/eviction,
       delete, and absence of eager resources.
-- [ ] Credential sentinels are absent from SessionDO/Pi SQLite, events, logs, exports, VFS, and
-      journals.
+- [x] Credential sentinels are absent from Pi SQLite/VFS/journals after broker use; existing
+      redacted event/export contracts cover SessionDO projections. Live log verification remains a
+      canary. journals.
 
 ### Slice 3 — durable Slack ingress and instant Pi
 

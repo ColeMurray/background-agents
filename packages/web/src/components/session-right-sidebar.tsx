@@ -38,6 +38,7 @@ import {
   type SessionInspectorTab,
 } from "@/hooks/use-session-inspector-tab";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useDeploymentCapabilities } from "@/hooks/use-deployment-capabilities";
 import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 import type { SessionScopeControls } from "@/lib/session-scope";
@@ -147,6 +148,7 @@ export function SessionRightSidebarContent({
     [sessionState?.ttydUrl, sessionState?.ttydToken]
   );
   const isDurable = sessionState?.executionBackend === "durable";
+  const deploymentCapabilities = useDeploymentCapabilities();
   const hasRepository = Boolean(
     sessionState?.repositories?.length ||
     (sessionState?.repoOwner && sessionState.repoName) ||
@@ -385,6 +387,32 @@ export function SessionRightSidebarContent({
               />
             )}
             <ManagedSkillsSection sessionId={sessionState.id} />
+            {sessionState.harness === "pi" && (
+              <DetailsSection title="Pi runtime diagnostics">
+                <dl className="space-y-2 text-xs">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted-foreground">Execution</dt>
+                    <dd>Instant · Durable Object</dd>
+                  </div>
+                  {Object.entries(sessionState.piFeatureCapabilities?.capabilities ?? {}).map(
+                    ([capability, mode]) => (
+                      <div key={capability} className="flex justify-between gap-3">
+                        <dt className="text-muted-foreground">{capability}</dt>
+                        <dd className="font-mono">{mode}</dd>
+                      </div>
+                    )
+                  )}
+                  {deploymentCapabilities.data && (
+                    <div className="border-t border-border-muted pt-2 font-mono text-muted-foreground">
+                      Pi {deploymentCapabilities.data.runtimeVersions.piDurable} · Agents{" "}
+                      {deploymentCapabilities.data.runtimeVersions.piHarness} · Computer{" "}
+                      {deploymentCapabilities.data.runtimeVersions.computer} · Code Mode{" "}
+                      {deploymentCapabilities.data.runtimeVersions.codeMode}
+                    </div>
+                  )}
+                </dl>
+              </DetailsSection>
+            )}
             <MemoriesSection sessionId={sessionState.id} />
             {(!presenceSynced || participants.length > 0) && (
               <DetailsSection title="Participants">
@@ -447,7 +475,7 @@ export function SessionRightSidebarContent({
             {!sessionState
               ? "Loading workspace tools…"
               : isDurable
-                ? "Pi Durable runs without sandbox workspace tools."
+                ? "Pi tools are capability-gated and appear in the timeline when used. No sandbox is running."
                 : !capabilities.sandboxAccess
                   ? "Sandbox access is not available with your permissions."
                   : "Sandbox tools will appear here when available."}
