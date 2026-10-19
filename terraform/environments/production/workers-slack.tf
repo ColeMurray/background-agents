@@ -17,13 +17,13 @@ resource "cloudflare_queue" "slack_completion_delivery_dlq" {
 }
 
 resource "cloudflare_queue" "slack_ingress" {
-  count      = var.enable_slack_bot && var.pi_slack_durable_ingress_enabled ? 1 : 0
+  count      = var.enable_slack_bot ? 1 : 0
   account_id = var.cloudflare_account_id
   queue_name = "open-inspect-slack-ingress-${local.name_suffix}"
   settings   = { message_retention_period = 86400 }
 }
 resource "cloudflare_queue" "slack_ingress_dlq" {
-  count      = var.enable_slack_bot && var.pi_slack_durable_ingress_enabled ? 1 : 0
+  count      = var.enable_slack_bot ? 1 : 0
   account_id = var.cloudflare_account_id
   queue_name = "open-inspect-slack-ingress-dlq-${local.name_suffix}"
   settings   = { message_retention_period = 1209600 }
@@ -68,7 +68,10 @@ module "slack_bot_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
-  queue_bindings = merge({ SLACK_COMPLETION_QUEUE = { queue_name = cloudflare_queue.slack_completion_delivery[0].queue_name } }, var.pi_slack_durable_ingress_enabled ? { SLACK_INGRESS_QUEUE = { queue_name = cloudflare_queue.slack_ingress[0].queue_name } } : {})
+  queue_bindings = {
+    SLACK_COMPLETION_QUEUE = { queue_name = cloudflare_queue.slack_completion_delivery[0].queue_name }
+    SLACK_INGRESS_QUEUE    = { queue_name = cloudflare_queue.slack_ingress[0].queue_name }
+  }
 
   plain_text_bindings = merge(
     {
@@ -100,7 +103,7 @@ module "slack_bot_worker" {
 }
 
 resource "cloudflare_queue_consumer" "slack_ingress" {
-  count             = var.enable_slack_bot && var.pi_slack_durable_ingress_enabled ? 1 : 0
+  count             = var.enable_slack_bot ? 1 : 0
   account_id        = var.cloudflare_account_id
   queue_id          = cloudflare_queue.slack_ingress[0].queue_id
   type              = "worker"
@@ -110,7 +113,7 @@ resource "cloudflare_queue_consumer" "slack_ingress" {
   depends_on        = [module.slack_bot_worker]
 }
 resource "cloudflare_queue_consumer" "slack_ingress_dlq" {
-  count       = var.enable_slack_bot && var.pi_slack_durable_ingress_enabled ? 1 : 0
+  count       = var.enable_slack_bot ? 1 : 0
   account_id  = var.cloudflare_account_id
   queue_id    = cloudflare_queue.slack_ingress_dlq[0].queue_id
   type        = "worker"

@@ -24,6 +24,7 @@ export interface SlackIngressRow {
   received_at: number;
   updated_at: number;
   terminal_at: number | null;
+  thread_mapping_json?: string | null;
 }
 const TERMINAL = new Set(["completed", "failed"]);
 export class SlackIngressStore {
@@ -113,24 +114,26 @@ export class SlackIngressStore {
     next: string,
     sessionId: string | undefined,
     errorCode: string | undefined,
+    threadMapping: Record<string, unknown> | undefined,
     now: number
   ) {
     if (TERMINAL.has(expected)) return null;
     const allowed: Record<string, readonly string[]> = {
       processing: ["admitted", "session_created", "completed", "failed"],
-      session_created: ["prompt_queued", "failed"],
-      prompt_queued: ["completed", "failed"],
+      session_created: ["admitted", "prompt_queued", "failed"],
+      prompt_queued: ["admitted", "completed", "failed"],
     };
     if (!allowed[expected]?.includes(next)) return null;
     const releasesLease = next === "admitted" || TERMINAL.has(next);
     return this.db
       .prepare(
-        `UPDATE slack_ingress_receipts SET state=?,session_id=COALESCE(?,session_id),last_error_code=?,lease_owner=CASE WHEN ? IS NULL THEN lease_owner ELSE NULL END,lease_expires_at=CASE WHEN ? IS NULL THEN lease_expires_at ELSE NULL END,updated_at=?,terminal_at=?
+        `UPDATE slack_ingress_receipts SET state=?,session_id=COALESCE(?,session_id),thread_mapping_json=COALESCE(?,thread_mapping_json),last_error_code=?,lease_owner=CASE WHEN ? IS NULL THEN lease_owner ELSE NULL END,lease_expires_at=CASE WHEN ? IS NULL THEN lease_expires_at ELSE NULL END,updated_at=?,terminal_at=?
       WHERE id=? AND state=? AND lease_owner=? RETURNING *`
       )
       .bind(
         next,
         sessionId ?? null,
+        threadMapping === undefined ? null : JSON.stringify(threadMapping),
         errorCode ?? null,
         releasesLease ? now : null,
         releasesLease ? now : null,
@@ -140,6 +143,14 @@ export class SlackIngressStore {
         expected,
         owner
       )
+      .first<SlackIngressRow>();
+  }
+  async findThread(channelId: string, threadTs: string) {
+    return this.db
+      .prepare(
+        "SELECT * FROM slack_ingress_receipts WHERE channel_id=? AND thread_ts=? AND thread_mapping_json IS NOT NULL AND state='completed' ORDER BY updated_at DESC LIMIT 1"
+      )
+      .bind(channelId, threadTs)
       .first<SlackIngressRow>();
   }
   async reconcile(now: number) {

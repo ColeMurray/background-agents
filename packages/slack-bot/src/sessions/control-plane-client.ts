@@ -69,6 +69,7 @@ interface CreateSessionOptions {
   slackUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
+  ingress?: { receiptId: string; sessionId: string };
 }
 
 export type SendPromptResult =
@@ -135,6 +136,7 @@ export async function createSession(
     slackUserId,
     actorDisplayName,
     actorEmail,
+    ingress,
   } = options;
   const startTime = Date.now();
   const base = {
@@ -156,6 +158,7 @@ export async function createSession(
       reasoningEffort,
       actorDisplayName,
       actorEmail,
+      ingress,
     });
     const response = await signedControlPlaneFetch(
       env,
@@ -224,6 +227,7 @@ export interface SendPromptOptions {
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
+  clientRequestId?: string;
 }
 
 export async function sendPrompt(
@@ -240,6 +244,7 @@ export async function sendPrompt(
     callbackContext,
     attachments,
     traceId,
+    clientRequestId,
   } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
@@ -252,6 +257,7 @@ export async function sendPrompt(
       model,
       reasoningEffort,
       callbackContext,
+      clientRequestId,
       ...(attachments?.length ? { attachments } : {}),
     });
     const response = await signedControlPlaneFetch(

@@ -36,8 +36,8 @@ variables {
 run "durable_ingress_defaults_off" {
   command = plan
   assert {
-    condition     = length(cloudflare_queue.slack_ingress) == 0 && !contains(module.slack_bot_worker[0].binding_names, "SLACK_INGRESS_QUEUE") && module.slack_bot_worker[0].plain_text_bindings["PI_SLACK_DURABLE_INGRESS_ENABLED"] == "false"
-    error_message = "durable Slack ingress must default off"
+    condition     = length(cloudflare_queue.slack_ingress) == 1 && contains(module.slack_bot_worker[0].binding_names, "SLACK_INGRESS_QUEUE") && module.slack_bot_worker[0].plain_text_bindings["PI_SLACK_DURABLE_INGRESS_ENABLED"] == "false"
+    error_message = "durable Slack ingress admission must default off while retaining recovery infrastructure"
   }
 }
 run "durable_ingress_opt_in_wires_queue" {

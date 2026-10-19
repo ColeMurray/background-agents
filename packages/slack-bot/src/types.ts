@@ -72,6 +72,14 @@ export interface ThreadContext {
   threadTs?: string;
   previousMessages?: string[];
 }
+export interface SlackIngressExecution {
+  receiptId: string;
+  leaseOwner: string;
+  stableSessionId: string;
+  stableMessageId: string;
+  state: string;
+  sessionId?: string | null;
+}
 
 /**
  * Result of target classification. Unlike the shared repo-only

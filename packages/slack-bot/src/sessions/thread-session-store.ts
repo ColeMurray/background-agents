@@ -5,6 +5,7 @@ import { harnessIdSchema, type HarnessId } from "@open-inspect/shared/harnesses"
 import { createLogger } from "../logger";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env, ThreadSession } from "../types";
+import { lookupSlackIngressThread } from "../ingress-authority";
 
 const log = createLogger("handler");
 export const THREAD_CLOSED_MESSAGE = "this session is no longer available from this channel";
@@ -61,7 +62,13 @@ export async function lookupThreadSession(
       getThreadSessionKey(channel, threadTs),
       "json"
     );
-    const result = threadSessionSchema.safeParse(data);
+    let result = threadSessionSchema.safeParse(data);
+    if (!result.success && env.PI_SLACK_DURABLE_INGRESS_ENABLED?.trim().toLowerCase() === "true") {
+      const receipt = await lookupSlackIngressThread(env, channel, threadTs).catch(() => null);
+      const raw = receipt?.thread_mapping_json;
+      result = threadSessionSchema.safeParse(typeof raw === "string" ? JSON.parse(raw) : null);
+      if (result.success) await storeThreadSession(env, channel, threadTs, result.data);
+    }
     if (!result.success) return null;
     const session = result.data;
     if (!session.closed && (await hasThreadClosure(env, channel, threadTs, session.sessionId))) {

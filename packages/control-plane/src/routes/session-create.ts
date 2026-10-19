@@ -30,6 +30,7 @@ import { createSessionMemorySelector } from "../memory/session-memory-selector-f
 import type { Env } from "../types";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
+import { SlackIngressStore } from "../db/slack-ingress";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 import { resolveCreationOwnerTeam, teamRequiredResponse } from "./team-ownership";
 import {
@@ -83,6 +84,20 @@ export async function handleCreateSession(
   const parsed = await parseCreateSessionInput(request);
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
+  if (body.ingress) {
+    const principal = ctx.principal;
+    if (principal?.kind !== "service" || principal.service !== "slack-bot")
+      return error("Ingress identity is service-only", 403);
+    const receipt = await new SlackIngressStore(ctx.db).get(body.ingress.receiptId);
+    if (
+      !receipt ||
+      receipt.source !== "slack" ||
+      receipt.stable_session_id !== body.ingress.sessionId ||
+      receipt.state === "completed" ||
+      receipt.state === "failed"
+    )
+      return error("Invalid Slack ingress receipt", 409);
+  }
   const harness = getValidHarnessOrDefault(body.harness);
   const repositoryResolutionOptions = {
     checkoutLayout: harness === "pi" ? ("position" as const) : ("name" as const),
@@ -273,7 +288,7 @@ export async function handleCreateSession(
     environmentId
   );
 
-  const sessionId = generateId();
+  const sessionId = body.ingress?.sessionId ?? generateId();
   let providerAuth;
   try {
     providerAuth = await resolveSessionProviderAuth(ctx.db, {
@@ -343,6 +358,7 @@ export async function handleCreateSession(
     spawnSource,
     managedSkills: resolvedPin(managedSkillsManifest),
     providerAuth,
+    ingressReceiptId: body.ingress?.receiptId,
   };
 
   try {

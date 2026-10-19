@@ -46,6 +46,7 @@ describe("SlackIngressStore", () => {
         "session_created",
         "s1",
         undefined,
+        undefined,
         3_003
       )
     ).toBeNull();
@@ -57,6 +58,7 @@ describe("SlackIngressStore", () => {
           "processing",
           "session_created",
           "s1",
+          undefined,
           undefined,
           3_003
         )
@@ -71,10 +73,18 @@ describe("SlackIngressStore", () => {
           "prompt_queued",
           undefined,
           undefined,
+          {
+            sessionId: "s1",
+            repoId: "none",
+            repoFullName: "No repository",
+            model: "openai/gpt",
+            createdAt: 1,
+          },
           3_004
         )
       )?.state
     ).toBe("prompt_queued");
+    expect(await store.findThread("C1", "1.2")).toBeNull();
     expect(
       (
         await store.transition(
@@ -84,10 +94,14 @@ describe("SlackIngressStore", () => {
           "completed",
           undefined,
           undefined,
+          undefined,
           3_005
         )
       )?.state
     ).toBe("completed");
+    expect((await store.findThread("C1", "1.2"))?.thread_mapping_json).toContain(
+      '"sessionId":"s1"'
+    );
     expect(await store.cleanup(3_006)).toBe(1);
   });
   it("has one winner under concurrent claims and refuses work past its deadline", async () => {

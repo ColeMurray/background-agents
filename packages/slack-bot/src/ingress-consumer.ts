@@ -58,16 +58,26 @@ export async function processSlackIngressJob(
         );
       }
     }
-    await handleSlackEvent(payload, env, job.eventId, (promise) => background.push(promise));
+    await handleSlackEvent(payload, env, job.eventId, (promise) => background.push(promise), {
+      receiptId: job.receiptId,
+      leaseOwner,
+      stableSessionId: receipt.stable_session_id,
+      stableMessageId: receipt.stable_message_id,
+      state: receipt.state,
+      sessionId: receipt.session_id,
+    });
     await Promise.allSettled(background);
-    await transitionSlackIngress(env, job.receiptId, leaseOwner, "processing", "completed");
+    const latest = await getSlackIngress(env, job.receiptId);
+    if (latest.state === "processing")
+      await transitionSlackIngress(env, job.receiptId, leaseOwner, "processing", "completed");
     return "processed";
   } catch (error) {
+    const latest = await getSlackIngress(env, job.receiptId).catch(() => receipt);
     await transitionSlackIngress(
       env,
       job.receiptId,
       leaseOwner,
-      "processing",
+      latest.state,
       terminalFailure ? "failed" : "admitted",
       "dispatch_failed"
     ).catch(() => false);

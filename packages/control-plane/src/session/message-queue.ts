@@ -1250,7 +1250,10 @@ export class SessionMessageQueue {
       this.attachmentRepository
     );
     const attachments = resolvedAttachments?.attachments;
-    const messageId = generateId();
+    const messageId =
+      data.source === "slack" && data.clientRequestId?.startsWith("slack-message-")
+        ? data.clientRequestId
+        : generateId();
     const now = Date.now();
 
     let messageModel: string | null = null;

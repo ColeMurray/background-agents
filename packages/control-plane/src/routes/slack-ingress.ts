@@ -67,9 +67,21 @@ slackIngressRoutes.post("/internal/slack-ingress/:id/transition", admit(POLICY),
       v.state,
       v.sessionId,
       v.errorCode,
+      v.threadMapping,
       Date.now()
     );
     return receipt ? json({ receipt }) : json({ error: "Transition conflict" }, 409);
+  })
+);
+slackIngressRoutes.get("/internal/slack-ingress-thread", admit(POLICY), (c) =>
+  dispatch(c, async (request, _env, _p, ctx) => {
+    if (!slackOnly(ctx)) return json({ error: "Forbidden" }, 403);
+    const url = new URL(request.url);
+    const channelId = url.searchParams.get("channelId");
+    const threadTs = url.searchParams.get("threadTs");
+    if (!channelId || !threadTs) return json({ error: "Invalid thread coordinates" }, 400);
+    const receipt = await new SlackIngressStore(ctx.db).findThread(channelId, threadTs);
+    return receipt ? json({ receipt }) : json({ error: "Not found" }, 404);
   })
 );
 slackIngressRoutes.get("/internal/slack-ingress/:id", admit(POLICY), (c) =>

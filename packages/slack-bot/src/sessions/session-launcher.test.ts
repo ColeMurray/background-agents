@@ -12,6 +12,7 @@ import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import type * as ThreadSessionStoreModule from "./thread-session-store";
 import { startSessionAndSendPrompt, type SlackLaunchSettings } from "./session-launcher";
+import { transitionSlackIngress } from "../ingress-authority";
 
 vi.mock("@open-inspect/shared/slack", async (importOriginal) => ({
   ...(await importOriginal<typeof SlackModule>()),
@@ -29,6 +30,7 @@ vi.mock("../branch-preferences", async (importOriginal) => ({
 }));
 vi.mock("./control-plane-client", () => ({ createSession: vi.fn() }));
 vi.mock("./prompt-delivery", () => ({ deliverPrompt: vi.fn() }));
+vi.mock("../ingress-authority", () => ({ transitionSlackIngress: vi.fn() }));
 vi.mock("./thread-session-store", async (importOriginal) => {
   const actual = await importOriginal<typeof ThreadSessionStoreModule>();
   return {
@@ -90,6 +92,7 @@ describe("startSessionAndSendPrompt team boundaries", () => {
     vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
     vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
     vi.mocked(postMessage).mockResolvedValue({ ok: true, channel: "C123", ts: "111.333" });
+    vi.mocked(transitionSlackIngress).mockResolvedValue(true);
   });
 
   it("starts repository-backed Pi sessions through the control plane", async () => {
@@ -112,6 +115,39 @@ describe("startSessionAndSendPrompt team boundaries", () => {
       expect.objectContaining({ target: repositoryTarget, harness: "pi" })
     );
     expect(deliverPrompt).toHaveBeenCalled();
+  });
+
+  it("persists durable session and mapping stages around one stable prompt", async () => {
+    vi.mocked(createSession).mockResolvedValueOnce({
+      sessionId: "slack-session-1",
+      status: "created",
+    });
+    const env = makeEnv();
+    const ingress = {
+      receiptId: "r1",
+      leaseOwner: "w1",
+      stableSessionId: "slack-session-1",
+      stableMessageId: "slack-message-1",
+      state: "processing",
+      sessionId: null,
+    };
+    await expect(startSessionAndSendPrompt(env, { ...options, ingress })).resolves.toMatchObject({
+      sessionId: "slack-session-1",
+    });
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ ingress: { receiptId: "r1", sessionId: "slack-session-1" } })
+    );
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({ clientRequestId: "slack-message-1" })
+    );
+    expect(vi.mocked(transitionSlackIngress).mock.calls.map((call) => [call[3], call[4]])).toEqual([
+      ["processing", "session_created"],
+      ["session_created", "prompt_queued"],
+      ["prompt_queued", "completed"],
+    ]);
+    expect(storeThreadSession).toHaveBeenCalledOnce();
   });
 
   it.each([

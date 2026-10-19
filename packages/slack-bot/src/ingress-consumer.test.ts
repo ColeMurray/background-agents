@@ -4,12 +4,13 @@ const mocks = vi.hoisted(() => ({
   transition: vi.fn(),
   dispatch: vi.fn(),
   activity: vi.fn(),
+  get: vi.fn(),
 }));
 vi.mock("./ingress-authority", async (importOriginal) => ({
   ...(await importOriginal()),
   claimSlackIngress: mocks.claim,
   transitionSlackIngress: mocks.transition,
-  getSlackIngress: vi.fn(),
+  getSlackIngress: mocks.get,
 }));
 vi.mock("./events/dispatcher", () => ({ handleSlackEvent: mocks.dispatch }));
 vi.mock("./activity-status", () => ({ setAssistantThreadStatusBestEffort: mocks.activity }));
@@ -24,7 +25,16 @@ const payload = JSON.stringify({
 describe("durable Slack ingress consumer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.claim.mockResolvedValue({ id: "r1", state: "processing", payload_json: payload });
+    const receipt = {
+      id: "r1",
+      state: "processing",
+      payload_json: payload,
+      stable_session_id: "s1",
+      stable_message_id: "m1",
+      session_id: null,
+    };
+    mocks.claim.mockResolvedValue(receipt);
+    mocks.get.mockResolvedValue(receipt);
     mocks.transition.mockResolvedValue(true);
     mocks.dispatch.mockResolvedValue(undefined);
     mocks.activity.mockResolvedValue(undefined);

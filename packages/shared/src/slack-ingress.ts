@@ -49,5 +49,6 @@ export const slackIngressTransitionSchema = z.strictObject({
   state: slackIngressStateSchema,
   sessionId: z.string().min(1).max(128).optional(),
   errorCode: z.string().min(1).max(128).optional(),
+  threadMapping: z.record(z.string(), z.unknown()).optional(),
 });
 export type SlackIngressAdmit = z.infer<typeof slackIngressAdmitSchema>;

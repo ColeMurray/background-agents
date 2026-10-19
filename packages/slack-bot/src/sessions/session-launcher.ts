@@ -17,7 +17,8 @@ import {
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
-import type { Env } from "../types";
+import type { Env, SlackIngressExecution } from "../types";
+import { transitionSlackIngress } from "../ingress-authority";
 import type { SlackActorIdentity } from "../user-identity";
 import {
   getAuthoritativeUserPreferences,
@@ -110,6 +111,7 @@ export interface StartSessionOptions {
   launchPlan?: SessionLaunchPlan;
   launchSettings?: SlackLaunchSettings;
   traceId?: string;
+  ingress?: SlackIngressExecution;
 }
 
 /** What the session was actually created with, for the acknowledgement. */
@@ -141,6 +143,7 @@ export async function startSessionAndSendPrompt(
     launchPlan,
     launchSettings: providedLaunchSettings,
     traceId,
+    ingress,
   } = options;
   // Download image bytes before creating the session: an image-only request
   // whose images are all lost must never create a session it will not prompt.
@@ -220,6 +223,22 @@ export async function startSessionAndSendPrompt(
     branch = repoBranch ?? userPrefs.branch;
   }
 
+  if (ingress?.state === "processing") {
+    if (
+      !(await transitionSlackIngress(
+        env,
+        ingress.receiptId,
+        ingress.leaseOwner,
+        "processing",
+        "session_created",
+        undefined,
+        ingress.stableSessionId
+      ))
+    )
+      throw new Error("Slack ingress session reservation conflict");
+    ingress.state = "session_created";
+    ingress.sessionId = ingress.stableSessionId;
+  }
   const session = await createSession(env, {
     target,
     teamId,
@@ -231,8 +250,22 @@ export async function startSessionAndSendPrompt(
     slackUserId: actor.userId,
     actorDisplayName: actor.displayName,
     actorEmail: actor.email,
+    ...(ingress
+      ? { ingress: { receiptId: ingress.receiptId, sessionId: ingress.stableSessionId } }
+      : {}),
   });
   if (!session || "error" in session) {
+    if (ingress) {
+      await transitionSlackIngress(
+        env,
+        ingress.receiptId,
+        ingress.leaseOwner,
+        ingress.state,
+        "admitted",
+        "session_create_retry"
+      ).catch(() => false);
+      throw new Error("Durable Slack session creation is retryable");
+    }
     const failure = session?.error;
     let message = "Sorry, I couldn't create a session. Please try again.";
     if (
@@ -251,6 +284,8 @@ export async function startSessionAndSendPrompt(
     await postMessage(env.SLACK_BOT_TOKEN, channel, message, { thread_ts: threadTs });
     return null;
   }
+  if (ingress && session.sessionId !== ingress.stableSessionId)
+    throw new Error("Slack ingress session identity mismatch");
 
   const callbackContext: CallbackContext = {
     source: "slack",
@@ -259,12 +294,38 @@ export async function startSessionAndSendPrompt(
     repoFullName: targetLabel(target),
     model,
     reasoningEffort,
+    ...(ingress ? { ingressReceiptId: ingress.receiptId } : {}),
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
   let content = channelContext + threadContext + messageText;
   if (slackConfig.sessionInstructions) {
     content += `\n\n## Additional Instructions\n\n${slackConfig.sessionInstructions}`;
+  }
+  const mapping = buildThreadSession(
+    session.sessionId,
+    target,
+    model,
+    reasoningEffort,
+    messageTs,
+    teamId,
+    harness
+  );
+  if (ingress?.state === "session_created") {
+    if (
+      !(await transitionSlackIngress(
+        env,
+        ingress.receiptId,
+        ingress.leaseOwner,
+        "session_created",
+        "prompt_queued",
+        undefined,
+        session.sessionId,
+        mapping as unknown as Record<string, unknown>
+      ))
+    )
+      throw new Error("Slack ingress prompt transition conflict");
+    ingress.state = "prompt_queued";
   }
   const delivery = await deliverPrompt(env, {
     sessionId: session.sessionId,
@@ -276,8 +337,20 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     traceId,
+    clientRequestId: ingress?.stableMessageId,
   });
   if (!delivery.ok) {
+    if (ingress) {
+      await transitionSlackIngress(
+        env,
+        ingress.receiptId,
+        ingress.leaseOwner,
+        ingress.state,
+        "admitted",
+        "prompt_retry"
+      ).catch(() => false);
+      throw new Error("Durable Slack prompt delivery is retryable");
+    }
     // "no_images_delivered" already told the user nothing ran; the other
     // failures deserve an explicit retry hint against the created session.
     if (delivery.reason !== "no_images_delivered") {
@@ -290,19 +363,19 @@ export async function startSessionAndSendPrompt(
     }
     return null;
   }
-  await storeThreadSession(
-    env,
-    channel,
-    threadTs,
-    buildThreadSession(
-      session.sessionId,
-      target,
-      model,
-      reasoningEffort,
-      messageTs,
-      teamId,
-      harness
+  await storeThreadSession(env, channel, threadTs, mapping);
+  if (ingress) {
+    if (
+      !(await transitionSlackIngress(
+        env,
+        ingress.receiptId,
+        ingress.leaseOwner,
+        "prompt_queued",
+        "completed"
+      ))
     )
-  );
+      throw new Error("Slack ingress completion conflict");
+    ingress.state = "completed";
+  }
   return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
 }

@@ -45,6 +45,7 @@ export const slackCallbackContextSchema = z.object({
    * control plane knows which automation (if any) owns the thread.
    */
   automationId: z.string().optional(),
+  ingressReceiptId: z.string().min(1).max(128).optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
@@ -154,6 +155,7 @@ export const sendPromptRequestSchema = z
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
     callbackContext: z.unknown().optional(),
+    clientRequestId: z.string().min(1).max(128).optional(),
   })
   .refine(
     (prompt) =>
@@ -303,6 +305,12 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    ingress: z
+      .strictObject({
+        receiptId: z.string().min(1).max(128),
+        sessionId: z.string().min(1).max(128),
+      })
+      .optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

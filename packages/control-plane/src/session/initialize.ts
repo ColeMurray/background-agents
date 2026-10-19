@@ -91,6 +91,7 @@ export interface SessionInitInput {
   managedSkills: Pinned<SessionSkillManifestInput>;
   /** Complete, immutable provider routing snapshot resolved by the caller. */
   providerAuth: SessionModelProviderAuthInput[];
+  ingressReceiptId?: string;
 }
 
 /**
@@ -174,41 +175,56 @@ export async function initializeSession(
   if (input.visibility === "private" && !input.platformUserId) {
     throw new Error("Private sessions require a canonical owner");
   }
-  await sessionStore.create({
-    id: input.sessionId,
-    title: input.title || null,
-    repoOwner: input.repoOwner,
-    repoName: input.repoName,
-    harness: input.harness,
-    model: input.model,
-    reasoningEffort: input.reasoningEffort,
-    baseBranch,
-    repositories,
-    environmentId: input.environmentId ?? null,
-    status: "created",
-    parentSessionId: input.parentSessionId,
-    spawnSource: input.spawnSource,
-    spawnDepth: input.spawnDepth,
-    automationId: input.automationId,
-    automationRunId: input.automationRunId,
-    scmLogin: input.scmLogin || null,
-    userId: input.platformUserId,
-    ownerTeamId: input.ownerTeamId,
-    visibility: input.visibility,
-    collaboratorSourceSessionId: input.collaboratorSourceSessionId,
-    privateCreationActor:
-      input.visibility === "private" && input.platformUserId
-        ? {
-            requestId: ctx.request_id,
-            actorUserId: input.platformUserId,
-          }
-        : undefined,
-    createdAt: now,
-    updatedAt: now,
-    memory: input.memory,
-    managedSkills: input.managedSkills,
-    providerAuth: input.providerAuth,
-  });
+  const existingSession = input.ingressReceiptId ? await sessionStore.get(input.sessionId) : null;
+  if (
+    existingSession &&
+    (existingSession.userId !== input.platformUserId ||
+      existingSession.ownerTeamId !== input.ownerTeamId ||
+      existingSession.harness !== input.harness ||
+      existingSession.model !== input.model ||
+      existingSession.reasoningEffort !== input.reasoningEffort ||
+      existingSession.repoOwner !== input.repoOwner ||
+      existingSession.repoName !== input.repoName ||
+      existingSession.baseBranch !== baseBranch ||
+      existingSession.visibility !== input.visibility)
+  )
+    throw new Error("Session initialization identity mismatch");
+  if (!existingSession)
+    await sessionStore.create({
+      id: input.sessionId,
+      title: input.title || null,
+      repoOwner: input.repoOwner,
+      repoName: input.repoName,
+      harness: input.harness,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      baseBranch,
+      repositories,
+      environmentId: input.environmentId ?? null,
+      status: "created",
+      parentSessionId: input.parentSessionId,
+      spawnSource: input.spawnSource,
+      spawnDepth: input.spawnDepth,
+      automationId: input.automationId,
+      automationRunId: input.automationRunId,
+      scmLogin: input.scmLogin || null,
+      userId: input.platformUserId,
+      ownerTeamId: input.ownerTeamId,
+      visibility: input.visibility,
+      collaboratorSourceSessionId: input.collaboratorSourceSessionId,
+      privateCreationActor:
+        input.visibility === "private" && input.platformUserId
+          ? {
+              requestId: ctx.request_id,
+              actorUserId: input.platformUserId,
+            }
+          : undefined,
+      createdAt: now,
+      updatedAt: now,
+      memory: input.memory,
+      managedSkills: input.managedSkills,
+      providerAuth: input.providerAuth,
+    });
 
   // Step 2: runtime init
   let initResponse: Response;
@@ -263,6 +279,8 @@ export async function initializeSession(
     });
     throw new Error(`Failed to initialize session DO: ${initResponse.status}`);
   }
+  if (existingSession?.status === "failed")
+    await sessionStore.updateStatus(input.sessionId, "created");
 
   return { sessionId: input.sessionId, status: "created" };
 }

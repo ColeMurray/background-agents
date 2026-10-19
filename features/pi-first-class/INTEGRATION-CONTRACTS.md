@@ -65,6 +65,7 @@ Import `@open-inspect/shared/pi-migration-reservations`. The reserved versions a
 | D1        |    0090 | external actions  | long-lived external action authority |
 | D1        |    0091 | MCP               | long-lived MCP authority             |
 | D1        |    0092 | Slack ingress     | durable bot ingress receipts         |
+| D1        |    0095 | Slack ingress     | durable thread mapping projection    |
 
 Do not renumber another feature into these slots. D1 filenames retain the four-digit prefix. Feature
 branches import the exported `PI_*_MIGRATION_*` constant rather than repeating a number. Reserved
