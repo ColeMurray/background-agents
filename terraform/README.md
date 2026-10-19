@@ -265,6 +265,7 @@ GH_APP_INSTALLATION_ID
 
 # Slack
 ENABLE_SLACK_BOT # Optional; defaults to true
+PI_SLACK_DURABLE_INGRESS_ENABLED # Optional; defaults to false until the canary passes
 SLACK_BOT_TOKEN
 SLACK_SIGNING_SECRET
 

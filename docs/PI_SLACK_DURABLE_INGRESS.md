@@ -22,7 +22,9 @@ and recovery outcome only. It never contains event bodies, prompts, tool output,
 
 1. Apply D1 migrations 0092 and 0095 while the feature remains off.
 2. Enable `pi_slack_durable_ingress_enabled` for one personal Slack installation and apply
-   Terraform.
+   Terraform. In the production GitHub workflow, set the repository variable
+   `PI_SLACK_DURABLE_INGRESS_ENABLED=true`; leaving it unset safely supplies `false` to both plan
+   and apply.
 3. Mention the bot in one channel with a no-repository Pi request. Confirm ACK under 500 ms and the
    activity indicator under one second.
 4. Redeliver the same Slack event ID. Confirm one session, one first message, one mapping, and one

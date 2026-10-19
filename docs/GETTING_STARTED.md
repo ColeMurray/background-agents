@@ -1050,6 +1050,7 @@ Set these in `terraform.tfvars`, then run `terraform apply` from
 
 ```hcl
 enable_slack_bot                 = true
+pi_slack_durable_ingress_enabled = false # Enable only after the durable-ingress canary
 slack_bot_token                  = "xoxb-..."
 slack_signing_secret             = "your-signing-secret"
 classification_anthropic_api_key = "sk-ant-..." # Classifier-only; or set anthropic_api_key
@@ -1425,6 +1426,7 @@ Secrets for credentials:
 | `GH_APP_PRIVATE_KEY`                      | Required GitHub App repository-access private key (PKCS#8 format)                               |
 | `GH_APP_INSTALLATION_ID`                  | Required GitHub App repository-access installation ID                                           |
 | `ENABLE_SLACK_BOT`                        | `true` to deploy Slack bot, `false` to skip (default: `true`)                                   |
+| `PI_SLACK_DURABLE_INGRESS_ENABLED`        | `true` enables D1 + Queue Slack ingress after its canary; defaults to `false`                   |
 | `SLACK_BOT_TOKEN`                         | Slack bot token (required if enabled)                                                           |
 | `SLACK_SIGNING_SECRET`                    | Slack signing secret (required if enabled)                                                      |
 | `ENABLE_LINEAR_BOT`                       | `true` to deploy Linear bot, `false` to skip (default: `false`)                                 |

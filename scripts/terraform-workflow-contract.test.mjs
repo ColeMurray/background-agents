@@ -86,6 +86,13 @@ test("Every production Terraform variable reaches plan and apply", async () => {
   assert.deepEqual(missing, [], "each variable needs exactly one TF_VAR_ input per job");
 });
 
+test("Slack durable ingress reaches plan and apply with a safe default", () => {
+  assertInPlanAndApply(
+    "TF_VAR_pi_slack_durable_ingress_enabled: \"${{ vars.PI_SLACK_DURABLE_INGRESS_ENABLED || 'false' }}\"",
+    "Slack durable ingress safe default"
+  );
+});
+
 test("PiSessionDO migration is staged and guarded in plan and apply", () => {
   assertInPlanAndApply("pi_durable_binding_enabled", "Pi binding retention");
   assertInPlanAndApply('"control_plane_migration_tag":"v4"', "Pi migration tag");

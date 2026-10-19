@@ -290,6 +290,7 @@ jobs:
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ vars.GH_APP_INSTALLATION_ID || secrets.GH_APP_INSTALLATION_ID }}
           TF_VAR_enable_slack_bot: "${{ vars.ENABLE_SLACK_BOT || secrets.ENABLE_SLACK_BOT || 'true' }}"
+          TF_VAR_pi_slack_durable_ingress_enabled: "${{ vars.PI_SLACK_DURABLE_INGRESS_ENABLED || 'false' }}"
           TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
           TF_VAR_slack_bot_default_model: "${{ vars.SLACK_BOT_DEFAULT_MODEL || secrets.SLACK_BOT_DEFAULT_MODEL || 'claude-haiku-4-5' }}"
@@ -625,6 +626,7 @@ jobs:
           TF_VAR_github_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           TF_VAR_github_app_installation_id: ${{ vars.GH_APP_INSTALLATION_ID || secrets.GH_APP_INSTALLATION_ID }}
           TF_VAR_enable_slack_bot: "${{ vars.ENABLE_SLACK_BOT || secrets.ENABLE_SLACK_BOT || 'true' }}"
+          TF_VAR_pi_slack_durable_ingress_enabled: "${{ vars.PI_SLACK_DURABLE_INGRESS_ENABLED || 'false' }}"
           TF_VAR_slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           TF_VAR_slack_signing_secret: ${{ secrets.SLACK_SIGNING_SECRET }}
           TF_VAR_slack_bot_default_model: "${{ vars.SLACK_BOT_DEFAULT_MODEL || secrets.SLACK_BOT_DEFAULT_MODEL || 'claude-haiku-4-5' }}"

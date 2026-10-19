@@ -200,6 +200,8 @@ google_client_secret = ""
 # Set enable_slack_bot = false to skip deployment.
 
 enable_slack_bot = false
+# Keep durable D1 + Queue ingress off until its personal-workspace canary passes.
+pi_slack_durable_ingress_enabled = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
