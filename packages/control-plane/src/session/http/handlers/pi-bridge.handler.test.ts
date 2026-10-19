@@ -5,7 +5,13 @@ import { ExternalActionDefinitionRegistry } from "../../external-action-definiti
 import { SourceControlProviderError } from "../../../source-control";
 import type { PiPinnedRepository } from "../../../pi/repository-tools";
 
-function harness(options: { claimedBaseline?: boolean; activeControl?: boolean } = {}) {
+function harness(
+  options: {
+    claimedBaseline?: boolean;
+    activeControl?: boolean;
+    spawnSource?: "user" | "automation";
+  } = {}
+) {
   const fullSha = "a".repeat(40);
   const pin = vi.fn(async (): Promise<PiPinnedRepository[]> => []);
   const restore = vi.fn(() => [
@@ -42,10 +48,17 @@ function harness(options: { claimedBaseline?: boolean; activeControl?: boolean }
     nextOffset: null,
     files: [],
   }));
+  const agentControls = {
+    handle: vi.fn(async (_request: Request) => Response.json({ state: "completed" })),
+  };
   const handler = new PiBridgeHandler({
     sessions: {
       getSession: () =>
-        ({ harness: "pi", base_sha: options.claimedBaseline ? fullSha : null }) as never,
+        ({
+          harness: "pi",
+          base_sha: options.claimedBaseline ? fullSha : null,
+          spawn_source: options.spawnSource ?? "user",
+        }) as never,
       getSessionRepositories: () =>
         [
           {
@@ -59,6 +72,7 @@ function harness(options: { claimedBaseline?: boolean; activeControl?: boolean }
     },
     messages: { getProcessingMessage: () => null },
     controls: { isActiveOperation: () => options.activeControl === true },
+    agentControls,
     credentials: {
       getOpenAIAccess: vi.fn(async () => ({
         accessToken: "secret-token",
@@ -86,6 +100,7 @@ function harness(options: { claimedBaseline?: boolean; activeControl?: boolean }
     prepareMaterialization,
     materializeBatch,
     fullSha,
+    agentControls,
   };
 }
 
@@ -98,6 +113,46 @@ it("recognizes an accepted native control as active bridge authority", async () 
   );
   expect(response.status).toBe(200);
   expect(response.headers.get("Cache-Control")).toBe("no-store");
+});
+
+it("routes bounded same-session agent controls through active SessionDO authority", async () => {
+  const { handler, agentControls } = harness({ activeControl: true });
+  const response = await handler.agentControl(
+    new Request("http://session/internal/pi-agent-control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+      body: JSON.stringify({
+        sessionId: "other-session",
+        requestId: "agent-request-1",
+        action: "steer",
+        conversationId: 2,
+        content: "focus",
+      }),
+    })
+  );
+  expect(response.status).toBe(200);
+  const forwarded = agentControls.handle.mock.calls[0]?.[0];
+  await expect(forwarded?.json()).resolves.toMatchObject({
+    actorId: "pi:message-1",
+    source: "pi",
+    control: { sessionId: "session-1", action: "steer", conversationId: 2 },
+  });
+});
+
+it("advertises agent messaging only for explicitly allowed session origins", async () => {
+  const user = harness({ spawnSource: "user" });
+  const automation = harness({ spawnSource: "automation" });
+  const request = () =>
+    new Request("http://session/internal/pi-context", {
+      method: "POST",
+      body: JSON.stringify({ mode: "bootstrap" }),
+    });
+  await expect((await user.handler.context(request())).json()).resolves.toMatchObject({
+    agentMessagingEnabled: true,
+  });
+  await expect((await automation.handler.context(request())).json()).resolves.toMatchObject({
+    agentMessagingEnabled: false,
+  });
 });
 
 function externalActionHarness(
@@ -161,6 +216,7 @@ function externalActionHarness(
     },
     messages: { getProcessingMessage: () => ({ id: "message-1" }) as never },
     controls: { isActiveOperation: () => false },
+    agentControls: { handle: vi.fn() },
     credentials: { getOpenAIAccess: vi.fn() },
     skills: { getSandboxInstallation: vi.fn(async () => null) },
     repositories: {

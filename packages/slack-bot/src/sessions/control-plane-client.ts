@@ -230,6 +230,54 @@ export interface SendPromptOptions {
   clientRequestId?: string;
 }
 
+export type PiSlackControlAction = "follow_up" | "steer";
+
+export async function sendPiSessionControl(
+  env: ControlPlaneEnv,
+  options: {
+    sessionId: string;
+    channel: string;
+    actorId: string;
+    requestId: string;
+    action: PiSlackControlAction;
+    content: string;
+    traceId?: string;
+  }
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const url = new URL(
+    `https://internal/sessions/${encodeURIComponent(options.sessionId)}/pi/control`
+  );
+  url.searchParams.set("channel", `slack:${options.channel}`);
+  try {
+    const response = await signedControlPlaneFetch(
+      env,
+      {
+        method: "POST",
+        url: url.toString(),
+        actor: options.actorId,
+        traceId: options.traceId,
+        body: JSON.stringify({
+          action: options.action,
+          requestId: options.requestId,
+          content: options.content,
+        }),
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+    if (response.ok) return { ok: true };
+    const errorBody = await readErrorBody(response);
+    return {
+      ok: false,
+      message:
+        response.status === 403
+          ? "You do not have permission to control this Pi session."
+          : (errorBody.error ?? `Pi control failed (${response.status}).`),
+    };
+  } catch {
+    return { ok: false, message: "Pi controls are temporarily unavailable. Please try again." };
+  }
+}
+
 export async function sendPrompt(
   env: ControlPlaneEnv,
   options: SendPromptOptions

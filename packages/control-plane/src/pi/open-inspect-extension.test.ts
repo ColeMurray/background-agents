@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
-import { createOpenInspectExtension, createSubagentExtension } from "./open-inspect-extension";
+import {
+  createAgentMessagingExtension,
+  createOpenInspectExtension,
+  createSubagentExtension,
+} from "./open-inspect-extension";
+import type { PiAgentControlRequest } from "./open-inspect-extension";
 
 describe("createOpenInspectExtension", () => {
   it("offers replay-safe repository tools only when the session has repositories", async () => {
@@ -89,5 +94,36 @@ describe("createOpenInspectExtension", () => {
       })
     ).rejects.toThrow("Pi active subagent limit reached");
     expect(createConversation).not.toHaveBeenCalled();
+  });
+
+  it("gives same-session agent controls stable idempotency keys", async () => {
+    const invoke = vi.fn(async (_control: PiAgentControlRequest, _conversationId: number) => ({
+      ok: true,
+    }));
+    const extension = createAgentMessagingExtension({ invoke });
+    expect(extension.tools?.map((tool) => tool.name)).toEqual([
+      "list_agents",
+      "send_agent_message",
+      "get_last_message",
+      "follow_up_agent",
+      "steer_agent",
+      "cancel_agent",
+      "inspect_agents",
+    ]);
+    const steer = extension.tools?.find((tool) => tool.name === "steer_agent");
+    if (!steer) throw new Error("Expected steer_agent tool");
+    const api = { taskId: 7, callId: "call-1", conversationId: 1 } as ToolExecutionApi;
+    const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
+    await steer.execute({ conversationId: 2, content: "focus" }, api, context);
+    await steer.execute({ conversationId: 2, content: "focus" }, api, context);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[0]?.[0]).toEqual(invoke.mock.calls[1]?.[0]);
+    expect(invoke.mock.calls[0]?.[0]).toMatchObject({
+      action: "steer",
+      conversationId: 2,
+      content: "focus",
+      requestId: expect.stringMatching(/^agent:[0-9a-f]{64}$/),
+    });
+    expect(invoke.mock.calls[0]?.[1]).toBe(1);
   });
 });

@@ -82,6 +82,8 @@ export const piRuntimeControlSchema = z
   .discriminatedUnion("action", [
     controlBase.extend({ action: z.literal("list_conversations") }),
     controlBase.extend({ action: z.literal("get_conversation"), conversationId }),
+    controlBase.extend({ action: z.literal("get_last_message"), conversationId }),
+    controlBase.extend({ action: z.literal("inspect_agents") }),
     controlBase.extend({
       action: z.enum(["submit", "send", "steer", "follow_up"]),
       conversationId: conversationId.optional(),
@@ -95,6 +97,10 @@ export const piRuntimeControlSchema = z
       operationId: operationId.optional(),
       submissionId: z.number().int().positive().optional(),
       taskId: z.number().int().positive().optional(),
+    }),
+    controlBase.extend({
+      action: z.literal("cancel_agent"),
+      taskId: z.number().int().positive(),
     }),
     controlBase.extend({
       action: z.literal("fork"),

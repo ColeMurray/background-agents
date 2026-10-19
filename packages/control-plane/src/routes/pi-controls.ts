@@ -4,20 +4,38 @@ import { piRuntimeControlSchema } from "../pi/runtime-contract";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
-import { error, requireSession, SCM_AGNOSTIC_HUMAN_USER_ROUTE } from "./shared";
+import {
+  error,
+  requireSession,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+} from "./shared";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
 const requestIdSchema = z.string().min(1).max(128);
+const SLACK_CONTROL_ACTIONS = new Set(["steer", "follow_up"]);
 function forward(control: unknown, sessionId: string, ctx: SessionRouteContext) {
   const candidate = typeof control === "object" && control !== null ? control : {};
   const parsed = piRuntimeControlSchema.safeParse({ ...candidate, sessionId });
   if (!parsed.success) return error("Invalid Pi control request", 400);
   const principal = ctx.principal;
-  if (principal?.kind !== "user") return error("Pi controls require a user", 403);
+  if (
+    principal?.kind === "service" &&
+    (principal.service !== "slack-bot" || !SLACK_CONTROL_ACTIONS.has(parsed.data.action))
+  ) {
+    return error("Service is not authorized for this Pi control", 403);
+  }
+  const authority =
+    principal?.kind === "user"
+      ? { actorId: principal.userId, source: "web" }
+      : principal?.kind === "service" && principal.service === "slack-bot" && principal.actor
+        ? { actorId: principal.actor.participantUserId, source: "slack" }
+        : null;
+  if (!authority) return error("Pi controls require an authorized actor", 403);
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.piControl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ actorId: principal.userId, source: "web", control: parsed.data }),
+    body: JSON.stringify({ ...authority, control: parsed.data }),
   });
 }
 const COLLABORATION_ACTIONS = new Set(["submit", "send", "steer", "follow_up", "fork", "compact"]);
@@ -37,7 +55,15 @@ function post(allowed: Set<string>) {
     return forward(body, params.id, ctx);
   };
 }
-function readAction(action: "list_conversations" | "get_conversation" | "inspect" | "task_graph") {
+function readAction(
+  action:
+    | "list_conversations"
+    | "get_conversation"
+    | "get_last_message"
+    | "inspect_agents"
+    | "inspect"
+    | "task_graph"
+) {
   return async (
     request: Request,
     _env: unknown,
@@ -60,7 +86,7 @@ function readAction(action: "list_conversations" | "get_conversation" | "inspect
 export const piControlRoutes = new Hono<ControlPlaneHonoEnv>();
 const READ = admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") });
 const COLLABORATE = admit({
-  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   authorization: requireSession("collaborate"),
 });
 const LIFECYCLE = admit({
@@ -75,6 +101,12 @@ piControlRoutes.get("/sessions/:id/pi/conversations/:conversationId", READ, (c) 
 );
 piControlRoutes.get("/sessions/:id/pi/inspect", READ, (c) =>
   dispatchSession(c, readAction("inspect"))
+);
+piControlRoutes.get("/sessions/:id/pi/agents", READ, (c) =>
+  dispatchSession(c, readAction("inspect_agents"))
+);
+piControlRoutes.get("/sessions/:id/pi/conversations/:conversationId/last-message", READ, (c) =>
+  dispatchSession(c, readAction("get_last_message"))
 );
 piControlRoutes.get("/sessions/:id/pi/task-graph", READ, (c) =>
   dispatchSession(c, readAction("task_graph"))

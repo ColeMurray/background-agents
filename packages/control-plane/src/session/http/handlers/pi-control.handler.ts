@@ -6,6 +6,7 @@ import {
 } from "../../../pi/runtime-contract";
 import type { Logger } from "../../../logger";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
+import { sha256Hex } from "@open-inspect/shared/service-auth";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
 
@@ -15,7 +16,14 @@ const envelopeSchema = z.strictObject({
   source: z.string().min(1).max(32),
   control: piRuntimeControlSchema,
 });
-const READ_ACTIONS = new Set(["list_conversations", "get_conversation", "task_graph", "inspect"]);
+const READ_ACTIONS = new Set([
+  "list_conversations",
+  "get_conversation",
+  "get_last_message",
+  "inspect_agents",
+  "task_graph",
+  "inspect",
+]);
 
 export class PiControlHandler {
   constructor(
@@ -149,14 +157,12 @@ export class PiControlHandler {
   }
 }
 async function controlRequestHash(control: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(control));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return sha256Hex(JSON.stringify(control));
 }
 function isDeterministicControlError(error: unknown) {
   return (
     error instanceof Error &&
-    /(limit reached|not found|cannot change model|bound to an active submission|unsupported|target is required)/i.test(
+    /(limit reached|not found|not active|requires a child|cannot change model|bound to an active submission|unsupported|target is required)/i.test(
       error.message
     )
   );

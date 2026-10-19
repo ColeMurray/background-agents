@@ -304,7 +304,16 @@ describe("PiSessionDO", () => {
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
       return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
     });
-    expect(tools).toEqual(["subagent"]);
+    expect(tools).toEqual([
+      "subagent",
+      "list_agents",
+      "send_agent_message",
+      "get_last_message",
+      "follow_up_agent",
+      "steer_agent",
+      "cancel_agent",
+      "inspect_agents",
+    ]);
   });
 
   it("does not let an early blank open poison a committed creation snapshot", async () => {
@@ -640,6 +649,16 @@ describe("PiSessionDO", () => {
     expect(fork).toMatchObject({ state: "completed" });
     const forkId = (fork.result as { conversationId: number }).conversationId;
     await runInPiSessionDO(stub, async (instance) => {
+      const forkConversation = await (
+        await instance.harness.pi()
+      ).conversation(forkId as never, BACKGROUND_CONTEXT);
+      const extensionNames = (await forkConversation!.agent(BACKGROUND_CONTEXT)).extensions.map(
+        (extension) => extension.name
+      );
+      expect(extensionNames).not.toContain("open-inspect.subagent");
+      expect(extensionNames).not.toContain("open-inspect.agent-messaging");
+    });
+    await runInPiSessionDO(stub, async (instance) => {
       await expect(
         instance.control({
           sessionId: sessionName,
@@ -682,8 +701,26 @@ describe("PiSessionDO", () => {
       action: "inspect",
     });
     expect(JSON.stringify(inspection)).not.toContain("private sentinel prompt");
-    expect(JSON.stringify(inspection)).toContain("control-submit-1");
     expect(JSON.stringify(inspection)).not.toContain("open-inspect-control:");
+    const agents = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "agents-1",
+      action: "inspect_agents",
+    });
+    expect(agents).toMatchObject({
+      state: "completed",
+      result: {
+        agents: expect.arrayContaining([expect.objectContaining({ conversationId: rootId })]),
+      },
+    });
+    expect(JSON.stringify(agents)).not.toContain("private sentinel prompt");
+    const lastMessage = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "last-message-1",
+      action: "get_last_message",
+      conversationId: rootId,
+    });
+    expect(lastMessage).toMatchObject({ result: { text: "controlled answer" } });
     const graph = await controlPi(stub, {
       sessionId: sessionName,
       requestId: "graph-1",
@@ -1412,6 +1449,13 @@ describe("PiSessionDO", () => {
       "repository_list",
       "repository_read",
       "subagent",
+      "list_agents",
+      "send_agent_message",
+      "get_last_message",
+      "follow_up_agent",
+      "steer_agent",
+      "cancel_agent",
+      "inspect_agents",
       "read",
       "ls",
       "find",
@@ -1424,6 +1468,7 @@ describe("PiSessionDO", () => {
       "open-inspect.tool-policy",
       "open-inspect",
       "open-inspect.subagent",
+      "open-inspect.agent-messaging",
       "open-inspect.workspace",
       "open-inspect.repository-overlay",
       "open-inspect.external-actions",

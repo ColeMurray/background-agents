@@ -23,6 +23,7 @@ import {
   type EntryId,
   type TaskId,
   type SubmissionId,
+  type UsageState,
 } from "@earendil-works/pi-durable";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
@@ -60,7 +61,14 @@ import {
   type PiRepositoryMaterialization,
   type PiRepositoryMaterializationManifest,
 } from "../pi/repository-materialization-contract";
-import { createOpenInspectExtension, createSubagentExtension } from "../pi/open-inspect-extension";
+import {
+  createAgentMessagingExtension,
+  createOpenInspectExtension,
+  createSubagentExtension,
+  AGENT_MESSAGING_EXTENSION_NAME,
+  SUBAGENT_EXTENSION_NAME,
+  type PiAgentControlRequest,
+} from "../pi/open-inspect-extension";
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
 import { createComputerWorkspaceCapability } from "../pi/computer-workspace-extension";
@@ -130,6 +138,7 @@ const CONTROL_COMPLETION_PREFIX = "open-inspect:control-completion:";
 const CONTROL_SUBMISSION_REQUEST_PREFIX = "open-inspect-control:";
 const MAX_OPERATION_METADATA_TOMBSTONES = 128;
 const DIFF_FAILURE_REPORT_TIMEOUT_MS = 5_000;
+const MAX_PENDING_AGENT_MESSAGES = 16;
 
 interface PiOperationMetadata {
   readonly model: string;
@@ -203,6 +212,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
       });
       const delegation = createSubagentExtension();
+      const agentMessaging = createAgentMessagingExtension({
+        invoke: (control, callerConversationId, signal) =>
+          this.invokeAgentControl(control, callerConversationId as ConversationId, signal),
+      });
       let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const workspaceMutations = new WorkspaceMutationFifo();
       const extensions: PiExtensionContribution[] = [
@@ -243,6 +256,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           effects: [],
         },
       ];
+      if (sessionContext.agentMessagingEnabled) {
+        extensions.push({
+          slot: "agent_messaging",
+          extension: agentMessaging,
+          effects: declaredEffects(agentMessaging),
+        });
+      }
       if (sessionContext.skills && sessionContext.skills.skills.length > 0) {
         const skills = await createManagedSkillsExtension([
           skillSourceFromInstallation(sessionContext.skills),
@@ -592,6 +612,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         result: sanitizeInspection(inspection),
       };
     }
+    if (input.action === "inspect_agents") {
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: await this.inspectAgents(pi),
+      };
+    }
     if (input.action === "task_graph") {
       const graph = await pi.taskGraph(BACKGROUND_CONTEXT);
       try {
@@ -603,6 +630,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       } finally {
         graph.dispose();
       }
+    }
+    if (input.action === "cancel_agent") {
+      const task = await pi.getTask(input.taskId as TaskId, BACKGROUND_CONTEXT);
+      if (!task) throw new Error("Pi agent task not found");
+      const child = await pi.commit(
+        (tx) => tx.conversation(task.conversationId),
+        BACKGROUND_CONTEXT
+      );
+      if (!child?.owner) throw new Error("Pi agent cancellation requires a child conversation");
+      const outcome = await pi.abortTask(input.taskId as TaskId, BACKGROUND_CONTEXT);
+      return { requestId: input.requestId, state: "completed", result: { outcome } };
     }
     const conversation = await this.controlConversation(
       pi,
@@ -621,6 +659,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             ...(entry.byTaskId === undefined ? {} : { taskId: entry.byTaskId }),
           })),
         } as unknown as JsonValue,
+      };
+    }
+    if (input.action === "get_last_message") {
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: lastAgentMessage(
+          await conversation.entries({}, 200, undefined, BACKGROUND_CONTEXT),
+          2_000
+        ),
       };
     }
     if (input.action === "cancel_exact") {
@@ -694,9 +742,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const source = all.items.find((record) => record.id === input.conversationId);
       if (!source) throw new Error("Pi conversation not found");
       if (source.parent || source.owner) throw new Error("Pi fork depth limit reached");
+      const forkExtensions = (await conversation.agent(BACKGROUND_CONTEXT)).extensions.filter(
+        (extension) =>
+          extension.name !== SUBAGENT_EXTENSION_NAME &&
+          extension.name !== AGENT_MESSAGING_EXTENSION_NAME
+      );
       const fork = await conversation.fork(
         input.entryId as EntryId,
-        { ownership: { kind: "ownerless" } },
+        { ownership: { kind: "ownerless" }, agent: { extensions: forkExtensions } },
         BACKGROUND_CONTEXT
       );
       return {
@@ -715,6 +768,21 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     return this.onSubmissionControlLine(async () => {
       const inspection = await pi.inspect(BACKGROUND_CONTEXT);
       if (inspection.tasks.length >= 4) throw new Error("Pi active task limit reached");
+      const conversationBusy =
+        inspection.tasks.some((task) => task.record.conversationId === conversation.id) ||
+        inspection.submissions.some(
+          (submission) =>
+            submission.conversationId === conversation.id && submission.status === "placed"
+        );
+      const pendingMessages = inspection.submissions.filter(
+        (submission) =>
+          submission.conversationId === conversation.id &&
+          (submission.status === "queued" || submission.status === "placed")
+      ).length;
+      if (pendingMessages >= MAX_PENDING_AGENT_MESSAGES)
+        throw new Error("Pi agent message limit reached");
+      if (input.action === "steer" && !conversationBusy)
+        throw new Error("Pi conversation is not active");
       if (
         (input.action === "steer" || input.action === "follow_up") &&
         (input.model !== undefined || input.reasoningEffort !== undefined)
@@ -821,6 +889,71 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     );
     if (!conversation) throw new Error("Pi conversation not found");
     return conversation;
+  }
+
+  private async inspectAgents(
+    pi: Awaited<ReturnType<PiSessionDO["harness"]["pi"]>>
+  ): Promise<JsonValue> {
+    const [page, inspection] = await Promise.all([
+      pi.commit((tx) => tx.scanConversations({}, 33), BACKGROUND_CONTEXT),
+      pi.inspect(BACKGROUND_CONTEXT),
+    ]);
+    if (page.items.length > 32) throw new Error("Pi conversation limit reached");
+    const agents = await Promise.all(
+      page.items.map(async (record) => {
+        const conversation = await pi.conversation(record.id, BACKGROUND_CONTEXT);
+        if (!conversation) throw new Error("Pi conversation not found");
+        const view = await conversation.viewState(BACKGROUND_CONTEXT);
+        try {
+          const tasks = inspection.tasks
+            .filter((task) => task.record.conversationId === record.id)
+            .slice(0, 16)
+            .map((task) => ({
+              id: task.record.id,
+              kind: task.record.kind,
+              status: task.state.kind,
+              phase: "phase" in task.record.state ? task.record.state.phase : undefined,
+              abortRequested: task.record.abortRequested,
+            }));
+          const queued = inspection.submissions.filter(
+            (submission) =>
+              submission.conversationId === record.id && submission.status === "queued"
+          ).length;
+          const placed = inspection.submissions.filter(
+            (submission) =>
+              submission.conversationId === record.id && submission.status === "placed"
+          ).length;
+          const usage = summarizePiUsage(view.value.docs["pi.usage"] as unknown as UsageState);
+          return {
+            conversationId: record.id,
+            ...(record.parent
+              ? {
+                  parent: {
+                    conversationId: record.parent.conversationId,
+                    entryId: record.parent.at,
+                  },
+                }
+              : {}),
+            ...(record.owner
+              ? {
+                  owner: {
+                    conversationId: record.owner.conversationId,
+                    taskId: record.owner.taskId,
+                  },
+                }
+              : {}),
+            status: tasks.length > 0 || placed > 0 ? "active" : queued > 0 ? "queued" : "idle",
+            queued,
+            tasks,
+            usage,
+            lastMessage: lastAgentMessage({ items: view.value.entries }, 256),
+          };
+        } finally {
+          view.dispose();
+        }
+      })
+    );
+    return { agents } as unknown as JsonValue;
   }
 
   async destroy(sessionId: string): Promise<void> {
@@ -1326,6 +1459,43 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return z.json().parse(body);
+  }
+
+  private async invokeAgentControl(
+    control: PiAgentControlRequest,
+    callerConversationId: ConversationId,
+    signal?: AbortSignal
+  ): Promise<JsonValue> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const caller = await (
+      await this.harness.pi()
+    ).commit((tx) => tx.conversation(callerConversationId), BACKGROUND_CONTEXT);
+    if (!caller || caller.parent || caller.owner || String(caller.id) !== ROOT_SESSION) {
+      throw new Error("Pi agent messaging is restricted to the root conversation");
+    }
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piAgentControl}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+        },
+        body: JSON.stringify(control),
+        signal,
+      })
+    );
+    const body = (await response.json().catch(() => null)) as JsonValue;
+    if (!response.ok) {
+      const message =
+        body && typeof body === "object" && !Array.isArray(body) && typeof body.error === "string"
+          ? body.error
+          : `Pi agent control failed (${response.status})`;
+      throw new Error(message);
+    }
+    return body;
   }
 
   private async prepareExternalAction(request: ExternalActionPrepareRequest, signal?: AbortSignal) {
@@ -1930,6 +2100,24 @@ function sanitizeInspection(
         : {}),
     })),
   } as unknown as JsonValue;
+}
+
+function lastAgentMessage(
+  page: { readonly items: readonly EntryRecord[] },
+  maxLength: number
+): JsonValue {
+  const entries = [...page.items].sort((left, right) => Number(right.id) - Number(left.id));
+  for (const entry of entries) {
+    for (const message of [...(entry.model ?? [])].reverse()) {
+      if (message.role !== "assistant") continue;
+      const text = message.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("")
+        .slice(0, maxLength);
+      if (text) return { entryId: entry.id, text };
+    }
+  }
+  return null;
 }
 
 function nativeControlSubmissionRequestId(requestId: string): string {

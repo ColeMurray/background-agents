@@ -2,6 +2,7 @@ import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import { PI_TOOL_EFFECT_REGISTRY } from "@open-inspect/shared/pi-tool-effects";
+import { sha256Hex } from "@open-inspect/shared/service-auth";
 import {
   AssistantEntry,
   configure,
@@ -12,6 +13,7 @@ import {
   type Extension,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
+import type { PiRuntimeControl } from "./runtime-contract";
 
 interface PiRepositoryDescriptor {
   repoOwner: string;
@@ -25,6 +27,17 @@ interface OpenInspectExtensionOptions {
   invokeRepository(
     tool: "repository_list" | "repository_read",
     args: Record<string, JsonValue | undefined>,
+    signal?: AbortSignal
+  ): Promise<JsonValue>;
+}
+
+type WithoutSession<T> = T extends unknown ? Omit<T, "sessionId"> : never;
+export type PiAgentControlRequest = WithoutSession<PiRuntimeControl>;
+
+interface AgentMessagingExtensionOptions {
+  invoke(
+    control: PiAgentControlRequest,
+    callerConversationId: number,
     signal?: AbortSignal
   ): Promise<JsonValue>;
 }
@@ -47,6 +60,8 @@ const subagentEffect = declaredToolEffect("subagent");
 const MAX_ACTIVE_SUBAGENTS = 4;
 const MAX_CONVERSATIONS = 32;
 const SUBAGENT_TIMEOUT_MS = 10 * 60 * 1_000;
+export const AGENT_MESSAGING_EXTENSION_NAME = "open-inspect.agent-messaging";
+export const SUBAGENT_EXTENSION_NAME = "open-inspect.subagent";
 
 const repositoryList = defineTool({
   name: "repository_list",
@@ -126,15 +141,132 @@ export function createOpenInspectExtension(options: OpenInspectExtensionOptions)
 
 /** Separate extension so a child can lose only recursive delegation and retain its other tools. */
 export function createSubagentExtension(): Extension {
-  const selection = defineExtension({ name: "open-inspect.subagent" });
+  const selection = defineExtension({ name: SUBAGENT_EXTENSION_NAME });
   return defineExtension({
-    name: "open-inspect.subagent",
+    name: SUBAGENT_EXTENSION_NAME,
     sections: [
       section("subagent", () => "Delegate independent analysis to the subagent tool.", {
         tag: false,
       }),
     ],
     tools: [createSubagentTool(selection)],
+  });
+}
+
+/** Root-only controls for durable same-session conversations. */
+export function createAgentMessagingExtension(options: AgentMessagingExtensionOptions): Extension {
+  const controlTool = <T extends ReturnType<typeof Type.Object>>(
+    name: string,
+    description: string,
+    parameters: T,
+    action: (args: Record<string, unknown>, requestId: string) => PiAgentControlRequest
+  ) => {
+    const effect = declaredToolEffect(name);
+    return defineTool({
+      name,
+      description,
+      parameters,
+      structuredOutputSchema: Type.Any(),
+      replay: effect.replay,
+      callers: effect.callers,
+      execute: async (args, api, context) => {
+        const requestId = await agentControlRequestId(api.taskId, api.callId, name);
+        const result = await options.invoke(
+          action(args as Record<string, unknown>, requestId),
+          api.conversationId,
+          context.abortSignal
+        );
+        return {
+          output: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+          structuredOutput: result,
+        };
+      },
+    });
+  };
+  const conversation = {
+    conversationId: Type.Integer({ minimum: 1, description: "Target Pi conversation ID." }),
+  };
+  const message = {
+    ...conversation,
+    content: Type.String({ minLength: 1, maxLength: 20_000, description: "Message to send." }),
+  };
+  return defineExtension({
+    name: AGENT_MESSAGING_EXTENSION_NAME,
+    sections: [
+      section(
+        "agent_messaging",
+        () =>
+          "Use agent controls only for same-session child conversations. Ordinary user turns remain queued separately.",
+        { tag: false }
+      ),
+    ],
+    tools: [
+      controlTool(
+        "list_agents",
+        "List bounded same-session agents, status, tasks, and usage.",
+        Type.Object({}),
+        (_args, requestId) => ({ action: "inspect_agents", requestId })
+      ),
+      controlTool(
+        "send_agent_message",
+        "Send a new message to an idle same-session agent.",
+        Type.Object(message),
+        (args, requestId) => ({
+          action: "send",
+          requestId,
+          conversationId: Number(args.conversationId),
+          content: String(args.content),
+        })
+      ),
+      controlTool(
+        "get_last_message",
+        "Read only the latest visible assistant text from a same-session agent.",
+        Type.Object(conversation),
+        (args, requestId) => ({
+          action: "get_last_message",
+          requestId,
+          conversationId: Number(args.conversationId),
+        })
+      ),
+      controlTool(
+        "follow_up_agent",
+        "Queue an explicit immediate follow-up for an active same-session agent.",
+        Type.Object(message),
+        (args, requestId) => ({
+          action: "follow_up",
+          requestId,
+          conversationId: Number(args.conversationId),
+          content: String(args.content),
+        })
+      ),
+      controlTool(
+        "steer_agent",
+        "Steer an active same-session agent at its next safe boundary.",
+        Type.Object(message),
+        (args, requestId) => ({
+          action: "steer",
+          requestId,
+          conversationId: Number(args.conversationId),
+          content: String(args.content),
+        })
+      ),
+      controlTool(
+        "cancel_agent",
+        "Cancel one exact active same-session agent task.",
+        Type.Object({ taskId: Type.Integer({ minimum: 1, description: "Exact Pi task ID." }) }),
+        (args, requestId) => ({
+          action: "cancel_agent",
+          requestId,
+          taskId: Number(args.taskId),
+        })
+      ),
+      controlTool(
+        "inspect_agents",
+        "Inspect bounded same-session agent state without prompts, tool arguments, or credentials.",
+        Type.Object({}),
+        (_args, requestId) => ({ action: "inspect_agents", requestId })
+      ),
+    ],
   });
 }
 
@@ -182,7 +314,8 @@ function createSubagentTool(extension: Extension) {
       // delegation; `{ remove }` would incorrectly restart from host defaults
       // when the parent stores an explicit extension list.
       const childExtensions = (await api.agent(context)).extensions.filter(
-        (selected) => selected.name !== extension.name
+        (selected) =>
+          selected.name !== extension.name && selected.name !== AGENT_MESSAGING_EXTENSION_NAME
       );
       const childId = await api.commit(async (tx) => {
         const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
@@ -237,6 +370,14 @@ function createSubagentTool(extension: Extension) {
       };
     },
   });
+}
+
+async function agentControlRequestId(
+  taskId: ToolExecutionApi["taskId"],
+  callId: string,
+  action: string
+): Promise<string> {
+  return `agent:${await sha256Hex(`${String(taskId)}:${callId}:${action}`)}`;
 }
 
 async function answerText(

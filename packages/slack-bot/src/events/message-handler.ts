@@ -42,7 +42,12 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import { checkPublicationAccess } from "../sessions/control-plane-client";
+import {
+  checkPublicationAccess,
+  getDeploymentCapabilities,
+  sendPiSessionControl,
+} from "../sessions/control-plane-client";
+import { parseSlackPiExplicitControl, slackPiControlRequestId } from "../pi-explicit-control";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -208,6 +213,65 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
   if (admission.kind === "followUp") {
     const { session: existingSession, threadTs } = admission;
+    const explicitPiControl =
+      existingSession.harness === "pi" ? parseSlackPiExplicitControl(messageText) : null;
+    if (explicitPiControl) {
+      if (images.length > 0 || forwarded.entries.length > 0) {
+        await postMessage(
+          env.SLACK_BOT_TOKEN,
+          channel,
+          "Pi follow-up and steering commands accept text only.",
+          { thread_ts: threadTs }
+        );
+        return;
+      }
+      const deployment = await getDeploymentCapabilities(env, traceId).catch(() => null);
+      if (!deployment?.pi.enabled || !deployment.pi.bindingReachable) {
+        await postMessage(
+          env.SLACK_BOT_TOKEN,
+          channel,
+          "Pi controls are not available in this deployment.",
+          { thread_ts: threadTs }
+        );
+        return;
+      }
+      const explicitActor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
+      const result = await sendPiSessionControl(env, {
+        sessionId: existingSession.sessionId,
+        channel,
+        actorId: `slack:${user}`,
+        requestId: await slackPiControlRequestId(
+          ingress?.stableMessageId ?? `${channel}:${threadTs}:${ts}`
+        ),
+        action: explicitPiControl.action,
+        content: formatAttributedRequest(explicitActor.senderLabel, explicitPiControl.content, []),
+        traceId,
+      });
+      if (!result.ok) {
+        await postMessage(env.SLACK_BOT_TOKEN, channel, result.message, { thread_ts: threadTs });
+        return;
+      }
+      await advanceLastPromptTs(env, channel, threadTs, ts);
+      const reaction = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
+      if (!reaction.ok && reaction.error !== "already_reacted") {
+        log.warn("slack.reaction.add", {
+          trace_id: traceId,
+          channel,
+          message_ts: ts,
+          reaction: "eyes",
+          slack_error: reaction.error,
+        });
+      }
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        explicitPiControl.action === "steer"
+          ? "Steering the active Pi agent."
+          : "Queued an immediate Pi follow-up.",
+        { thread_ts: threadTs }
+      );
+      return;
+    }
     let turnPlan: ResolvedTurnPlan | undefined;
     if (hasInlineOverrides) {
       const enabledModels = await getAuthoritativeModels(env, traceId);

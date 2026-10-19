@@ -91,6 +91,7 @@ describe("assemblePiExtensions", () => {
       "policy",
       "core",
       "delegation",
+      "agent_messaging",
       "skills",
       "workspace",
       "repository_editing",

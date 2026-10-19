@@ -46,6 +46,7 @@ import type { SessionDiffRefresh } from "@/hooks/use-session-diffs";
 import { SessionVisibilityControl } from "./session-visibility-control";
 import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
+import { PiAgentsSection } from "./sidebar/pi-agents-section";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -149,6 +150,10 @@ export function SessionRightSidebarContent({
   );
   const isDurable = sessionState?.executionBackend === "durable";
   const deploymentCapabilities = useDeploymentCapabilities();
+  const piControlsAvailable =
+    sessionState?.harness === "pi" &&
+    deploymentCapabilities.data?.pi.enabled === true &&
+    deploymentCapabilities.data.pi.bindingReachable === true;
   const hasRepository = Boolean(
     sessionState?.repositories?.length ||
     (sessionState?.repoOwner && sessionState.repoName) ||
@@ -464,6 +469,12 @@ export function SessionRightSidebarContent({
           <p className="text-xs text-muted-foreground">
             The agent hasn’t published a task list yet.
           </p>
+        )}
+        {piControlsAvailable && (
+          <PiAgentsSection sessionId={sessionId} capabilities={capabilities} />
+        )}
+        {sessionState?.harness === "pi" && deploymentCapabilities.data && !piControlsAvailable && (
+          <p className="text-xs text-muted-foreground">Pi agent controls are unavailable.</p>
         )}
         {sessionState && <ChildSessionsSection sessionId={sessionState.id} />}
       </InspectorPanel>

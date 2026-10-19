@@ -54,6 +54,7 @@ export interface SessionInternalRouteHandlers {
   piContext: SessionInternalRouteHandler;
   piControl: SessionInternalRouteHandler;
   piControlCompletion: SessionInternalRouteHandler;
+  piAgentControl: SessionInternalRouteHandler;
   piRepositoryTool: SessionInternalRouteHandler;
   piRepositoryMaterialization: SessionInternalRouteHandler;
   piExternalActionPrepare: SessionInternalRouteHandler;
@@ -161,6 +162,7 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.piControlCompletion,
       handler: handlers.piControlCompletion,
     },
+    { method: "POST", path: SessionInternalPaths.piAgentControl, handler: handlers.piAgentControl },
     {
       method: "POST",
       path: SessionInternalPaths.piRepositoryTool,

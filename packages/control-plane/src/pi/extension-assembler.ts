@@ -17,6 +17,7 @@ export const PI_EXTENSION_SLOTS = [
   "policy",
   "core",
   "delegation",
+  "agent_messaging",
   "skills",
   "workspace",
   "repository_editing",

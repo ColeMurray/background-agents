@@ -21,3 +21,28 @@ level, four active tasks/subagents, a ten-minute subagent deadline, 200 inspecte
 entries/submissions, 64 inspected tasks, a 15-second control response deadline, and 128 retained
 terminal receipts. Inspection excludes prompts, model messages, tool arguments/results, checkpoints,
 errors, and credentials.
+
+## Same-session agents
+
+The root Pi agent can use `list_agents`, `send_agent_message`, `get_last_message`,
+`follow_up_agent`, `steer_agent`, `cancel_agent`, and `inspect_agents`. These tools call the owning
+SessionDO authorization bridge and then the same PiSessionDO; they never address another session.
+They are installed only for user- and Slack-started sessions; automation, GitHub, and Linear
+sessions retain their existing tool policy. Children inherit the parent capability selection except
+delegation and agent-messaging tools, so delegation remains depth one. The four-child, task, input,
+timeout, budget, and cancellation bounds apply to tool calls and human controls alike. Each
+conversation accepts at most 16 pending native messages.
+
+The session inspector's Tasks tab lists Pi conversations, active/queued work, bounded visible last
+messages, token usage, and cost. Collaborators can explicitly send, follow up, steer, fork, or
+compact. Lifecycle-authorized users can reset, hand off, and cancel exact tasks. Confirmation
+dialogs protect context-changing actions. The ordinary composer still queues a new turn.
+
+In an existing Pi Slack thread, two exact text commands opt into immediate control:
+
+- `follow up now: <message>`
+- `steer: <message>`
+
+Slack signature and actor assertions, session collaboration authority, deployment capability
+discovery, and stable event-derived request IDs all apply. Every other thread message keeps the
+ordinary queued-turn behavior.

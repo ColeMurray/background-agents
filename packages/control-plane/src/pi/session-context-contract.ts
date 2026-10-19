@@ -45,6 +45,7 @@ export const piSessionContextSchema = z.object({
     piRepositoryIdentitySchema.extend({ commitSha: fullGitObjectIdSchema.optional() })
   ),
   skills: sandboxSkillInstallationSchema.nullable(),
+  agentMessagingEnabled: z.boolean().default(false),
 });
 
 export type PiSessionContext = z.infer<typeof piSessionContextSchema>;

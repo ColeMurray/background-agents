@@ -17,6 +17,7 @@ import type { PiControlRepository } from "../../pi-control-repository";
 import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
 import type { ExternalActionGateway } from "../../external-action-gateway";
 import { z } from "zod";
+import { piRuntimeControlSchema } from "../../../pi/runtime-contract";
 import type { ExternalActionDefinitionRegistry } from "../../external-action-definitions";
 
 const externalActionIdSchema = z.strictObject({ actionId: z.string().min(1) });
@@ -25,6 +26,15 @@ const externalActionDecisionSchema = z.strictObject({
   decision: z.enum(["approve", "deny"]),
   reason: z.string().min(1).max(1_000).optional(),
 });
+const PI_AGENT_CONTROL_ACTIONS = new Set([
+  "list_conversations",
+  "inspect_agents",
+  "get_last_message",
+  "send",
+  "follow_up",
+  "steer",
+  "cancel_agent",
+]);
 
 interface ExternalActionBridge {
   enabled: boolean;
@@ -54,6 +64,7 @@ interface PiBridgeHandlerOptions {
   sessions: Pick<SessionCoreRepository, "getSession" | "getSessionRepositories">;
   messages: Pick<MessageRepository, "getProcessingMessage">;
   controls: Pick<PiControlRepository, "isActiveOperation">;
+  agentControls: { handle(request: Request): Promise<Response> };
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
   repositories: Pick<
@@ -99,6 +110,35 @@ export class PiBridgeHandler {
     }
   }
 
+  async agentControl(request: Request): Promise<Response> {
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    if (!operationId || !this.activeOperation(request)) {
+      return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+    }
+    const body = await request.json().catch(() => null);
+    const candidate = typeof body === "object" && body !== null ? body : {};
+    const parsed = piRuntimeControlSchema.safeParse({
+      ...candidate,
+      sessionId: this.options.getSessionId(),
+    });
+    if (!parsed.success)
+      return Response.json({ error: "Invalid Pi agent control" }, { status: 400 });
+    if (!PI_AGENT_CONTROL_ACTIONS.has(parsed.data.action)) {
+      return Response.json({ error: "Pi agent control is not allowed" }, { status: 403 });
+    }
+    return this.options.agentControls.handle(
+      new Request("http://session/internal/pi-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: `pi:${operationId}`.slice(0, 128),
+          source: "pi",
+          control: parsed.data,
+        }),
+      })
+    );
+  }
+
   async context(request: Request): Promise<Response> {
     if (this.options.sessions.getSession()?.harness !== "pi") {
       return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
@@ -123,6 +163,8 @@ export class PiBridgeHandler {
               (repository.isPrimary ? (session?.base_branch ?? null) : null),
           })),
           skills,
+          agentMessagingEnabled:
+            session?.spawn_source === "user" || session?.spawn_source === "slack-bot",
         }),
         { headers: { "Cache-Control": "no-store" } }
       );
