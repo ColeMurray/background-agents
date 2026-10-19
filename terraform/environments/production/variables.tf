@@ -243,6 +243,12 @@ variable "enable_slack_bot" {
   }
 }
 
+variable "pi_slack_durable_ingress_enabled" {
+  description = "Enable D1 + Queue backed Slack event ingress after its canary gate passes."
+  type        = bool
+  default     = false
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string

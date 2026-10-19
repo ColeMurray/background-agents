@@ -5,6 +5,8 @@ import { handleSlackEvent } from "../events/dispatcher";
 import { slackEventPayloadSchema } from "../events/payload";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
+import { admitSlackIngress, SLACK_INGRESS_QUEUE_VERSION } from "../ingress-authority";
+import { processSlackIngressJob } from "../ingress-consumer";
 
 const log = createLogger("handler");
 const EVENT_DEDUPE_TTL_MS = 60 * 60 * 1000;
@@ -67,6 +69,52 @@ eventRoutes.post("/events", async (c) => {
     });
     return c.json({ ok: true });
   };
+
+  const durableEnabled = c.env.PI_SLACK_DURABLE_INGRESS_ENABLED?.trim().toLowerCase() === "true";
+  if (
+    durableEnabled &&
+    payload.type === "event_callback" &&
+    payload.event_id &&
+    payload.event?.channel
+  ) {
+    try {
+      const admittedAt = Date.now();
+      const admission = await admitSlackIngress(c.env, payload, body, admittedAt);
+      log.info("slack.ingress", {
+        event: "slack.ingress",
+        milestone: "durable_ingress",
+        source: "slack",
+        event_id: payload.event_id,
+        receipt_id: admission.receipt.id,
+        timestamp_ms: Date.now(),
+        duration_ms: Date.now() - startTime,
+      });
+      if (admission.receipt.state !== "completed" && admission.receipt.state !== "failed") {
+        if (!c.env.SLACK_INGRESS_QUEUE) throw new Error("Slack ingress Queue is unavailable");
+        const job = {
+          version: SLACK_INGRESS_QUEUE_VERSION,
+          receiptId: admission.receipt.id,
+          eventId: payload.event_id,
+          admittedAt,
+        };
+        await c.env.SLACK_INGRESS_QUEUE.send(job, { contentType: "json" });
+        c.executionCtx.waitUntil(processSlackIngressJob(c.env, job).then(() => undefined));
+      }
+      return acknowledge();
+    } catch (error) {
+      log.error("slack.ingress", {
+        event: "slack.ingress",
+        milestone: "durable_ingress",
+        source: "slack",
+        event_id: payload.event_id,
+        timestamp_ms: Date.now(),
+        outcome: "retry",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return c.json({ error: "Durable ingress unavailable" }, 503);
+    }
+  }
+
   if (eventId) {
     const cacheStore = createKvCacheStore(c.env.SLACK_KV);
     const dedupeKey = `event:${eventId}`;

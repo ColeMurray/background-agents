@@ -28,7 +28,10 @@ export interface SlackIngressRow {
 const TERMINAL = new Set(["completed", "failed"]);
 export class SlackIngressStore {
   constructor(private readonly db: SqlDatabase) {}
-  async admit(input: SlackIngressAdmit, now: number): Promise<SlackIngressRow> {
+  async admit(
+    input: SlackIngressAdmit,
+    now: number
+  ): Promise<{ row: SlackIngressRow; created: boolean }> {
     if (input.payloadJson !== undefined) {
       const bytes = new TextEncoder().encode(input.payloadJson);
       if (bytes.byteLength > 262_144) throw new Error("Slack ingress payload is too large");
@@ -48,7 +51,7 @@ export class SlackIngressStore {
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
     const id = `slack_ingress_${eventDigest.slice(0, 24)}`;
-    await this.db
+    const inserted = await this.db
       .prepare(
         `INSERT INTO slack_ingress_receipts
       (id,source,external_event_id,payload_json,payload_ref,payload_sha256,actor_user_id,owner_team_id,channel_id,thread_ts,state,stable_session_id,stable_message_id,deadline_at,received_at,updated_at)
@@ -80,7 +83,7 @@ export class SlackIngressStore {
       row.stable_message_id !== input.stableMessageId
     )
       throw new Error("Slack ingress idempotency conflict");
-    return row;
+    return { row, created: inserted.meta.changes === 1 };
   }
   get(id: string) {
     return this.db
@@ -114,11 +117,12 @@ export class SlackIngressStore {
   ) {
     if (TERMINAL.has(expected)) return null;
     const allowed: Record<string, readonly string[]> = {
-      processing: ["session_created", "failed"],
+      processing: ["admitted", "session_created", "completed", "failed"],
       session_created: ["prompt_queued", "failed"],
       prompt_queued: ["completed", "failed"],
     };
     if (!allowed[expected]?.includes(next)) return null;
+    const releasesLease = next === "admitted" || TERMINAL.has(next);
     return this.db
       .prepare(
         `UPDATE slack_ingress_receipts SET state=?,session_id=COALESCE(?,session_id),last_error_code=?,lease_owner=CASE WHEN ? IS NULL THEN lease_owner ELSE NULL END,lease_expires_at=CASE WHEN ? IS NULL THEN lease_expires_at ELSE NULL END,updated_at=?,terminal_at=?
@@ -128,8 +132,8 @@ export class SlackIngressStore {
         next,
         sessionId ?? null,
         errorCode ?? null,
-        TERMINAL.has(next) ? now : null,
-        TERMINAL.has(next) ? now : null,
+        releasesLease ? now : null,
+        releasesLease ? now : null,
         now,
         TERMINAL.has(next) ? now : null,
         id,

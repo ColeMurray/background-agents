@@ -30,9 +30,10 @@ slackIngressRoutes.post("/internal/slack-ingress", admit(POLICY), (c) =>
     const parsed = slackIngressAdmitSchema.safeParse(await body(request));
     if (!parsed.success) return json({ error: "Invalid Slack ingress receipt" }, 400);
     try {
+      const admitted = await new SlackIngressStore(ctx.db).admit(parsed.data, Date.now());
       return json(
-        { receipt: await new SlackIngressStore(ctx.db).admit(parsed.data, Date.now()) },
-        201
+        { receipt: admitted.row, created: admitted.created },
+        admitted.created ? 201 : 200
       );
     } catch {
       return json({ error: "Slack ingress conflict" }, 409);

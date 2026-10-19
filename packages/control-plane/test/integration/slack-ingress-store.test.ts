@@ -19,7 +19,7 @@ describe("SlackIngressStore", () => {
   it("admits idempotently and rejects a changed duplicate", async () => {
     const store = new SlackIngressStore(env.DB);
     const first = await store.admit(input, 1_000);
-    expect((await store.admit(input, 1_001)).id).toBe(first.id);
+    expect((await store.admit(input, 1_001)).row.id).toBe(first.row.id);
     await expect(
       store.admit(
         {
@@ -34,13 +34,13 @@ describe("SlackIngressStore", () => {
   it("claims once, recovers an expired lease, CAS transitions, and cleans terminal rows", async () => {
     const store = new SlackIngressStore(env.DB);
     const admitted = await store.admit(input, 1_000);
-    expect((await store.claim(admitted.id, "worker-a", 1_000, 2_000))?.attempts).toBe(1);
-    expect(await store.claim(admitted.id, "worker-b", 1_000, 2_500)).toBeNull();
+    expect((await store.claim(admitted.row.id, "worker-a", 1_000, 2_000))?.attempts).toBe(1);
+    expect(await store.claim(admitted.row.id, "worker-b", 1_000, 2_500)).toBeNull();
     await store.reconcile(3_001);
-    expect((await store.claim(admitted.id, "worker-b", 1_000, 3_002))?.attempts).toBe(2);
+    expect((await store.claim(admitted.row.id, "worker-b", 1_000, 3_002))?.attempts).toBe(2);
     expect(
       await store.transition(
-        admitted.id,
+        admitted.row.id,
         "worker-a",
         "processing",
         "session_created",
@@ -52,7 +52,7 @@ describe("SlackIngressStore", () => {
     expect(
       (
         await store.transition(
-          admitted.id,
+          admitted.row.id,
           "worker-b",
           "processing",
           "session_created",
@@ -65,7 +65,7 @@ describe("SlackIngressStore", () => {
     expect(
       (
         await store.transition(
-          admitted.id,
+          admitted.row.id,
           "worker-b",
           "session_created",
           "prompt_queued",
@@ -78,7 +78,7 @@ describe("SlackIngressStore", () => {
     expect(
       (
         await store.transition(
-          admitted.id,
+          admitted.row.id,
           "worker-b",
           "prompt_queued",
           "completed",
@@ -94,8 +94,8 @@ describe("SlackIngressStore", () => {
     const store = new SlackIngressStore(env.DB);
     const admitted = await store.admit(input, 1_000);
     const claims = await Promise.all([
-      store.claim(admitted.id, "a", 1_000, 2_000),
-      store.claim(admitted.id, "b", 1_000, 2_000),
+      store.claim(admitted.row.id, "a", 1_000, 2_000),
+      store.claim(admitted.row.id, "b", 1_000, 2_000),
     ]);
     expect(claims.filter(Boolean)).toHaveLength(1);
     const expired = await store.admit(
@@ -108,6 +108,6 @@ describe("SlackIngressStore", () => {
       },
       1_000
     );
-    expect(await store.claim(expired.id, "a", 1_000, 2_000)).toBeNull();
+    expect(await store.claim(expired.row.id, "a", 1_000, 2_000)).toBeNull();
   });
 });
