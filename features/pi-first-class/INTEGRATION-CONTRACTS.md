@@ -62,6 +62,7 @@ Import `@open-inspect/shared/pi-migration-reservations`. The reserved versions a
 | SessionDO |      60 | external actions  | approvals and execution persistence  |
 | SessionDO |      61 | core authority    | creation-time Pi capability snapshot |
 | SessionDO |      62 | Pi projection     | dispatch CAS and projection sequence |
+| SessionDO |      64 | Pi controls       | native control receipts              |
 | D1        |    0090 | external actions  | long-lived external action authority |
 | D1        |    0091 | MCP               | long-lived MCP authority             |
 | D1        |    0092 | Slack ingress     | durable bot ingress receipts         |

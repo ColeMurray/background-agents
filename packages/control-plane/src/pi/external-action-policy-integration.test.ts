@@ -58,6 +58,7 @@ describe("Pi external action approval integration", () => {
         getSessionRepositories: () => [],
       },
       messages: { getProcessingMessage: () => ({ id: activeOperationId }) as never },
+      controls: { isActiveOperation: () => false },
       credentials: { getOpenAIAccess: vi.fn() },
       skills: { getSandboxInstallation: vi.fn(async () => null) },
       repositories: {

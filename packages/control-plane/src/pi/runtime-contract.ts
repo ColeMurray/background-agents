@@ -1,6 +1,7 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import type { JsonValue } from "@earendil-works/chord";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -71,6 +72,70 @@ export const piRuntimeOperationStatusSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("settled"), result: piRuntimeResultSchema }),
 ]) satisfies z.ZodType<PiRuntimeOperationStatus>;
 
+const controlBase = z.object({
+  sessionId: z.string().min(1),
+  requestId: z.string().min(1).max(128),
+});
+const conversationId = z.number().int().positive();
+const operationId = z.string().min(1).max(128);
+export const piRuntimeControlSchema = z
+  .discriminatedUnion("action", [
+    controlBase.extend({ action: z.literal("list_conversations") }),
+    controlBase.extend({ action: z.literal("get_conversation"), conversationId }),
+    controlBase.extend({
+      action: z.enum(["submit", "send", "steer", "follow_up"]),
+      conversationId: conversationId.optional(),
+      content: z.string().min(1).max(20_000),
+      model: z.string().min(1).optional(),
+      reasoningEffort: z.string().nullable().optional(),
+    }),
+    controlBase.extend({
+      action: z.literal("cancel_exact"),
+      conversationId: conversationId.optional(),
+      operationId: operationId.optional(),
+      submissionId: z.number().int().positive().optional(),
+      taskId: z.number().int().positive().optional(),
+    }),
+    controlBase.extend({
+      action: z.literal("fork"),
+      conversationId,
+      entryId: z.number().int().positive(),
+    }),
+    controlBase.extend({ action: z.literal("reset"), conversationId: conversationId.optional() }),
+    controlBase.extend({
+      action: z.literal("handoff"),
+      conversationId: conversationId.optional(),
+      handoff: z.string().min(1).max(20_000),
+    }),
+    controlBase.extend({
+      action: z.literal("compact"),
+      conversationId: conversationId.optional(),
+      instructions: z.string().max(4_000).optional(),
+    }),
+    controlBase.extend({ action: z.enum(["task_graph", "inspect"]) }),
+  ])
+  .refine(
+    (value) =>
+      value.action !== "cancel_exact" ||
+      value.operationId !== undefined ||
+      value.submissionId !== undefined ||
+      value.taskId !== undefined,
+    "Exact cancel target is required"
+  );
+export type PiRuntimeControl = z.infer<typeof piRuntimeControlSchema>;
+export interface PiRuntimeControlResult {
+  requestId: string;
+  state: "completed" | "accepted" | "indeterminate";
+  result?: JsonValue;
+}
+export const piRuntimeControlCompletionSchema = z.strictObject({
+  requestId: z.string().min(1).max(128),
+  status: z.enum(["completed", "failed"]),
+  costUsd: z.number().finite().nonnegative(),
+  errorCode: z.string().min(1).max(128).optional(),
+});
+export type PiRuntimeControlCompletion = z.infer<typeof piRuntimeControlCompletionSchema>;
+
 /** Session-scoped port for the separate Pi Durable Object namespace. */
 export interface PiRuntimeDispatch {
   initialize(sessionId: string, snapshot: PiFeatureCapabilitySnapshot): Promise<void>;
@@ -78,6 +143,7 @@ export interface PiRuntimeDispatch {
   lookup(sessionId: string, operationId: string): Promise<PiRuntimeOperationStatus>;
   abort(sessionId: string, operationId?: string): Promise<boolean>;
   status(sessionId: string): Promise<{ busy: boolean; pending: number }>;
+  control(input: PiRuntimeControl): Promise<PiRuntimeControlResult>;
   refreshDiff(sessionId: string): Promise<void>;
   destroy(sessionId: string): Promise<void>;
 }

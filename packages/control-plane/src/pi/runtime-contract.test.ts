@@ -1,7 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { piRuntimeOperationStatusSchema, toPiModel, toPiThinkingLevel } from "./runtime-contract";
+import {
+  piRuntimeControlSchema,
+  piRuntimeOperationStatusSchema,
+  toPiModel,
+  toPiThinkingLevel,
+} from "./runtime-contract";
 
 describe("Pi runtime contract", () => {
+  it("bounds native controls and requires exact cancellation targets", () => {
+    expect(
+      piRuntimeControlSchema.safeParse({
+        sessionId: "s",
+        requestId: "r",
+        action: "steer",
+        content: "x".repeat(20_001),
+      }).success
+    ).toBe(false);
+    expect(
+      piRuntimeControlSchema.safeParse({ sessionId: "s", requestId: "r", action: "cancel_exact" })
+        .success
+    ).toBe(false);
+    expect(
+      piRuntimeControlSchema.safeParse({
+        sessionId: "s",
+        requestId: "r",
+        action: "cancel_exact",
+        taskId: 1,
+      }).success
+    ).toBe(true);
+  });
   it("maps Open-Inspect OpenAI model ids to Pi's Codex provider", () => {
     expect(toPiModel("openai/gpt-6.1-sol")).toEqual({
       provider: "openai-codex",

@@ -56,4 +56,38 @@ describe("createOpenInspectExtension", () => {
       "Delegate independent analysis"
     );
   });
+
+  it("rejects a fifth active same-session subagent before creating its conversation", async () => {
+    const extension = createSubagentExtension();
+    const tool = extension.tools?.find((candidate) => candidate.name === "subagent");
+    if (!tool) throw new Error("Expected subagent tool");
+    const createConversation = vi.fn();
+    const api = {
+      taskId: 99,
+      agent: vi.fn(async () => ({ extensions: [extension] })),
+      commit: vi.fn(async (change) =>
+        change({
+          scanConversations: vi
+            .fn()
+            .mockResolvedValueOnce({ items: [] })
+            .mockResolvedValueOnce({
+              items: Array.from({ length: 4 }, (_, index) => ({
+                id: index + 1,
+                owner: { conversationId: 1, taskId: index + 10 },
+              })),
+            }),
+          task: vi.fn(async () => ({ state: { status: "running", phase: "run" } })),
+          createConversation,
+        })
+      ),
+    };
+    await expect(
+      tool.execute({ task: "bounded work" }, api as unknown as ToolExecutionApi, {
+        abortSignal: undefined,
+        value: () => undefined,
+        toString: () => "test",
+      })
+    ).rejects.toThrow("Pi active subagent limit reached");
+    expect(createConversation).not.toHaveBeenCalled();
+  });
 });

@@ -13,6 +13,7 @@ import {
 import type { MessageRepository } from "../../message-repository";
 import type { PiCredentialService } from "../../pi-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
+import type { PiControlRepository } from "../../pi-control-repository";
 import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
 import type { ExternalActionGateway } from "../../external-action-gateway";
 import { z } from "zod";
@@ -52,6 +53,7 @@ import { publicSourceControlError } from "../../../source-control";
 interface PiBridgeHandlerOptions {
   sessions: Pick<SessionCoreRepository, "getSession" | "getSessionRepositories">;
   messages: Pick<MessageRepository, "getProcessingMessage">;
+  controls: Pick<PiControlRepository, "isActiveOperation">;
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
   repositories: Pick<
@@ -427,7 +429,8 @@ export class PiBridgeHandler {
     return (
       this.options.sessions.getSession()?.harness === "pi" &&
       !!operationId &&
-      this.options.messages.getProcessingMessage()?.id === operationId
+      (this.options.messages.getProcessingMessage()?.id === operationId ||
+        this.options.controls.isActiveOperation(operationId))
     );
   }
 

@@ -275,6 +275,7 @@ function buildQueue(
     abort: vi.fn(async () => true),
     lookup: vi.fn<PiRuntimeDispatch["lookup"]>(async () => ({ status: "running" })),
     status: vi.fn(async () => ({ busy: false, pending: 0 })),
+    control: vi.fn(),
     refreshDiff: vi.fn(async () => {}),
     destroy: vi.fn(async () => {}),
   };

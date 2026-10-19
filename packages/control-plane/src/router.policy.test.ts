@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(246);
+    expect(routes).toHaveLength(252);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(188);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(246);
+    expect(new Set(paths).size).toBe(194);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(252);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },
@@ -61,6 +61,15 @@ describe("route policy table", () => {
         authorization: { kind: "service", services: ["slack-bot"] },
       });
     }
+    expect(routeFor("POST", "/sessions/session-1/pi/control")?.authorization).toMatchObject({
+      allOf: [{ kind: "session", action: "collaborate" }],
+    });
+    expect(
+      routeFor("POST", "/sessions/session-1/pi/lifecycle-control")?.authorization
+    ).toMatchObject({ allOf: [{ kind: "session", action: "lifecycle" }] });
+    expect(routeFor("GET", "/sessions/session-1/pi/inspect")?.authorization).toMatchObject({
+      allOf: [{ kind: "session", action: "read" }],
+    });
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
       authentication: { kind: "user" },
       authorization: { kind: "active-self" },

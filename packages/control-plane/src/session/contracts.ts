@@ -110,6 +110,8 @@ export const SessionInternalPaths = {
   piCredential: "/internal/pi-credential",
   piCapabilityAuthority: "/internal/pi-capability-authority",
   piContext: "/internal/pi-context",
+  piControl: "/internal/pi-control",
+  piControlCompletion: "/internal/pi-control-completion",
   piRepositoryTool: "/internal/pi-repository-tool",
   piRepositoryMaterialization: "/internal/pi-repository-materialization",
   piExternalActionPrepare: "/internal/pi-external-action/prepare",

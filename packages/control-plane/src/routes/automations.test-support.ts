@@ -105,6 +105,7 @@ export function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS)
       abort: vi.fn(),
       lookup: vi.fn(),
       status: vi.fn(),
+      control: vi.fn(),
       refreshDiff: vi.fn(),
       destroy: vi.fn(),
     },

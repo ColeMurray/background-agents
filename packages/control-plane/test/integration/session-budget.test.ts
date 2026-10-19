@@ -101,6 +101,7 @@ describe("session budgets", () => {
       lookup,
       abort,
       status: vi.fn(async () => ({ busy: true, pending: 1 })),
+      control: vi.fn(),
       refreshDiff: vi.fn(async () => {}),
       destroy: vi.fn(async () => {}),
     } satisfies PiRuntimeDispatch;

@@ -179,6 +179,8 @@ import type { SessionWebSocket } from "../platform-ports";
 import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import { PiCredentialService } from "./pi-credential-service";
 import { PiResultHandler } from "./http/handlers/pi-result.handler";
+import { PiControlHandler } from "./http/handlers/pi-control.handler";
+import { PiControlRepository } from "./pi-control-repository";
 import { PiEventHandler } from "./http/handlers/pi-event.handler";
 import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
 import { PiOperationRepository } from "./pi-operation-repository";
@@ -800,6 +802,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         settledAt
       )
   );
+  const piControlRepository = new PiControlRepository(sql);
+  const piControlHandler = new PiControlHandler(
+    sessionCoreRepository,
+    piControlRepository,
+    env.PI_SESSION,
+    log
+  );
   const visiblePiTokens = new Set<string>();
   const piEventHandler = new PiEventHandler(
     piOperations,
@@ -936,6 +945,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const piBridgeHandler = new PiBridgeHandler({
     sessions: sessionCoreRepository,
     messages: messageRepository,
+    controls: piControlRepository,
     credentials: piCredentialService,
     skills: new SessionSkillStore(db),
     repositories: piRepositoryTools,
@@ -1214,6 +1224,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     externalActionDecision: (request) => piBridgeHandler.externalActionDecision(request),
     piSandboxCommand: (request) => piSandboxExecutionHandler.handle(request),
     piResult: (request) => piResultHandler.handle(request),
+    piControl: (request) => piControlHandler.handle(request),
+    piControlCompletion: (request) => piControlHandler.complete(request),
     piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
     scmCredentials: (_request, _url, requestLog) => sandboxHandler.scmCredentials(requestLog),

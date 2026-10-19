@@ -19,6 +19,10 @@ import {
   type AgentEvent,
   type AgentEventStream,
   type EntryRecord,
+  type ConversationId,
+  type EntryId,
+  type TaskId,
+  type SubmissionId,
 } from "@earendil-works/pi-durable";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
@@ -30,7 +34,7 @@ import {
   PermanentPiResultDeliveryError,
   RetryablePiProjectionError,
 } from "../pi/projection-retry-policy";
-import { translatePiEvents } from "../pi/event-translator";
+import { translatePiEvents, type PiEventTranslationState } from "../pi/event-translator";
 import {
   toPiModel,
   toPiThinkingLevel,
@@ -39,6 +43,8 @@ import {
   type PiRuntimeReceipt,
   type PiRuntimeResult,
   type PiRuntimeUsage,
+  type PiRuntimeControl,
+  type PiRuntimeControlResult,
 } from "../pi/runtime-contract";
 import type { WorkerBindings } from "./platform";
 import {
@@ -120,6 +126,8 @@ const DELETION_STATE_KEY = "open-inspect:deletion-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
 const OPERATION_METADATA_PREFIX = "open-inspect:operation:";
+const CONTROL_COMPLETION_PREFIX = "open-inspect:control-completion:";
+const CONTROL_SUBMISSION_REQUEST_PREFIX = "open-inspect-control:";
 const MAX_OPERATION_METADATA_TOMBSTONES = 128;
 const DIFF_FAILURE_REPORT_TIMEOUT_MS = 5_000;
 
@@ -128,6 +136,15 @@ interface PiOperationMetadata {
   readonly baseline: PiAccountingSnapshot;
   readonly projectedCostUsd: number;
   readonly settledAt?: number;
+}
+interface NativeControlCompletion {
+  readonly sessionId: string;
+  readonly requestId: string;
+  readonly baseline: PiAccountingSnapshot;
+  readonly suppressCost: boolean;
+  readonly target:
+    | { readonly kind: "submission"; readonly id: number }
+    | { readonly kind: "task"; readonly id: number };
 }
 /** OpenCode-free, sandbox-free Pi runtime for one Open-Inspect session. */
 export class PiSessionDO extends DurableObject<PiWorkerBindings> {
@@ -149,11 +166,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     ((signal?: AbortSignal) => Promise<PiRepositoryWorkspace>) | undefined;
   private readonly repositoryWorkspaceAbort = new AbortController();
   private harnessOpened = false;
-  private readonly eventStreams = new Map<string, AgentEventStream>();
+  private eventStream: AgentEventStream | undefined;
+  private eventStreamOpening: Promise<AgentEventStream> | undefined;
+  private readonly projectedOperations = new Set<string>();
+  private readonly translationStateByOperation = new Map<string, PiEventTranslationState>();
+  private eventRouterWork: Promise<void> = Promise.resolve();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
   private readonly firstModelRequestObserved = new Set<string>();
   private readonly firstTokenCommitted = new Set<string>();
   private readonly firstTokenProjected = new Set<string>();
+  private readonly activeOperationByConversation = new Map<string, string>();
+  private submissionControlLine: Promise<void> = Promise.resolve();
   readonly projectionOutbox = new PiProjectionOutbox(
     this.ctx.storage.sql,
     (sequence, displayId, operationId, event) =>
@@ -433,13 +456,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!sessionId) return;
     await this.ensureSession(sessionId);
     const pending = await this.harness.pending({ session: ROOT_SESSION });
-    await Promise.all(
-      pending.map((operation) =>
+    const completionRecords = await this.ctx.storage.list<NativeControlCompletion>({
+      prefix: CONTROL_COMPLETION_PREFIX,
+    });
+    await Promise.all([
+      ...[...completionRecords.values()].map((record) => {
+        this.ctx.waitUntil(this.resumeNativeControlCompletion(record));
+        return Promise.resolve();
+      }),
+      ...pending.map((operation) =>
         this.startEventRelay(sessionId, operation.operationId, {
           recoverSnapshot: operation.status === "running",
         })
-      )
-    );
+      ),
+    ]);
   }
 
   async submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt> {
@@ -532,6 +562,267 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     return { busy, pending: pending.length };
   }
 
+  async control(input: PiRuntimeControl): Promise<PiRuntimeControlResult> {
+    await this.ensureSession(input.sessionId);
+    const pi = await this.harness.pi();
+    if (input.action === "list_conversations") {
+      const page = await pi.commit((tx) => tx.scanConversations({}, 33), BACKGROUND_CONTEXT);
+      if (page.items.length > 32) throw new Error("Pi conversation limit reached");
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: page.items.map((record) => ({
+          id: record.id,
+          ...(record.parent
+            ? { parent: { conversationId: record.parent.conversationId, at: record.parent.at } }
+            : {}),
+          ...(record.owner
+            ? {
+                owner: { conversationId: record.owner.conversationId, taskId: record.owner.taskId },
+              }
+            : {}),
+        })) as unknown as JsonValue,
+      };
+    }
+    if (input.action === "inspect") {
+      const inspection = await pi.inspect(BACKGROUND_CONTEXT);
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: sanitizeInspection(inspection),
+      };
+    }
+    if (input.action === "task_graph") {
+      const graph = await pi.taskGraph(BACKGROUND_CONTEXT);
+      try {
+        return {
+          requestId: input.requestId,
+          state: "completed",
+          result: graph.value as unknown as JsonValue,
+        };
+      } finally {
+        graph.dispose();
+      }
+    }
+    const conversation = await this.controlConversation(
+      pi,
+      "conversationId" in input ? input.conversationId : undefined
+    );
+    if (input.action === "get_conversation") {
+      const page = await conversation.entries({}, 200, undefined, BACKGROUND_CONTEXT);
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: {
+          id: conversation.id,
+          entries: page.items.map((entry) => ({
+            id: entry.id,
+            kind: entry.kind,
+            ...(entry.byTaskId === undefined ? {} : { taskId: entry.byTaskId }),
+          })),
+        } as unknown as JsonValue,
+      };
+    }
+    if (input.action === "cancel_exact") {
+      if (input.operationId) {
+        const operationId = input.operationId;
+        const matched = (await pi.inspect(BACKGROUND_CONTEXT)).submissions.find(
+          (submission) =>
+            (submission.requestId === operationId ||
+              submission.requestId === nativeControlSubmissionRequestId(operationId)) &&
+            (!input.conversationId || submission.conversationId === input.conversationId)
+        );
+        if (!matched)
+          return {
+            requestId: input.requestId,
+            state: "completed",
+            result: { outcome: "not_found" },
+          };
+        const outcome = await pi.abortSubmission(
+          matched.id,
+          BACKGROUND_CONTEXT,
+          input.conversationId as ConversationId | undefined
+        );
+        return { requestId: input.requestId, state: "completed", result: { outcome } };
+      }
+      if (input.submissionId) {
+        const outcome = await pi.abortSubmission(
+          input.submissionId as SubmissionId,
+          BACKGROUND_CONTEXT,
+          input.conversationId as ConversationId | undefined
+        );
+        return { requestId: input.requestId, state: "completed", result: { outcome } };
+      }
+      if (input.taskId) {
+        const outcome = await pi.abortTask(input.taskId as TaskId, BACKGROUND_CONTEXT);
+        return { requestId: input.requestId, state: "completed", result: { outcome } };
+      }
+      throw new Error("Exact Pi cancel target is required");
+    }
+    if (input.action === "reset" || input.action === "handoff") {
+      await conversation.reset(
+        input.action === "handoff" ? input.handoff : undefined,
+        BACKGROUND_CONTEXT
+      );
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: { conversationId: conversation.id },
+      };
+    }
+    if (input.action === "compact") {
+      if ((await pi.inspect(BACKGROUND_CONTEXT)).tasks.length >= 4)
+        throw new Error("Pi active task limit reached");
+      const baseline = await this.accountingTotals();
+      const taskId = await conversation.compact(input.instructions, BACKGROUND_CONTEXT);
+      await this.scheduleNativeControlCompletion({
+        sessionId: input.sessionId,
+        requestId: input.requestId,
+        baseline,
+        suppressCost: false,
+        target: { kind: "task", id: taskId },
+      });
+      return {
+        requestId: input.requestId,
+        state: "accepted",
+        result: { conversationId: conversation.id, taskId },
+      };
+    }
+    if (input.action === "fork") {
+      const all = await pi.commit((tx) => tx.scanConversations({}, 33), BACKGROUND_CONTEXT);
+      if (all.items.length >= 32) throw new Error("Pi conversation limit reached");
+      const source = all.items.find((record) => record.id === input.conversationId);
+      if (!source) throw new Error("Pi conversation not found");
+      if (source.parent || source.owner) throw new Error("Pi fork depth limit reached");
+      const fork = await conversation.fork(
+        input.entryId as EntryId,
+        { ownership: { kind: "ownerless" } },
+        BACKGROUND_CONTEXT
+      );
+      return {
+        requestId: input.requestId,
+        state: "completed",
+        result: { conversationId: fork.id },
+      };
+    }
+    if (!(
+      input.action === "submit" ||
+      input.action === "send" ||
+      input.action === "steer" ||
+      input.action === "follow_up"
+    ))
+      throw new Error("Unsupported Pi control action");
+    return this.onSubmissionControlLine(async () => {
+      const inspection = await pi.inspect(BACKGROUND_CONTEXT);
+      if (inspection.tasks.length >= 4) throw new Error("Pi active task limit reached");
+      if (
+        (input.action === "steer" || input.action === "follow_up") &&
+        (input.model !== undefined || input.reasoningEffort !== undefined)
+      )
+        throw new Error("Busy Pi controls cannot change model configuration");
+      if (
+        (input.action === "submit" || input.action === "send") &&
+        (input.model !== undefined || input.reasoningEffort !== undefined)
+      ) {
+        const busy =
+          inspection.tasks.length > 0 ||
+          inspection.submissions.some((submission) => submission.status === "placed");
+        if (busy) throw new Error("Pi model configuration is bound to an active submission");
+        const model = input.model ? toPiModel(input.model) : undefined;
+        const thinking = toPiThinkingLevel(input.reasoningEffort);
+        await conversation.configure(
+          {
+            ...(model ? { model: { provider: model.provider, modelId: model.id } } : {}),
+            ...(thinking === undefined ? {} : { thinkingLevel: thinking }),
+          },
+          BACKGROUND_CONTEXT
+        );
+      }
+      const whenBusy =
+        input.action === "steer" ? "steer" : input.action === "follow_up" ? "followUp" : "reject";
+      const baseline = await this.accountingTotals();
+      const submission = await conversation.submit(
+        {
+          type: "input",
+          content: input.content,
+          requestId: nativeControlSubmissionRequestId(input.requestId),
+          whenBusy,
+        },
+        BACKGROUND_CONTEXT
+      );
+      await this.scheduleNativeControlCompletion({
+        sessionId: input.sessionId,
+        requestId: input.requestId,
+        baseline,
+        suppressCost: input.action === "steer" || input.action === "follow_up",
+        target: { kind: "submission", id: submission.id },
+      });
+      return {
+        requestId: input.requestId,
+        state: "accepted",
+        result: { conversationId: conversation.id, submissionId: submission.id },
+      };
+    });
+  }
+
+  private onSubmissionControlLine<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.submissionControlLine.catch(() => undefined).then(operation);
+    this.submissionControlLine = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async scheduleNativeControlCompletion(record: NativeControlCompletion): Promise<void> {
+    await this.ctx.storage.put(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`, record);
+    this.ctx.waitUntil(this.resumeNativeControlCompletion(record));
+  }
+
+  private async resumeNativeControlCompletion(record: NativeControlCompletion): Promise<void> {
+    const pi = await this.harness.pi();
+    let status: "completed" | "failed";
+    if (record.target.kind === "submission") {
+      const submission = await pi.submission(record.target.id as SubmissionId, BACKGROUND_CONTEXT);
+      if (!submission) throw new Error("Pi control submission is unavailable");
+      const settled = await submission.wait(BACKGROUND_CONTEXT);
+      status = settled.status === "done" ? "completed" : "failed";
+    } else {
+      const task = await pi.waitForTask(record.target.id as TaskId, BACKGROUND_CONTEXT);
+      status = task.state.outcome.status === "completed" ? "completed" : "failed";
+    }
+    const current = await this.accountingTotals();
+    const accounting = record.suppressCost
+      ? { costUsd: 0 }
+      : operationAccountingDelta(current, {
+          usage: record.baseline.usage,
+          costUsd: record.baseline.costUsd,
+        });
+    const response = await this.env.SESSION.getByName(record.sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piControlCompletion}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: record.requestId, status, costUsd: accounting.costUsd }),
+      })
+    );
+    if (!response.ok && response.status !== 404)
+      throw new Error(`Pi control completion rejected (${response.status})`);
+    await this.ctx.storage.delete(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`);
+  }
+
+  private async controlConversation(
+    pi: Awaited<ReturnType<PiSessionDO["harness"]["pi"]>>,
+    conversationId?: number
+  ) {
+    if (!conversationId) return pi.root(BACKGROUND_CONTEXT);
+    const conversation = await pi.conversation(
+      conversationId as ConversationId,
+      BACKGROUND_CONTEXT
+    );
+    if (!conversation) throw new Error("Pi conversation not found");
+    return conversation;
+  }
+
   async destroy(sessionId: string): Promise<void> {
     if ((await this.ctx.storage.get<string>(DELETION_STATE_KEY)) === "destroyed") return;
     await this.ctx.blockConcurrencyWhile(async () => {
@@ -542,9 +833,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         throw new Error("Pi Durable Object session identity mismatch");
       }
       if (stored === undefined) await this.ctx.storage.put(SESSION_ID_KEY, sessionId);
-      await Promise.all(
-        [...this.eventStreams.keys()].map((operationId) => this.stopEventRelay(operationId))
-      );
+      const opening = this.eventStreamOpening;
+      this.eventStreamOpening = undefined;
+      if (opening) await opening.then((stream) => stream.stop()).catch(() => {});
+      if (this.eventStream) {
+        await this.eventStream.stop();
+        this.eventStream = undefined;
+      }
+      await this.eventRouterWork.catch(() => {});
+      this.projectedOperations.clear();
+      this.translationStateByOperation.clear();
+      this.eventRelayWork.clear();
       if (deletionState !== "destroying") {
         await this.ctx.storage.put(DELETION_STATE_KEY, "destroying");
         // A cold object has no live code to abort. Opening its harness here can
@@ -878,14 +1177,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
-    if (!operation) throw new Error("Pi Durable has no active operation");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
     const stub = this.env.SESSION.getByName(sessionId);
     const response = await stub.fetch(
       new Request(`http://session${SessionInternalPaths.piCredential}`, {
         method: "POST",
         headers: {
-          "X-Pi-Operation-ID": operation.operationId,
+          "X-Pi-Operation-ID": operationId,
           ...(rejectedCredentialVersion === undefined
             ? {}
             : { "X-Pi-Rejected-Credential-Version": String(rejectedCredentialVersion) }),
@@ -916,7 +1215,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       timestamp_ms: brokerCompletedAt,
       duration_ms: brokerCompletedAt - brokerStartedAt,
       session_id: sessionId,
-      operation_id: operation.operationId,
+      operation_id: operationId,
       recovery: rejectedCredentialVersion === undefined ? 0 : 1,
     });
     return {
@@ -998,8 +1297,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   ) {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
-    if (!operation) throw new Error("Pi Durable has no active operation");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
     const pins = await this.ensureRepositoryPins(signal);
     const position = typeof args.repository === "number" ? args.repository : 0;
     const repository = pins.repositories.find((candidate) => candidate.position === position);
@@ -1009,7 +1308,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Pi-Operation-ID": operation.operationId,
+          "X-Pi-Operation-ID": operationId,
         },
         body: JSON.stringify({ tool, arguments: { ...args, commitSha: repository.commitSha } }),
         signal,
@@ -1065,14 +1364,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   ) {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
-    if (!operation) throw new Error("Pi Durable has no active operation");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${path}${search}`, {
         ...init,
         headers: {
           "Content-Type": "application/json",
-          "X-Pi-Operation-ID": operation.operationId,
+          "X-Pi-Operation-ID": operationId,
         },
         signal,
       })
@@ -1183,7 +1482,27 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async currentOperationId(): Promise<string | null> {
-    return (await this.harness.pending({ session: ROOT_SESSION }))[0]?.operationId ?? null;
+    return this.attributedOperationId(ROOT_SESSION);
+  }
+
+  private async attributedOperationId(conversationId: string): Promise<string | null> {
+    const active = this.activeOperationByConversation.get(conversationId);
+    if (active) return active;
+    const inspection = await (await this.harness.pi()).inspect(BACKGROUND_CONTEXT);
+    const candidates = inspection.submissions.filter(
+      (submission) =>
+        String(submission.conversationId) === conversationId &&
+        submission.status === "placed" &&
+        submission.requestId !== undefined
+    );
+    if (candidates.length === 1) return operationIdForSubmission(candidates[0]!.requestId) ?? null;
+    if (candidates.length > 1) return null;
+    const allCandidates = inspection.submissions.filter(
+      (submission) => submission.status === "placed" && submission.requestId !== undefined
+    );
+    return allCandidates.length === 1
+      ? (operationIdForSubmission(allCandidates[0]!.requestId) ?? null)
+      : null;
   }
 
   private async publishDiffBundle(bundle: SessionDiffUpload, signal?: AbortSignal): Promise<void> {
@@ -1275,78 +1594,118 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     operationId: string,
     options: { recoverSnapshot?: boolean } = {}
   ): Promise<void> {
-    if (this.eventStreams.has(operationId)) return;
-    const stream = await this.harness.session(ROOT_SESSION).events(BACKGROUND_CONTEXT);
+    if (this.projectedOperations.has(operationId)) return;
     const metadata = await this.operationMetadata(operationId);
     if (!metadata) throw new Error("Pi operation metadata is unavailable");
-    const state = { text: "", tools: new Map() };
+    this.projectedOperations.add(operationId);
+    this.translationStateByOperation.set(operationId, { text: "", tools: new Map() });
     const queue = (events: readonly AgentEvent[]) => {
-      const previous = (this.eventRelayWork.get(operationId) ?? Promise.resolve()).catch(() => {});
-      const work = previous.then(async () => {
-        for (const source of events) {
-          const translated = translatePiEvents([source], state, {
-            sessionId,
-            operationId,
-            timestamp: Date.now() / 1_000,
-          });
-          const sourceIdentity = piAgentEventIdentity(source);
-          const accounting =
-            source.type === "usage_changed" ||
-            source.type === "snapshot" ||
-            source.type === "tool_execution_end" ||
-            source.type === "compaction_end" ||
-            translated.some((event) => event.type === "step_finish")
-              ? await this.observeOperationAccounting(operationId)
-              : undefined;
-          for (const event of translated) {
-            if (event.type === "step_start" && !this.firstModelRequestObserved.has(operationId)) {
-              this.firstModelRequestObserved.add(operationId);
-              this.log.info("pi.latency", {
-                event: "pi.latency",
-                milestone: "model_request",
-                timestamp_ms: Date.now(),
-                session_id: sessionId,
-                operation_id: operationId,
-                model: metadata.model,
-              });
+      const work = this.eventRouterWork
+        .catch(() => {})
+        .then(async () => {
+          for (const source of events) {
+            if (source.type === "run_start" || (source.type === "snapshot" && source.run)) {
+              const inputs = source.type === "run_start" ? source.inputs : source.run!.inputs;
+              const inspection = await (await this.harness.pi()).inspect(BACKGROUND_CONTEXT);
+              const submission = inspection.submissions.find(
+                (candidate) => candidate.id === inputs[0]
+              );
+              if (submission?.requestId)
+                this.activeOperationByConversation.set(
+                  ROOT_SESSION,
+                  operationIdForSubmission(submission.requestId)!
+                );
             }
-            this.projectionOutbox.enqueue(
-              piProjectionIdentity(operationId, event, sourceIdentity),
-              operationId,
-              this.priceStepEvent(event, metadata.model, accounting?.costUsd),
-              Date.now()
-            );
-            if (event.type === "token" && !this.firstTokenCommitted.has(operationId)) {
-              this.firstTokenCommitted.add(operationId);
-              this.log.info("pi.latency", {
-                event: "pi.latency",
-                milestone: "first_token_committed",
-                timestamp_ms: Date.now(),
-                session_id: sessionId,
-                operation_id: operationId,
-                model: metadata.model,
-              });
+            const routedOperation = this.activeOperationByConversation.get(ROOT_SESSION);
+            if (!routedOperation || !this.projectedOperations.has(routedOperation)) {
+              if (source.type === "run_end")
+                this.activeOperationByConversation.delete(ROOT_SESSION);
+              continue;
             }
+            const routedMetadata = await this.operationMetadata(routedOperation);
+            const state = this.translationStateByOperation.get(routedOperation);
+            if (!routedMetadata || !state) continue;
+            const translated = translatePiEvents([source], state, {
+              sessionId,
+              operationId: routedOperation,
+              timestamp: Date.now() / 1_000,
+            });
+            const sourceIdentity = piAgentEventIdentity(source);
+            const accounting =
+              source.type === "usage_changed" ||
+              source.type === "snapshot" ||
+              source.type === "tool_execution_end" ||
+              source.type === "compaction_end" ||
+              translated.some((event) => event.type === "step_finish")
+                ? await this.observeOperationAccounting(routedOperation)
+                : undefined;
+            for (const event of translated) {
+              if (
+                event.type === "step_start" &&
+                !this.firstModelRequestObserved.has(routedOperation)
+              ) {
+                this.firstModelRequestObserved.add(routedOperation);
+                this.log.info("pi.latency", {
+                  event: "pi.latency",
+                  milestone: "model_request",
+                  timestamp_ms: Date.now(),
+                  session_id: sessionId,
+                  operation_id: routedOperation,
+                  model: routedMetadata.model,
+                });
+              }
+              this.projectionOutbox.enqueue(
+                piProjectionIdentity(routedOperation, event, sourceIdentity),
+                routedOperation,
+                this.priceStepEvent(event, routedMetadata.model, accounting?.costUsd),
+                Date.now()
+              );
+              if (event.type === "token" && !this.firstTokenCommitted.has(routedOperation)) {
+                this.firstTokenCommitted.add(routedOperation);
+                this.log.info("pi.latency", {
+                  event: "pi.latency",
+                  milestone: "first_token_committed",
+                  timestamp_ms: Date.now(),
+                  session_id: sessionId,
+                  operation_id: routedOperation,
+                  model: routedMetadata.model,
+                });
+              }
+            }
+            if (accounting?.changed) {
+              const event = accountingProjectionEvent(
+                sessionId,
+                routedOperation,
+                accounting.costUsd
+              );
+              this.projectionOutbox.enqueue(
+                piProjectionIdentity(routedOperation, event),
+                routedOperation,
+                event,
+                Date.now()
+              );
+              await this.recordProjectedCost(routedOperation, accounting.costUsd);
+            }
+            if (source.type === "run_end") this.activeOperationByConversation.delete(ROOT_SESSION);
           }
-          if (accounting?.changed) {
-            const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
-            this.projectionOutbox.enqueue(
-              piProjectionIdentity(operationId, event),
-              operationId,
-              event,
-              Date.now()
-            );
-            await this.recordProjectedCost(operationId, accounting.costUsd);
-          }
-        }
-      });
-      this.eventRelayWork.set(operationId, work);
+        });
+      this.eventRouterWork = work;
+      for (const registered of this.projectedOperations) this.eventRelayWork.set(registered, work);
       return work;
     };
-    this.eventStreams.set(operationId, stream);
+    if (this.eventStream || this.eventStreamOpening) {
+      return;
+    }
+    const opening = this.harness.session(ROOT_SESSION).events(BACKGROUND_CONTEXT);
+    this.eventStreamOpening = opening;
+    const stream = await opening;
+    if (this.eventStreamOpening === opening) this.eventStreamOpening = undefined;
+    this.eventStream = stream;
     if (options.recoverSnapshot) void queue([stream.snapshot]).catch(() => {});
     stream.start((events) => queue(events).catch(() => {}));
-    void stream.closed.then(() => this.eventStreams.delete(operationId));
+    void stream.closed.then(() => {
+      if (this.eventStream === stream) this.eventStream = undefined;
+    });
   }
 
   private async captureFinalProjection(operationId: string): Promise<void> {
@@ -1452,17 +1811,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async stopEventRelay(operationId: string): Promise<void> {
-    const stream = this.eventStreams.get(operationId);
-    if (stream) {
-      this.eventStreams.delete(operationId);
-      await stream.stop();
-    }
     try {
       await this.eventRelayWork.get(operationId);
     } catch {
       // Terminal projection below is the durable backstop for a failed live relay.
     } finally {
       this.eventRelayWork.delete(operationId);
+      this.projectedOperations.delete(operationId);
+      this.translationStateByOperation.delete(operationId);
     }
   }
 
@@ -1544,6 +1900,47 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
 function isRetryableDiffPublicationStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function sanitizeInspection(
+  inspection: Awaited<ReturnType<Awaited<ReturnType<PiSessionDO["harness"]["pi"]>>["inspect"]>>
+): JsonValue {
+  return {
+    scheduling: inspection.scheduling,
+    tasks: inspection.tasks.slice(0, 64).map(({ record, state }) => ({
+      id: record.id,
+      kind: record.kind,
+      conversationId: record.conversationId,
+      state: {
+        kind: state.kind,
+        ...("phase" in record.state ? { phase: record.state.phase } : {}),
+      },
+    })),
+    submissions: inspection.submissions.slice(-200).map((submission) => ({
+      id: submission.id,
+      conversationId: submission.conversationId,
+      requestId: operationIdForSubmission(submission.requestId),
+      type: submission.type,
+      status: submission.status,
+      ...("entry" in submission && submission.entry !== undefined
+        ? { entry: submission.entry }
+        : {}),
+      ...("answer" in submission && submission.answer !== undefined
+        ? { answer: submission.answer }
+        : {}),
+    })),
+  } as unknown as JsonValue;
+}
+
+function nativeControlSubmissionRequestId(requestId: string): string {
+  return `${CONTROL_SUBMISSION_REQUEST_PREFIX}${requestId}`;
+}
+
+function operationIdForSubmission(requestId: string | undefined): string | undefined {
+  if (!requestId) return undefined;
+  return requestId.startsWith(CONTROL_SUBMISSION_REQUEST_PREFIX)
+    ? requestId.slice(CONTROL_SUBMISSION_REQUEST_PREFIX.length)
+    : requestId;
 }
 
 async function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

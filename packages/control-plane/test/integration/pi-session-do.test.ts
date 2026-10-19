@@ -8,13 +8,18 @@ import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
+import type { PiAccountingSnapshot } from "../../src/pi/accounting";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
 import { SessionInternalPaths } from "../../src/session/contracts";
 import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
-import type { PiRuntimeDispatch } from "../../src/pi/runtime-contract";
+import type {
+  PiRuntimeControl,
+  PiRuntimeControlResult,
+  PiRuntimeDispatch,
+} from "../../src/pi/runtime-contract";
 import {
   PermanentPiResultDeliveryError,
   RetryablePiProjectionError,
@@ -31,6 +36,14 @@ import {
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
   return env.PI_SESSION.getByName(name);
+}
+function controlPi(
+  stub: DurableObjectStub<PiSessionDO>,
+  input: PiRuntimeControl
+): Promise<PiRuntimeControlResult> {
+  return (
+    stub as unknown as { control(value: PiRuntimeControl): Promise<PiRuntimeControlResult> }
+  ).control(input);
 }
 
 function runInPiSessionDO<T>(
@@ -555,6 +568,287 @@ describe("PiSessionDO", () => {
     });
 
     await expect(queryDO(stub, "SELECT id FROM sandbox")).resolves.toEqual([]);
+  });
+
+  it("exposes bounded native controls with sanitized inspection and exact cancellation", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-controls");
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, async (instance) => {
+      const models = (instance as unknown as { models: MutableModels }).models;
+      const faux = fauxProvider();
+      models.setProvider(faux.provider);
+      faux.setResponses([fauxAssistantMessage("controlled answer")]);
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+    });
+    const list = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "list-1",
+      action: "list_conversations",
+    });
+    expect(list).toMatchObject({ state: "completed" });
+    const submitted = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "control-submit-1",
+      action: "submit",
+      content: "private sentinel prompt",
+    });
+    expect(submitted).toMatchObject({ state: "accepted" });
+    await runInPiSessionDO(stub, async (instance) => {
+      await expect(
+        instance.control({
+          sessionId: sessionName,
+          requestId: "follow-config",
+          action: "follow_up",
+          content: "queued B",
+          model: "openai/gpt-5.6-sol",
+        })
+      ).rejects.toThrow(/cannot change model/i);
+    });
+    const submissionId = (submitted.result as { submissionId: number }).submissionId;
+    await runInPiSessionDO(stub, async (instance) => {
+      const pi = await instance.harness.pi();
+      const submission = await pi.submission(submissionId as never, BACKGROUND_CONTEXT);
+      expect(submission).toBeDefined();
+      await submission!.wait(BACKGROUND_CONTEXT);
+    });
+    await runInPiSessionDO(stub, async (instance) =>
+      expect(
+        (
+          await (
+            instance as unknown as { accountingTotals(): Promise<{ usage: { total: number } }> }
+          ).accountingTotals()
+        ).usage.total
+      ).toBeGreaterThan(0)
+    );
+    const conversations = list.result as Array<{ id: number }>;
+    const rootId = conversations[0]!.id;
+    const detail = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "get-1",
+      action: "get_conversation",
+      conversationId: rootId,
+    });
+    const entries = (detail.result as { entries: Array<{ id: number }> }).entries;
+    const fork = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "fork-1",
+      action: "fork",
+      conversationId: rootId,
+      entryId: entries.at(-1)!.id,
+    });
+    expect(fork).toMatchObject({ state: "completed" });
+    const forkId = (fork.result as { conversationId: number }).conversationId;
+    await runInPiSessionDO(stub, async (instance) => {
+      await expect(
+        instance.control({
+          sessionId: sessionName,
+          requestId: "fork-depth",
+          action: "fork",
+          conversationId: forkId,
+          entryId: entries.at(-1)!.id,
+        })
+      ).rejects.toThrow(/depth limit/i);
+    });
+    await expect(
+      controlPi(stub, {
+        sessionId: sessionName,
+        requestId: "reset-1",
+        action: "handoff",
+        conversationId: rootId,
+        handoff: "continue safely",
+      })
+    ).resolves.toMatchObject({ state: "completed" });
+    const compact = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "compact-1",
+      action: "compact",
+      conversationId: rootId,
+      instructions: "retain decisions",
+    });
+    expect(compact).toMatchObject({ state: "accepted" });
+    const compactTaskId = (compact.result as { taskId: number }).taskId;
+    await expect(
+      controlPi(stub, {
+        sessionId: sessionName,
+        requestId: "cancel-compact",
+        action: "cancel_exact",
+        taskId: compactTaskId,
+      })
+    ).resolves.toMatchObject({ state: "completed" });
+    const inspection = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "inspect-1",
+      action: "inspect",
+    });
+    expect(JSON.stringify(inspection)).not.toContain("private sentinel prompt");
+    expect(JSON.stringify(inspection)).toContain("control-submit-1");
+    expect(JSON.stringify(inspection)).not.toContain("open-inspect-control:");
+    const graph = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "graph-1",
+      action: "task_graph",
+    });
+    expect(graph.state).toBe("completed");
+    const cancel = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "cancel-1",
+      action: "cancel_exact",
+      submissionId,
+    });
+    expect(cancel).toMatchObject({ state: "completed", result: { outcome: "settled" } });
+  });
+
+  it("replays one SessionDO control receipt after eviction", async () => {
+    const { sessionName } = await initializedPiStub("pi-control-receipt");
+    let sessionStub = env.SESSION.getByName(sessionName);
+    const body = JSON.stringify({
+      actorId: "user-1",
+      source: "web",
+      control: { sessionId: sessionName, requestId: "inspect-eviction", action: "inspect" },
+    });
+    const send = () =>
+      sessionStub.fetch(
+        new Request(`http://session${SessionInternalPaths.piControl}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        })
+      );
+    expect((await send()).status).toBe(200);
+    await expect(
+      runInSessionDO(sessionStub, (_instance, state) =>
+        state.abort("test: Pi control receipt eviction")
+      )
+    ).rejects.toThrow();
+    sessionStub = env.SESSION.getByName(sessionName);
+    await expect((await send()).json()).resolves.toMatchObject({
+      requestId: "inspect-eviction",
+      state: "completed",
+    });
+  });
+
+  it("reconciles native control completion and cost without a SessionDO transcript", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-control-completion");
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, async (instance) => {
+      const faux = fauxProvider();
+      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
+      faux.setResponses([fauxAssistantMessage("native answer")]);
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      const totals = vi
+        .fn()
+        .mockResolvedValueOnce({
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUsd: 0,
+        })
+        .mockResolvedValue({
+          usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, total: 12 },
+          costUsd: 0.25,
+        });
+      (
+        instance as unknown as { accountingTotals(): Promise<PiAccountingSnapshot> }
+      ).accountingTotals = totals;
+    });
+    const sessionStub = env.SESSION.getByName(sessionName);
+    const response = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.piControl}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: "user-1",
+          source: "web",
+          control: {
+            sessionId: sessionName,
+            requestId: "native-submit-1",
+            action: "submit",
+            content: "native input",
+          },
+        }),
+      })
+    );
+    expect(response.status).toBe(202);
+    await vi.waitFor(async () => {
+      await expect(
+        queryDO(
+          sessionStub,
+          "SELECT state FROM pi_control_receipts WHERE request_id = ?",
+          "native-submit-1"
+        )
+      ).resolves.toEqual([{ state: "completed" }]);
+    });
+    await expect(
+      queryDO(sessionStub, "SELECT id FROM messages WHERE id = ?", "native-submit-1")
+    ).resolves.toEqual([]);
+    const [{ total_cost: totalCost }] = await queryDO<{ total_cost: number }>(
+      sessionStub,
+      "SELECT total_cost FROM session"
+    );
+    expect(totalCost).toBeGreaterThan(0);
+  });
+
+  it("keeps active A and explicit steer/follow-up controls attributed to one conversation", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-control-attribution");
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, async (instance) => {
+      const faux = fauxProvider({ tokensPerSecond: 1 });
+      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
+      faux.setResponses([
+        fauxAssistantMessage("slow answer"),
+        fauxAssistantMessage("follow-up answer"),
+      ]);
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+    });
+    await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "active-a",
+      action: "submit",
+      content: "A",
+    });
+    await runInPiSessionDO(stub, async (instance) => {
+      await vi.waitFor(async () =>
+        expect(
+          (await (await instance.harness.pi()).inspect(BACKGROUND_CONTEXT)).submissions.some(
+            (submission) =>
+              submission.requestId?.endsWith("active-a") && submission.status === "placed"
+          )
+        ).toBe(true)
+      );
+    });
+    await expect(
+      controlPi(stub, {
+        sessionId: sessionName,
+        requestId: "steer-b",
+        action: "steer",
+        content: "B",
+      })
+    ).resolves.toMatchObject({ state: "accepted" });
+    await expect(
+      controlPi(stub, {
+        sessionId: sessionName,
+        requestId: "follow-c",
+        action: "follow_up",
+        content: "C",
+      })
+    ).resolves.toMatchObject({ state: "accepted" });
+    await runInPiSessionDO(stub, async (instance) => {
+      const submissions = (
+        await (await instance.harness.pi()).inspect(BACKGROUND_CONTEXT)
+      ).submissions.filter((submission) =>
+        ["active-a", "steer-b", "follow-c"].some((requestId) =>
+          submission.requestId?.endsWith(requestId)
+        )
+      );
+      expect(new Set(submissions.map((submission) => submission.conversationId)).size).toBe(1);
+    });
+    await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "cancel-a",
+      action: "cancel_exact",
+      operationId: "active-a",
+    });
   });
 
   it("opens Pi without constructing Computer for an idle root conversation", async () => {

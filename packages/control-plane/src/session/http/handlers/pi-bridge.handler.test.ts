@@ -5,7 +5,7 @@ import { ExternalActionDefinitionRegistry } from "../../external-action-definiti
 import { SourceControlProviderError } from "../../../source-control";
 import type { PiPinnedRepository } from "../../../pi/repository-tools";
 
-function harness(options: { claimedBaseline?: boolean } = {}) {
+function harness(options: { claimedBaseline?: boolean; activeControl?: boolean } = {}) {
   const fullSha = "a".repeat(40);
   const pin = vi.fn(async (): Promise<PiPinnedRepository[]> => []);
   const restore = vi.fn(() => [
@@ -58,7 +58,14 @@ function harness(options: { claimedBaseline?: boolean } = {}) {
         ] as never,
     },
     messages: { getProcessingMessage: () => null },
-    credentials: { getOpenAIAccess: vi.fn() },
+    controls: { isActiveOperation: () => options.activeControl === true },
+    credentials: {
+      getOpenAIAccess: vi.fn(async () => ({
+        accessToken: "secret-token",
+        expiresAt: Date.now() + 60_000,
+        credentialVersion: 1,
+      })),
+    },
     skills: { getSandboxInstallation: vi.fn(async () => null) },
     repositories: {
       pin,
@@ -81,6 +88,17 @@ function harness(options: { claimedBaseline?: boolean } = {}) {
     fullSha,
   };
 }
+
+it("recognizes an accepted native control as active bridge authority", async () => {
+  const { handler } = harness({ activeControl: true });
+  const response = await handler.credential(
+    new Request("http://session/internal/pi-credential", {
+      headers: { "X-Pi-Operation-ID": "native-control-1" },
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
+});
 
 function externalActionHarness(
   enabled: boolean,
@@ -142,6 +160,7 @@ function externalActionHarness(
       getSessionRepositories: () => [],
     },
     messages: { getProcessingMessage: () => ({ id: "message-1" }) as never },
+    controls: { isActiveOperation: () => false },
     credentials: { getOpenAIAccess: vi.fn() },
     skills: { getSandboxInstallation: vi.fn(async () => null) },
     repositories: {

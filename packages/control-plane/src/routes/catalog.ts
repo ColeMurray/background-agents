@@ -23,6 +23,7 @@ import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
 import { mcpConnectionRoutes } from "./mcp-connections";
+import { piControlRoutes } from "./pi-controls";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
 import { modelProviderAccountRoutes } from "./model-provider-accounts";
@@ -55,6 +56,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Session management, then the agent-initiated Slack notification
   sessionRoutes,
+  piControlRoutes,
   slackNotifyRoutes,
   slackIngressRoutes,
 

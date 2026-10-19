@@ -1,4 +1,5 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import { PI_TOOL_EFFECT_REGISTRY } from "@open-inspect/shared/pi-tool-effects";
 import {
@@ -43,6 +44,9 @@ function declaredToolEffect(name: string) {
 const repositoryListEffect = declaredToolEffect("repository_list");
 const repositoryReadEffect = declaredToolEffect("repository_read");
 const subagentEffect = declaredToolEffect("subagent");
+const MAX_ACTIVE_SUBAGENTS = 4;
+const MAX_CONVERSATIONS = 32;
+const SUBAGENT_TIMEOUT_MS = 10 * 60 * 1_000;
 
 const repositoryList = defineTool({
   name: "repository_list",
@@ -183,6 +187,19 @@ function createSubagentTool(extension: Extension) {
       const childId = await api.commit(async (tx) => {
         const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
         if (existing) return existing.id;
+        const conversations = (await tx.scanConversations({}, MAX_CONVERSATIONS + 1)).items;
+        if (conversations.length >= MAX_CONVERSATIONS) {
+          throw new Error("Pi conversation limit reached");
+        }
+        let activeSubagents = 0;
+        for (const conversation of conversations) {
+          if (!conversation.owner) continue;
+          const owner = await tx.task(conversation.owner.taskId);
+          if (owner && owner.state.status !== "terminal") activeSubagents += 1;
+        }
+        if (activeSubagents >= MAX_ACTIVE_SUBAGENTS) {
+          throw new Error("Pi active subagent limit reached");
+        }
         const child = await tx.createConversation({
           ownership: { kind: "task", taskId: api.taskId },
         });
@@ -192,15 +209,24 @@ function createSubagentTool(extension: Extension) {
       await api.details({ conversationId: childId }, context);
       const child = await api.conversation(childId, context);
       if (!child) throw new Error("Subagent conversation is unavailable");
+      const timeoutSignal = AbortSignal.timeout(SUBAGENT_TIMEOUT_MS);
+      const runContext = withAbortSignal(timeoutSignal, context);
       const submission = await child.submit(
         {
           type: "input",
           content: task,
           requestId: `subagent:${api.taskId}`,
         },
-        context
+        runContext
       );
-      const settled = await submission.wait(context);
+      const settled = await submission.wait(runContext).catch(async (error: unknown) => {
+        await submission.abort(BACKGROUND_CONTEXT).catch(() => "settled" as const);
+        await child.abort(BACKGROUND_CONTEXT, { background: true }).catch(() => undefined);
+        if (timeoutSignal.aborted && !context.abortSignal?.aborted) {
+          throw new Error("Subagent timed out", { cause: error });
+        }
+        throw error;
+      });
       if (settled.status !== "done" || settled.type !== "input") {
         throw new Error(`Subagent failed: ${settled.status}`);
       }

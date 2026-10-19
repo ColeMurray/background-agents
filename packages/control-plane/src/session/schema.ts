@@ -422,6 +422,7 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 
 import { createLogger } from "../logger";
 import {
+  PI_SESSION_DO_CONTROLS_MIGRATION_ID,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
@@ -971,6 +972,36 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Fence Pi repository diff publication generations",
     feature: "repositoryEditing",
     run: "ALTER TABLE session_diff ADD COLUMN pi_publication_generation INTEGER",
+  },
+  {
+    id: PI_SESSION_DO_CONTROLS_MIGRATION_ID,
+    description: "Persist Pi native control receipts",
+    feature: "piControls",
+    run: (sql) => {
+      sql.exec(`CREATE TABLE pi_control_receipts (
+      request_id TEXT PRIMARY KEY,
+      request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
+      action TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('processing','accepted','completed','failed','indeterminate')),
+      conversation_id TEXT,
+      operation_id TEXT,
+      submission_id INTEGER,
+      task_id INTEGER,
+      result_json TEXT CHECK(result_json IS NULL OR length(result_json)<=65536),
+      error_code TEXT CHECK(error_code IS NULL OR length(error_code)<=128),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      terminal_at INTEGER
+    )`);
+      sql.exec(
+        "CREATE INDEX idx_pi_control_receipts_terminal ON pi_control_receipts(terminal_at) WHERE terminal_at IS NOT NULL"
+      );
+      sql.exec(
+        "CREATE INDEX idx_pi_control_receipts_actor ON pi_control_receipts(actor_id,created_at)"
+      );
+    },
   },
 ];
 
