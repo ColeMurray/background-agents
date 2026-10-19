@@ -468,6 +468,53 @@ describe("POST /internal/create-pr", () => {
       expect(response.status).toBe(200);
       expect(prAuth).toEqual({ authType: "oauth", token: "browser-access-token" });
     });
+
+    it("opens an automation prompt's PR with app auth although its owner has current OAuth", async () => {
+      const ownerUserId = "11111111111111111111111111111111";
+      const sessionName = `automation-pr-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(sessionName, {
+        userId: "automation:owner",
+        canonicalUserId: ownerUserId,
+      });
+      await modelLegacyManualPushSession(stub);
+      const tokenResponse = await serviceFetch(
+        `https://test.local/sessions/${sessionName}/ws-token`,
+        { method: "POST", body: "{}" }
+      );
+      expect(tokenResponse.status).toBe(200);
+      const { participantId } = await tokenResponse.json<{ participantId: string }>();
+      const accessToken = await symmetricEncrypt({
+        key: env.BROWSER_AUTH_SECRET!,
+        data: "owner-access-token",
+      });
+      await env.DB.prepare(
+        "UPDATE user_identities SET access_token = ?, access_token_expires_at = ? WHERE user_id = ? AND provider = 'github'"
+      )
+        .bind(accessToken, Date.now() + 3_600_000, ownerUserId)
+        .run();
+      await seedMessage(stub, {
+        id: "automation-create-pr",
+        authorId: participantId,
+        content: "Implement the ticket",
+        source: "automation",
+        status: "processing",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+      let prAuth: SourceControlAuthContext | undefined;
+      await installSingleRepoMockProvider(stub, (auth) => {
+        prAuth = auth;
+      });
+
+      const response = await stub.fetch("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "Automation PR", body: "Unattended change" }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(prAuth).toEqual({ authType: "app", token: "push-token" });
+    });
   });
 
   it("reuses an existing open PR recorded for the session branch", async () => {

@@ -7,6 +7,7 @@
  * - Resolving auth context for PR creation
  */
 
+import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
 import type { Logger } from "../logger";
 import { BetterAuthGitHubTokenUnavailableError } from "./identity";
@@ -18,7 +19,7 @@ import type { ParticipantRepository } from "./participant-repository";
  */
 export interface ParticipantServiceDeps {
   repository: ParticipantRepository;
-  getProcessingMessageAuthor: () => { author_id: string } | null;
+  getProcessingMessageAuthor: () => { author_id: string; source: MessageSource } | null;
   log: Logger;
   generateId: () => string;
   resolveCurrentGitHubAccessToken?: (
@@ -48,7 +49,7 @@ export class ParticipantService {
   private readonly log: Logger;
   private readonly generateId: () => string;
   private readonly resolveCurrentGitHubAccessToken?: ParticipantServiceDeps["resolveCurrentGitHubAccessToken"];
-  private readonly getProcessingMessageAuthor: () => { author_id: string } | null;
+  private readonly getProcessingMessageAuthor: ParticipantServiceDeps["getProcessingMessageAuthor"];
 
   constructor(deps: ParticipantServiceDeps) {
     this.repository = deps.repository;
@@ -109,12 +110,13 @@ export class ParticipantService {
   }
 
   /**
-   * Find the participant who authored the currently-processing message.
-   * Used for PR creation to determine whose OAuth token to use.
+   * Find the participant who authored the currently-processing message, and
+   * where that message came from. Used for PR creation to determine whose
+   * OAuth token to use.
    */
   async getPromptingParticipantForPR(): Promise<
-    | { participant: ParticipantRow; error?: never; status?: never }
-    | { participant?: never; error: string; status: number }
+    | { participant: ParticipantRow; source: MessageSource; error?: never; status?: never }
+    | { participant?: never; source?: never; error: string; status: number }
   > {
     const processingMessage = this.getProcessingMessageAuthor();
 
@@ -135,7 +137,7 @@ export class ParticipantService {
       return { error: "User not found. Please re-authenticate.", status: 401 };
     }
 
-    return { participant };
+    return { participant, source: processingMessage.source };
   }
 
   /**
@@ -143,10 +145,24 @@ export class ParticipantService {
    *
    * Returns:
    * - `{ auth: SourceControlAuthContext }` on success
-   * - `{ auth: null }` when user has no usable OAuth token (caller falls back to app token)
+   * - `{ auth: null }` when the prompt came from an automation, or the user has
+   *   no usable OAuth token (caller falls back to app token)
    * - `{ error, status }` on unexpected failure
+   *
+   * An automation prompt carries its owner's identity for commit attribution,
+   * but the PR it opens is the app's: opening it with the owner's OAuth would
+   * present unattended work as the owner's own.
    */
-  async resolveAuthForPR(participant: ParticipantRow): Promise<PromptingAuthResolution> {
+  async resolveAuthForPR(
+    participant: ParticipantRow,
+    source: MessageSource
+  ): Promise<PromptingAuthResolution> {
+    if (source === "automation") {
+      this.log.info("PR creation: automation prompt, using app auth", {
+        user_id: participant.user_id,
+      });
+      return { auth: null };
+    }
     if (this.resolveCurrentGitHubAccessToken && participant.canonical_user_id) {
       try {
         const accessToken = await this.resolveCurrentGitHubAccessToken(
