@@ -39,15 +39,27 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(240);
+    expect(routes).toHaveLength(245);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(182);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(240);
+    expect(new Set(paths).size).toBe(187);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(245);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },
     });
+    for (const [method, path] of [
+      ["POST", "/internal/slack-ingress"],
+      ["POST", "/internal/slack-ingress/receipt-1/claim"],
+      ["POST", "/internal/slack-ingress/receipt-1/transition"],
+      ["GET", "/internal/slack-ingress/receipt-1"],
+      ["POST", "/internal/slack-ingress/reconcile"],
+    ] as const) {
+      expect(routeFor(method, path)).toMatchObject({
+        authentication: { kind: "service" },
+        authorization: { kind: "service", services: ["slack-bot"] },
+      });
+    }
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
       authentication: { kind: "user" },
       authorization: { kind: "active-self" },

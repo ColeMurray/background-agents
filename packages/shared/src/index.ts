@@ -28,3 +28,4 @@ export * from "./pi-tool-effects";
 export * from "./pi-feature-capabilities";
 export * from "./pi-migration-reservations";
 export * from "./deployment-capabilities";
+export * from "./slack-ingress";

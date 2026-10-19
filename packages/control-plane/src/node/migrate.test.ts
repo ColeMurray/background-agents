@@ -12,8 +12,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { PI_FEATURE_IDS, type PiFeatureId } from "@open-inspect/shared/pi-feature-capabilities";
-import { validateMigrationArtifacts } from "@open-inspect/shared/pi-migration-reservations";
+import {
+  PI_MIGRATION_RESERVATIONS,
+  type PiMigrationOwner,
+  validateMigrationArtifacts,
+} from "@open-inspect/shared/pi-migration-reservations";
 import { buildSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyMigrations, containsTransactionControl, listMigrations } from "./migrate";
@@ -441,10 +444,12 @@ describe("applyMigrations", () => {
   });
 });
 
-function readMigrationFeature(path: string): PiFeatureId | undefined {
+function readMigrationFeature(path: string): PiMigrationOwner | undefined {
   const declared = /^-- pi-feature: ([^\r\n]+)\r?\n/.exec(readFileSync(path, "utf8"))?.[1];
   if (declared === undefined) return undefined;
-  const feature = PI_FEATURE_IDS.find((feature) => feature === declared);
+  const feature = PI_MIGRATION_RESERVATIONS.find(
+    (reservation) => reservation.feature === declared
+  )?.feature;
   if (!feature) throw new Error(`Migration ${path} declares unknown Pi feature ${declared}`);
   return feature;
 }

@@ -172,6 +172,19 @@ SLOs for the personal Pi canary:
 
 ### Slice 3 — durable Slack ingress and instant Pi
 
+#### Slice 3A — control-plane ingress authority
+
+- [x] D1 0092 reserves bounded Slack ingress receipts with immutable source/event identity, stable
+      session/message IDs, actor/team links, leases, deadlines, attempts, terminal retention
+      indexes, and restrictive user/team deletion semantics.
+- [x] Portable store implements idempotent admission, hash verification, atomic claims, lease
+      recovery, expected-state transitions, terminal cleanup, and response-loss reconciliation.
+- [x] Service-auth routes admit only `slack-bot`; strict shared schemas expose no secret-bearing log
+      fields. User merge repoints actor authority before deletion.
+- [x] Fresh migration, duplicate/conflict, concurrent claim, lease expiry, stale-owner CAS,
+      deadline, staged completion, retention, user merge, route policy, and SQL portability tests
+      pass.
+
 - [ ] D1 migration 0092 adds bounded ingress receipts; Queue and DLQ bindings default safely.
 - [ ] Verify signature/schema, commit the exact bounded event receipt and queue admission before
       ACK, then race `waitUntil` fast path and Queue through one D1 idempotent claim.
@@ -262,7 +275,8 @@ SLOs for the personal Pi canary:
 | 0     | `d484e480` | Existing sandbox dispatch is unchanged; Pi queue still never asks for a socket or spawn; Slack still verifies signature/schema and keeps its current ACK path | control-plane 5,111/1 skipped; Slack 638; focused 154; control-plane typecheck/lint/build; Slack lint/build; Prettier/diff check                | none                                        |
 | 1     | pending    | Server capability authority now drives web/Slack; Pi opens bootstrap context only; repository pin, provider reads, and Computer are first-tool lazy           | shared 1,303; control-plane 5,115/1 skipped; focused workerd 51; Slack 638; web 2,532/2,533 plus isolated timeout pass; affected typecheck/lint | capability reachability in deployed account |
 | 2     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | personal provider credential/browser canary |
-| 3     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | real Slack retry/latency canary             |
+| 3A    | pending    | D1 0092 and Slack-only internal routes own bounded ingress admission, leases, stable IDs, staged CAS, reconciliation, and retention; Slack ACK is unchanged   | shared 1,303; control-plane 5,115/1 skipped; focused unit 163; workerd store/user merge 17; SQL portability green                               | none; Queue wiring belongs to 3B            |
+| 3B    | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | real Slack retry/latency canary             |
 | 4     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | real model multi-agent canary               |
 | 5     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | paid Cloudflare deployment/version canary   |
 | 6     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | provider execution canaries                 |

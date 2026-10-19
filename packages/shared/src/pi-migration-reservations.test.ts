@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
   PI_D1_MCP_MIGRATION_VERSION,
+  PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
   PI_MIGRATION_RESERVATIONS,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
@@ -25,7 +26,8 @@ describe("Pi migration reservations", () => {
       PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
       PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
       PI_D1_MCP_MIGRATION_VERSION,
-    ]).toEqual([58, 59, 60, 61, 62, 63, 90, 91]);
+      PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
+    ]).toEqual([58, 59, 60, 61, 62, 63, 90, 91, 92]);
     expect(PI_MIGRATION_RESERVATIONS).toEqual([
       {
         store: "session_do",
@@ -74,6 +76,12 @@ describe("Pi migration reservations", () => {
         version: PI_D1_MCP_MIGRATION_VERSION,
         feature: "mcp",
         purpose: "MCP authority",
+      },
+      {
+        store: "d1",
+        version: PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
+        feature: "slackIngress",
+        purpose: "durable Slack ingress receipts",
       },
     ]);
     expect(() => validateMigrationReservations(PI_MIGRATION_RESERVATIONS)).not.toThrow();

@@ -10,8 +10,9 @@ export const PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID = 62;
 export const PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID = 63;
 export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_MIGRATION_VERSION = 91;
+export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
 
-export type PiMigrationOwner = PiFeatureId | "coreAuthority" | "piProjection";
+export type PiMigrationOwner = PiFeatureId | "coreAuthority" | "piProjection" | "slackIngress";
 
 export interface MigrationReservation {
   readonly store: MigrationStore;
@@ -81,6 +82,12 @@ export const PI_MIGRATION_RESERVATIONS = [
     version: PI_D1_MCP_MIGRATION_VERSION,
     feature: "mcp",
     purpose: "MCP authority",
+  },
+  {
+    store: "d1",
+    version: PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
+    feature: "slackIngress",
+    purpose: "durable Slack ingress receipts",
   },
 ] as const satisfies readonly MigrationReservation[];
 

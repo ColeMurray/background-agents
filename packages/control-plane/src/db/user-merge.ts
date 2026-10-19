@@ -58,6 +58,7 @@ export interface UserMergeOptions {
 }
 
 const USER_MERGE_COUNT_KEYS = [
+  "slackIngressActorsRepointed",
   "memoriesOwnedRepointed",
   "memoryAuthorsRepointed",
   "memoryRevisionAuthorsRepointed",
@@ -284,6 +285,7 @@ const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
 };
 
 const FINAL_REPOINT_OPERATIONS = [
+  regularRepoint("slackIngressActorsRepointed", "slack_ingress_receipts", "actor_user_id"),
   regularRepoint("memoriesOwnedRepointed", "memories", "owner_user_id"),
   regularRepoint("memoryAuthorsRepointed", "memories", "author_user_id"),
   regularRepoint("memoryRevisionAuthorsRepointed", "memory_revisions", "author_user_id"),
