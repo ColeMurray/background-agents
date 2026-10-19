@@ -56,6 +56,7 @@ import {
   type StopResult,
   type VncAccess,
 } from "../provider";
+import { secureExecutionSandboxConfig } from "../execution-isolation";
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
@@ -86,6 +87,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     supportsRestore: true,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
+    executionIsolation: "canary_blocked",
   };
 
   constructor(
@@ -94,6 +96,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    config = secureExecutionSandboxConfig(config, this.name, this.capabilities);
     const template = this.requireTemplate();
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;

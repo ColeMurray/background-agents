@@ -92,6 +92,30 @@ function createHandler() {
 }
 
 describe("SandboxHandler", () => {
+  it("rejects execution credentials from the sandbox-error endpoint", async () => {
+    const { handler, getSandbox, isValidSandboxToken } = createHandler();
+    getSandbox.mockReturnValue({
+      id: "row-1",
+      modal_sandbox_id: "sandbox-1",
+      runtime_mode: "execution",
+    } as SandboxRow);
+
+    const response = await handler.sandboxError(
+      new Request("http://internal/sandbox-error", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer execution-token",
+          "X-Sandbox-ID": "sandbox-1",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ error: "attempted" }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(isValidSandboxToken).not.toHaveBeenCalled();
+  });
+
   it.each(["file", "unknown", "", null, 42])(
     "rejects raw %s artifact events before processing",
     async (artifactType) => {
@@ -699,7 +723,11 @@ describe("SandboxHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ valid: true });
+    expect(await response.json()).toMatchObject({
+      valid: true,
+      credentialClass: "agent",
+      expiresAt: null,
+    });
   });
 
   it("returns 401 when sandbox token is invalid", async () => {
@@ -734,7 +762,11 @@ describe("SandboxHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ valid: true });
+    expect(await response.json()).toMatchObject({
+      valid: true,
+      credentialClass: "agent",
+      expiresAt: null,
+    });
     expect(log.info).toHaveBeenCalledWith("Sandbox token verified successfully");
   });
 

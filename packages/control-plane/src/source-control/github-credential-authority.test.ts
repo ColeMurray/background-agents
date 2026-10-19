@@ -171,7 +171,9 @@ describe("resolveGitHubCredentialAuthority", () => {
   it("rejects sandbox principals", async () => {
     await expect(
       resolveGitHubCredentialAuthority(
-        createContext({ principal: { kind: "sandbox", sessionId: "session-1" } }),
+        createContext({
+          principal: { kind: "sandbox", sessionId: "session-1", credentialClass: "agent" },
+        }),
         BROWSER_HEADERS
       )
     ).rejects.toThrow("Principal cannot authorize GitHub user credentials");

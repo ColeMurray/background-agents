@@ -52,7 +52,7 @@ describe("SandboxRuntimeEventHandler ready outcomes", () => {
             timestamp: 1,
             runtimeMode: "execution",
             bridgeInstanceId: "bridge-1",
-            runtimeVersion: "v77-pi-sandbox-execution",
+            runtimeVersion: "v78-execution-isolation-boundary",
           },
           { now: 1_000, messageId: null, processingMessage: null }
         )

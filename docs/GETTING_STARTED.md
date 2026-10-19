@@ -1637,6 +1637,23 @@ ID. Never delete or import the Wrangler-owned Worker through Terraform during no
 Before restoring paid admission, set both version variables to the rollback target and ensure the
 recorded canary evidence covers that exact version.
 
+### Pi execution isolation boundary
+
+Generation 78 includes a separate, default-off execution artifact. It is not an agent sandbox: it
+contains no harness, repository image/snapshot, user environment, VCS/model/MCP credentials,
+repository hooks, code server, VNC, terminal, or desktop service. Its privileged in-process bridge
+receives a rotating, two-hour execution credential through stdin rather than argv/environment;
+commands run as dedicated UID/GID 10001 with a root-owned runtime and a mode-0700 workspace.
+
+Execution startup fails unless the provider supplies `/proc` `hidepid=2`, Yama ptrace isolation, and
+the exact `package-install-v1` egress policy: the control-plane host, `registry.npmjs.org`,
+`pypi.org`, and `files.pythonhosted.org`. The pinned Modal SDK does not expose domain allowlists,
+and the other provider adapters do not yet have reviewed enforcement, so **all providers remain
+canary-blocked**. This is intentional; no Pi execution tool is exposed in Slice 6A. Use
+`docs/templates/PI_EXECUTION_ISOLATION_CANARY.md` and the read-only
+`scripts/attest-execution-isolation.mjs` before changing a provider verdict. Never use an execution
+credential on SCM, provider-token, diff, push, or public routes.
+
 Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
 The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
 sessions can still continue, stop, and delete while new admission and selectors are disabled. Direct

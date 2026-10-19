@@ -18,7 +18,9 @@ function createEnv(options?: { actorAuthorized?: boolean }) {
   const fetch = vi.fn(async (request: Request) => {
     if (new URL(request.url).pathname === "/internal/verify-sandbox-token") {
       const body = (await request.json()) as { token?: string };
-      return new Response(null, { status: body.token === "sandbox-token" ? 204 : 401 });
+      return body.token === "sandbox-token"
+        ? Response.json({ sandboxId: "sandbox-1", credentialClass: "agent" })
+        : new Response(null, { status: 401 });
     }
     return Response.json({ ok: true }, { status: 202 });
   });

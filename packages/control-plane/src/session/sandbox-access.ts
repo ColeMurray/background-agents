@@ -13,6 +13,23 @@ import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import type { Logger } from "../logger";
 import type { SandboxRow } from "./types";
+import { EXECUTION_CREDENTIAL_MAX_LIFETIME_MS } from "../sandbox/execution-isolation";
+
+export { EXECUTION_CREDENTIAL_MAX_LIFETIME_MS } from "../sandbox/execution-isolation";
+
+export type SandboxCredentialClass = "agent" | "execution";
+
+export interface VerifiedSandboxCredential {
+  credentialClass: SandboxCredentialClass;
+  expiresAt: number | null;
+}
+
+export function isSandboxCredentialLive(sandbox: SandboxRow, now: number): boolean {
+  return (
+    sandbox.runtime_mode !== "execution" ||
+    (sandbox.fenced !== 1 && now < sandbox.created_at + EXECUTION_CREDENTIAL_MAX_LIFETIME_MS)
+  );
+}
 
 /**
  * Verify a provided sandbox token against stored credentials.
@@ -24,20 +41,40 @@ export async function isValidSandboxToken(
   token: string | null,
   sandbox: SandboxRow | null
 ): Promise<boolean> {
+  return (await verifySandboxCredential(token, sandbox, Date.now())) !== null;
+}
+
+/** Verify, classify, and lifetime-bound the current sandbox generation credential. */
+export async function verifySandboxCredential(
+  token: string | null,
+  sandbox: SandboxRow | null,
+  now: number
+): Promise<VerifiedSandboxCredential | null> {
   if (!token || !sandbox) {
-    return false;
+    return null;
+  }
+
+  const execution = sandbox.runtime_mode === "execution";
+  let expiresAt: number | null = null;
+  if (execution) {
+    expiresAt = sandbox.created_at + EXECUTION_CREDENTIAL_MAX_LIFETIME_MS;
+    if (!isSandboxCredentialLive(sandbox, now) || !sandbox.auth_token_hash) return null;
   }
 
   if (sandbox.auth_token_hash) {
     const tokenHash = await hashToken(token);
-    return timingSafeEqual(tokenHash, sandbox.auth_token_hash);
+    return timingSafeEqual(tokenHash, sandbox.auth_token_hash)
+      ? { credentialClass: execution ? "execution" : "agent", expiresAt }
+      : null;
   }
 
-  if (sandbox.auth_token) {
-    return timingSafeEqual(token, sandbox.auth_token);
+  if (!execution && sandbox.auth_token) {
+    return timingSafeEqual(token, sandbox.auth_token)
+      ? { credentialClass: "agent", expiresAt: null }
+      : null;
   }
 
-  return false;
+  return null;
 }
 
 /**

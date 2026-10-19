@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .browser_desktop import BrowserDesktop
     from .code_server import CodeServer
     from .docker_service import DockerService
+    from .execution_bridge import ExecutionBridgeOwner
     from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
     from .memories import MemoryMaterializer
@@ -65,7 +66,7 @@ class SandboxSupervisor:
         config: RuntimeConfig,
         repository_boot: RepositoryBoot,
         harness_process: HarnessProcessOwner,
-        agent_bridge: AgentBridgeProcess,
+        agent_bridge: AgentBridgeProcess | ExecutionBridgeOwner,
         code_server: CodeServer,
         web_terminal: WebTerminal,
         browser_desktop: BrowserDesktop,

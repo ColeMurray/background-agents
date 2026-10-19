@@ -17,7 +17,6 @@ from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS
 from .command_runner import CommandRunner
 from .event_forwarder import BufferedEventForwarder
 from .log_config import get_logger
-from .repo_config import load_repo_manifest
 
 
 class ExecutionBridge:
@@ -58,7 +57,7 @@ class ExecutionBridge:
             self._send_event,
             self.log,
             process_group_registry_path=Path(
-                f"/tmp/open-inspect-execution-process-groups-{sandbox_id}.json"
+                f"/run/open-inspect/execution-process-groups-{sandbox_id}.json"
             ),
         )
 
@@ -68,7 +67,6 @@ class ExecutionBridge:
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
     def _ready_event(self) -> dict[str, Any]:
-        repositories = load_repo_manifest()
         runtime_version = os.environ.get("SANDBOX_VERSION", "")
         return {
             "type": "ready",
@@ -78,16 +76,7 @@ class ExecutionBridge:
             "opencodeSessionId": None,
             "preservationProtocolVersion": 1,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
-            "repositories": [
-                {
-                    "position": position,
-                    "repoOwner": repository.owner,
-                    "repoName": repository.name,
-                    "baseSha": repository.base_sha,
-                }
-                for position, repository in enumerate(repositories)
-                if repository.base_sha
-            ],
+            "repositories": [],
         }
 
     async def run(self) -> None:
@@ -210,3 +199,50 @@ class ExecutionBridge:
 
     async def _send_event(self, event: dict[str, Any]) -> bool:
         return await self.event_forwarder.send(event)
+
+    async def stop(self) -> None:
+        self.shutdown_event.set()
+        await self.runner.shutdown()
+        if self.ws is not None:
+            with contextlib.suppress(Exception):
+                await self.ws.close()
+
+
+class ExecutionBridgeOwner:
+    """Supervisor-owned in-process bridge; its credential never enters argv or child env."""
+
+    def __init__(self, bridge: ExecutionBridge) -> None:
+        self.bridge = bridge
+        self._task: asyncio.Task[None] | None = None
+        self._exit_code: int | None = None
+
+    async def start(self, _early_connect: bool | None = None) -> None:
+        if self._task is not None:
+            return
+
+        async def run() -> None:
+            try:
+                await self.bridge.run()
+                self._exit_code = 0
+            except Exception:
+                self._exit_code = 1
+                raise
+
+        self._task = asyncio.create_task(run())
+
+    async def stop(self) -> None:
+        await self.bridge.stop()
+        if self._task is not None:
+            await asyncio.gather(self._task, return_exceptions=True)
+
+    async def wait(self) -> int | None:
+        if self._task is None:
+            return None
+        await self._task
+        return self._exit_code
+
+    def exit_code(self) -> int | None:
+        return self._exit_code
+
+    def started(self) -> bool:
+        return self._task is not None

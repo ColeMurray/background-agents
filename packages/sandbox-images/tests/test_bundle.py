@@ -137,6 +137,35 @@ def test_each_caller_gets_a_fresh_context_without_reusing_extra_files(tmp_path):
     assert not (second.directory / ".env").exists()
 
 
+def test_execution_artifact_is_generation_78_clean_and_root_separated():
+    manifest = json.loads(
+        (
+            REPO_ROOT
+            / "packages/sandbox-runtime/src/sandbox_runtime/execution_artifact_manifest.json"
+        ).read_text()
+    )
+    installer = (REPO_ROOT / "packages/sandbox-images/install/install.sh").read_text()
+    filesystem = (REPO_ROOT / "packages/sandbox-images/install/execution-filesystem.sh").read_text()
+
+    assert manifest["runtimeGeneration"] == 78
+    assert manifest["commandUid"] == 10001
+    assert manifest["commandGid"] == 10001
+    assert manifest["authDelivery"] == "stdin-fd"
+    assert manifest["networkProfiles"] == {
+        "package-install-v1": [
+            "registry.npmjs.org",
+            "pypi.org",
+            "files.pythonhosted.org",
+        ]
+    }
+    execution_branch = installer.split('if [[ "${1:-}" == "execution" ]]')[1].split("elif")[0]
+    assert 'phases=("os/$OI_OS" languages runtime execution-filesystem)' in execution_branch
+    assert " tools " not in execution_branch
+    assert "--uid 10001" in filesystem
+    assert "--gid 10001" in filesystem
+    assert "chmod -R go-rwx" in filesystem
+
+
 def test_missing_payload_fails_closed(checkout):
     (checkout / "packages/sandbox-runtime/uv.lock").unlink()
     with pytest.raises(FileNotFoundError):

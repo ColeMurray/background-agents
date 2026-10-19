@@ -1,10 +1,10 @@
 {
-  "runtimeVersion": "v77-pi-sandbox-execution",
-  "generation": 77,
+  "runtimeVersion": "v78-execution-isolation-boundary",
+  "generation": 78,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 77,
-  "executionMinimumGeneration": 77,
+  "minimumRebuildGeneration": 78,
+  "executionMinimumGeneration": 78,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,

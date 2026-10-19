@@ -563,7 +563,7 @@ class TestAgentBridgeProcessEarlyConnect:
 
         assert "--early-connect" not in spawned[0]
 
-    async def test_execution_mode_is_passed_without_parsing_an_agent_harness(self, monkeypatch):
+    async def test_execution_mode_cannot_enter_the_argv_bridge(self, monkeypatch):
         process = self._process(
             {
                 "SANDBOX_ID": "sandbox-1",
@@ -590,17 +590,10 @@ class TestAgentBridgeProcessEarlyConnect:
         )
         monkeypatch.setattr("sandbox_runtime.agent_bridge_process.asyncio.sleep", AsyncMock())
 
-        await process.start()
-        await process.start()
+        with pytest.raises(RuntimeError, match="in-process bridge"):
+            await process.start()
 
-        assert "--runtime-mode" in spawned[0]
-        assert spawned[0][spawned[0].index("--runtime-mode") + 1] == "execution"
-        assert "--harness" not in spawned[0]
-        assert "--bridge-restarted" not in spawned[0]
-        assert "--bridge-restarted" in spawned[1]
-        first_id = spawned[0][spawned[0].index("--bridge-instance-id") + 1]
-        second_id = spawned[1][spawned[1].index("--bridge-instance-id") + 1]
-        assert first_id != second_id
+        assert spawned == []
 
     async def test_wait_returns_the_exit_code(self):
         process = self._process(

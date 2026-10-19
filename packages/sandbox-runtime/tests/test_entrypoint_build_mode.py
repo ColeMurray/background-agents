@@ -5,6 +5,7 @@ import json
 import os
 import signal
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -107,20 +108,30 @@ def _successful_sync(repository_boot):
 
 def test_build_supervisor_accepts_pi_harness_in_execution_mode(monkeypatch):
     from sandbox_runtime.entrypoint import DormantHarnessProcess, build_supervisor
+    from sandbox_runtime.execution_bridge import ExecutionBridgeOwner
 
     environment = {
         "SANDBOX_ID": "sandbox-1",
-        "REPO_OWNER": "acme",
-        "REPO_NAME": "repo",
+        "CONTROL_PLANE_URL": "https://control.example",
         "SESSION_CONFIG": json.dumps(
-            {"session_id": "session-1", "runtime_mode": "execution", "harness": "pi"}
+            {
+                "session_id": "session-1",
+                "runtime_mode": "execution",
+                "bridge_early_connect": True,
+            }
         ),
     }
     monkeypatch.setattr(os, "environ", environment)
+    monkeypatch.setattr(
+        "sandbox_runtime.entrypoint.prepare_execution_host",
+        lambda _workspace: (10001, 10001, Path("/home/openinspect-exec")),
+    )
 
-    supervisor = build_supervisor(asyncio.Event())
+    supervisor = build_supervisor(asyncio.Event(), execution_auth_token="execution-token")
 
     assert isinstance(supervisor.harness_process, DormantHarnessProcess)
+    assert isinstance(supervisor.agent_bridge, ExecutionBridgeOwner)
+    assert "execution-token" not in repr(supervisor.agent_bridge)
 
 
 @pytest.mark.asyncio

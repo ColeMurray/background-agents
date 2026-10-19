@@ -173,7 +173,7 @@ describe("handleSpawnChild repository grants", () => {
                 metrics: createRequestMetrics(),
                 executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
                 db: env.DB,
-                principal: { kind: "sandbox", sessionId: parentId },
+                principal: { kind: "sandbox", sessionId: parentId, credentialClass: "agent" },
               })
             );
       expect(response.status).toBe(403);
@@ -199,7 +199,7 @@ describe("handleSpawnChild repository grants", () => {
       metrics: createRequestMetrics(),
       executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
       db: env.DB,
-      principal: { kind: "sandbox", sessionId: parentId },
+      principal: { kind: "sandbox", sessionId: parentId, credentialClass: "agent" },
     });
 
     const response = await handleSpawnChild(

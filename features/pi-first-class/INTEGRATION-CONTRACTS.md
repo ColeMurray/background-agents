@@ -120,6 +120,11 @@ independent `registry.install(...)` calls.
   `PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS` unchanged.
 - **Sandbox execution:** use `sandbox_execution`, gate on `sandboxExecution`, and import the two
   SessionDO sandbox-execution migration constants. Classify execution tools as `sandbox_execution`.
+  Slice 6A exposes no tools: execution credentials are hash-only, rotating, two-hour credentials
+  accepted solely by the execution WebSocket; every HTTP sandbox route is agent-only. Generation 78
+  requires the clean artifact, root/in-process bridge, UID/GID 10001 command runner, protected proc/
+  ptrace/runtime/cache boundary, and exact package-install network profile. A provider remains
+  `canary_blocked` until sandbox-layer enforcement and every attack in the canary template pass.
 - **External actions:** use `external_actions`, gate on `externalActions`, and import the SessionDO
   and D1 external-action migration constants. Classify reads and mutations separately.
 - **MCP:** use `mcp`, gate on `mcp`, import `PI_D1_MCP_MIGRATION_VERSION`, and declare every

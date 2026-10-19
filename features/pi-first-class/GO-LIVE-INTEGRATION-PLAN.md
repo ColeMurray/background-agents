@@ -298,10 +298,17 @@ SLOs for the personal Pi canary:
 
 ### Slice 6 — secure lazy execution
 
-- [ ] Execution receives only session-scoped WS/events/preservation credentials; credential routes,
+#### Slice 6A — isolation boundary, no model tools
+
+- [x] Execution receives only session-scoped WS/events/preservation credentials; credential routes,
       secret argv/environment, repo images, snapshots, user env, VCS/model secrets are denied.
-- [ ] Privileged bridge and unprivileged command boundary; network default deny with explicit
+- [x] Privileged bridge and unprivileged command boundary; network default deny with explicit
       package profiles.
+- [x] Generation 78 clean artifact, immutable manifest/evidence verifier, provider attack contracts,
+      and honest canary blocks for Modal/OpenComputer/Daytona/Vercel/E2B. No live calls.
+
+#### Slice 6B — durable execution tools
+
 - [ ] Add the next unclaimed SessionDO migration for dispatch/ack/retry/cancel/fence/indeterminate,
       replay-gap/late completion, quotas, and retention.
 - [ ] Expose authorized `run_shell`, `run_build`, and `run_tests` only after emergency policy.

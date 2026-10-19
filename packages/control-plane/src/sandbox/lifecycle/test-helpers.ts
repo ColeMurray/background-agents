@@ -432,6 +432,7 @@ export function createMockProvider(
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
       supportsRestore: true,
+      executionIsolation: "enforced",
       ...overrides.capabilities,
     },
     createSandbox:

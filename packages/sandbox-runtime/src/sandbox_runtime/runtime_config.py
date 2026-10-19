@@ -133,6 +133,7 @@ class RuntimeConfig:
         environment: Mapping[str, str],
         *,
         workspace_path: Path = Path("/workspace"),
+        sandbox_token_override: str | None = None,
     ) -> RuntimeConfig:
         repo_owner = environment.get("REPO_OWNER", "")
         repo_name = environment.get("REPO_NAME", "")
@@ -146,7 +147,11 @@ class RuntimeConfig:
         return cls(
             sandbox_id=environment.get("SANDBOX_ID", "unknown"),
             control_plane_url=control_plane_url,
-            sandbox_token=environment.get("SANDBOX_AUTH_TOKEN", ""),
+            sandbox_token=(
+                sandbox_token_override
+                if sandbox_token_override is not None
+                else environment.get("SANDBOX_AUTH_TOKEN", "")
+            ),
             repo_owner=repo_owner,
             repo_name=repo_name,
             vcs_host=environment.get("VCS_HOST", "github.com"),

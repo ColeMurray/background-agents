@@ -18,11 +18,6 @@ describe("buildSessionConfig runtime mode", () => {
   it("marks an execution-only sandbox explicitly", () => {
     expect(buildSessionConfig({ ...input, harness: "pi", runtimeMode: "execution" })).toEqual({
       session_id: "session-1",
-      repo_owner: "acme",
-      repo_name: "repo",
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      mcp_servers: undefined,
       bridge_early_connect: true,
       runtime_mode: "execution",
     });
@@ -40,6 +35,13 @@ describe("buildSessionConfig runtime mode", () => {
       { scmIdentity: { host: "github.com", cloneUsername: "x-access-token", secretHosts: [] } }
     );
 
-    expect(JSON.parse(env.SESSION_CONFIG)).toMatchObject({ runtime_mode: "execution" });
+    expect(JSON.parse(env.SESSION_CONFIG)).toEqual({
+      session_id: "session-1",
+      runtime_mode: "execution",
+      bridge_early_connect: true,
+    });
+    expect(env).not.toHaveProperty("SANDBOX_AUTH_TOKEN");
+    expect(env).not.toHaveProperty("REPO_OWNER");
+    expect(env).not.toHaveProperty("VCS_HOST");
   });
 });

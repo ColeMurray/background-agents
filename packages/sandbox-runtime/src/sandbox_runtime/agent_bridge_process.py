@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import secrets
 from typing import TYPE_CHECKING, Any
 
 from .constants import OPENCODE_PORT
@@ -26,7 +25,6 @@ class AgentBridgeProcess:
         self.runtime_mode = config.runtime_mode
         self._process: asyncio.subprocess.Process | None = None
         self._early_connect = False
-        self._start_count = 0
 
     async def start(self, early_connect: bool | None = None) -> None:
         """Spawn the bridge; ``early_connect`` sticks, so a restart keeps the mode.
@@ -35,6 +33,8 @@ class AgentBridgeProcess:
         repository boots and attaches its harness when the supervisor reports
         the harness phase complete (see ``bridge.py``).
         """
+        if self.runtime_mode.value == "execution":
+            raise RuntimeError("Execution credentials require the privileged in-process bridge")
         if early_connect is not None:
             self._early_connect = early_connect
         self.log.info("bridge.start", early_connect=self._early_connect)
@@ -47,16 +47,6 @@ class AgentBridgeProcess:
 
         mode_arguments = ["--runtime-mode", self.runtime_mode.value]
         harness_arguments = ["--harness", self.harness.value] if self.harness is not None else []
-        execution_identity_arguments = (
-            [
-                "--bridge-instance-id",
-                secrets.token_hex(16),
-                *(["--bridge-restarted"] if self._start_count > 0 else []),
-            ]
-            if self.runtime_mode.value == "execution"
-            else []
-        )
-        self._start_count += 1
         self._process = await asyncio.create_subprocess_exec(
             "python",
             "-m",
@@ -73,7 +63,6 @@ class AgentBridgeProcess:
             str(OPENCODE_PORT),
             *mode_arguments,
             *harness_arguments,
-            *execution_identity_arguments,
             *(["--early-connect"] if self._early_connect else []),
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,

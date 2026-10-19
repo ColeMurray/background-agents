@@ -154,7 +154,7 @@ describe("SandboxLifecycleManager", () => {
           undefined,
           1,
           "execution",
-          "v77-pi-sandbox-execution",
+          "v78-execution-isolation-boundary",
           "bridge-1"
         )
       ).toBe("became_ready");
@@ -195,7 +195,7 @@ describe("SandboxLifecycleManager", () => {
             undefined,
             1,
             "execution",
-            "v77-pi-sandbox-execution",
+            "v78-execution-isolation-boundary",
             "bridge-new",
             runtimeSandboxId
           )
@@ -231,7 +231,7 @@ describe("SandboxLifecycleManager", () => {
             undefined,
             1,
             "execution",
-            "v77-pi-sandbox-execution",
+            "v78-execution-isolation-boundary",
             bridgeInstanceId,
             sandbox.modal_sandbox_id ?? undefined
           )
@@ -276,12 +276,66 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({
           runtimeMode: "execution",
           harness: undefined,
+          repoOwner: null,
+          repoName: null,
+          provider: "",
+          model: "",
+          timeoutSeconds: 7200,
           codeServerEnabled: false,
           vncEnabled: false,
           agentSlackNotifyEnabled: false,
           mcpServers: undefined,
           userEnvVars: undefined,
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
+          branch: null,
+          repositories: undefined,
           sandboxSettings: { cpuCores: 2 },
+          execution: {
+            artifactGeneration: 78,
+            networkProfile: "package-install-v1",
+            allowedDomains: [
+              "test.workers.dev",
+              "registry.npmjs.org",
+              "pypi.org",
+              "files.pythonhosted.org",
+            ],
+          },
+        })
+      );
+    });
+
+    it("discards session snapshots instead of restoring them as execution runtimes", async () => {
+      const session = createMockSession({ harness: "pi" });
+      const storage = createMockStorage(
+        session,
+        createMockSandbox({
+          status: "stopped",
+          snapshot_image_id: "agent-snapshot",
+          snapshot_runtime_version: COMPATIBLE_RUNTIME_VERSION,
+        })
+      );
+      const provider = createMockProvider();
+      const manager = createTestLifecycleManager(
+        provider,
+        storage,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createUnmanagedShutdown(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox("spawn", "execution");
+
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeMode: "execution",
+          prebuiltImageId: null,
+          prebuiltImageSha: null,
         })
       );
     });

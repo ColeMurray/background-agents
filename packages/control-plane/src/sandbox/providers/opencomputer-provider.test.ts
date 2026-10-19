@@ -100,6 +100,7 @@ describe("OpenComputerSandboxProvider", () => {
       supportsRestore: true,
       supportsPersistentResume: true,
       supportsExplicitStop: true,
+      executionIsolation: "canary_blocked",
     });
   });
 
@@ -327,7 +328,7 @@ describe("OpenComputerSandboxProvider", () => {
     expect(createCall.env).toHaveProperty("ANTHROPIC_API_KEY", "sk-provider");
   });
 
-  it("suppresses provider and repository secrets for execution-only sandboxes", async () => {
+  it("keeps execution canary-blocked before any provider request", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
@@ -335,18 +336,16 @@ describe("OpenComputerSandboxProvider", () => {
       llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
     });
 
-    await provider.createSandbox({
-      ...baseConfig,
-      runtimeMode: "execution",
-      harness: undefined,
-      userEnvVars: { ANTHROPIC_API_KEY: "sk-repo", CUSTOM_SECRET: "hidden" },
-    });
-
-    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
-    expect(createCall.env).not.toHaveProperty("CUSTOM_SECRET");
-    expect(createCall.env).not.toHaveProperty("ANTHROPIC_API_KEY", "sk-provider");
-    const secretStore = vi.mocked(client.createSecretStore);
-    expect(secretStore).not.toHaveBeenCalled();
+    await expect(
+      provider.createSandbox({
+        ...baseConfig,
+        runtimeMode: "execution",
+        harness: undefined,
+        userEnvVars: { ANTHROPIC_API_KEY: "sk-repo", CUSTOM_SECRET: "hidden" },
+      })
+    ).rejects.toThrow("opencomputer execution isolation is canary-blocked");
+    expect(client.createSandbox).not.toHaveBeenCalled();
+    expect(client.createSecretStore).not.toHaveBeenCalled();
   });
 
   it("keeps repo LLM credentials ahead of provider defaults", async () => {

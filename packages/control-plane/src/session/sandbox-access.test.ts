@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   decryptStoredAccessValue,
+  EXECUTION_CREDENTIAL_MAX_LIFETIME_MS,
   isValidSandboxToken,
   resolveSandboxDashboardUrl,
+  verifySandboxCredential,
 } from "./sandbox-access";
 import { encryptToken, generateEncryptionKey, hashToken } from "../auth/crypto";
 import type { SandboxRow } from "./types";
@@ -43,6 +45,41 @@ describe("isValidSandboxToken", () => {
     await expect(isValidSandboxToken(null, sandboxRow({ auth_token: "t" }))).resolves.toBe(false);
     await expect(isValidSandboxToken("", sandboxRow({ auth_token: "t" }))).resolves.toBe(false);
     await expect(isValidSandboxToken("t", null)).resolves.toBe(false);
+  });
+
+  it("classifies execution credentials and enforces revocation and lifetime", async () => {
+    const createdAt = 1_000;
+    const sandbox = sandboxRow({
+      auth_token_hash: await hashToken("execution-token"),
+      runtime_mode: "execution",
+      status: "ready",
+      fenced: 0,
+      created_at: createdAt,
+    });
+
+    await expect(
+      verifySandboxCredential("execution-token", sandbox, createdAt + 1)
+    ).resolves.toEqual({
+      credentialClass: "execution",
+      expiresAt: createdAt + EXECUTION_CREDENTIAL_MAX_LIFETIME_MS,
+    });
+    await expect(
+      verifySandboxCredential(
+        "execution-token",
+        sandbox,
+        createdAt + EXECUTION_CREDENTIAL_MAX_LIFETIME_MS
+      )
+    ).resolves.toBeNull();
+    await expect(
+      verifySandboxCredential("execution-token", { ...sandbox, fenced: 1 }, createdAt + 1)
+    ).resolves.toBeNull();
+    await expect(
+      verifySandboxCredential(
+        "execution-token",
+        { ...sandbox, auth_token_hash: await hashToken("rotated-token") },
+        createdAt + 1
+      )
+    ).resolves.toBeNull();
   });
 });
 

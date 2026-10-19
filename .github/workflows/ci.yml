@@ -267,6 +267,9 @@ jobs:
       - name: Run Pi Code Mode sandbox infrastructure contracts
         run: npm test -w @open-inspect/pi-codemode-sandbox
 
+      - name: Run execution isolation artifact and provider contracts
+        run: npm run test:execution-isolation-contract
+
       # Separate from test-cp-integration so each --shard invocation remains
       # exactly one half of the established suite instead of recursively
       # launching this unsharded auxiliary-Worker lane.

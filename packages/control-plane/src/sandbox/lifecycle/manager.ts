@@ -37,6 +37,10 @@ import {
   type StopConfig,
 } from "../provider";
 import {
+  assertExecutionIsolationSupported,
+  secureExecutionSandboxConfig,
+} from "../execution-isolation";
+import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
   evaluateWarmDecision,
@@ -569,8 +573,19 @@ export class SandboxLifecycleManager
     requestedRuntimeMode?: SandboxRuntimeMode
   ): Promise<void> {
     const runtimeMode = requestedRuntimeMode ?? this.storage.getSandbox()?.runtime_mode ?? "agent";
+    assertExecutionIsolationSupported(runtimeMode, this.provider.name, this.provider.capabilities);
     const startup = this.shutdown.startupDecision();
     if (startup.kind === "hold") return;
+    if (runtimeMode === "execution" && startup.kind === "restore_snapshot") {
+      const row = this.storage.getSandbox();
+      await this.doSpawn(
+        row?.modal_sandbox_id && row.last_heartbeat !== null
+          ? { sandboxId: row.modal_sandbox_id, createdAt: row.created_at }
+          : undefined,
+        "execution"
+      );
+      return;
+    }
     if (startup.kind === "restore_snapshot" || startup.kind === "resume_retained") {
       if (this.isSpawningSandbox || this.isTerminatingSandbox) return;
       if (
@@ -639,6 +654,23 @@ export class SandboxLifecycleManager
 
       case "restore":
         if (!this.admitLaunch(sandboxState, now)) return;
+        if (runtimeMode === "execution") {
+          this.log.info("Execution runtime discarded an agent snapshot", {
+            event: "sandbox.execution_snapshot_refused",
+          });
+          this.announceStartup(intent);
+          const executionRow = this.storage.getSandbox();
+          await this.doSpawn(
+            executionRow?.modal_sandbox_id
+              ? {
+                  sandboxId: executionRow.modal_sandbox_id,
+                  createdAt: executionRow.created_at,
+                }
+              : undefined,
+            "execution"
+          );
+          return;
+        }
         this.log.info("Spawn decision: restore", {
           snapshot_image_id: spawnDecision.snapshotImageId,
           snapshot_runtime_version: spawnDecision.snapshotRuntimeVersion,
@@ -846,16 +878,11 @@ export class SandboxLifecycleManager
       const agent = this.launchContext.resolveAgent(session);
       const { repositories, fields: repositoryFields } =
         this.launchContext.resolveRepositories(session);
-      const imageScope = resolveImageBuildScope(session, repositories);
+      const imageScope = executionOnly ? null : resolveImageBuildScope(session, repositories);
       const candidateImage = imageScope
         ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent.harness)
         : null;
-      const selectedImage =
-        executionOnly &&
-        candidateImage &&
-        !supportsPiSandboxExecution(candidateImage.runtimeVersion)
-          ? null
-          : candidateImage;
+      const selectedImage = candidateImage;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
@@ -872,28 +899,32 @@ export class SandboxLifecycleManager
       const { sandboxSettings: resolvedSandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
       const sandboxSettings = settingsForRuntimeMode(resolvedSandboxSettings, runtimeMode);
-      const createConfig: CreateSandboxConfig = {
-        sessionId,
-        generationCreatedAtMs: generation.createdAt,
-        retireSandboxId: priorSandboxId,
-        sandboxId: expectedSandboxId,
-        controlPlaneUrl: this.config.controlPlaneUrl,
-        sandboxAuthToken,
-        runtimeMode,
-        harness: executionOnly ? undefined : agent.harness,
-        provider: agent.provider,
-        model: agent.model,
-        userEnvVars,
-        prebuiltImageId,
-        prebuiltImageSha,
-        timeoutSeconds,
-        codeServerEnabled,
-        vncEnabled,
-        agentSlackNotifyEnabled,
-        mcpServers,
-        sandboxSettings,
-        ...repositoryFields,
-      };
+      const createConfig = secureExecutionSandboxConfig(
+        {
+          sessionId,
+          generationCreatedAtMs: generation.createdAt,
+          retireSandboxId: priorSandboxId,
+          sandboxId: expectedSandboxId,
+          controlPlaneUrl: this.config.controlPlaneUrl,
+          sandboxAuthToken,
+          runtimeMode,
+          harness: executionOnly ? undefined : agent.harness,
+          provider: agent.provider,
+          model: agent.model,
+          userEnvVars,
+          prebuiltImageId,
+          prebuiltImageSha,
+          timeoutSeconds,
+          codeServerEnabled,
+          vncEnabled,
+          agentSlackNotifyEnabled,
+          mcpServers,
+          sandboxSettings,
+          ...repositoryFields,
+        },
+        this.provider.name,
+        this.provider.capabilities
+      );
 
       this.vmStartup.registerForegroundAuth(generation, sessionId, sandboxAuthToken);
 

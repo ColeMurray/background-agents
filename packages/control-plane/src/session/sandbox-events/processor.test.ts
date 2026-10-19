@@ -94,7 +94,7 @@ describe("SessionSandboxEventProcessor command execution boundary", () => {
         timestamp: 1,
         runtimeMode: "execution",
         bridgeInstanceId: "bridge-1",
-        runtimeVersion: "v77-pi-sandbox-execution",
+        runtimeVersion: "v78-execution-isolation-boundary",
       });
 
       expect(h.commands.onSandboxReady).toHaveBeenCalledOnce();

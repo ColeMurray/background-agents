@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Self
+from urllib.parse import urlsplit
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
@@ -120,6 +121,12 @@ class _RepositoryContextModel(_ModalRequestModel):
         return self
 
 
+class ExecutionPolicyRequest(_ModalRequestModel):
+    artifactGeneration: int = Field(ge=78)
+    networkProfile: str
+    allowedDomains: list[NonEmptyString]
+
+
 class CreateSandboxRequest(_RepositoryContextModel):
     session_id: NonEmptyString
     sandbox_id: str | None = None
@@ -148,6 +155,49 @@ class CreateSandboxRequest(_RepositoryContextModel):
     sandbox_backend: ModalBackend = "modal"
     retire_sandbox_id: str | None = None
     launch_deadline_at_ms: int | None = Field(default=None, gt=0)
+    runtime_mode: str | None = None
+    execution_policy: ExecutionPolicyRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_execution_boundary(self) -> Self:
+        if self.runtime_mode != "execution":
+            return self
+        if self.execution_policy is None:
+            raise ValueError("execution_policy is required for execution runtime")
+        if self.execution_policy.networkProfile != "package-install-v1":
+            raise ValueError("unsupported execution network profile")
+        control_plane_host = urlsplit(self.control_plane_url).hostname
+        expected_domains = [
+            control_plane_host,
+            "registry.npmjs.org",
+            "pypi.org",
+            "files.pythonhosted.org",
+        ]
+        if self.execution_policy.allowedDomains != expected_domains:
+            raise ValueError("execution network allowlist must match the reviewed profile")
+        if self.sandbox_backend != "modal":
+            raise ValueError("execution runtime is unavailable on the Modal VM backend")
+        if any(
+            value is not None
+            for value in (
+                self.repo_owner,
+                self.repo_name,
+                self.harness,
+                self.provider,
+                self.model,
+                self.user_env_vars,
+                self.repo_image_id,
+                self.repo_image_sha,
+                self.mcp_servers,
+                self.repositories,
+            )
+        ):
+            raise ValueError(
+                "execution runtime cannot receive repository, model, MCP, or user data"
+            )
+        if self.code_server_enabled or self.vnc_enabled or self.agent_slack_notify_enabled:
+            raise ValueError("execution runtime cannot expose interactive or agent services")
+        return self
 
 
 class RestoreSessionConfigRequest(_RepositoryContextModel):
@@ -385,6 +435,13 @@ def _session_config_from_create_request(
     """
     from .sandbox import SessionConfig
 
+    if request.get("runtime_mode") == "execution":
+        return {
+            "session_id": request["session_id"],
+            "runtime_mode": "execution",
+            "bridge_early_connect": True,
+        }
+
     fields = {
         name: request[name]
         for name in SessionConfig.model_fields
@@ -482,6 +539,11 @@ async def api_create_sandbox(
             ),
             retire_sandbox_id=parsed_request.retire_sandbox_id or None,
             launch_deadline_at_ms=parsed_request.launch_deadline_at_ms,
+            execution_policy=(
+                parsed_request.execution_policy.model_dump()
+                if parsed_request.execution_policy is not None
+                else None
+            ),
         )
 
         try:

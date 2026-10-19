@@ -1,10 +1,12 @@
 """Translate a session launch into Modal image, environment, and resource arguments."""
 
+import inspect
 import json
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import modal
 
@@ -23,7 +25,7 @@ from sandbox_runtime.types import SandboxStatus
 
 from ..app import app
 from ..app_config import APP_NAME
-from ..images.base import base_image
+from ..images.base import base_image, execution_image
 from .launch_policy import (
     docker_allocation_name,
     docker_allocation_tags,
@@ -64,6 +66,9 @@ _RESERVED_LAUNCH_ENV_VARS = {
 
 log = get_logger("manager")
 ACCESS_PASSWORD_READ_TIMEOUT_SECONDS = 30
+MODAL_DOMAIN_ALLOWLIST_SUPPORTED = (
+    "outbound_domain_allowlist" in inspect.signature(modal.Sandbox.create.aio).parameters
+)
 
 
 class RepositoryImageUnavailableError(RuntimeError):
@@ -90,12 +95,12 @@ type SandboxImageSource = BaseImageSource | RepositoryImageSource | SnapshotImag
 
 
 async def _create_sandbox(
-    create_kwargs: dict[str, Any], *, repository_image: bool
+    create_kwargs: dict[str, Any], *, repository_image: bool, command: list[str] | None = None
 ) -> modal.Sandbox:
     """Only a missing repository image at create time is classified as unavailable."""
     try:
         return await modal.Sandbox.create.aio(
-            "python", "-m", "sandbox_runtime.entrypoint", **create_kwargs
+            *(command or ["python", "-m", "sandbox_runtime.entrypoint"]), **create_kwargs
         )
     except modal.exception.NotFoundError as e:
         if repository_image:
@@ -145,28 +150,43 @@ class SandboxLauncher:
             )
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
+        execution = is_execution_runtime(config.session_config)
+        if execution and not isinstance(spec.source, BaseImageSource):
+            raise RuntimeError("Execution sandboxes require the clean base artifact")
         docker = parse_launch(config.sandbox_backend, config.settings)
-        env_vars = {
-            key: value
-            for key, value in (config.user_env_vars or {}).items()
-            if key not in _RESERVED_LAUNCH_ENV_VARS
-        }
+        if execution and docker.enabled:
+            raise RuntimeError("Execution sandboxes cannot use the Modal VM backend")
+        env_vars = (
+            {}
+            if execution
+            else {
+                key: value
+                for key, value in (config.user_env_vars or {}).items()
+                if key not in _RESERVED_LAUNCH_ENV_VARS
+            }
+        )
         env_vars.update(
             {
                 "PYTHONUNBUFFERED": "1",
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": config.control_plane_url,
-                "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
                 SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
-                "REPO_OWNER": config.repo_owner or "",
-                "REPO_NAME": config.repo_name or "",
-                **docker_runtime_env(docker),
+                **({} if execution else {"REPO_OWNER": config.repo_owner or ""}),
+                **({} if execution else {"REPO_NAME": config.repo_name or ""}),
+                **({} if execution else docker_runtime_env(docker)),
             }
         )
+        if not execution:
+            env_vars["SANDBOX_AUTH_TOKEN"] = config.sandbox_auth_token
 
         snapshot_id: str | None = None
         if isinstance(spec.source, BaseImageSource):
-            image = docker_base_image() if docker.enabled else base_image
+            if execution:
+                if execution_image is None:
+                    raise RuntimeError("Verified execution image is not provisioned")
+                image = execution_image
+            else:
+                image = docker_base_image() if docker.enabled else base_image
         elif isinstance(spec.source, RepositoryImageSource):
             try:
                 image = modal.Image.from_id(spec.source.image_id)
@@ -180,17 +200,24 @@ class SandboxLauncher:
             snapshot_id = spec.source.image_id
 
         if config.session_config is not None:
+            if execution and (
+                not isinstance(config.session_config, dict)
+                or set(config.session_config)
+                != {"session_id", "runtime_mode", "bridge_early_connect"}
+            ):
+                raise RuntimeError("Execution SESSION_CONFIG contains forbidden fields")
             env_vars["SESSION_CONFIG"] = (
                 json.dumps(config.session_config)
                 if isinstance(config.session_config, dict)
                 else config.session_config.model_dump_json()
             )
 
-        inject_vcs_env_vars(
-            env_vars,
-            clone_host=config.clone_host,
-            clone_username=config.clone_username,
-        )
+        if not execution:
+            inject_vcs_env_vars(
+                env_vars,
+                clone_host=config.clone_host,
+                clone_username=config.clone_username,
+            )
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -219,6 +246,9 @@ class SandboxLauncher:
             llm_secrets = modal.Secret.from_name("llm-api-keys")
             await llm_secrets.hydrate.aio()
             launch_secrets.append(llm_secrets)
+        command = ["python", "-m", "sandbox_runtime.entrypoint"]
+        if execution:
+            command.append("--execution-auth-stdin-v1")
         create_kwargs: dict[str, Any] = {
             "image": image,
             "app": app,
@@ -228,6 +258,25 @@ class SandboxLauncher:
             "env": env_vars,
             **launch_kwargs(docker),
         }
+        if execution:
+            if not MODAL_DOMAIN_ALLOWLIST_SUPPORTED:
+                raise RuntimeError("Pinned Modal SDK cannot enforce the execution domain allowlist")
+            policy = config.execution_policy or {}
+            if (
+                policy.get("artifactGeneration") != 78
+                or policy.get("networkProfile") != "package-install-v1"
+            ):
+                raise RuntimeError("Execution isolation policy is invalid")
+            domains = policy.get("allowedDomains")
+            expected_domains = [
+                urlsplit(config.control_plane_url).hostname,
+                "registry.npmjs.org",
+                "pypi.org",
+                "files.pythonhosted.org",
+            ]
+            if domains != expected_domains:
+                raise RuntimeError("Execution network allowlist is invalid")
+            create_kwargs["outbound_domain_allowlist"] = domains
         if tunnels.exposed_ports:
             create_kwargs["encrypted_ports"] = tunnels.exposed_ports
 
@@ -251,7 +300,12 @@ class SandboxLauncher:
                 code_server_password = passwords.get("CODE_SERVER_PASSWORD")
                 vnc_password = passwords.get(VNC_PASSWORD_ENV_VAR)
         else:
-            sandbox = await _create_sandbox(create_kwargs, repository_image=repository_image)
+            sandbox = await _create_sandbox(
+                create_kwargs, repository_image=repository_image, command=command
+            )
+        if execution:
+            sandbox.stdin.write(config.sandbox_auth_token + "\n")
+            await sandbox.stdin.drain.aio()
         modal_object_id = sandbox.object_id
         urls = await tunnels.resolve(sandbox, sandbox_id)
 

@@ -594,6 +594,7 @@ describe("route policy table", () => {
     expect(route.authentication.kind).toBe("user-or-service-with-sandbox-fallback");
     if (route.authentication.kind === "user-or-service-with-sandbox-fallback") {
       expect(route.authentication.getSessionId(params)).toBe("session-1");
+      expect(route.authentication.credentialClasses).toEqual(["agent"]);
     }
     expect(route.authorization.kind).toBe("active-user");
   });
@@ -612,6 +613,7 @@ describe("route policy table", () => {
     const { route, params } = matchRoute(routes, method, path)!;
     expect(route.authentication.kind).toBe("sandbox");
     if (route.authentication.kind === "sandbox") {
+      expect(route.authentication.credentialClasses).toEqual(["agent"]);
       expect(route.authentication.getSessionId(params)).toBe(
         path.includes("/children/") ? "parent-1" : "session-1"
       );
@@ -801,7 +803,16 @@ describe("route policy dispatch ordering", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it.each(["null", '"sandbox-1"', "[]", "{}", '{"sandboxId":""}', '{"sandboxId":123}', "not-json"])(
+  it.each([
+    "null",
+    '"sandbox-1"',
+    "[]",
+    "{}",
+    '{"sandboxId":"sandbox-1"}',
+    '{"sandboxId":""}',
+    '{"sandboxId":123}',
+    "not-json",
+  ])(
     "does not issue provider credentials for a verified response without an identity: %s",
     async (body) => {
       const testEnv = {
@@ -820,7 +831,7 @@ describe("route policy dispatch ordering", () => {
         TEST_BACKGROUND_TASK_CONTEXT
       );
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(401);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       await expect(response.json()).resolves.toEqual({ error: "Sandbox identity unavailable" });
       expect(testEnv.DB.prepare).not.toHaveBeenCalled();
@@ -829,6 +840,25 @@ describe("route policy dispatch ordering", () => {
 });
 
 describe("route principal policy", () => {
+  it("keeps every HTTP sandbox credential route agent-only", () => {
+    const sandboxRoutes = routes.filter(
+      (route) =>
+        route.authentication.kind === "sandbox" ||
+        route.authentication.kind === "user-or-service-with-sandbox-fallback"
+    );
+    expect(sandboxRoutes.length).toBeGreaterThan(0);
+    for (const route of sandboxRoutes) {
+      if (
+        route.authentication.kind === "sandbox" ||
+        route.authentication.kind === "user-or-service-with-sandbox-fallback"
+      ) {
+        expect(route.authentication.credentialClasses, `${route.method} ${route.path}`).toEqual([
+          "agent",
+        ]);
+      }
+    }
+  });
+
   it.each([
     [{ kind: "web-service" } as const, { kind: "service", service: "web", actor: null } as const],
     [{ kind: "user" } as const, { kind: "user", userId: "user-1" } as const],

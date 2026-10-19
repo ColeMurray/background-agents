@@ -189,7 +189,11 @@ describe("session runtime proxy routes", () => {
     async ({ method, path, internal, ...options }) => {
       const paths: string[] = [];
       const fetch = vi.fn(async (request: Request) => {
-        paths.push(new URL(request.url).pathname);
+        const pathname = new URL(request.url).pathname;
+        paths.push(pathname);
+        if (pathname === SessionInternalPaths.verifySandboxToken) {
+          return Response.json({ sandboxId: "sandbox-1", credentialClass: "agent" });
+        }
         return Response.json({ ok: true });
       });
       const init = "init" in options ? options.init : {};

@@ -8,6 +8,7 @@ import json
 import os
 import signal
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,13 @@ COMMAND_ENV_ALLOWLIST = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class CommandIdentity:
+    uid: int
+    gid: int
+    home: Path
+
+
 def command_environment(environment: dict[str, str]) -> dict[str, str]:
     """Only non-secret process basics cross from the bridge into user commands."""
     return {key: value for key, value in environment.items() if key in COMMAND_ENV_ALLOWLIST}
@@ -53,6 +61,7 @@ class CommandRunner:
         terminate_grace_seconds: float = 5.0,
         environment: dict[str, str] | None = None,
         process_group_registry_path: Path | None = None,
+        identity: CommandIdentity | None = None,
     ) -> None:
         self.workspace_path = workspace_path.resolve()
         self.emit = emit
@@ -62,6 +71,15 @@ class CommandRunner:
             dict(os.environ) if environment is None else environment
         )
         self.process_group_registry_path = process_group_registry_path
+        self.identity = identity
+        if identity is not None:
+            self.environment.update(
+                {
+                    "HOME": str(identity.home),
+                    "LOGNAME": "openinspect-exec",
+                    "USER": "openinspect-exec",
+                }
+            )
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._started: dict[str, asyncio.Event] = {}
@@ -115,6 +133,15 @@ class CommandRunner:
         outcome = "failed"
         error_message: str | None = None
         try:
+            identity_options = (
+                {
+                    "user": self.identity.uid,
+                    "group": self.identity.gid,
+                    "extra_groups": [],
+                }
+                if self.identity is not None
+                else {}
+            )
             process = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=cwd,
@@ -123,6 +150,7 @@ class CommandRunner:
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
                 env=self.environment,
+                **identity_options,
             )
             self._processes[command_id] = process
             self._record_process_group(command_id, process.pid)

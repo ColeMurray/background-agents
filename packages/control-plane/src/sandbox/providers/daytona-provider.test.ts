@@ -126,11 +126,22 @@ describe("DaytonaSandboxProvider", () => {
         supportsRestore: false,
         supportsPersistentResume: true,
         supportsExplicitStop: true,
+        executionIsolation: "canary_blocked",
       });
     });
   });
 
   describe("createSandbox", () => {
+    it("rejects execution before contacting Daytona", async () => {
+      const client = createMockClient();
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      await expect(
+        provider.createSandbox({ ...baseCreateConfig, runtimeMode: "execution" })
+      ).rejects.toThrow("daytona execution isolation is canary-blocked");
+      expect(client.createSandbox).not.toHaveBeenCalled();
+    });
+
     it("happy path: creates sandbox with env vars, labels, and tunnel URLs", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);

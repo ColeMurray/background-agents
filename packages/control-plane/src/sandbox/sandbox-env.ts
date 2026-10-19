@@ -39,14 +39,14 @@ export interface SessionRepositoryConfigPayload {
 /** Canonical `SESSION_CONFIG` payload handed to the sandbox runtime. */
 export interface SessionConfigPayload {
   session_id: string;
-  repo_owner: string | null;
-  repo_name: string | null;
+  repo_owner?: string | null;
+  repo_name?: string | null;
   /** Agent harness the runtime must boot. */
   harness?: HarnessId;
   /** Omitted for the legacy/default agent runtime. */
   runtime_mode?: Extract<SandboxRuntimeMode, "execution">;
-  provider: string;
-  model: string;
+  provider?: string;
+  model?: string;
   /** Omitted from the serialized payload when undefined. */
   mcp_servers?: McpServerConfig[];
   /** Omitted from the serialized payload when undefined. */
@@ -85,6 +85,13 @@ export interface SessionConfigInput {
  * explicitly represent a no-repository session.
  */
 export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayload {
+  if (input.runtimeMode === "execution") {
+    return {
+      session_id: input.sessionId,
+      runtime_mode: "execution",
+      bridge_early_connect: true,
+    };
+  }
   const payload: SessionConfigPayload = {
     session_id: input.sessionId,
     repo_owner: input.repoOwner,
@@ -94,11 +101,8 @@ export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayl
     mcp_servers: input.mcpServers,
     bridge_early_connect: true,
   };
-  if (input.runtimeMode !== "execution" && input.harness !== undefined) {
+  if (input.harness !== undefined) {
     payload.harness = input.harness;
-  }
-  if (input.runtimeMode === "execution") {
-    payload.runtime_mode = "execution";
   }
   if (input.branch !== undefined) {
     payload.branch = input.branch;
@@ -324,7 +328,10 @@ export function buildSandboxEnvVars(
   config: CreateSandboxConfig | RestoreConfig,
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
-  const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
+  const execution = config.runtimeMode === "execution";
+  const envVars: Record<string, string> = execution
+    ? {}
+    : { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
   delete envVars.CODE_SERVER_PORT;
   delete envVars.CODE_SERVER_PASSWORD;
   delete envVars.VNC_PASSWORD;
@@ -354,12 +361,14 @@ export function buildSandboxEnvVars(
     PYTHONUNBUFFERED: "1",
     SANDBOX_ID: config.sandboxId,
     CONTROL_PLANE_URL: config.controlPlaneUrl,
-    SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
     SANDBOX_TIMEOUT_SECONDS: String(config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS),
-    REPO_OWNER: config.repoOwner ?? "",
-    REPO_NAME: config.repoName ?? "",
     [SESSION_CONFIG_ENV_VAR]: JSON.stringify(sessionConfig),
   });
+  if (!execution) {
+    envVars.SANDBOX_AUTH_TOKEN = config.sandboxAuthToken;
+    envVars.REPO_OWNER = config.repoOwner ?? "";
+    envVars.REPO_NAME = config.repoName ?? "";
+  }
 
   if (portPlan.codeServerPort !== undefined) {
     envVars.CODE_SERVER_PORT = String(portPlan.codeServerPort);
@@ -385,7 +394,7 @@ export function buildSandboxEnvVars(
     envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
   }
 
-  applyScmCloneEnv(envVars, options.scmIdentity);
+  if (!execution) applyScmCloneEnv(envVars, options.scmIdentity);
 
   // Note: this builder never sets VCS_CLONE_TOKEN / GITHUB_TOKEN /
   // GITHUB_APP_TOKEN as system vars. Git operations in the sandbox

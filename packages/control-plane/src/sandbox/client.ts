@@ -22,7 +22,7 @@ import {
   toRepositoryConfigPayload,
   type ScmCloneIdentity,
 } from "./sandbox-env";
-import type { SessionRepositoryInfo } from "./provider";
+import type { ExecutionSandboxPolicy, SessionRepositoryInfo } from "./provider";
 import { parsePendingVmReference } from "./providers/pending-vm-reference";
 import { withRequestDeadline } from "./request-deadline";
 
@@ -170,6 +170,7 @@ export function buildModalSandboxDashboardUrl(params: {
 
 export interface CreateSandboxRequest {
   runtimeMode?: SandboxRuntimeMode;
+  execution?: ExecutionSandboxPolicy;
   scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
@@ -519,8 +520,9 @@ export class ModalClient {
           agent_session_id: request.agentSessionId || null,
           harness: request.runtimeMode === "execution" ? null : (request.harness ?? null),
           runtime_mode: request.runtimeMode === "execution" ? "execution" : null,
-          provider: request.provider || "anthropic",
-          model: request.model || "claude-sonnet-4-6",
+          execution_policy: request.execution ?? null,
+          provider: request.runtimeMode === "execution" ? null : request.provider || "anthropic",
+          model: request.runtimeMode === "execution" ? null : request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
           repo_image_id: request.prebuiltImageId || null,
           repo_image_sha: request.prebuiltImageSha || null,

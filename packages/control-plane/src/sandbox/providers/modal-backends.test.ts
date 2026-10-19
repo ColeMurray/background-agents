@@ -183,6 +183,30 @@ describe("distinct Modal backend identities", () => {
     }
     expect(provider.name).toBe("modal-vm");
     expect(provider.capabilities.snapshotRequiresShutdown).toBe(true);
+    expect(provider.capabilities.executionIsolation).toBe("canary_blocked");
+  });
+
+  it("keeps both Modal backends blocked until domain policy and UID isolation pass canary", async () => {
+    const modalFixture = fixture("modal");
+    const modal = {
+      client: modalFixture.client,
+      provider: new ModalSandboxProvider(
+        modalFixture.client as unknown as ModalClient,
+        "modal",
+        "github"
+      ),
+    };
+    await expect(
+      modal.provider.createSandbox({ ...config, runtimeMode: "execution" })
+    ).rejects.toThrow("modal execution isolation is canary-blocked");
+    expect(modal.client.createSandbox).not.toHaveBeenCalled();
+    expect(modal.provider.capabilities.executionIsolation).toBe("canary_blocked");
+
+    const vm = fixture("modal-vm");
+    await expect(
+      vm.provider.createSandbox({ ...config, runtimeMode: "execution" })
+    ).rejects.toThrow("modal-vm execution isolation is canary-blocked");
+    expect(vm.client.createSandbox).not.toHaveBeenCalled();
   });
 
   it.each(["modal", "modal-vm"] as const)("forwards image-build caps to %s", async (backend) => {

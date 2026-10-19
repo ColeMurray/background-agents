@@ -32,6 +32,7 @@ import type { SessionSandboxEventProcessor } from "../../sandbox-events/processo
 import type { SandboxRow, SessionRow } from "../../types";
 import { parseTunnelUrls } from "../../tunnel-urls";
 import { z } from "zod";
+import { EXECUTION_CREDENTIAL_MAX_LIFETIME_MS } from "../../sandbox-access";
 
 /**
  * A fatal runtime report. The phase fields are what the supervisor knew
@@ -101,6 +102,12 @@ export class SandboxHandler {
     const sandbox = this.sandboxRepository.getSandbox();
     if (!sandbox || !token) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (sandbox.runtime_mode === "execution") {
+      return Response.json(
+        { error: "Execution credentials cannot report sandbox errors" },
+        { status: 403 }
+      );
     }
     if (sandbox.modal_sandbox_id && sandboxId !== sandbox.modal_sandbox_id) {
       return Response.json({ error: "Wrong sandbox" }, { status: 403 });
@@ -289,8 +296,17 @@ export class SandboxHandler {
     }
 
     log.info("Sandbox token verified successfully");
+    const credentialClass = sandbox.runtime_mode === "execution" ? "execution" : "agent";
     return Response.json(
-      { valid: true, sandboxId: sandbox.modal_sandbox_id ?? sandbox.id },
+      {
+        valid: true,
+        sandboxId: sandbox.modal_sandbox_id ?? sandbox.id,
+        credentialClass,
+        expiresAt:
+          credentialClass === "execution"
+            ? sandbox.created_at + EXECUTION_CREDENTIAL_MAX_LIFETIME_MS
+            : null,
+      },
       { status: 200 }
     );
   }

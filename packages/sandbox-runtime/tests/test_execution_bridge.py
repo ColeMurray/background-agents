@@ -1,6 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock
 
-from sandbox_runtime.execution_bridge import ExecutionBridge
+from sandbox_runtime.execution_bridge import ExecutionBridge, ExecutionBridgeOwner
 
 
 class FakeRunner:
@@ -73,9 +73,11 @@ def test_execution_bridge_ready_event_has_no_agent_harness():
 
 
 def test_execution_bridge_ready_event_reports_runtime_version(monkeypatch):
-    monkeypatch.setenv("SANDBOX_VERSION", "v77-pi-sandbox-execution")
+    monkeypatch.setenv("SANDBOX_VERSION", "v78-execution-isolation-boundary")
 
-    assert bridge(FakeRunner())._ready_event()["runtimeVersion"] == "v77-pi-sandbox-execution"
+    assert (
+        bridge(FakeRunner())._ready_event()["runtimeVersion"] == "v78-execution-isolation-boundary"
+    )
 
 
 async def test_preservation_fences_all_later_command_operations():
@@ -108,3 +110,15 @@ async def test_preservation_fences_all_later_command_operations():
     runner.start.assert_not_called()
     runner.cancel.assert_not_awaited()
     runner.replay.assert_not_awaited()
+
+
+async def test_execution_bridge_owner_runs_in_process_without_token_argv(monkeypatch):
+    execution_bridge = bridge(FakeRunner())
+    execution_bridge.run = AsyncMock(return_value=None)
+    owner = ExecutionBridgeOwner(execution_bridge)
+
+    await owner.start()
+    assert await owner.wait() == 0
+    assert owner.exit_code() == 0
+    assert owner.started() is True
+    execution_bridge.run.assert_awaited_once()
