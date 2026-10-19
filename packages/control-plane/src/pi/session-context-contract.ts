@@ -6,11 +6,14 @@ const fullGitObjectIdSchema = z
   .string()
   .regex(FULL_GIT_OBJECT_ID_PATTERN, "Expected a full Git object SHA");
 
-const piRepositorySchema = z.object({
+const piRepositoryIdentitySchema = z.object({
   repoOwner: z.string().min(1),
   repoName: z.string().min(1),
   position: z.number().int().nonnegative(),
   baseBranch: z.string().min(1).nullable(),
+});
+
+const piRepositorySchema = piRepositoryIdentitySchema.extend({
   commitSha: fullGitObjectIdSchema,
 });
 
@@ -23,12 +26,24 @@ export const piRepositoryPinsSchema = z.array(
   })
 );
 
-export const piSessionContextRequestSchema = z.object({
-  repositoryPins: piRepositoryPinsSchema.optional(),
-});
+export const piSessionContextRequestSchema = z
+  .object({
+    mode: z.enum(["bootstrap", "pin"]).default("bootstrap"),
+    repositoryPins: piRepositoryPinsSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.mode === "bootstrap" && value.repositoryPins !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Bootstrap context cannot include repository pins",
+      });
+    }
+  });
 
 export const piSessionContextSchema = z.object({
-  repositories: z.array(piRepositorySchema),
+  repositories: z.array(
+    piRepositoryIdentitySchema.extend({ commitSha: fullGitObjectIdSchema.optional() })
+  ),
   skills: sandboxSkillInstallationSchema.nullable(),
 });
 

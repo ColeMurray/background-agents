@@ -557,7 +557,7 @@ describe("PiSessionDO", () => {
     await expect(queryDO(stub, "SELECT id FROM sandbox")).resolves.toEqual([]);
   });
 
-  it("opens Pi and Computer storage together and reports an idle root conversation", async () => {
+  it("opens Pi without constructing Computer for an idle root conversation", async () => {
     const { sessionName, stub } = await initializedPiStub("pi-idle");
     await expect(stub.status(sessionName)).resolves.toEqual({ busy: false, pending: 0 });
     const tables = await runInDurableObject(stub, (_instance, state) =>
@@ -567,7 +567,7 @@ describe("PiSessionDO", () => {
         .map((row) => row.name)
     );
     expect(tables.some((name) => name.startsWith("pi_"))).toBe(true);
-    expect(tables.some((name) => name.startsWith("vfs_") || name.startsWith("_vfs_"))).toBe(true);
+    expect(tables.some((name) => name.startsWith("vfs_") || name.startsWith("_vfs_"))).toBe(false);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
@@ -718,6 +718,7 @@ describe("PiSessionDO", () => {
     await stub.status(sessionName);
 
     const results = await runInPiSessionDO(stub, async (instance) => {
+      await workspaceOf(instance).fs.stat("/workspace");
       const workspace = rawWorkspaceOf(instance);
       await workspace.fs.symlink("/outside-secret.txt", "/workspace/scratch/escape");
       return Promise.all([
@@ -742,6 +743,7 @@ describe("PiSessionDO", () => {
     await stub.status(sessionName);
     await expect(
       runInPiSessionDO(stub, async (instance, state) => {
+        await workspaceOf(instance).fs.stat("/workspace");
         const workspace = rawWorkspaceOf(instance);
         await workspace.fs.rm("/workspace/scratch", { recursive: true, force: true });
         await workspace.fs.symlink("/outside", "/workspace/scratch");
@@ -1534,7 +1536,7 @@ describe("PiSessionDO", () => {
       new Request(`http://session${SessionInternalPaths.piContext}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ mode: "pin" }),
       })
     );
     expect(claimed.status).toBe(200);
@@ -1542,6 +1544,9 @@ describe("PiSessionDO", () => {
 
     const stub = piStub(sessionName);
     await stub.status(sessionName);
+    await runInPiSessionDO(stub, (instance) =>
+      executeAgentTool(instance, "repository_list", {}, "lazy-pin-read")
+    );
 
     expect(resolveCommit).toHaveBeenCalledOnce();
     await expect(

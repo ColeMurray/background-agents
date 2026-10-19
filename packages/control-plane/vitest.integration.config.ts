@@ -253,7 +253,8 @@ export default defineConfig({
         "path" in error &&
         typeof error.path === "string" &&
         error.path.startsWith("/workspace/") &&
-        errorStack?.includes("@cloudflare/computer/src/tools/common/fs/write.ts");
+        (errorStack?.includes("@cloudflare/computer/src/tools/common/fs/write.ts") ||
+          errorStack?.includes("src/pi/computer-workspace-quota.ts"));
       // Computer 0.5.1 catches this ENOENT and successfully creates the file,
       // but the Workers pool also reports the intermediate rejection. Keep the
       // exception exact; the integration assertion proves the write committed.

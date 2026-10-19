@@ -167,7 +167,7 @@ function externalActionHarness(
 }
 
 describe("PiBridgeHandler context", () => {
-  it("resolves repository heads only on the first context request", async () => {
+  it("returns lightweight repository identities without resolving heads", async () => {
     const h = harness();
 
     const response = await h.handler.context(
@@ -178,8 +178,34 @@ describe("PiBridgeHandler context", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(h.pin).toHaveBeenCalledOnce();
+    expect(h.pin).not.toHaveBeenCalled();
     expect(h.restore).not.toHaveBeenCalled();
+    expect(h.claimBaselines).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      repositories: [
+        {
+          repoOwner: "acme",
+          repoName: "widgets",
+          position: 0,
+          baseBranch: null,
+        },
+      ],
+    });
+  });
+
+  it("resolves and claims repository heads only for an explicit lazy pin request", async () => {
+    const h = harness();
+
+    const response = await h.handler.context(
+      new Request("http://session/internal/pi-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "pin" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(h.pin).toHaveBeenCalledOnce();
     expect(h.claimBaselines).toHaveBeenCalledWith([]);
   });
 
@@ -198,7 +224,7 @@ describe("PiBridgeHandler context", () => {
       new Request("http://session/internal/pi-context", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repositoryPins }),
+        body: JSON.stringify({ mode: "pin", repositoryPins }),
       })
     );
 
@@ -226,7 +252,7 @@ describe("PiBridgeHandler context", () => {
       new Request("http://session/internal/pi-context", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ mode: "pin" }),
       })
     );
 

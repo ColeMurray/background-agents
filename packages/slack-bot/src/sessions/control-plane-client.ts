@@ -7,13 +7,14 @@ import {
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
-import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 import { z } from "zod";
+import { deploymentCapabilitiesSchema } from "@open-inspect/shared";
+import { HARNESS_IDS, type HarnessId } from "@open-inspect/shared/harnesses";
 
 const log = createLogger("handler");
 
@@ -27,6 +28,30 @@ const controlPlaneErrorBodySchema = z.object({
 });
 
 type ControlPlaneErrorBody = z.infer<typeof controlPlaneErrorBodySchema>;
+
+export async function getDeploymentCapabilities(env: ControlPlaneEnv, traceId?: string) {
+  const response = await signedControlPlaneFetch(
+    env,
+    { method: "GET", url: "https://internal/capabilities", traceId },
+    { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+  );
+  if (!response.ok) throw new Error(`Deployment capabilities unavailable (${response.status})`);
+  return deploymentCapabilitiesSchema.parse(await response.json());
+}
+
+/** Capability outages fail Pi advertising closed without breaking existing Slack harnesses. */
+export async function getAvailableHarnessIds(
+  env: ControlPlaneEnv,
+  traceId?: string
+): Promise<readonly HarnessId[]> {
+  try {
+    return (await getDeploymentCapabilities(env, traceId)).harnesses
+      .filter((harness) => harness.available)
+      .map((harness) => harness.id);
+  } catch {
+    return HARNESS_IDS.filter((harness) => harness !== "pi");
+  }
+}
 
 async function readErrorBody(response: Response): Promise<ControlPlaneErrorBody> {
   const parsed = controlPlaneErrorBodySchema.safeParse(await response.json().catch(() => null));

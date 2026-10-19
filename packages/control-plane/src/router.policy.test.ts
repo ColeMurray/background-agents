@@ -39,11 +39,15 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(239);
+    expect(routes).toHaveLength(240);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(181);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(239);
+    expect(new Set(paths).size).toBe(182);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(240);
+    expect(routeFor("GET", "/capabilities")).toMatchObject({
+      authentication: { kind: "public" },
+      authorization: { kind: "none" },
+    });
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
       authentication: { kind: "user" },
       authorization: { kind: "active-self" },

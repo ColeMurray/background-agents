@@ -17,7 +17,6 @@ interface PiRepositoryDescriptor {
   repoName: string;
   position: number;
   baseBranch: string | null;
-  commitSha: string;
 }
 
 interface OpenInspectExtensionOptions {
@@ -151,8 +150,7 @@ function bindRepositoryTool(
       const position = typeof args.repository === "number" ? args.repository : 0;
       const repository = repositories.find((candidate) => candidate.position === position);
       if (!repository) throw new Error(`Repository index ${position} is not part of this session`);
-      const pinnedArgs = { ...args, commitSha: repository.commitSha };
-      const result = await invoke(toolName, pinnedArgs, context.abortSignal);
+      const result = await invoke(toolName, args, context.abortSignal);
       return {
         output: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredOutput: result,

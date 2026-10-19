@@ -1,7 +1,7 @@
 "use client";
 
 import { getHarnessLabel, isValidHarness, type HarnessId } from "@open-inspect/shared/harnesses";
-import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
+import { useAvailableHarnessIds } from "@/lib/available-harnesses";
 import {
   Select,
   SelectContent,
@@ -39,9 +39,10 @@ export function HarnessSelect({
   /** Repository-only integrations cannot use the current no-repository Pi runtime. */
   supportsPi?: boolean;
 }) {
+  const availableHarnesses = useAvailableHarnessIds();
   const harnesses = supportsPi
-    ? AVAILABLE_HARNESS_IDS
-    : AVAILABLE_HARNESS_IDS.filter((harness) => harness !== "pi");
+    ? availableHarnesses
+    : availableHarnesses.filter((harness) => harness !== "pi");
   return (
     <Select
       disabled={disabled}

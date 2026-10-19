@@ -3,7 +3,9 @@ import type { Workspace } from "@cloudflare/computer";
 import {
   WORKSPACE_QUOTA_STATE_KEY,
   WorkspaceMutationFifo,
+  createLazyWorkspaceToolFacade,
   createQuotaWorkspace,
+  createWorkspaceToolFacade,
 } from "./computer-workspace-quota";
 
 interface FileEntry {
@@ -142,6 +144,20 @@ function memoryWorkspace(seed: Record<string, string> = {}) {
 }
 
 describe("createQuotaWorkspace", () => {
+  it("does not construct Computer until the first workspace method call", async () => {
+    const { workspace } = memoryWorkspace({ "/workspace/scratch/note.txt": "hello" });
+    let opens = 0;
+    const lazy = createLazyWorkspaceToolFacade(async () => {
+      opens += 1;
+      return createWorkspaceToolFacade(workspace);
+    });
+
+    expect(opens).toBe(0);
+    await lazy.fs.stat("/workspace/scratch/note.txt");
+    await lazy.fs.stat("/workspace/scratch");
+    expect(opens).toBe(1);
+  });
+
   it("enforces one aggregate byte quota across files and overwrites", async () => {
     const storage = new MemoryStorage();
     const { workspace, files } = memoryWorkspace({ "/workspace/scratch/a.txt": "1234" });

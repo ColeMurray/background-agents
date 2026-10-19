@@ -70,6 +70,33 @@ export function createWorkspaceToolFacade(workspace: Workspace): WorkspaceToolFa
   };
 }
 
+/** Defer Computer construction until a model actually invokes a workspace tool. */
+export function createLazyWorkspaceToolFacade(
+  open: () => Promise<WorkspaceToolFacade>
+): WorkspaceToolFacade {
+  let opened: Promise<WorkspaceToolFacade> | undefined;
+  const get = () => (opened ??= open());
+  const method =
+    (name: keyof ToolFileSystem) =>
+    (...args: unknown[]) =>
+      get().then((workspace) =>
+        Reflect.apply(workspace.fs[name] as (...values: unknown[]) => unknown, workspace.fs, args)
+      );
+  return {
+    fs: {
+      stat: method("stat") as ToolFileSystem["stat"],
+      lstat: method("lstat") as ToolFileSystem["lstat"],
+      readFile: method("readFile") as ToolFileSystem["readFile"],
+      writeFile: method("writeFile") as ToolFileSystem["writeFile"],
+      mkdir: method("mkdir") as ToolFileSystem["mkdir"],
+      rm: method("rm") as ToolFileSystem["rm"],
+      find: method("find") as ToolFileSystem["find"],
+      grep: method("grep") as ToolFileSystem["grep"],
+      readdir: method("readdir") as ToolFileSystem["readdir"],
+    },
+  };
+}
+
 /**
  * Add durable aggregate scratch accounting while returning only the small
  * filesystem surface Computer's tools require.

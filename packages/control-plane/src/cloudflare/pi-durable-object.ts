@@ -62,6 +62,7 @@ import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
   createQuotaWorkspace,
+  createLazyWorkspaceToolFacade,
   createWorkspaceToolFacade,
   ensureRealWorkspaceDirectory,
   type WorkspaceToolFacade,
@@ -167,7 +168,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const snapshot = await readPiFeatureCapabilitySnapshot(this.ctx.storage);
       if (!snapshot) throw new Error("Pi Durable capability authority is not initialized");
       const { capabilities } = snapshot;
-      const sessionContext = await this.fetchSessionContext();
+      const sessionContext = await this.fetchSessionContext("bootstrap");
       const codeModePolicy = createPiCodeModePolicyState();
       const codeModePolicyDelegate = createPiCodeModePolicyDelegate(codeModePolicy);
       const emergencyPolicy = createPiDeploymentEmergencyPolicy(
@@ -232,18 +233,26 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const repositoryEditing =
         capabilities.repositoryEditing === "enabled" && sessionContext.repositories.length > 0;
       if (repositoryEditing) {
-        const scratchWorkspace = await this.openWorkspace(capabilities.workspace === "enabled");
-        const rawWorkspace = this.rawWorkspace;
-        if (!rawWorkspace) throw new Error("Pi repository workspace is unavailable");
-        this.repositoryWorkspaceInitializer = (signal) =>
-          this.initializeRepositoryWorkspace(
-            sessionContext.repositories,
+        const scratchWorkspace = createLazyWorkspaceToolFacade(() =>
+          this.openWorkspace(capabilities.workspace === "enabled")
+        );
+        this.workspace = scratchWorkspace;
+        const repositoryWorkspace = createLazyWorkspaceToolFacade(async () => {
+          await this.openWorkspace(capabilities.workspace === "enabled");
+          if (!this.rawWorkspace) throw new Error("Pi repository workspace is unavailable");
+          return createWorkspaceToolFacade(this.rawWorkspace);
+        });
+        this.repositoryWorkspaceInitializer = async (signal) => {
+          await this.openWorkspace(capabilities.workspace === "enabled");
+          return this.initializeRepositoryWorkspace(
+            (await this.ensureRepositoryPins(signal)).repositories,
             workspaceMutations,
             signal
           );
+        };
         const capability = createRepositoryEditingWorkspaceCapability({
           scratchWorkspace,
-          repositoryWorkspace: createWorkspaceToolFacade(rawWorkspace),
+          repositoryWorkspace,
           initializeOverlay: (signal) => this.repositoryWorkspaceInitializer!(signal),
           mutations: workspaceMutations,
           scratchMode: capabilities.workspace,
@@ -266,7 +275,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           effects: [],
         });
       } else if (capabilities.workspace !== "off") {
-        const workspace = await this.openWorkspace(capabilities.workspace === "enabled");
+        const workspace = createLazyWorkspaceToolFacade(() =>
+          this.openWorkspace(capabilities.workspace === "enabled")
+        );
+        this.workspace = workspace;
         const capability = createComputerWorkspaceCapability(
           workspace,
           capabilities.workspace,
@@ -573,7 +585,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async openWorkspace(writable: boolean): Promise<WorkspaceToolFacade> {
-    if (this.workspace) return this.workspace;
+    if (this.rawWorkspace && this.workspace) return this.workspace;
     const workspace = new Workspace({
       storage: this.ctx.storage as unknown as DurableObjectStorageLike,
       sessionId: this.ctx.id.toString(),
@@ -594,7 +606,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async initializeRepositoryWorkspace(
-    repositories: PiSessionContext["repositories"],
+    repositories: Array<PiSessionContext["repositories"][number] & { commitSha: string }>,
     mutations: WorkspaceMutationFifo,
     signal?: AbortSignal
   ): Promise<PiRepositoryWorkspace> {
@@ -914,51 +926,69 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     };
   }
 
-  private async fetchSessionContext(): Promise<PiSessionContext> {
+  private async fetchSessionContext(
+    mode: "bootstrap" | "pin",
+    repositoryPins?: z.infer<typeof piRepositoryPinsSchema>
+  ): Promise<PiSessionContext> {
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) {
       throw new Error("Pi Durable session was deleted");
     }
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const storedPinsValue = await this.ctx.storage.get<unknown>(REPOSITORY_PINS_KEY);
-    const storedPins =
-      storedPinsValue === undefined ? undefined : piRepositoryPinsSchema.parse(storedPinsValue);
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piContext}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repositoryPins: storedPins }),
+        body: JSON.stringify({ mode, ...(repositoryPins ? { repositoryPins } : {}) }),
       })
     );
     if (!response.ok) throw new Error(`Pi session context unavailable (${response.status})`);
-    const sessionContext = piSessionContextSchema.parse(await response.json());
-    if (storedPins === undefined) {
-      await this.ctx.storage.put(
-        REPOSITORY_PINS_KEY,
-        sessionContext.repositories.map(({ repoOwner, repoName, position, commitSha }) => ({
-          repoOwner,
-          repoName,
-          position,
-          commitSha,
-        }))
-      );
-      return sessionContext;
-    }
-    const byPosition = new Map(storedPins.map((pin) => [pin.position, pin]));
-    return {
-      ...sessionContext,
-      repositories: sessionContext.repositories.map((repository) => {
-        const pin = byPosition.get(repository.position);
-        if (
-          !pin ||
-          pin.repoOwner !== repository.repoOwner ||
-          pin.repoName !== repository.repoName
-        ) {
-          throw new Error("Pi repository pin does not match the session repository set");
-        }
-        return { ...repository, commitSha: pin.commitSha };
-      }),
-    };
+    return piSessionContextSchema.parse(await response.json());
+  }
+
+  private async ensureRepositoryPins(signal?: AbortSignal): Promise<{
+    repositories: Array<PiSessionContext["repositories"][number] & { commitSha: string }>;
+    skills: PiSessionContext["skills"];
+  }> {
+    const storedValue = await this.ctx.storage.get<unknown>(REPOSITORY_PINS_KEY);
+    const stored =
+      storedValue === undefined ? undefined : piRepositoryPinsSchema.parse(storedValue);
+    const candidate = await this.fetchSessionContext("pin", stored);
+    const pinned = candidate.repositories.map((repository) => {
+      if (!repository.commitSha) throw new Error("Pi repository pin is unavailable");
+      return { ...repository, commitSha: repository.commitSha };
+    });
+    signal?.throwIfAborted();
+    await this.ctx.storage.transaction(async (transaction) => {
+      const winnerValue = await transaction.get<unknown>(REPOSITORY_PINS_KEY);
+      if (winnerValue === undefined) {
+        await transaction.put(
+          REPOSITORY_PINS_KEY,
+          pinned.map(({ repoOwner, repoName, position, commitSha }) => ({
+            repoOwner,
+            repoName,
+            position,
+            commitSha,
+          }))
+        );
+        return;
+      }
+      const winner = piRepositoryPinsSchema.parse(winnerValue);
+      if (
+        JSON.stringify(winner) !==
+        JSON.stringify(
+          pinned.map(({ repoOwner, repoName, position, commitSha }) => ({
+            repoOwner,
+            repoName,
+            position,
+            commitSha,
+          }))
+        )
+      ) {
+        throw new Error("Pi repository pin does not match the immutable winner");
+      }
+    });
+    return { repositories: pinned, skills: candidate.skills };
   }
 
   private async invokeRepositoryTool(
@@ -970,6 +1000,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
     const operation = (await this.harness.pending({ session: ROOT_SESSION }))[0];
     if (!operation) throw new Error("Pi Durable has no active operation");
+    const pins = await this.ensureRepositoryPins(signal);
+    const position = typeof args.repository === "number" ? args.repository : 0;
+    const repository = pins.repositories.find((candidate) => candidate.position === position);
+    if (!repository) throw new Error(`Repository index ${position} is not part of this session`);
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piRepositoryTool}`, {
         method: "POST",
@@ -977,7 +1011,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           "Content-Type": "application/json",
           "X-Pi-Operation-ID": operation.operationId,
         },
-        body: JSON.stringify({ tool, arguments: args }),
+        body: JSON.stringify({ tool, arguments: { ...args, commitSha: repository.commitSha } }),
         signal,
       })
     );

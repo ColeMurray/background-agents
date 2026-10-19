@@ -4,7 +4,6 @@ import { createOpenInspectExtension, createSubagentExtension } from "./open-insp
 
 describe("createOpenInspectExtension", () => {
   it("offers replay-safe repository tools only when the session has repositories", async () => {
-    const commitSha = "a".repeat(40);
     const invokeRepository = vi.fn(async () => ({ entries: [] }));
     const extension = createOpenInspectExtension({
       repositories: [
@@ -13,7 +12,6 @@ describe("createOpenInspectExtension", () => {
           repoName: "widgets",
           position: 0,
           baseBranch: "main",
-          commitSha,
         },
       ],
       invokeRepository,
@@ -35,11 +33,7 @@ describe("createOpenInspectExtension", () => {
       value: () => undefined,
       toString: () => "test",
     });
-    expect(invokeRepository).toHaveBeenCalledWith(
-      "repository_list",
-      { path: "src", commitSha },
-      undefined
-    );
+    expect(invokeRepository).toHaveBeenCalledWith("repository_list", { path: "src" }, undefined);
     expect(result).toMatchObject({ structuredOutput: { entries: [] } });
   });
 

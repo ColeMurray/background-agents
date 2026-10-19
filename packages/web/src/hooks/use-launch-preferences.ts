@@ -29,7 +29,8 @@ import {
   setProviderSelection,
 } from "@/lib/provider-selection";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
-import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
+import { useAvailableHarnessIds } from "@/lib/available-harnesses";
+import { useDeploymentCapabilities } from "@/hooks/use-deployment-capabilities";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_HARNESS_STORAGE_KEY = "open-inspect-last-selected-harness";
@@ -81,6 +82,8 @@ export function useLaunchPreferences(
   { models, providerAccounts }: LaunchPreferencesInput,
   storage: LaunchPreferenceStorage = browserStorage
 ) {
+  const availableHarnesses = useAvailableHarnessIds();
+  const { isLoading: capabilitiesLoading } = useDeploymentCapabilities();
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = models;
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
@@ -94,6 +97,10 @@ export function useLaunchPreferences(
 
   useEffect(() => {
     if (hasHydratedPreferencesRef.current) return;
+    const storedHarness = getValidHarnessOrDefault(
+      storage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)
+    );
+    if (capabilitiesLoading && storedHarness === "pi") return;
 
     const storedModel = storage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = storage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
@@ -129,10 +136,7 @@ export function useLaunchPreferences(
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
-    const storedHarness = getValidHarnessOrDefault(
-      storage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)
-    );
-    if (AVAILABLE_HARNESS_IDS.includes(storedHarness)) {
+    if (availableHarnesses.includes(storedHarness)) {
       setHarness(storedHarness);
     } else {
       setHarness(DEFAULT_HARNESS);
@@ -141,7 +145,7 @@ export function useLaunchPreferences(
     if (storedProviderSelections) setProviderSelections(storedProviderSelections);
     setProviderSelectionsHydrated(true);
     hasHydratedPreferencesRef.current = true;
-  }, [storage]);
+  }, [availableHarnesses, capabilitiesLoading, storage]);
 
   const availableProviderSelections = reconcileProviderSelectionsForHarness(
     harness,

@@ -143,17 +143,21 @@ SLOs for the personal Pi canary:
 
 ### Slice 1 — server capabilities and truly lazy first token
 
-- [ ] Add one server-authoritative `/capabilities` contract and route reporting binding
+- [x] Add one server-authoritative `/capabilities` contract and route reporting binding
       reachability, harness/auth/model constraints, Pi modes, exact versions, and canary readiness
-      without secrets.
-- [ ] Web BFF/SWR and Slack consume the server contract; remove independent Pi advertising drift.
-- [ ] Session creation stores only repository identities/positions/base branches, skill snapshot,
+      without secrets — shared strict schema plus public control-plane route and sentinel test.
+- [x] Web BFF/SWR and Slack consume the server contract; independent build/env Pi advertising now
+      fails closed while ordinary harnesses remain available during capability outages.
+- [x] Session creation stores only repository identities/positions/base branches, skill snapshot,
       and feature snapshot. It resolves no repository ref/blob or provider pin and opens no
-      Computer/VFS, Code Mode, or sandbox.
-- [ ] First repository tool call obtains fresh SessionDO authorization/ref, atomically latches the
-      immutable identity-matching winner, and performs the direct read only then.
-- [ ] Workspace facade creates Computer only on the first workspace call.
-- [ ] Counters/tests prove an ordinary web/Slack first model request uses none of those resources.
+      Computer/VFS, Code Mode, or sandbox — workerd idle-open test proves no VFS tables.
+- [x] First repository tool call obtains fresh SessionDO authorization/ref, atomically latches the
+      immutable identity-matching winner, and performs the direct read only then; crash recovery
+      reuses SessionDO's claimed baseline.
+- [x] Workspace facade creates Computer only on the first workspace call — focused unit and workerd
+      tests cover zero-open, first-call open, reuse, eviction, quota, and deletion.
+- [x] Tests prove an ordinary Pi open has zero sandbox rows, provider ref/blob calls, Computer/VFS
+      tables, or Code Mode RPC; Slack launch consumes capabilities without changing non-Pi fallback.
 
 ### Slice 2 — personal web production vertical
 
@@ -252,15 +256,15 @@ SLOs for the personal Pi canary:
 
 ## Evidence ledger
 
-| Slice | Commit  | Reachable-flow evidence                                                                                                                                       | Test/canary evidence                                                                                                             | Remaining live-only gate                    |
-| ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| 0     | pending | Existing sandbox dispatch is unchanged; Pi queue still never asks for a socket or spawn; Slack still verifies signature/schema and keeps its current ACK path | control-plane 5,111/1 skipped; Slack 638; focused 154; control-plane typecheck/lint/build; Slack lint/build; Prettier/diff check | none                                        |
-| 1     | pending | pending                                                                                                                                                       | pending                                                                                                                          | capability reachability in deployed account |
-| 2     | pending | pending                                                                                                                                                       | pending                                                                                                                          | personal provider credential/browser canary |
-| 3     | pending | pending                                                                                                                                                       | pending                                                                                                                          | real Slack retry/latency canary             |
-| 4     | pending | pending                                                                                                                                                       | pending                                                                                                                          | real model multi-agent canary               |
-| 5     | pending | pending                                                                                                                                                       | pending                                                                                                                          | paid Cloudflare deployment/version canary   |
-| 6     | pending | pending                                                                                                                                                       | pending                                                                                                                          | provider execution canaries                 |
-| 7     | pending | pending                                                                                                                                                       | pending                                                                                                                          | provider comment/reply canaries             |
-| 8     | pending | pending                                                                                                                                                       | pending                                                                                                                          | approved MCP OAuth server canary            |
-| 9     | pending | pending                                                                                                                                                       | pending                                                                                                                          | 10-minute deployed soak                     |
+| Slice | Commit     | Reachable-flow evidence                                                                                                                                       | Test/canary evidence                                                                                                                            | Remaining live-only gate                    |
+| ----- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| 0     | `d484e480` | Existing sandbox dispatch is unchanged; Pi queue still never asks for a socket or spawn; Slack still verifies signature/schema and keeps its current ACK path | control-plane 5,111/1 skipped; Slack 638; focused 154; control-plane typecheck/lint/build; Slack lint/build; Prettier/diff check                | none                                        |
+| 1     | pending    | Server capability authority now drives web/Slack; Pi opens bootstrap context only; repository pin, provider reads, and Computer are first-tool lazy           | shared 1,303; control-plane 5,115/1 skipped; focused workerd 51; Slack 638; web 2,532/2,533 plus isolated timeout pass; affected typecheck/lint | capability reachability in deployed account |
+| 2     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | personal provider credential/browser canary |
+| 3     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | real Slack retry/latency canary             |
+| 4     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | real model multi-agent canary               |
+| 5     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | paid Cloudflare deployment/version canary   |
+| 6     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | provider execution canaries                 |
+| 7     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | provider comment/reply canaries             |
+| 8     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | approved MCP OAuth server canary            |
+| 9     | pending    | pending                                                                                                                                                       | pending                                                                                                                                         | 10-minute deployed soak                     |

@@ -6,7 +6,7 @@ import {
   getHarnessReasoningConfig,
   isValidHarness,
 } from "@open-inspect/shared/harnesses";
-import { AVAILABLE_HARNESS_IDS } from "@/lib/available-harnesses";
+import { useAvailableHarnessIds } from "@/lib/available-harnesses";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -38,6 +38,7 @@ export function AutomationAgentFields({
   modelError = "",
   onChange,
 }: AutomationAgentFieldsProps) {
+  const availableHarnesses = useAvailableHarnessIds();
   const reasoningConfig = getHarnessReasoningConfig(value.harness, resolvedModel);
   const reasoningEffort = effectiveReasoningEffort(
     value.harness,
@@ -89,7 +90,7 @@ export function AutomationAgentFields({
             <SelectValue>{getHarnessLabel(value.harness)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {AVAILABLE_HARNESS_IDS.map((harness) => (
+            {availableHarnesses.map((harness) => (
               <SelectItem key={harness} value={harness}>
                 {getHarnessLabel(harness)}
               </SelectItem>

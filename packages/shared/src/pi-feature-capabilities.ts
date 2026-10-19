@@ -30,19 +30,21 @@ export const PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION = 1 as const;
 
 const featureCapabilityModeSchema = z.enum(FEATURE_CAPABILITY_MODES);
 
+export const piFeatureCapabilityMatrixSchema = z
+  .object({
+    workspace: featureCapabilityModeSchema,
+    repositoryEditing: featureCapabilityModeSchema,
+    codeMode: featureCapabilityModeSchema,
+    sandboxExecution: featureCapabilityModeSchema,
+    externalActions: featureCapabilityModeSchema,
+    mcp: featureCapabilityModeSchema,
+  })
+  .strict();
+
 export const piFeatureCapabilitySnapshotSchema = z
   .object({
     version: z.literal(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION),
-    capabilities: z
-      .object({
-        workspace: featureCapabilityModeSchema,
-        repositoryEditing: featureCapabilityModeSchema,
-        codeMode: featureCapabilityModeSchema,
-        sandboxExecution: featureCapabilityModeSchema,
-        externalActions: featureCapabilityModeSchema,
-        mcp: featureCapabilityModeSchema,
-      })
-      .strict(),
+    capabilities: piFeatureCapabilityMatrixSchema,
   })
   .strict();
 

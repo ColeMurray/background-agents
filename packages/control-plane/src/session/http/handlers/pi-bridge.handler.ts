@@ -108,6 +108,23 @@ export class PiBridgeHandler {
     const sessionId = this.options.getSessionId();
     const session = this.options.sessions.getSession();
     const sessionRepositories = this.options.sessions.getSessionRepositories();
+    const skills = await this.options.skills.getSandboxInstallation(sessionId);
+    if (parsed.data.mode === "bootstrap") {
+      return Response.json(
+        piSessionContextSchema.parse({
+          repositories: sessionRepositories.map((repository) => ({
+            position: repository.position,
+            repoOwner: repository.repoOwner,
+            repoName: repository.repoName,
+            baseBranch:
+              repository.row?.base_branch ??
+              (repository.isPrimary ? (session?.base_branch ?? null) : null),
+          })),
+          skills,
+        }),
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
     const claimedPins = sessionRepositories.map((repository) => ({
       position: repository.position,
       repoOwner: repository.repoOwner,
@@ -118,14 +135,11 @@ export class PiBridgeHandler {
     const completeClaimedPins = claimedPins.every((pin) => pin.commitSha !== null)
       ? claimedPins.map((pin) => ({ ...pin, commitSha: pin.commitSha! }))
       : null;
-    const [repositories, skills] = await Promise.all([
-      parsed.data.repositoryPins
-        ? this.options.repositories.restore(parsed.data.repositoryPins)
-        : completeClaimedPins
-          ? this.options.repositories.restore(completeClaimedPins)
-          : this.options.repositories.pin(),
-      this.options.skills.getSandboxInstallation(sessionId),
-    ]);
+    const repositories = parsed.data.repositoryPins
+      ? this.options.repositories.restore(parsed.data.repositoryPins)
+      : completeClaimedPins
+        ? this.options.repositories.restore(completeClaimedPins)
+        : await this.options.repositories.pin();
     this.options.diffs.claimBaselines(
       repositories.map(({ position, repoOwner, repoName, commitSha }) => ({
         position,

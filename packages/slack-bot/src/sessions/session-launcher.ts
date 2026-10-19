@@ -1,11 +1,7 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ValidModel } from "@open-inspect/shared/models";
-import {
-  availableHarnessIds,
-  checkHarnessCompatibility,
-  DEFAULT_HARNESS,
-} from "@open-inspect/shared/harnesses";
+import { checkHarnessCompatibility, DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -28,7 +24,7 @@ import {
   resolveUserPreferences,
   type ResolvedUserPreferences,
 } from "../user-preferences";
-import { createSession } from "./control-plane-client";
+import { createSession, getAvailableHarnessIds } from "./control-plane-client";
 import { getAuthoritativeSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
@@ -54,13 +50,13 @@ export async function loadAuthoritativeSlackLaunchSettings(
   traceId?: string
 ): Promise<SlackLaunchSettings | null> {
   try {
-    const [enabledModels, slackConfig, prefs] = await Promise.all([
+    const [enabledModels, slackConfig, prefs, availableHarnesses] = await Promise.all([
       getAuthoritativeModels(env, traceId),
       getAuthoritativeSlackSettings(env, traceId),
       getAuthoritativeUserPreferences(env, userId),
+      getAvailableHarnessIds(env, traceId),
     ]);
     if (!enabledModels || !slackConfig) return null;
-    const availableHarnesses = availableHarnessIds(env.PI_DURABLE_ENABLED);
     const workspaceHarness = availableHarnesses.includes(slackConfig.harness)
       ? slackConfig.harness
       : DEFAULT_HARNESS;
