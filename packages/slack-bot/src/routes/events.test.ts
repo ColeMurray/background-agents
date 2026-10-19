@@ -114,6 +114,7 @@ describe("POST /events deduplication", () => {
   );
 
   it("dispatches a valid event with file and attachment fields", async () => {
+    const consoleInfo = vi.spyOn(console, "log").mockImplementation(() => {});
     const env = makeEnv("get");
     const ctx = makeCtx();
     const response = await eventRoutes.fetch(
@@ -148,6 +149,25 @@ describe("POST /events deduplication", () => {
       expect.any(String),
       expect.any(Function)
     );
+    const telemetry = consoleInfo.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((entry) => entry.msg === "slack.ingress");
+    expect(telemetry).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          milestone: "ingress",
+          source: "slack",
+          timestamp_ms: expect.any(Number),
+        }),
+        expect.objectContaining({
+          milestone: "ack",
+          source: "slack",
+          duration_ms: expect.any(Number),
+          timestamp_ms: expect.any(Number),
+        }),
+      ])
+    );
+    expect(JSON.stringify(telemetry)).not.toContain("see attached");
   });
 
   it("rejects malformed JSON", async () => {

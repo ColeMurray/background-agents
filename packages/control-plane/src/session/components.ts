@@ -800,7 +800,26 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         settledAt
       )
   );
-  const piEventHandler = new PiEventHandler(piOperations, processPiEvent, isPiSession);
+  const visiblePiTokens = new Set<string>();
+  const piEventHandler = new PiEventHandler(
+    piOperations,
+    processPiEvent,
+    isPiSession,
+    Date.now,
+    (event) => {
+      if (event.type !== "token" || visiblePiTokens.has(event.operationId)) return;
+      visiblePiTokens.add(event.operationId);
+      log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "first_token_visible",
+        timestamp_ms: event.timestampMs,
+        operation_id: event.operationId,
+        projection_sequence: event.sequence,
+        harness: "pi",
+        execution_backend: "durable_object",
+      });
+    }
+  );
   const alarmHandler = createAlarmHandler({
     repository: messageRepository,
     messageQueue,

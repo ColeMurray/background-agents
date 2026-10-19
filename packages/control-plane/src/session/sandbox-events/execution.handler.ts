@@ -86,6 +86,14 @@ export class SandboxExecutionEventHandler {
           context: { message_id: event.messageId },
         }
       );
+      this.log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "callback_scheduled",
+        timestamp_ms: context.now,
+        operation_id: event.messageId,
+        harness: "pi",
+        execution_backend: "durable_object",
+      });
     }
     await this.budget.deliverTransition(budgetTransition);
     if (completion) {
@@ -110,6 +118,20 @@ export class SandboxExecutionEventHandler {
         processing_duration_ms: processingDurationMs,
         queue_duration_ms: queueDurationMs,
       });
+      if (event.sandboxId.startsWith("pi:")) {
+        this.log.info("pi.latency", {
+          event: "pi.latency",
+          milestone: "terminal",
+          timestamp_ms: context.now,
+          operation_id: event.messageId,
+          harness: "pi",
+          execution_backend: "durable_object",
+          outcome: event.success ? "success" : "failure",
+          total_duration_ms: totalDurationMs,
+          processing_duration_ms: processingDurationMs,
+          queue_duration_ms: queueDurationMs,
+        });
+      }
       this.applyFallbackTitle(completion.messageId);
       this.messenger.broadcast({ type: "sandbox_event", event });
       this.messenger.broadcast({

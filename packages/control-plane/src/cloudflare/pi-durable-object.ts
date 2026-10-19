@@ -110,6 +110,7 @@ import {
   type RepositoryDiffPublicationOutcome,
 } from "../pi/repository-diff-outbox";
 import { RepositoryDiffPublicationCapability } from "../pi/repository-diff-publication";
+import { createLogger } from "../logger";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
 
@@ -129,6 +130,10 @@ interface PiOperationMetadata {
 }
 /** OpenCode-free, sandbox-free Pi runtime for one Open-Inspect session. */
 export class PiSessionDO extends DurableObject<PiWorkerBindings> {
+  private readonly log = createLogger("pi-session-do", {
+    harness: "pi",
+    execution_backend: "durable_object",
+  });
   private readonly credentials = new CodexBrokerCredentialStore((version, signal) =>
     this.fetchCodexCredential(version, signal)
   );
@@ -145,6 +150,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private harnessOpened = false;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
+  private readonly firstModelRequestObserved = new Set<string>();
+  private readonly firstTokenCommitted = new Set<string>();
+  private readonly firstTokenProjected = new Set<string>();
   readonly projectionOutbox = new PiProjectionOutbox(
     this.ctx.storage.sql,
     (sequence, displayId, operationId, event) =>
@@ -286,6 +294,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const assembly = assemblePiExtensions(extensions, capabilities);
       for (const extension of assembly.extensions) this.registry.install(extension);
       this.models.setProvider(openaiCodexProvider());
+      const openStartedAt = Date.now();
       const opened = await Harness.open(
         storage,
         {
@@ -294,6 +303,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         },
         context
       );
+      this.log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "pi_open",
+        timestamp_ms: Date.now(),
+        duration_ms: Date.now() - openStartedAt,
+        cold: !this.harnessOpened,
+      });
       this.harnessOpened = true;
       return opened;
     },
@@ -357,6 +373,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     .use(this.repositoryDiffPublication);
 
   async initialize(sessionId: string, input: PiFeatureCapabilitySnapshot): Promise<void> {
+    const initializeStartedAt = Date.now();
     const snapshot = piFeatureCapabilitySnapshotSchema.parse(input);
     await this.ctx.storage.transaction(async (transaction) => {
       if ((await transaction.get<string>(DELETION_STATE_KEY)) !== undefined) {
@@ -384,6 +401,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         throw new Error("Pi Durable Object capability snapshot mismatch");
       }
     });
+    const initializedAt = Date.now();
+    this.log.info("pi.latency", {
+      event: "pi.latency",
+      milestone: "pi_init",
+      timestamp_ms: initializedAt,
+      duration_ms: initializedAt - initializeStartedAt,
+      session_id: sessionId,
+      capability_workspace: snapshot.capabilities.workspace,
+      capability_repository_editing: snapshot.capabilities.repositoryEditing,
+      capability_code_mode: snapshot.capabilities.codeMode,
+      sandbox_avoided: 1,
+    });
   }
 
   async onStart(): Promise<void> {
@@ -402,6 +431,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   async submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt> {
+    const submitStartedAt = Date.now();
     try {
       await this.ensureSession(input.sessionId);
       await this.configure(input);
@@ -425,6 +455,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const receipt = await this.harness.submit(input.content, {
       session: ROOT_SESSION,
       operationId: input.messageId,
+    });
+    this.log.info("pi.latency", {
+      event: "pi.latency",
+      milestone: "pi_admitted",
+      timestamp_ms: Date.now(),
+      duration_ms: Date.now() - submitStartedAt,
+      session_id: input.sessionId,
+      operation_id: receipt.operationId,
+      model: input.model,
+      sandbox_avoided: 1,
     });
     return { operationId: receipt.operationId, accepted: receipt.accepted };
   }
@@ -705,6 +745,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async settleOperationMetadata(operationId: string): Promise<void> {
+    this.firstModelRequestObserved.delete(operationId);
+    this.firstTokenCommitted.delete(operationId);
+    this.firstTokenProjected.delete(operationId);
     const key = `${OPERATION_METADATA_PREFIX}${operationId}`;
     const metadata = await this.ctx.storage.get<PiOperationMetadata>(key);
     if (!metadata) return;
@@ -817,6 +860,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async fetchCodexCredential(rejectedCredentialVersion?: number, signal?: AbortSignal) {
+    const brokerStartedAt = Date.now();
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) {
       throw new Error("Pi Durable session was deleted");
     }
@@ -853,6 +897,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     ) {
       throw new Error("Invalid OpenAI credential broker response");
     }
+    const brokerCompletedAt = Date.now();
+    this.log.info("pi.latency", {
+      event: "pi.latency",
+      milestone: "provider_broker",
+      timestamp_ms: brokerCompletedAt,
+      duration_ms: brokerCompletedAt - brokerStartedAt,
+      session_id: sessionId,
+      operation_id: operation.operationId,
+      recovery: rejectedCredentialVersion === undefined ? 0 : 1,
+    });
     return {
       accessToken: body.access_token,
       expiresIn: body.expires_in,
@@ -1211,12 +1265,34 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               ? await this.observeOperationAccounting(operationId)
               : undefined;
           for (const event of translated) {
+            if (event.type === "step_start" && !this.firstModelRequestObserved.has(operationId)) {
+              this.firstModelRequestObserved.add(operationId);
+              this.log.info("pi.latency", {
+                event: "pi.latency",
+                milestone: "model_request",
+                timestamp_ms: Date.now(),
+                session_id: sessionId,
+                operation_id: operationId,
+                model: metadata.model,
+              });
+            }
             this.projectionOutbox.enqueue(
               piProjectionIdentity(operationId, event, sourceIdentity),
               operationId,
               this.priceStepEvent(event, metadata.model, accounting?.costUsd),
               Date.now()
             );
+            if (event.type === "token" && !this.firstTokenCommitted.has(operationId)) {
+              this.firstTokenCommitted.add(operationId);
+              this.log.info("pi.latency", {
+                event: "pi.latency",
+                milestone: "first_token_committed",
+                timestamp_ms: Date.now(),
+                session_id: sessionId,
+                operation_id: operationId,
+                model: metadata.model,
+              });
+            }
           }
           if (accounting?.changed) {
             const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
@@ -1381,6 +1457,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!response.ok) {
       throw new PermanentPiProjectionError(`Pi event delivery rejected (${response.status})`);
     }
+    if (event.type === "token" && !this.firstTokenProjected.has(operationId)) {
+      this.firstTokenProjected.add(operationId);
+      this.log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "first_token_projected",
+        timestamp_ms: Date.now(),
+        session_id: sessionId,
+        operation_id: operationId,
+        projection_sequence: sequence,
+      });
+    }
   }
 
   private async deliverResult(sessionId: string, result: PiRuntimeResult): Promise<void> {
@@ -1410,6 +1497,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!response.ok) {
       throw new PermanentPiResultDeliveryError(`Pi result delivery rejected (${response.status})`);
     }
+    this.log.info("pi.latency", {
+      event: "pi.latency",
+      milestone: "terminal",
+      timestamp_ms: Date.now(),
+      session_id: sessionId,
+      operation_id: result.operationId,
+      outcome: result.status,
+    });
   }
 }
 

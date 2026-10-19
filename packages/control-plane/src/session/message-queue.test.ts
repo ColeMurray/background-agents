@@ -433,6 +433,26 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.wsManager.getSandboxCommandTarget).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    expect(h.log.info).toHaveBeenCalledWith(
+      "pi.latency",
+      expect.objectContaining({
+        event: "pi.latency",
+        milestone: "prompt_claimed",
+        harness: "pi",
+        execution_backend: "durable_object",
+        source: "web",
+        sandbox_avoided: 1,
+        timestamp_ms: expect.any(Number),
+      })
+    );
+    expect(h.log.info).toHaveBeenCalledWith(
+      "pi.latency",
+      expect.objectContaining({
+        milestone: "pi_admitted",
+        operation_id: "msg-1",
+        duration_ms: expect.any(Number),
+      })
+    );
   });
 
   it("keeps ambiguous Pi admission processing and emits the started callback", async () => {

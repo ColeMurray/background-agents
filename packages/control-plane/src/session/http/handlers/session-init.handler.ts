@@ -281,9 +281,30 @@ export class SessionInitHandler {
     });
 
     if (harness === "pi" && piRuntimeForSession) {
+      const piInitializeStartedAt = this.now();
+      log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "session_do_init",
+        timestamp_ms: piInitializeStartedAt,
+        harness: "pi",
+        execution_backend: "durable_object",
+        repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
+        sandbox_avoided: 1,
+      });
       if (!(await this.initializePi(sessionName, piFeatureCapabilitySnapshot!, log))) {
         return Response.json({ error: "Pi Durable is unavailable" }, { status: 503 });
       }
+      const initializedAt = this.now();
+      log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "pi_init",
+        timestamp_ms: initializedAt,
+        duration_ms: initializedAt - piInitializeStartedAt,
+        harness: "pi",
+        execution_backend: "durable_object",
+        repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
+        sandbox_avoided: 1,
+      });
       log.info("Created sandbox-free Pi Durable session");
     } else {
       log.info("Triggering sandbox spawn for new session");

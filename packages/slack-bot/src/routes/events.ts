@@ -44,6 +44,29 @@ eventRoutes.post("/events", async (c) => {
   if (payload.type === "url_verification") return c.json({ challenge: payload.challenge });
 
   const eventId = payload.event_id;
+  log.info("slack.ingress", {
+    event: "slack.ingress",
+    milestone: "ingress",
+    source: "slack",
+    timestamp_ms: startTime,
+    trace_id: traceId,
+    event_id: eventId,
+    event_type: payload.event?.type,
+  });
+  const acknowledge = () => {
+    const timestampMs = Date.now();
+    log.info("slack.ingress", {
+      event: "slack.ingress",
+      milestone: "ack",
+      source: "slack",
+      timestamp_ms: timestampMs,
+      duration_ms: timestampMs - startTime,
+      trace_id: traceId,
+      event_id: eventId,
+      event_type: payload.event?.type,
+    });
+    return c.json({ ok: true });
+  };
   if (eventId) {
     const cacheStore = createKvCacheStore(c.env.SLACK_KV);
     const dedupeKey = `event:${eventId}`;
@@ -51,7 +74,7 @@ eventRoutes.post("/events", async (c) => {
     try {
       if (await cacheStore.get(dedupeKey)) {
         log.debug("slack.event.duplicate", { trace_id: traceId, event_id: eventId });
-        return c.json({ ok: true });
+        return acknowledge();
       }
       kvOperation = "put";
       await cacheStore.put(dedupeKey, "1", { ttlMs: EVENT_DEDUPE_TTL_MS });
@@ -84,5 +107,5 @@ eventRoutes.post("/events", async (c) => {
     event_type: payload.event?.type,
     duration_ms: Date.now() - startTime,
   });
-  return c.json({ ok: true });
+  return acknowledge();
 });

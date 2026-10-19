@@ -710,6 +710,19 @@ export class SessionMessageQueue {
     );
     if (!this.mayDispatch()) return;
     if (!this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent)) return;
+    this.log.info("pi.latency", {
+      event: "pi.latency",
+      milestone: "prompt_claimed",
+      timestamp_ms: now,
+      message_id: message.id,
+      operation_id: message.id,
+      harness: "pi",
+      execution_backend: "durable_object",
+      source: message.source,
+      model: resolvedModel,
+      repository_mode: session.repo_owner ? "repository" : "none",
+      sandbox_avoided: 1,
+    });
     const barrier = completionBarrier();
     this.piSubmissionsInFlight.set(message.id, barrier.promise);
     let stopAfterBarrier = false;
@@ -730,6 +743,19 @@ export class SessionMessageQueue {
 
       let receipt: PiRuntimeReceipt | undefined;
       let submissionError: unknown;
+      const submitStartedAt = Date.now();
+      this.log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "pi_submit",
+        timestamp_ms: submitStartedAt,
+        message_id: message.id,
+        operation_id: message.id,
+        harness: "pi",
+        execution_backend: "durable_object",
+        source: message.source,
+        model: resolvedModel,
+        sandbox_avoided: 1,
+      });
       try {
         receipt = await this.piRuntime.submit({
           sessionId: session.session_name || session.id,
@@ -794,6 +820,20 @@ export class SessionMessageQueue {
           reasoning_effort: reasoningEffort,
           execution_backend: "durable_object",
           queue_wait_ms: now - message.created_at,
+        });
+        this.log.info("pi.latency", {
+          event: "pi.latency",
+          milestone: "pi_admitted",
+          timestamp_ms: Date.now(),
+          duration_ms: Date.now() - submitStartedAt,
+          message_id: message.id,
+          operation_id: receipt.operationId,
+          harness: "pi",
+          execution_backend: "durable_object",
+          source: message.source,
+          model: resolvedModel,
+          recovery: receipt.accepted ? 0 : 1,
+          sandbox_avoided: 1,
         });
       }
     } finally {

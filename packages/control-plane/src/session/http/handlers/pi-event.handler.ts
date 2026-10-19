@@ -8,7 +8,13 @@ export class PiEventHandler {
       event: ReturnType<typeof sandboxIngressEventSchema.parse>
     ) => Promise<void>,
     private readonly isPiSession: () => boolean,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly observeVisible?: (event: {
+      operationId: string;
+      sequence: number;
+      type: string;
+      timestampMs: number;
+    }) => void
   ) {}
 
   async handle(request: Request): Promise<Response> {
@@ -36,6 +42,12 @@ export class PiEventHandler {
     }
 
     await this.processEvent({ ...parsed.data, ackId: `pi-projection:${displayId}` });
+    this.observeVisible?.({
+      operationId,
+      sequence,
+      type: parsed.data.type,
+      timestampMs: this.now(),
+    });
     if (
       !this.operations.advanceProjection(
         operationId,

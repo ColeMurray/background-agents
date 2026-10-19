@@ -37,11 +37,13 @@ describe("PiEventHandler", () => {
       }),
     };
     const processEvent = vi.fn(async () => {});
+    const observeVisible = vi.fn();
     const handler = new PiEventHandler(
       operations,
       processEvent,
       () => true,
-      () => 456
+      () => 456,
+      observeVisible
     );
 
     expect((await handler.handle(request())).status).toBe(200);
@@ -53,6 +55,12 @@ describe("PiEventHandler", () => {
       })
     );
     expect(operations.advanceProjection).toHaveBeenCalledWith("message-1", 0, 1, 456);
+    expect(observeVisible).toHaveBeenCalledWith({
+      operationId: "message-1",
+      sequence: 1,
+      type: "token",
+      timestampMs: 456,
+    });
 
     expect(await (await handler.handle(request())).json()).toEqual({
       status: "already_projected",
