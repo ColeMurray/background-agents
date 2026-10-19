@@ -7,6 +7,7 @@ import {
   normalizeWorkspaceAbsolutePath,
   resolveWorkspacePath,
 } from "./computer-workspace-quota";
+import { validateWorkspaceToolInput } from "./workspace-input-limits";
 
 const BEFORE_MEMO = "open-inspect.workspace-policy.before";
 const AFTER_MEMO = "open-inspect.workspace-policy.after";
@@ -46,13 +47,25 @@ export function createWorkspaceMutationPolicyDelegate(): PiToolPolicyDelegate {
           scope: "scratch",
           tool: call.name,
           ...(path === null ? {} : { path }),
-          outcome: result.isError === true ? "failed" : "succeeded",
+          outcome: mutationOutcome(result),
         },
         context
       );
       return result;
     },
   };
+}
+
+function mutationOutcome(result: { isError?: boolean; details?: unknown }): JsonValue {
+  if (
+    typeof result.details === "object" &&
+    result.details !== null &&
+    "mutationOutcome" in result.details &&
+    result.details.mutationOutcome === "indeterminate_or_applied"
+  ) {
+    return "indeterminate_or_applied";
+  }
+  return result.isError === true ? "failed" : "succeeded";
 }
 
 async function memoDecision(
@@ -75,7 +88,18 @@ async function memoDecision(
 }
 
 function mutationDecision(call: ToolHookCall): MutationDecision {
-  const path = pathFrom(call);
+  let normalized: Record<string, unknown>;
+  try {
+    normalized = validateWorkspaceToolInput(call.name, call.arguments);
+  } catch (error) {
+    return {
+      allowed: false,
+      reason: error instanceof Error ? error.message : "Workspace mutation arguments are invalid",
+      metadata: {},
+    };
+  }
+  const boundedCall = { ...call, arguments: normalized } as ToolHookCall;
+  const path = pathFrom(boundedCall);
   if (path === null) {
     return {
       allowed: false,
@@ -90,15 +114,15 @@ function mutationDecision(call: ToolHookCall): MutationDecision {
       metadata: { path },
     };
   }
-  switch (call.name) {
+  switch (boundedCall.name) {
     case "write":
-      return writeDecision(call, path);
+      return writeDecision(boundedCall, path);
     case "edit":
-      return editDecision(call, path);
+      return editDecision(boundedCall, path);
     case "delete":
       return {
         allowed: true,
-        metadata: { path, recursive: call.arguments.recursive === true },
+        metadata: { path, recursive: boundedCall.arguments.recursive === true },
       };
     default:
       return {

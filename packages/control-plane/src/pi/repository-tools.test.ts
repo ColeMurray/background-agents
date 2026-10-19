@@ -20,6 +20,7 @@ function harness() {
   }));
   const readFile = vi.fn(async () => new TextEncoder().encode("hello world\n"));
   const readBlob = vi.fn(async () => new TextEncoder().encode("hello world\n"));
+  const observeMaterialization = vi.fn();
   const tools = new PiRepositoryTools({
     repositories: () => [
       {
@@ -31,8 +32,9 @@ function harness() {
     ],
     resolveCredentialScope: vi.fn(async () => ({ kind: "all" as const })),
     provider: () => ({ resolveCommit, listTree, readFile, readBlob }),
+    observeMaterialization,
   });
-  return { tools, resolveCommit, listTree, readFile, readBlob };
+  return { tools, resolveCommit, listTree, readFile, readBlob, observeMaterialization };
 }
 
 describe("PiRepositoryTools", () => {
@@ -267,6 +269,32 @@ describe("PiRepositoryTools", () => {
     expect(h.readBlob).not.toHaveBeenCalled();
   });
 
+  it("rejects UTF-8 path and depth bombs before materialization", async () => {
+    for (const path of [
+      `${"😀".repeat(2_000)}.txt`,
+      `${Array.from({ length: 65 }, () => "deep").join("/")}/file.txt`,
+    ]) {
+      const h = harness();
+      h.listTree.mockResolvedValueOnce({
+        entries: [
+          {
+            path,
+            type: "file",
+            blobId: "blob-1",
+            mode: "100644",
+            sizeBytes: 1,
+            executable: false,
+          },
+        ],
+        truncated: false,
+      });
+      await expect(
+        h.tools.prepareMaterialization({ repository: 0, commitSha: FULL_SHA })
+      ).rejects.toThrow(/repository-relative POSIX path|Path must/);
+      expect(h.readBlob).not.toHaveBeenCalled();
+    }
+  });
+
   it("refuses provider size mismatches instead of materializing an inexact tree", async () => {
     const h = harness();
     h.listTree.mockResolvedValueOnce({
@@ -335,5 +363,55 @@ describe("PiRepositoryTools", () => {
     expect(batches.map((batch) => batch.files.length)).toEqual([40, 11]);
     expect(h.readBlob).toHaveBeenCalledTimes(51);
     expect(h.listTree).toHaveBeenCalledOnce();
+  });
+
+  it("coalesces immutable blob retries without caching credentials", async () => {
+    const h = harness();
+    await h.tools.prepareMaterialization({ repository: 0, commitSha: FULL_SHA });
+
+    await Promise.all([
+      h.tools.materializeBatch({ repository: 0, commitSha: FULL_SHA, offset: 0 }),
+      h.tools.materializeBatch({ repository: 0, commitSha: FULL_SHA, offset: 0 }),
+    ]);
+
+    expect(h.readBlob).toHaveBeenCalledOnce();
+    expect(h.observeMaterialization).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "blob_request", cacheHit: true, scopeKind: "all" })
+    );
+  });
+
+  it("emits bounded request metrics for the 1000-blob worst case", async () => {
+    const h = harness();
+    h.listTree.mockResolvedValueOnce({
+      entries: Array.from({ length: 1_000 }, (_, index) => ({
+        path: `file-${index}.txt`,
+        type: "file" as const,
+        blobId: `blob-${index}`,
+        mode: "100644",
+        sizeBytes: 1,
+        executable: false,
+      })),
+      truncated: false,
+    });
+    h.readBlob.mockResolvedValue(new Uint8Array([1]));
+    await h.tools.prepareMaterialization({ repository: 0, commitSha: FULL_SHA });
+
+    for (let offset = 0; offset < 1_000; offset += 40) {
+      await h.tools.materializeBatch({ repository: 0, commitSha: FULL_SHA, offset });
+    }
+
+    expect(h.readBlob).toHaveBeenCalledTimes(1_000);
+    expect(
+      h.observeMaterialization.mock.calls.filter(
+        ([event]) => event.event === "blob_request" && event.cacheHit === false
+      )
+    ).toHaveLength(1_000);
+    expect(h.observeMaterialization).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "manifest_admission",
+        repository: "acme/widgets",
+        scopeKind: "all",
+      })
+    );
   });
 });

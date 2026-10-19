@@ -151,9 +151,9 @@ export class SessionDiffService {
 
     const revisionId = this.generateRevisionId();
     const now = this.now();
-    this.store.replaceBundle(parsed.data, revisionId, now);
-    this.broadcastState(now);
-    return revisionId;
+    const storedRevisionId = this.store.replaceBundle(parsed.data, revisionId, now) ?? revisionId;
+    if (storedRevisionId === revisionId) this.broadcastState(now);
+    return storedRevisionId;
   }
 
   /** Record a bounded refresh error without discarding the previous successful bundle. */

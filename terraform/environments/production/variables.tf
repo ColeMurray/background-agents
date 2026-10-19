@@ -793,6 +793,12 @@ variable "pi_repository_editing_mode" {
   }
 }
 
+variable "pi_computer_preview_acknowledged" {
+  description = "Explicit acknowledgement that Cloudflare Computer 0.5.1 workspace and repository editing APIs are preview-only and not production-ready"
+  type        = bool
+  default     = false
+}
+
 variable "pi_sandbox_execution_mode" {
   description = "Pi sandbox execution capability for new sessions: off, read_only, or enabled"
   type        = string

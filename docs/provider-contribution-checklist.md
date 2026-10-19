@@ -31,6 +31,12 @@ Use this checklist before opening a pull request for a new source-control provid
 - [ ] Existing create-PR branch consistency tests still pass.
 - [ ] Slack manual-PR button tests still pass.
 - [ ] No provider-specific URL/token logic is introduced outside provider/auth modules.
+- [ ] Pi repository materialization preserves nested owner namespaces and isolates duplicate names
+      by repository position.
+- [ ] A worst-case 1,000-blob materialization is covered by provider/install admission metrics and
+      immutable request coalescing; no access token or credential scope is cached with blob bytes.
+- [ ] Revocation blocks provider repair and new materialization without making an already-complete
+      pinned Pi overlay unreadable to authorized session participants.
 
 ## Documentation Checklist
 

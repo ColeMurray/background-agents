@@ -35,6 +35,7 @@ const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   trigger_message_id TEXT,
   bundle_json TEXT,
   captured_at INTEGER,
+  pi_publication_generation INTEGER,
   last_error TEXT,
   error_at INTEGER,
   updated_at INTEGER NOT NULL
@@ -424,6 +425,7 @@ import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+  PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
 } from "@open-inspect/shared/pi-migration-reservations";
@@ -963,6 +965,12 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Persist Pi dispatch CAS and projection sequence",
     feature: "piProjection",
     run: PI_PROJECTION_RELIABILITY_TABLES_SQL,
+  },
+  {
+    id: PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
+    description: "Fence Pi repository diff publication generations",
+    feature: "repositoryEditing",
+    run: "ALTER TABLE session_diff ADD COLUMN pi_publication_generation INTEGER",
   },
 ];
 

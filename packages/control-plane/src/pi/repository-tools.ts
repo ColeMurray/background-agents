@@ -8,6 +8,7 @@ import {
   PI_REPOSITORY_MAX_BYTES,
   PI_REPOSITORY_MAX_FILE_BYTES,
   PI_REPOSITORY_MAX_FILES,
+  isSafeRepositoryRelativePath,
   type PiRepositoryMaterializationManifest,
 } from "./repository-materialization-contract";
 
@@ -32,6 +33,13 @@ interface PiRepositoryToolsOptions {
   repositories(): readonly PiRepository[];
   resolveCredentialScope(): Promise<CredentialScope>;
   provider(): Pick<SourceControlProvider, "resolveCommit" | "listTree" | "readFile" | "readBlob">;
+  observeMaterialization?(event: {
+    event: "manifest_admission" | "blob_request";
+    repository: string;
+    scopeKind: CredentialScope["kind"];
+    scopeRepositoryCount: number;
+    cacheHit?: boolean;
+  }): void;
 }
 
 interface RepositoryTargetInput {
@@ -62,6 +70,7 @@ export class PiRepositoryTools {
     string,
     PiRepositoryMaterializationManifest
   >();
+  private readonly immutableBlobs = new Map<string, Promise<Uint8Array>>();
 
   constructor(private readonly options: PiRepositoryToolsOptions) {}
 
@@ -150,6 +159,7 @@ export class PiRepositoryTools {
   ): Promise<PiRepositoryMaterializationManifest> {
     const repository = this.repository(input.repository);
     const scope = await this.options.resolveCredentialScope();
+    this.observe("manifest_admission", repository, scope);
     const commitSha = await this.targetCommit(repository, input.commitSha, scope);
     const tree = await this.options.provider().listTree(
       {
@@ -240,15 +250,7 @@ export class PiRepositoryTools {
     let batchBytes = 0;
     const materializedFiles = [];
     for (const entry of selected) {
-      const bytes = await this.options.provider().readBlob(
-        {
-          owner: repository.repoOwner,
-          name: repository.repoName,
-          blobId: entry.blobId,
-          maxBytes: MAX_REPOSITORY_FILE_BYTES,
-        },
-        scope
-      );
+      const bytes = await this.readImmutableBlob(repository, entry.blobId, scope);
       if (bytes.byteLength > MAX_REPOSITORY_FILE_BYTES) {
         throw new Error(
           `Repository file exceeds ${MAX_REPOSITORY_FILE_BYTES} bytes: ${entry.path}`
@@ -368,6 +370,54 @@ export class PiRepositoryTools {
   private materializationKey(position: number, commitSha: string): string {
     return `${position}:${commitSha.toLowerCase()}`;
   }
+
+  private async readImmutableBlob(
+    repository: PiRepository,
+    blobId: string,
+    scope: CredentialScope
+  ): Promise<Uint8Array> {
+    const key = `${repository.repoOwner}\0${repository.repoName}\0${blobId}`;
+    const cached = this.immutableBlobs.get(key);
+    this.observe("blob_request", repository, scope, cached !== undefined);
+    if (cached) return new Uint8Array(await cached);
+    if (this.immutableBlobs.size >= PI_REPOSITORY_MAX_FILES) {
+      throw new Error("Repository immutable blob cache is full");
+    }
+    const request = this.options
+      .provider()
+      .readBlob(
+        {
+          owner: repository.repoOwner,
+          name: repository.repoName,
+          blobId,
+          maxBytes: MAX_REPOSITORY_FILE_BYTES,
+        },
+        scope
+      )
+      .then((bytes) => new Uint8Array(bytes));
+    this.immutableBlobs.set(key, request);
+    try {
+      return new Uint8Array(await request);
+    } catch (error) {
+      this.immutableBlobs.delete(key);
+      throw error;
+    }
+  }
+
+  private observe(
+    event: "manifest_admission" | "blob_request",
+    repository: PiRepository,
+    scope: CredentialScope,
+    cacheHit?: boolean
+  ): void {
+    this.options.observeMaterialization?.({
+      event,
+      repository: formatRepositoryFullName(repository),
+      scopeKind: scope.kind,
+      scopeRepositoryCount: scope.kind === "repositories" ? scope.repositoryIds.length : 0,
+      ...(cacheHit === undefined ? {} : { cacheHit }),
+    });
+  }
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -379,13 +429,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 function repositoryPath(value: string, allowEmpty: boolean): string {
   const path = value.trim();
   if (allowEmpty && path === "") return "";
-  if (
-    path === "" ||
-    path.startsWith("/") ||
-    path.includes("\\") ||
-    path.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ||
-    hasControlCharacters(path)
-  ) {
+  if (!isSafeRepositoryRelativePath(path) || hasControlCharacters(path)) {
     throw new Error("Path must be a repository-relative POSIX path");
   }
   return path;

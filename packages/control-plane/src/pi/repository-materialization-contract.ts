@@ -8,19 +8,18 @@ const repositoryRelativePathSchema = z
   .string()
   .min(1)
   .max(4_096)
-  .refine(
-    (path) =>
-      !path.startsWith("/") &&
-      !path.includes("\\") &&
-      !path.includes("\0") &&
-      path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".."),
-    "Expected a repository-relative POSIX path"
-  );
+  .refine(isSafeRepositoryRelativePath, "Expected a repository-relative POSIX path");
 
 export const PI_REPOSITORY_MAX_FILES = 1_000;
 export const PI_REPOSITORY_MAX_FILE_BYTES = 256 * 1024;
 export const PI_REPOSITORY_MAX_BYTES = 2 * 1024 * 1024;
 export const PI_REPOSITORY_MATERIALIZATION_BATCH_FILES = 40;
+export const PI_REPOSITORY_SESSION_MAX_LIVE_BYTES = 8 * 1024 * 1024;
+export const PI_REPOSITORY_SESSION_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+export const PI_REPOSITORY_SESSION_MAX_ENTRIES = 4_000;
+export const PI_REPOSITORY_MAX_PATH_BYTES = 4_096;
+export const PI_REPOSITORY_MAX_DEPTH = 64;
+export const PI_REPOSITORY_MAX_METADATA_BYTES = 4 * 1024 * 1024;
 
 const materializationTargetShape = {
   repository: z.number().int().nonnegative(),
@@ -150,3 +149,20 @@ export type PiRepositoryMaterializationManifest = z.infer<
 export type PiRepositoryMaterializationBatch = z.infer<
   typeof piRepositoryMaterializationBatchSchema
 >;
+
+export function isSafeRepositoryRelativePath(path: string): boolean {
+  if (
+    path.length > PI_REPOSITORY_MAX_PATH_BYTES ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.includes("\0")
+  ) {
+    return false;
+  }
+  const segments = path.split("/");
+  return (
+    segments.length <= PI_REPOSITORY_MAX_DEPTH &&
+    segments.every((segment) => segment !== "" && segment !== "." && segment !== "..") &&
+    new TextEncoder().encode(path).byteLength <= PI_REPOSITORY_MAX_PATH_BYTES
+  );
+}

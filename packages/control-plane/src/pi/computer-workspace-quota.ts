@@ -1,21 +1,41 @@
 import type { Workspace } from "@cloudflare/computer";
 
 export const COMPUTER_SCRATCH_ROOT = "/workspace/scratch";
+const WORKSPACE_ROOT = "/workspace";
 const SCAN_PAGE_SIZE = 1_000;
+const QUOTA_STATE_VERSION = 2 as const;
 
 export const WORKSPACE_QUOTA_BYTES = 8 * 1024 * 1024;
 export const WORKSPACE_QUOTA_ENTRIES = 1_000;
 export const WORKSPACE_QUOTA_STATE_KEY = "open-inspect:workspace-quota";
 
+interface PendingWrite {
+  path: string;
+  newParents: string[];
+}
+
 interface WorkspaceQuotaState {
+  version: typeof QUOTA_STATE_VERSION;
   bytes: number;
   entries: number;
   dirty: boolean;
+  vfsRevision: number;
+  pendingWrite?: PendingWrite;
 }
 
 interface WorkspaceQuotaStorage {
   get<T>(key: string): Promise<T | undefined>;
   put(key: string, value: unknown): Promise<void>;
+}
+
+type ToolFileSystem = Pick<
+  Workspace["fs"],
+  "stat" | "lstat" | "readFile" | "writeFile" | "mkdir" | "rm" | "find" | "grep" | "readdir"
+>;
+
+/** The complete object handed to Computer's tool adapter. No Workspace authority is reachable. */
+export interface WorkspaceToolFacade {
+  readonly fs: ToolFileSystem;
 }
 
 /** One workspace-wide admission queue for every mutating tool in a Pi session. */
@@ -32,16 +52,34 @@ export class WorkspaceMutationFifo {
   }
 }
 
+/** Build a read-only-in-authority facade sufficient for createPiTools. */
+export function createWorkspaceToolFacade(workspace: Workspace): WorkspaceToolFacade {
+  const filesystem = workspace.fs;
+  return {
+    fs: {
+      stat: filesystem.stat.bind(filesystem),
+      lstat: filesystem.lstat.bind(filesystem),
+      readFile: filesystem.readFile.bind(filesystem),
+      writeFile: filesystem.writeFile.bind(filesystem),
+      mkdir: filesystem.mkdir.bind(filesystem),
+      rm: filesystem.rm.bind(filesystem),
+      find: filesystem.find.bind(filesystem),
+      grep: filesystem.grep.bind(filesystem),
+      readdir: filesystem.readdir.bind(filesystem),
+    },
+  };
+}
+
 /**
- * Add durable aggregate accounting to Computer's filesystem without exposing
- * the Workspace, runtime, Git, assets, or mounts to tool code.
+ * Add durable aggregate scratch accounting while returning only the small
+ * filesystem surface Computer's tools require.
  */
 export function createQuotaWorkspace(
   workspace: Workspace,
   storage: WorkspaceQuotaStorage,
   quotaBytes = WORKSPACE_QUOTA_BYTES,
   quotaEntries = WORKSPACE_QUOTA_ENTRIES
-): Workspace {
+): WorkspaceToolFacade {
   if (!Number.isSafeInteger(quotaBytes) || quotaBytes < 0) {
     throw new Error("Workspace quota must be a non-negative safe integer");
   }
@@ -50,20 +88,43 @@ export function createQuotaWorkspace(
   }
   const filesystem = workspace.fs;
 
+  const currentRevision = (): number => {
+    const revision = workspace.db.scalar<number>("SELECT v FROM vfs_meta WHERE k = 'rev'") ?? 0;
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      throw new Error("Workspace VFS revision is invalid");
+    }
+    return revision;
+  };
+
   async function readState(): Promise<WorkspaceQuotaState> {
     const stored = await storage.get<unknown>(WORKSPACE_QUOTA_STATE_KEY);
-    if (isQuotaState(stored) && !stored.dirty) return stored;
-    return recoverState();
+    if (isQuotaState(stored) && !stored.dirty && stored.vfsRevision === currentRevision()) {
+      await verifyWorkspaceRoots(filesystem);
+      return stored;
+    }
+    return recoverState(isQuotaState(stored) ? stored.pendingWrite : undefined);
   }
 
-  async function recoverState(): Promise<WorkspaceQuotaState> {
-    const state = { ...(await aggregateUsage(workspace)), dirty: false };
+  async function recoverState(pendingWrite?: PendingWrite): Promise<WorkspaceQuotaState> {
+    await verifyWorkspaceRoots(filesystem);
+    if (pendingWrite) await cleanAbandonedParents(filesystem, pendingWrite);
+    const usage = await aggregateUsage(filesystem);
+    const state: WorkspaceQuotaState = {
+      version: QUOTA_STATE_VERSION,
+      ...usage,
+      dirty: false,
+      vfsRevision: currentRevision(),
+    };
     await storage.put(WORKSPACE_QUOTA_STATE_KEY, state);
     return state;
   }
 
-  async function markDirty(state: WorkspaceQuotaState): Promise<void> {
-    await storage.put(WORKSPACE_QUOTA_STATE_KEY, { ...state, dirty: true });
+  async function markDirty(state: WorkspaceQuotaState, pendingWrite?: PendingWrite): Promise<void> {
+    await storage.put(WORKSPACE_QUOTA_STATE_KEY, {
+      ...state,
+      dirty: true,
+      ...(pendingWrite ? { pendingWrite } : {}),
+    });
   }
 
   async function writeFile(
@@ -74,24 +135,29 @@ export function createQuotaWorkspace(
     const resolvedPath = requireWorkspacePath(path);
     const state = await readState();
     const existing = await pathUsage(filesystem, resolvedPath);
-    const nextEntries = state.entries + (existing.exists ? 0 : 1);
+    if (existing.exists && !existing.isFile)
+      throw new Error("Workspace write target is not a file");
+    const newParents = await missingDirectories(filesystem, parentPath(resolvedPath));
+    const bytes = await materializeContent(content, quotaBytes - state.bytes + existing.bytes);
+    const nextBytes = state.bytes - existing.bytes + bytes.byteLength;
+    const nextEntries = state.entries + newParents.length + (existing.exists ? 0 : 1);
     if (nextEntries > quotaEntries) {
       throw new Error(`Workspace entry quota exceeded (${nextEntries} > ${quotaEntries} entries)`);
     }
-    const bytes = await materializeContent(content, quotaBytes - state.bytes + existing.bytes);
-    const nextBytes = state.bytes - existing.bytes + bytes.byteLength;
     if (nextBytes > quotaBytes) {
       throw new Error(`Workspace quota exceeded (${nextBytes} > ${quotaBytes} bytes)`);
     }
-    await markDirty(state);
+    const pendingWrite = { path: resolvedPath, newParents };
+    await markDirty(state, pendingWrite);
     try {
+      for (const directory of newParents) {
+        await filesystem.mkdir(directory);
+        await requireRealDirectory(filesystem, directory);
+      }
       await filesystem.writeFile(resolvedPath, bytes, options);
-      await storage.put(WORKSPACE_QUOTA_STATE_KEY, {
-        bytes: nextBytes,
-        entries: nextEntries,
-        dirty: false,
-      });
+      await recoverState();
     } catch (error) {
+      await cleanAbandonedParents(filesystem, pendingWrite).catch(() => {});
       await recoverState().catch(() => {});
       throw error;
     }
@@ -116,48 +182,41 @@ export function createQuotaWorkspace(
     }
   }
 
-  async function mkdir(
-    path: string,
-    options?: Parameters<typeof filesystem.mkdir>[1]
-  ): Promise<void> {
+  // Computer calls mkdir only as ensureParentDir immediately before writeFile.
+  // Deferring creation lets writeFile reserve directories and file bytes atomically.
+  async function reserveParent(path: string): Promise<void> {
     const resolvedPath = requireWorkspacePath(path);
-    const state = await readState();
-    const createdEntries = await missingDirectoryCount(filesystem, resolvedPath);
-    const nextEntries = state.entries + createdEntries;
-    if (nextEntries > quotaEntries) {
-      throw new Error(`Workspace entry quota exceeded (${nextEntries} > ${quotaEntries} entries)`);
-    }
-    if (createdEntries === 0) {
-      await filesystem.mkdir(resolvedPath, options);
-      return;
-    }
-    await markDirty(state);
-    try {
-      await filesystem.mkdir(resolvedPath, options);
-      await recoverState();
-    } catch (error) {
-      await recoverState().catch(() => {});
-      throw error;
+    await verifyWorkspaceRoots(filesystem);
+    const stat = await lstatOrNull(filesystem, resolvedPath);
+    if (stat) {
+      if (!stat.isDirectory || stat.isSymbolicLink) {
+        throw new Error(`Workspace parent is not a real directory: ${resolvedPath}`);
+      }
     }
   }
 
-  const quotaFilesystem = new Proxy(filesystem, {
-    get(target, property) {
-      if (property === "writeFile") return writeFile;
-      if (property === "rm") return remove;
-      if (property === "mkdir") return mkdir;
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
+  return {
+    fs: {
+      stat: filesystem.stat.bind(filesystem),
+      lstat: filesystem.lstat.bind(filesystem),
+      readFile: filesystem.readFile.bind(filesystem),
+      writeFile,
+      mkdir: reserveParent,
+      rm: remove,
+      find: filesystem.find.bind(filesystem),
+      grep: filesystem.grep.bind(filesystem),
+      readdir: filesystem.readdir.bind(filesystem),
     },
-  });
+  };
+}
 
-  return new Proxy(workspace, {
-    get(target, property) {
-      if (property === "fs") return quotaFilesystem;
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+export async function ensureRealWorkspaceDirectory(
+  filesystem: Workspace["fs"],
+  path: string
+): Promise<void> {
+  const existing = await lstatOrNull(filesystem, path);
+  if (!existing) await filesystem.mkdir(path, { recursive: true });
+  await requireRealDirectory(filesystem, path);
 }
 
 export function isWorkspaceRoot(path: string): boolean {
@@ -166,7 +225,7 @@ export function isWorkspaceRoot(path: string): boolean {
 
 export function isProtectedWorkspaceRoot(path: string): boolean {
   const normalized = normalizeWorkspaceAbsolutePath(path);
-  return normalized === "/workspace" || normalized === COMPUTER_SCRATCH_ROOT;
+  return normalized === WORKSPACE_ROOT || normalized === COMPUTER_SCRATCH_ROOT;
 }
 
 export function resolveWorkspacePath(path: string): string | null {
@@ -191,16 +250,54 @@ function isQuotaState(value: unknown): value is WorkspaceQuotaState {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<WorkspaceQuotaState>;
   return (
+    candidate.version === QUOTA_STATE_VERSION &&
     Number.isSafeInteger(candidate.bytes) &&
     (candidate.bytes ?? -1) >= 0 &&
     Number.isSafeInteger(candidate.entries) &&
     (candidate.entries ?? -1) >= 0 &&
-    typeof candidate.dirty === "boolean"
+    Number.isSafeInteger(candidate.vfsRevision) &&
+    (candidate.vfsRevision ?? -1) >= 0 &&
+    typeof candidate.dirty === "boolean" &&
+    (candidate.pendingWrite === undefined || isPendingWrite(candidate.pendingWrite))
   );
 }
 
+function isPendingWrite(value: unknown): value is PendingWrite {
+  if (!(
+    typeof value === "object" &&
+    value !== null &&
+    "path" in value &&
+    typeof value.path === "string" &&
+    "newParents" in value &&
+    Array.isArray(value.newParents) &&
+    value.newParents.every((path) => typeof path === "string")
+  ))
+    return false;
+  const path = resolveWorkspacePath(value.path);
+  return (
+    path !== null &&
+    path !== COMPUTER_SCRATCH_ROOT &&
+    value.newParents.every((parent) => {
+      const resolved = resolveWorkspacePath(parent);
+      return resolved !== null && resolved !== COMPUTER_SCRATCH_ROOT;
+    })
+  );
+}
+
+async function verifyWorkspaceRoots(filesystem: Workspace["fs"]): Promise<void> {
+  await requireRealDirectory(filesystem, WORKSPACE_ROOT);
+  await requireRealDirectory(filesystem, COMPUTER_SCRATCH_ROOT);
+}
+
+async function requireRealDirectory(filesystem: Workspace["fs"], path: string): Promise<void> {
+  const stat = await filesystem.lstat(path);
+  if (!stat.isDirectory || stat.isSymbolicLink) {
+    throw new Error(`Workspace root must be a real directory: ${path}`);
+  }
+}
+
 async function aggregateUsage(
-  workspace: Workspace
+  filesystem: Workspace["fs"]
 ): Promise<Pick<WorkspaceQuotaState, "bytes" | "entries">> {
   const pending = [COMPUTER_SCRATCH_ROOT];
   let bytes = 0;
@@ -209,17 +306,15 @@ async function aggregateUsage(
     const directory = pending.pop();
     if (!directory) continue;
     for (let offset = 0; ; offset += SCAN_PAGE_SIZE) {
-      const page = await workspace.fs.readdir(directory, {
-        limit: SCAN_PAGE_SIZE,
-        offset,
-      });
+      const page = await filesystem.readdir(directory, { limit: SCAN_PAGE_SIZE, offset });
       for (const entry of page) {
+        if (entry.isSymbolicLink) throw new Error("Workspace contains an unsafe symbolic link");
         entryCount += 1;
-        const path = `${directory === "/" ? "" : directory}/${entry.name}`;
+        const path = `${directory}/${entry.name}`;
         if (entry.isFile) {
           bytes += entry.size;
           if (!Number.isSafeInteger(bytes)) throw new Error("Workspace byte count overflowed");
-        } else if (entry.isDirectory && !entry.isSymbolicLink) {
+        } else if (entry.isDirectory) {
           pending.push(path);
         }
       }
@@ -233,30 +328,40 @@ async function aggregateUsage(
 async function pathUsage(
   filesystem: Workspace["fs"],
   path: string
-): Promise<{ exists: boolean; bytes: number }> {
-  try {
-    const stat = await filesystem.lstat(path);
-    return { exists: true, bytes: stat.isFile ? stat.size : 0 };
-  } catch (error) {
-    if (isMissing(error)) return { exists: false, bytes: 0 };
-    throw error;
-  }
+): Promise<{ exists: boolean; bytes: number; isFile: boolean }> {
+  const stat = await lstatOrNull(filesystem, path);
+  if (!stat) return { exists: false, bytes: 0, isFile: false };
+  if (stat.isSymbolicLink) throw new Error("Workspace path is an unsafe symbolic link");
+  return { exists: true, bytes: stat.isFile ? stat.size : 0, isFile: stat.isFile };
 }
 
-async function missingDirectoryCount(filesystem: Workspace["fs"], path: string): Promise<number> {
-  if (path === COMPUTER_SCRATCH_ROOT) return 0;
+async function missingDirectories(filesystem: Workspace["fs"], path: string): Promise<string[]> {
+  if (path === COMPUTER_SCRATCH_ROOT) return [];
   const relative = path.slice(`${COMPUTER_SCRATCH_ROOT}/`.length).split("/");
   let current = COMPUTER_SCRATCH_ROOT;
-  for (let index = 0; index < relative.length; index++) {
-    current = `${current}/${relative[index]}`;
-    try {
-      await filesystem.lstat(current);
-    } catch (error) {
-      if (isMissing(error)) return relative.length - index;
-      throw error;
+  const missing: string[] = [];
+  for (const segment of relative) {
+    current = `${current}/${segment}`;
+    const stat = await lstatOrNull(filesystem, current);
+    if (!stat) {
+      missing.push(current);
+      continue;
+    }
+    if (!stat.isDirectory || stat.isSymbolicLink) {
+      throw new Error(`Workspace parent is not a real directory: ${current}`);
     }
   }
-  return 0;
+  return missing;
+}
+
+async function cleanAbandonedParents(
+  filesystem: Workspace["fs"],
+  pending: PendingWrite
+): Promise<void> {
+  if (await lstatOrNull(filesystem, pending.path)) return;
+  for (const directory of [...pending.newParents].reverse()) {
+    await filesystem.rm(directory, { force: true }).catch(() => {});
+  }
 }
 
 function requireWorkspacePath(path: string): string {
@@ -265,11 +370,28 @@ function requireWorkspacePath(path: string): string {
   return resolved;
 }
 
+function parentPath(path: string): string {
+  const separator = path.lastIndexOf("/");
+  return separator <= 0 ? "/" : path.slice(0, separator);
+}
+
+async function lstatOrNull(filesystem: Workspace["fs"], path: string) {
+  try {
+    return await filesystem.lstat(path);
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+}
+
 async function materializeContent(
   content: Parameters<Workspace["fs"]["writeFile"]>[1],
   availableBytes: number
 ): Promise<Uint8Array> {
-  if (typeof content === "string") return new TextEncoder().encode(content);
+  if (typeof content === "string") {
+    if (content.length > availableBytes) throw new Error("Workspace quota exceeded while writing");
+    return new TextEncoder().encode(content);
+  }
   if (content instanceof Uint8Array) return content;
   const reader = content.getReader();
   const chunks: Uint8Array[] = [];
@@ -309,6 +431,6 @@ function isMissing(error: unknown): boolean {
   const candidate = error as { code?: unknown; message?: unknown };
   return (
     candidate.code === "ENOENT" ||
-    (typeof candidate.message === "string" && /ENOENT|no such/i.test(candidate.message))
+    (typeof candidate.message === "string" && /ENOENT|no such|not found/i.test(candidate.message))
   );
 }

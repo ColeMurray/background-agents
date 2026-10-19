@@ -912,6 +912,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     repositories: () => sessionCoreRepository.getSessionRepositories(),
     resolveCredentialScope: () => resolveCredentialScope(getPublicSessionId()),
     provider: sourceControlProvider,
+    observeMaterialization: (event) => log.info("pi.repository_materialization", event),
   });
   const piBridgeHandler = new PiBridgeHandler({
     sessions: sessionCoreRepository,

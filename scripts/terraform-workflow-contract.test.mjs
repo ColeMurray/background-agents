@@ -43,6 +43,13 @@ test("Classifier-only Anthropic key reaches Terraform plan and apply", () => {
   );
 });
 
+test("Computer preview acknowledgement reaches Terraform plan and apply with a safe default", () => {
+  assertInPlanAndApply(
+    "TF_VAR_pi_computer_preview_acknowledged: \"${{ vars.PI_COMPUTER_PREVIEW_ACKNOWLEDGED || 'false' }}\"",
+    "Computer preview acknowledgement"
+  );
+});
+
 // Inputs the workflow deliberately does not take from the environment:
 // control_plane_* values are staged per migration (the "Stage Durable Object
 // migration" step writes them to an auto.tfvars.json file), and

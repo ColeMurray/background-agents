@@ -6,6 +6,7 @@ import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+  PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   assertMigrationReservation,
@@ -21,9 +22,10 @@ describe("Pi migration reservations", () => {
       PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
       PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
       PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+      PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
       PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
       PI_D1_MCP_MIGRATION_VERSION,
-    ]).toEqual([58, 59, 60, 61, 62, 90, 91]);
+    ]).toEqual([58, 59, 60, 61, 62, 63, 90, 91]);
     expect(PI_MIGRATION_RESERVATIONS).toEqual([
       {
         store: "session_do",
@@ -54,6 +56,12 @@ describe("Pi migration reservations", () => {
         version: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
         feature: "piProjection",
         purpose: "Pi dispatch CAS and projection sequence",
+      },
+      {
+        store: "session_do",
+        version: PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
+        feature: "repositoryEditing",
+        purpose: "Pi repository diff publication generation fence",
       },
       {
         store: "d1",

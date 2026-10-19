@@ -73,6 +73,16 @@ are rejected. GitHub review/comment and Linear issue integrations must use anoth
 their diff, mutation, and publication tools exist. See the operator rollout in the repository's
 `docs/GETTING_STARTED.md`.
 
+Deployments must also set `pi_computer_preview_acknowledged = true` (or the deployment Actions
+variable `PI_COMPUTER_PREVIEW_ACKNOWLEDGED=true`); Terraform plan and apply reject read-only,
+writable, or repository-editing activation without that explicit acknowledgement. Repository
+overlays are pinned session data: authorized participants can keep reading a complete overlay after
+provider or grant revocation, while new materialization, repair, and external publication remain
+blocked. Missing, modified, or unexplained unchanged files fail closed. Deleting or fencing the
+session purges the pinned data. Successful repository mutations are not rolled back by a diff-service
+outage; they report projection pending and a durable coalesced outbox retries while retaining the
+last published bundle.
+
 The workspace mode is snapshotted durably when a Pi session first opens. Deployment flag changes
 apply to later sessions and do not silently change an existing session's capabilities after eviction.
 

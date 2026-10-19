@@ -1,6 +1,8 @@
 import { createTwoFilesPatch, diffLines } from "diff";
 import {
   SESSION_DIFF_MAX_FILE_PATCH_BYTES,
+  SESSION_DIFF_MAX_BUNDLE_BYTES,
+  SESSION_DIFF_MAX_FILES,
   SESSION_DIFF_MAX_TOTAL_PATCH_BYTES,
   sessionDiffUploadSchema,
   type SessionDiffFileUpload,
@@ -37,7 +39,7 @@ export async function assembleSessionTextDiff(
   const assembled = [];
   for (const repository of repositories.sort((a, b) => a.position - b.position)) {
     const files: SessionDiffFileUpload[] = [];
-    for (const file of repository.files) {
+    for (const file of [...repository.files].sort((a, b) => a.path.localeCompare(b.path))) {
       if (file.before === file.after) continue;
       const status = file.before === null ? "added" : file.after === null ? "deleted" : "modified";
       const oldText = file.before ?? "";
@@ -73,12 +75,56 @@ export async function assembleSessionTextDiff(
       files,
     });
   }
-  return sessionDiffUploadSchema.parse({
+  const bundle = {
     version: 1,
     triggerMessageId: options.triggerMessageId,
     capturedAt: options.capturedAt,
     repositories: assembled,
-  });
+  } satisfies SessionDiffUpload;
+  fitWireEnvelope(bundle);
+  return sessionDiffUploadSchema.parse(bundle);
+}
+
+function fitWireEnvelope(bundle: SessionDiffUpload): void {
+  const ready = bundle.repositories
+    .filter((repository) => repository.status === "ready")
+    .map((repository) => ({
+      repository,
+      files: [...repository.files],
+      omitted: repository.omittedFileCount,
+      truncated: repository.truncated,
+    }));
+  const totalFiles = ready.reduce((sum, item) => sum + item.files.length, 0);
+  const applyLimit = (limit: number): void => {
+    let remaining = limit;
+    for (const item of ready) {
+      const keep = Math.min(item.files.length, remaining);
+      item.repository.files = item.files.slice(0, keep);
+      const omitted = item.files.length - keep;
+      item.repository.omittedFileCount = item.omitted + omitted;
+      item.repository.truncated = item.truncated || omitted > 0;
+      remaining -= keep;
+    }
+  };
+
+  let low = 0;
+  let high = Math.min(totalFiles, SESSION_DIFF_MAX_FILES);
+  applyLimit(high);
+  if (encodedBytes(bundle) <= SESSION_DIFF_MAX_BUNDLE_BYTES) return;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    applyLimit(middle);
+    if (encodedBytes(bundle) <= SESSION_DIFF_MAX_BUNDLE_BYTES) low = middle;
+    else high = middle - 1;
+  }
+  applyLimit(low);
+  if (encodedBytes(bundle) > SESSION_DIFF_MAX_BUNDLE_BYTES) {
+    throw new Error("Session diff repository metadata exceeds the wire envelope");
+  }
+}
+
+function encodedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function lineStats(oldText: string, newText: string): { additions: number; deletions: number } {

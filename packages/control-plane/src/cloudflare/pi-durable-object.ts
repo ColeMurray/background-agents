@@ -51,7 +51,6 @@ import {
   piRepositoryMaterializationManifestSchema,
   piRepositoryMaterializationSchema,
   PI_REPOSITORY_MAX_BYTES,
-  PI_REPOSITORY_MAX_FILES,
   type PiRepositoryMaterialization,
   type PiRepositoryMaterializationManifest,
 } from "../pi/repository-materialization-contract";
@@ -63,6 +62,9 @@ import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
   createQuotaWorkspace,
+  createWorkspaceToolFacade,
+  ensureRealWorkspaceDirectory,
+  type WorkspaceToolFacade,
 } from "../pi/computer-workspace-quota";
 import { createRepositoryEditingWorkspaceCapability } from "../pi/repository-editing-capability";
 import { assemblePiExtensions, type PiExtensionContribution } from "../pi/extension-assembler";
@@ -87,7 +89,10 @@ import {
   createPiCodeModePolicyDelegate,
   createPiCodeModePolicyState,
 } from "../pi/codemode-extension";
-import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
+import {
+  SESSION_DIFF_MAX_ERROR_LENGTH,
+  type SessionDiffUpload,
+} from "@open-inspect/shared/types/session-diffs";
 import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import { createPiDeploymentEmergencyPolicy } from "../pi/deployment-emergency-policy";
 import { fetchPiCapabilityAuthority } from "../pi/capability-authority-client";
@@ -99,6 +104,12 @@ import {
   summarizePiUsage,
   type PiAccountingSnapshot,
 } from "../pi/accounting";
+import {
+  PermanentRepositoryDiffPublicationError,
+  RepositoryDiffOutbox,
+  type RepositoryDiffPublicationOutcome,
+} from "../pi/repository-diff-outbox";
+import { RepositoryDiffPublicationCapability } from "../pi/repository-diff-publication";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
 
@@ -108,6 +119,7 @@ const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
 const OPERATION_METADATA_PREFIX = "open-inspect:operation:";
 const MAX_OPERATION_METADATA_TOMBSTONES = 128;
+const DIFF_FAILURE_REPORT_TIMEOUT_MS = 5_000;
 
 interface PiOperationMetadata {
   readonly model: string;
@@ -122,10 +134,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   );
   private readonly models = createModels({ credentials: this.credentials });
   private readonly registry = createRegistry();
-  private workspace: Workspace | undefined;
+  private workspace: WorkspaceToolFacade | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private rawWorkspace: Workspace | undefined;
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
+  private repositoryWorkspaceInitialization: Promise<PiRepositoryWorkspace> | undefined;
+  private repositoryWorkspaceInitializer:
+    ((signal?: AbortSignal) => Promise<PiRepositoryWorkspace>) | undefined;
+  private readonly repositoryWorkspaceAbort = new AbortController();
   private harnessOpened = false;
   private readonly eventStreams = new Map<string, AgentEventStream>();
   private readonly eventRelayWork = new Map<string, Promise<void>>();
@@ -133,6 +149,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     this.ctx.storage.sql,
     (sequence, displayId, operationId, event) =>
       this.deliverEventProjection(sequence, displayId, operationId, event)
+  );
+  readonly repositoryDiffOutbox = new RepositoryDiffOutbox(this.ctx.storage.sql);
+  readonly repositoryDiffPublication = new RepositoryDiffPublicationCapability(() =>
+    this.drainRepositoryDiffPublication()
   );
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
@@ -207,39 +227,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         const scratchWorkspace = await this.openWorkspace(capabilities.workspace === "enabled");
         const rawWorkspace = this.rawWorkspace;
         if (!rawWorkspace) throw new Error("Pi repository workspace is unavailable");
-        const repositoryWorkspace = new PiRepositoryWorkspace(
-          rawWorkspace.fs as unknown as ConstructorParameters<typeof PiRepositoryWorkspace>[0],
-          () => Date.now(),
-          { mutations: workspaceMutations }
-        );
-        const restorePlan = await repositoryWorkspace.restore(sessionContext.repositories);
-        if (restorePlan.materializePositions.length > 0) {
-          const materializePositions = new Set(restorePlan.materializePositions);
-          const manifests: PiRepositoryMaterializationManifest[] = [];
-          let materializedFiles = restorePlan.restoredFileCount;
-          for (const repository of sessionContext.repositories) {
-            if (!materializePositions.has(repository.position)) continue;
-            const manifest = await this.fetchRepositoryMaterializationManifest(
-              repository.position,
-              repository.commitSha
-            );
-            materializedFiles += manifest.files.length;
-            if (materializedFiles > PI_REPOSITORY_MAX_FILES) {
-              throw new Error("Pi repository set exceeds the 1000 file materialization limit");
-            }
-            manifests.push(manifest);
-          }
-          for (const manifest of manifests) {
-            await repositoryWorkspace.materialize([
-              await this.fetchRepositoryMaterialization(manifest),
-            ]);
-          }
-        }
-        this.repositoryWorkspace = repositoryWorkspace;
+        this.repositoryWorkspaceInitializer = (signal) =>
+          this.initializeRepositoryWorkspace(
+            sessionContext.repositories,
+            workspaceMutations,
+            signal
+          );
         const capability = createRepositoryEditingWorkspaceCapability({
           scratchWorkspace,
-          repositoryWorkspace: rawWorkspace,
-          overlay: repositoryWorkspace,
+          repositoryWorkspace: createWorkspaceToolFacade(rawWorkspace),
+          initializeOverlay: (signal) => this.repositoryWorkspaceInitializer!(signal),
           mutations: workspaceMutations,
           scratchMode: capabilities.workspace,
           publishDiff: (bundle) => this.publishDiffBundle(bundle),
@@ -354,7 +351,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       await this.settleOperationMetadata(operationId);
     },
   });
-  readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.projector);
+  readonly lifecycle = Lifecycle.install(this)
+    .use(this.harness)
+    .use(this.projector)
+    .use(this.repositoryDiffPublication);
 
   async initialize(sessionId: string, input: PiFeatureCapabilitySnapshot): Promise<void> {
     const snapshot = piFeatureCapabilitySnapshotSchema.parse(input);
@@ -501,14 +501,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         if (this.harnessOpened) await this.harness.abort({ session: ROOT_SESSION });
       }
       await this.lifecycle.disableAlarms();
+      this.repositoryWorkspaceAbort.abort(new Error("Pi Durable session was deleted"));
       if (this.harnessOpened) await this.harness.dispose();
       this.harnessOpened = false;
       await this.codemodeSandbox?.close();
       this.codemodeSandbox = undefined;
-      await (this.rawWorkspace ?? this.workspace)?.close();
+      await this.rawWorkspace?.close();
       this.workspace = undefined;
       this.rawWorkspace = undefined;
       this.repositoryWorkspace = undefined;
+      this.repositoryWorkspaceInitialization = undefined;
+      this.repositoryWorkspaceInitializer = undefined;
       this.credentials.clear();
       await this.ctx.storage.deleteAll();
       await this.ctx.storage.put(DELETION_STATE_KEY, "destroyed");
@@ -517,27 +520,131 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   async refreshDiff(sessionId: string): Promise<void> {
     await this.ensureSession(sessionId);
+    const snapshot = await readPiFeatureCapabilitySnapshot(this.ctx.storage);
+    if (!snapshot || snapshot.capabilities.repositoryEditing !== "enabled") {
+      throw new Error("Pi repository editing is not enabled");
+    }
     await this.harness.pi();
-    if (!this.repositoryWorkspace) throw new Error("Pi repository editing is not enabled");
-    await this.publishDiffBundle(await this.repositoryWorkspace.captureDiff(null));
+    if (!this.repositoryWorkspaceInitializer)
+      throw new Error("Pi repository editing is not enabled");
+    await this.repositoryWorkspaceInitializer();
+    await this.repositoryDiffOutbox.requestRecapture();
+    await this.repositoryDiffPublication.schedule();
   }
 
-  private async openWorkspace(writable: boolean): Promise<Workspace> {
+  private async openWorkspace(writable: boolean): Promise<WorkspaceToolFacade> {
     if (this.workspace) return this.workspace;
     const workspace = new Workspace({
       storage: this.ctx.storage as unknown as DurableObjectStorageLike,
       sessionId: this.ctx.id.toString(),
     });
     try {
-      await workspace.fs.mkdir(COMPUTER_SCRATCH_ROOT, { recursive: true });
-      await workspace.fs.mkdir("/workspace/repos", { recursive: true });
+      await ensureRealWorkspaceDirectory(workspace.fs, "/workspace");
+      await ensureRealWorkspaceDirectory(workspace.fs, COMPUTER_SCRATCH_ROOT);
+      await ensureRealWorkspaceDirectory(workspace.fs, "/workspace/repos");
     } catch (error) {
       await workspace.close().catch(() => {});
       throw error;
     }
     this.rawWorkspace = workspace;
-    this.workspace = writable ? createQuotaWorkspace(workspace, this.ctx.storage) : workspace;
+    this.workspace = writable
+      ? createQuotaWorkspace(workspace, this.ctx.storage)
+      : createWorkspaceToolFacade(workspace);
     return this.workspace;
+  }
+
+  private async initializeRepositoryWorkspace(
+    repositories: PiSessionContext["repositories"],
+    mutations: WorkspaceMutationFifo,
+    signal?: AbortSignal
+  ): Promise<PiRepositoryWorkspace> {
+    if (signal?.aborted)
+      throw signal.reason ?? new Error("Repository overlay initialization aborted");
+    if (this.repositoryWorkspace) return this.repositoryWorkspace;
+    if (!this.repositoryWorkspaceInitialization) {
+      const startedAt = Date.now();
+      let providerRequests = 0;
+      const work = (async () => {
+        const rawWorkspace = this.rawWorkspace;
+        if (!rawWorkspace) throw new Error("Pi repository workspace is unavailable");
+        const repositoryWorkspace = new PiRepositoryWorkspace(rawWorkspace.fs, () => Date.now(), {
+          mutations,
+          publication: {
+            stage: (bundle) => this.repositoryDiffOutbox.stage(bundle),
+            drain: () => this.drainRepositoryDiffOutbox(),
+            recordCaptureFailure: (error) =>
+              this.repositoryDiffOutbox.recordCaptureFailure(error).then(() => undefined),
+            recordFailure: (error) => this.repositoryDiffOutbox.recordFailure(error),
+            reportFailure: async (error) => {
+              const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+              if (sessionId) {
+                await this.recordDiffFailure(
+                  sessionId,
+                  error instanceof Error ? error.message : String(error)
+                ).catch(() => {});
+              }
+            },
+            schedule: () => this.repositoryDiffPublication.schedule(),
+          },
+        });
+        const restorePlan = await repositoryWorkspace.restore(repositories);
+        const manifests: PiRepositoryMaterializationManifest[] = [];
+        for (const repository of repositories) {
+          if (!restorePlan.materializePositions.includes(repository.position)) continue;
+          providerRequests += 1;
+          manifests.push(
+            await this.fetchRepositoryMaterializationManifest(
+              repository.position,
+              repository.commitSha,
+              this.repositoryWorkspaceAbort.signal
+            )
+          );
+        }
+        const materializations = [];
+        for (const manifest of manifests) {
+          materializations.push(
+            await this.fetchRepositoryMaterialization(
+              manifest,
+              () => {
+                providerRequests += 1;
+              },
+              this.repositoryWorkspaceAbort.signal
+            )
+          );
+        }
+        await repositoryWorkspace.materialize(materializations);
+        this.repositoryWorkspace = repositoryWorkspace;
+        console.log(
+          JSON.stringify({
+            event: "pi.repository_overlay.init",
+            outcome: "success",
+            duration_ms: Date.now() - startedAt,
+            files: materializations.reduce((sum, item) => sum + item.files.length, 0),
+            provider_requests: providerRequests,
+          })
+        );
+        return repositoryWorkspace;
+      })();
+      this.repositoryWorkspaceInitialization = work;
+      void work
+        .catch((error) => {
+          console.warn(
+            JSON.stringify({
+              event: "pi.repository_overlay.init",
+              outcome: "failure",
+              duration_ms: Date.now() - startedAt,
+              provider_requests: providerRequests,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          );
+        })
+        .finally(() => {
+          if (this.repositoryWorkspaceInitialization === work && !this.repositoryWorkspace) {
+            this.repositoryWorkspaceInitialization = undefined;
+          }
+        });
+    }
+    return awaitWithAbort(this.repositoryWorkspaceInitialization, signal);
   }
 
   private async openCodemodeSandbox(): Promise<RemoteCodemodeSandbox> {
@@ -898,19 +1005,21 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   private async fetchRepositoryMaterializationManifest(
     repository: number,
-    commitSha: string
+    commitSha: string,
+    signal?: AbortSignal
   ): Promise<PiRepositoryMaterializationManifest> {
     return piRepositoryMaterializationManifestSchema.parse(
-      await this.fetchRepositoryMaterializationPart({
-        operation: "manifest",
-        repository,
-        commitSha,
-      })
+      await this.fetchRepositoryMaterializationPart(
+        { operation: "manifest", repository, commitSha },
+        signal
+      )
     );
   }
 
   private async fetchRepositoryMaterialization(
-    manifest: PiRepositoryMaterializationManifest
+    manifest: PiRepositoryMaterializationManifest,
+    onRequest: () => void = () => {},
+    signal?: AbortSignal
   ): Promise<PiRepositoryMaterialization> {
     const repository = manifest.repository.position;
     const commitSha = manifest.repository.commitSha;
@@ -918,13 +1027,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     let offset = 0;
     let totalBytes = 0;
     while (offset < manifest.files.length) {
+      onRequest();
       const batch = piRepositoryMaterializationBatchSchema.parse(
-        await this.fetchRepositoryMaterializationPart({
-          operation: "files",
-          repository,
-          commitSha,
-          offset,
-        })
+        await this.fetchRepositoryMaterializationPart(
+          { operation: "files", repository, commitSha, offset },
+          signal
+        )
       );
       if (
         batch.offset !== offset ||
@@ -969,7 +1077,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async fetchRepositoryMaterializationPart(
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<unknown> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
@@ -978,6 +1087,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal,
       })
     );
     if (!response.ok) throw new Error(`Repository materialization failed (${response.status})`);
@@ -988,29 +1098,86 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     return (await this.harness.pending({ session: ROOT_SESSION }))[0]?.operationId ?? null;
   }
 
-  private async publishDiffBundle(bundle: SessionDiffUpload): Promise<void> {
+  private async publishDiffBundle(bundle: SessionDiffUpload, signal?: AbortSignal): Promise<void> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const response = await this.env.SESSION.getByName(sessionId).fetch(
-      new Request(`http://session${SessionInternalPaths.diffStore}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bundle),
-      })
-    );
+    let response: Response;
+    try {
+      response = await this.env.SESSION.getByName(sessionId).fetch(
+        new Request(`http://session${SessionInternalPaths.diffStore}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bundle),
+          signal,
+        })
+      );
+    } catch (error) {
+      const message = `Pi diff publication failed: ${
+        error instanceof Error ? error.message : "network unavailable"
+      }`;
+      throw new Error(message, { cause: error });
+    }
     if (!response.ok) {
       const message = `Pi diff publication failed (${response.status})`;
-      await this.recordDiffFailure(sessionId, message).catch(() => {});
+      if (!isRetryableDiffPublicationStatus(response.status)) {
+        throw new PermanentRepositoryDiffPublicationError(message);
+      }
       throw new Error(message);
     }
   }
 
+  private async drainRepositoryDiffPublication(): Promise<RepositoryDiffPublicationOutcome> {
+    await this.harness.pi();
+    if (!this.repositoryWorkspaceInitializer)
+      throw new Error("Pi repository editing is not enabled");
+    const repositoryWorkspace = await this.repositoryWorkspaceInitializer();
+    let outcome = await this.drainRepositoryDiffOutbox();
+    if (outcome === "permanent" || outcome === "idle" || outcome === "published") return outcome;
+    let state = this.repositoryDiffOutbox.state();
+    if (state.pending) return "pending";
+    if (state.recaptureRequired) {
+      try {
+        await this.repositoryDiffOutbox.stage(await repositoryWorkspace.captureDiff(null));
+      } catch (error) {
+        await this.repositoryDiffOutbox.recordCaptureFailure(error);
+        const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+        if (sessionId) {
+          await this.recordDiffFailure(
+            sessionId,
+            error instanceof Error ? error.message : String(error)
+          ).catch(() => {});
+        }
+        return "pending";
+      }
+      outcome = await this.drainRepositoryDiffOutbox();
+      state = this.repositoryDiffOutbox.state();
+      return state.pending || state.recaptureRequired ? "pending" : outcome;
+    }
+    return outcome;
+  }
+
+  private async drainRepositoryDiffOutbox(): Promise<RepositoryDiffPublicationOutcome> {
+    const outcome = await this.repositoryDiffOutbox.drain((bundle, signal) =>
+      this.publishDiffBundle(bundle, signal)
+    );
+    if (outcome === "pending" || outcome === "permanent") {
+      const state = this.repositoryDiffOutbox.state();
+      const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+      if (sessionId && state.lastError) {
+        await this.recordDiffFailure(sessionId, state.lastError.message).catch(() => {});
+      }
+    }
+    return outcome;
+  }
+
   private async recordDiffFailure(sessionId: string, error: string): Promise<void> {
+    const boundedError = error.slice(0, SESSION_DIFF_MAX_ERROR_LENGTH);
     await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.diffFailure}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error }),
+        body: JSON.stringify({ error: boundedError }),
+        signal: AbortSignal.timeout(DIFF_FAILURE_REPORT_TIMEOUT_MS),
       })
     );
   }
@@ -1244,6 +1411,27 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new PermanentPiResultDeliveryError(`Pi result delivery rejected (${response.status})`);
     }
   }
+}
+
+function isRetryableDiffPublicationStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+async function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) throw signal.reason ?? new Error("Operation aborted");
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => reject(signal.reason ?? new Error("Operation aborted")),
+        {
+          once: true,
+        }
+      );
+    }),
+  ]);
 }
 
 function declaredEffects(extension: {

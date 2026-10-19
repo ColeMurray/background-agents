@@ -79,3 +79,17 @@ resource "terraform_data" "pi_codemode_paid_ready_gate" {
     }
   }
 }
+
+# Computer 0.5.1 is preview-only. Any VFS exposure, including read-only
+# scratch or repository editing, requires a deliberate deployment acknowledgement.
+resource "terraform_data" "pi_computer_preview_gate" {
+  lifecycle {
+    precondition {
+      condition = (
+        (var.pi_workspace_mode == "off" && var.pi_repository_editing_mode == "off") ||
+        var.pi_computer_preview_acknowledged
+      )
+      error_message = "Pi workspace or repository editing requires pi_computer_preview_acknowledged = true because Cloudflare Computer 0.5.1 is preview-only and not production-ready."
+    }
+  }
+}

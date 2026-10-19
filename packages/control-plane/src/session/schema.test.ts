@@ -7,6 +7,7 @@ import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+  PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   validateMigrationArtifacts,
@@ -33,6 +34,7 @@ it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
     { id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID, feature: "externalActions" },
     { id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID, feature: "coreAuthority" },
     { id: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID, feature: "piProjection" },
+    { id: PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID, feature: "repositoryEditing" },
   ]);
 });
 

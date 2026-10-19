@@ -1,4 +1,3 @@
-import type { Workspace } from "@cloudflare/computer";
 import { createPiTools, type PiToolResult } from "@cloudflare/computer/tools/pi-ai";
 import {
   PI_TOOL_EFFECT_REGISTRY,
@@ -16,11 +15,13 @@ import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
   isProtectedWorkspaceRoot,
+  type WorkspaceToolFacade,
 } from "./computer-workspace-quota";
 import {
   WORKSPACE_MUTATION_MAX_BYTES,
   createWorkspaceMutationPolicyDelegate,
 } from "./computer-workspace-policy";
+import { validateWorkspaceToolInput } from "./workspace-input-limits";
 
 const READ_ONLY_TOOL_NAMES = ["read", "ls", "find", "grep"] as const;
 const MUTATION_TOOL_NAMES = ["write", "edit", "delete"] as const;
@@ -43,7 +44,7 @@ const mutationEffects = new Map(
  * model's capabilities merely by returning another declaration.
  */
 export function createComputerWorkspaceCapability(
-  workspace: Workspace,
+  workspace: WorkspaceToolFacade,
   mode: Exclude<FeatureCapabilityMode, "off">,
   mutations = new WorkspaceMutationFifo()
 ) {
@@ -103,14 +104,22 @@ export function createComputerWorkspaceCapability(
           : { constrainedSampling: tool.constrainedSampling }),
         replay: declaration.replay,
         callers: declaration.callers,
+        prepareArguments: (args) => validateWorkspaceToolInput(tool.name, args, tool.parameters),
         ...(mutating ? { executionMode: "sequential" as const } : {}),
         async execute(args, api, context): Promise<ToolExecutionResult> {
-          if (tool.name === "delete" && deletesWorkspaceRoot(args)) {
+          let boundedArgs: Record<string, unknown>;
+          try {
+            boundedArgs = validateWorkspaceToolInput(tool.name, args, tool.parameters);
+          } catch (error) {
+            return toolError(error);
+          }
+          if (tool.name === "delete" && deletesWorkspaceRoot(boundedArgs)) {
             return {
               output: [{ type: "text", text: "Deleting the workspace root is not allowed" }],
               isError: true,
             };
           }
+          let dispatched = false;
           const invoke = (): Promise<PiToolResult> => {
             if (mutating && context.abortSignal?.aborted) {
               return Promise.resolve({
@@ -118,12 +127,25 @@ export function createComputerWorkspaceCapability(
                 isError: true,
               });
             }
+            dispatched = true;
             return execute(
-              { id: api.callId, name: tool.name, arguments: args },
+              { id: api.callId, name: tool.name, arguments: boundedArgs },
               { abortSignal: context.abortSignal }
             );
           };
-          const result = mutating ? await mutations.run(invoke) : await invoke();
+          let result = mutating ? await mutations.run(invoke) : await invoke();
+          if (mutating && dispatched && context.abortSignal?.aborted) {
+            result = {
+              content: [
+                {
+                  type: "text",
+                  text: "Workspace mutation was dispatched when cancellation arrived; outcome is indeterminate and durable quota state was reconciled.",
+                },
+              ],
+              isError: true,
+              details: { mutationOutcome: "indeterminate_or_applied", reconciled: true },
+            };
+          }
           const details = normalizeDetails(result.details);
           return {
             output: result.content,
@@ -149,6 +171,13 @@ export function createComputerWorkspaceCapability(
           toolPolicyDelegate: createWorkspaceMutationPolicyDelegate(),
         }
       : {}),
+  };
+}
+
+function toolError(error: unknown): ToolExecutionResult {
+  return {
+    output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+    isError: true,
   };
 }
 

@@ -10,6 +10,7 @@ import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
+import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
 import { SessionInternalPaths } from "../../src/session/contracts";
 import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
@@ -18,6 +19,8 @@ import {
   PermanentPiResultDeliveryError,
   RetryablePiProjectionError,
 } from "../../src/pi/projection-retry-policy";
+import { PermanentRepositoryDiffPublicationError } from "../../src/pi/repository-diff-outbox";
+import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import {
   fauxAssistantMessage,
@@ -52,9 +55,15 @@ async function initializedPiStub(label: string) {
   return { sessionName, stub: piStub(sessionName) };
 }
 
-function workspaceOf(instance: PiSessionDO): Workspace {
-  const workspace = (instance as unknown as { workspace?: Workspace }).workspace;
+function workspaceOf(instance: PiSessionDO): WorkspaceToolFacade {
+  const workspace = (instance as unknown as { workspace?: WorkspaceToolFacade }).workspace;
   if (!workspace) throw new Error("Expected initialized Computer Workspace");
+  return workspace;
+}
+
+function rawWorkspaceOf(instance: PiSessionDO): Workspace {
+  const workspace = (instance as unknown as { rawWorkspace?: Workspace }).rawWorkspace;
+  if (!workspace) throw new Error("Expected initialized raw Computer Workspace");
   return workspace;
 }
 
@@ -604,7 +613,7 @@ describe("PiSessionDO", () => {
     ).resolves.toBe("durable note");
     await expect(
       runInDurableObject(stub, (_instance, state) => state.storage.get(WORKSPACE_QUOTA_STATE_KEY))
-    ).resolves.toEqual({ bytes: 12, entries: 1, dirty: false });
+    ).resolves.toMatchObject({ version: 2, bytes: 12, entries: 1, dirty: false });
   });
 
   it("writes, edits, and deletes scratch files through unsafe workspace tools", async () => {
@@ -685,7 +694,7 @@ describe("PiSessionDO", () => {
       runInDurableObject(restored, (_instance, state) =>
         state.storage.get(WORKSPACE_QUOTA_STATE_KEY)
       )
-    ).resolves.toEqual({ bytes: 7, entries: 2, dirty: false });
+    ).resolves.toMatchObject({ version: 2, bytes: 7, entries: 2, dirty: false });
     await expect(
       runInPiSessionDO(restored, (instance) =>
         workspaceOf(instance).fs.readFile("/workspace/scratch/kept.txt", "utf8")
@@ -709,7 +718,7 @@ describe("PiSessionDO", () => {
     await stub.status(sessionName);
 
     const results = await runInPiSessionDO(stub, async (instance) => {
-      const workspace = workspaceOf(instance);
+      const workspace = rawWorkspaceOf(instance);
       await workspace.fs.symlink("/outside-secret.txt", "/workspace/scratch/escape");
       return Promise.all([
         executeWorkspaceTool(instance, "read", { path: "escape" }, "symlink-read"),
@@ -726,6 +735,21 @@ describe("PiSessionDO", () => {
 
     expect(results).toHaveLength(4);
     expect(results.every((result) => result.isError === true)).toBe(true);
+  });
+
+  it("fails closed when the scratch root becomes a symlink before cold open", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-workspace-root-symlink");
+    await stub.status(sessionName);
+    await expect(
+      runInPiSessionDO(stub, async (instance, state) => {
+        const workspace = rawWorkspaceOf(instance);
+        await workspace.fs.rm("/workspace/scratch", { recursive: true, force: true });
+        await workspace.fs.symlink("/outside", "/workspace/scratch");
+        state.abort("test: force Pi eviction after root replacement");
+      })
+    ).rejects.toThrow();
+
+    await expect(piStub(sessionName).status(sessionName)).rejects.toThrow();
   });
 
   it("isolates identical workspace paths between Pi sessions", async () => {
@@ -756,6 +780,80 @@ describe("PiSessionDO", () => {
     expect(firstText).toBe("first");
     expect(secondText).toBe("second");
   });
+
+  it("rejects diff refresh synchronously when repository editing is unavailable", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-diff-refresh-unavailable");
+
+    await expect(
+      runInPiSessionDO(stub, (instance) => instance.refreshDiff(sessionName))
+    ).rejects.toThrow(/repository editing is not enabled/i);
+  });
+
+  it.each([
+    { label: "network rejection", status: null, permanent: false },
+    { label: "request timeout", status: 408, permanent: false },
+    { label: "too early", status: 425, permanent: false },
+    { label: "rate limiting", status: 429, permanent: false },
+    { label: "server failure", status: 503, permanent: false },
+    { label: "deterministic client rejection", status: 400, permanent: true },
+  ])(
+    "records $label in public diff state and classifies retryability",
+    async ({ status, permanent }) => {
+      const { stub } = await initializedPiStub("pi-diff-publication-failure");
+      const bundle: SessionDiffUpload = {
+        version: 1,
+        triggerMessageId: null,
+        capturedAt: 1,
+        repositories: [
+          {
+            status: "ready",
+            position: 0,
+            repoOwner: "acme",
+            repoName: "widgets",
+            baseSha: "a".repeat(40),
+            headSha: "a".repeat(40),
+            truncated: false,
+            omittedFileCount: 0,
+            files: [],
+          },
+        ],
+      };
+      const failures: unknown[] = [];
+
+      const error = await runInPiSessionDO(stub, async (instance) => {
+        const target = instance as unknown as {
+          env: {
+            SESSION: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
+          };
+          publishDiffBundle(value: SessionDiffUpload): Promise<void>;
+        };
+        const real = target.env.SESSION;
+        target.env.SESSION = {
+          getByName: () => ({
+            async fetch(request) {
+              if (new URL(request.url).pathname === SessionInternalPaths.diffFailure) {
+                failures.push(await request.json());
+                return new Response(null, { status: 204 });
+              }
+              if (status === null) throw new Error("transport down");
+              return new Response(null, { status });
+            },
+          }),
+        };
+        try {
+          await target.publishDiffBundle(bundle);
+          return null;
+        } catch (caught) {
+          return caught;
+        } finally {
+          target.env.SESSION = real;
+        }
+      });
+
+      expect(failures).toHaveLength(0);
+      expect(error instanceof PermanentRepositoryDiffPublicationError).toBe(permanent);
+    }
+  );
 
   it("returns a definite rejection when initialization fails before Pi admission", async () => {
     const sessionId = `missing-${crypto.randomUUID()}`;
@@ -981,6 +1079,18 @@ describe("PiSessionDO", () => {
     });
     const stub = piStub(sessionName);
     await stub.status(sessionName);
+    const refreshJobCount = await runInPiSessionDO(stub, async (instance, state) => {
+      await instance.refreshDiff(sessionName);
+      await instance.refreshDiff(sessionName);
+      const rows = [
+        ...state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM cf_agents_jobs WHERE id = ?",
+          "repository-diff-publication"
+        ),
+      ] as Array<{ count: number }>;
+      return rows[0]?.count ?? 0;
+    });
+    expect(refreshJobCount).toBe(1);
 
     const agent = await runInPiSessionDO(stub, async (instance) => {
       const pi = await instance.harness.pi();
@@ -1083,6 +1193,9 @@ describe("PiSessionDO", () => {
     );
 
     expect(result).toMatchObject({ isError: false });
+    await runInPiSessionDO(stub, (instance) =>
+      (instance as unknown as { alarm(): Promise<void> }).alarm()
+    );
     const rows = await queryDO<{ bundle_json: string }>(
       sessionStub,
       "SELECT bundle_json FROM session_diff WHERE singleton = 1"
@@ -1231,7 +1344,7 @@ describe("PiSessionDO", () => {
             {
               path: "durable.txt",
               type: "file",
-              blobId: "blob-durable",
+              blobId: "89d6550e43ce52434725cfb864c6feed1b3632d5",
               mode: "100644",
               sizeBytes: 8,
               executable: false,
@@ -1244,7 +1357,31 @@ describe("PiSessionDO", () => {
     });
     const stub = piStub(sessionName);
     await stub.status(sessionName);
+    expect(readBlob).not.toHaveBeenCalled();
+    await runInPiSessionDO(stub, (instance) =>
+      executeWorkspaceTool(
+        instance,
+        "read",
+        { path: "/workspace/repos/0/durable.txt" },
+        "read-initialize-overlay"
+      )
+    );
     expect(readBlob).toHaveBeenCalledOnce();
+    await runInPiSessionDO(stub, async (instance) => {
+      const workspace = rawWorkspaceOf(instance);
+      const path = "/.open-inspect/repositories/0/manifest.json";
+      const manifest = JSON.parse(await workspace.fs.readFile(path, "utf8")) as {
+        files: Array<Record<string, unknown>>;
+      };
+      await workspace.fs.writeFile(
+        path,
+        JSON.stringify({
+          ...manifest,
+          version: 1,
+          files: manifest.files.map(({ contentSha256: _hash, ...file }) => file),
+        })
+      );
+    });
     await expect(
       runInPiSessionDO(stub, (_instance, state) => state.abort("test: evict repository Pi"))
     ).rejects.toThrow();
@@ -1273,6 +1410,11 @@ describe("PiSessionDO", () => {
       )
     );
     expect(result).toMatchObject({ isError: false });
+    await expect(
+      runInPiSessionDO(piStub(sessionName), (instance) =>
+        rawWorkspaceOf(instance).fs.readFile("/.open-inspect/repositories/0/manifest.json", "utf8")
+      )
+    ).resolves.toContain('"version":2');
   });
 
   it("rejects invalid UTF-8 provider bytes before mutating the real Computer VFS", async () => {

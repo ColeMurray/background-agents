@@ -1500,7 +1500,10 @@ account's refresh token in the Pi Durable Object. For an existing deployment:
 The workspace currently depends on exact-pinned `@cloudflare/computer@0.5.1`, which Cloudflare marks
 preview-only and not production-ready. Keep `PI_WORKSPACE_MODE=off` for production deployments until
 that status changes or your deployment owner explicitly accepts and validates the preview risk. For
-a personal or staging canary, set the Actions variable to one of these values and apply Terraform:
+a personal or staging canary, set `pi_computer_preview_acknowledged = true` in `terraform.tfvars` or
+set the Actions variable `PI_COMPUTER_PREVIEW_ACKNOWLEDGED=true`, **and** set the workspace mode.
+Both plan and apply receive the acknowledgement, and Terraform hard-fails if either workspace mode
+or repository editing is enabled without it:
 
 - `PI_WORKSPACE_MODE=read_only` adds `read`, `ls`, `find`, and `grep` under `/workspace/scratch`.
 - `PI_WORKSPACE_MODE=writable` also adds `write`, `edit`, and forced `delete`. It enforces an 8 MiB
@@ -1517,6 +1520,15 @@ under `/workspace/repos/{position}`. Repository and scratch mutations share the 
 FIFO, policy, redaction, and SessionDiff publication order. Scratch remains governed by
 `PI_WORKSPACE_MODE`, including its durable aggregate quota when writable. Repository bytes cross
 SessionDO in bounded batches and never carry source-control credentials.
+
+The materialized bytes are pinned session state. Authorized session participants can continue to
+read a complete durable overlay after a source-control grant or provider installation is revoked;
+revocation blocks new sessions, provider-backed repair/refetch, and external publication. A missing,
+tampered, or unexplained file fails closed rather than silently refetching over an edit or deletion.
+Session deletion or an authority fence purges the pinned VFS. Immutable blob requests are coalesced
+in memory per SessionDO after fresh scope resolution; no credential-bearing cache is created. Diff
+capture is staged to a durable, coalescing PiSessionDO outbox before mutation success returns, so an
+outage leaves the mutation applied with projection pending and preserves the last successful bundle.
 
 SessionDO resolves and persists the complete Pi capability snapshot during creation, then
 initializes PiSessionDO with that exact value before reporting success. One unavailable initialize

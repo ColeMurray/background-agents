@@ -49,13 +49,17 @@ function arrangeComputerTools() {
 function capability(
   scratchMode: "off" | "read_only" | "enabled",
   overlay: PiRepositoryWorkspace = {
-    runMutation: vi.fn(async (_tool, _args, execute) => execute()),
+    runMutation: vi.fn(async (_tool, _args, execute) => ({
+      value: await execute(),
+      mutation: "applied",
+      projection: "published",
+    })),
   } as unknown as PiRepositoryWorkspace
 ) {
   return createRepositoryEditingWorkspaceCapability({
     scratchWorkspace: {} as Workspace,
     repositoryWorkspace: {} as Workspace,
-    overlay,
+    initializeOverlay: async () => overlay,
     mutations: new WorkspaceMutationFifo(),
     scratchMode,
     publishDiff: vi.fn(async () => undefined),
@@ -112,7 +116,7 @@ describe("repository editing workspace capability", () => {
     const overlay = {
       runMutation: vi.fn(async (_tool, _args, execute: () => Promise<unknown>) => {
         await blocked;
-        return execute();
+        return { value: await execute(), mutation: "applied", projection: "published" };
       }),
     };
     const write = capability(
@@ -173,5 +177,86 @@ describe("repository editing workspace capability", () => {
       hookContext
     );
     expect(JSON.stringify(memo.mock.calls)).not.toContain("private body");
+  });
+
+  it("distinguishes an applied mutation whose diff projection is pending", async () => {
+    const overlay = {
+      runMutation: vi.fn(async (_tool, _args, execute: () => Promise<unknown>) => ({
+        value: await execute(),
+        mutation: "applied" as const,
+        projection: "pending" as const,
+      })),
+    };
+    const write = capability(
+      "enabled",
+      overlay as unknown as PiRepositoryWorkspace
+    ).extension.tools?.find((tool) => tool.name === "write");
+
+    await expect(
+      write?.execute(
+        { path: "/workspace/repos/0/file.txt", content: "body" },
+        { callId: "repository-write" } as ToolExecutionApi,
+        context
+      )
+    ).resolves.toMatchObject({
+      isError: false,
+      output: [expect.objectContaining({ text: expect.stringMatching(/applied.*pending/i) })],
+      details: { mutationApplied: true, projection: "pending" },
+    });
+  });
+
+  it("applies path limits to the repository-relative path instead of internal prefixes", async () => {
+    const relative = `${"a".repeat(4_092)}.txt`;
+    const overlay = {
+      runMutation: vi.fn(async (_tool, _args, execute: () => Promise<unknown>) => ({
+        value: await execute(),
+        mutation: "applied" as const,
+        projection: "published" as const,
+      })),
+    };
+    const write = capability(
+      "enabled",
+      overlay as unknown as PiRepositoryWorkspace
+    ).extension.tools?.find((tool) => tool.name === "write");
+
+    await expect(
+      write?.execute(
+        { path: `/workspace/repos/0/${relative}`, content: "body" },
+        { callId: "repository-max-path" } as ToolExecutionApi,
+        context
+      )
+    ).resolves.toMatchObject({ isError: false });
+    expect(overlay.runMutation).toHaveBeenCalledOnce();
+  });
+
+  it("blocks raw oversized repository paths before any durable policy memo", async () => {
+    const delegate = capability("enabled").toolPolicyDelegate;
+    const memo = vi.fn(async (_name: string, value: unknown) => value);
+    const api = { memo } as unknown as HookApi;
+    const huge = call(`/workspace/repos/0/${"😀".repeat(4_096)}`);
+
+    await expect(
+      delegate.beforeTool?.(huge, declaration(), api, {} as Context)
+    ).resolves.toMatchObject({ block: expect.stringMatching(/path.*too large/i) });
+    expect(memo).not.toHaveBeenCalled();
+  });
+
+  it("blocks oversized canonical edits before durable policy memo", async () => {
+    const delegate = capability("enabled").toolPolicyDelegate;
+    const memo = vi.fn(async (_name: string, value: unknown) => value);
+    const api = { memo } as unknown as HookApi;
+    const toolCall = {
+      ...call("/workspace/repos/0/file.txt"),
+      name: "edit",
+      arguments: {
+        path: "/workspace/repos/0/file.txt",
+        edits: Array.from({ length: 101 }, () => ({ oldText: "a", newText: "b" })),
+      },
+    } as ToolHookCall;
+
+    await expect(
+      delegate.beforeTool?.(toolCall, declaration(), api, {} as Context)
+    ).resolves.toMatchObject({ block: expect.stringMatching(/edit count/i) });
+    expect(memo).not.toHaveBeenCalled();
   });
 });

@@ -268,6 +268,63 @@ describe("createComputerWorkspaceCapability", () => {
     expect(computer.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("reports an in-flight aborted mutation as indeterminate after reconciliation", async () => {
+    arrangeComputerTools();
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => (release = resolve));
+    computer.execute.mockImplementationOnce(async () => {
+      await paused;
+      return { content: [{ type: "text", text: "written" }], isError: false };
+    });
+    const extension = createExtension("enabled", new WorkspaceMutationFifo());
+    const write = extension.tools?.find((tool) => tool.name === "write");
+    const abort = new AbortController();
+
+    const result = write?.execute(
+      { path: "paused.txt", content: "body" },
+      { callId: "write-paused" } as ToolExecutionApi,
+      { ...context, abortSignal: abort.signal }
+    );
+    await vi.waitFor(() => expect(computer.execute).toHaveBeenCalledOnce());
+    abort.abort();
+    release();
+
+    await expect(result).resolves.toMatchObject({
+      isError: true,
+      output: [
+        expect.objectContaining({ text: expect.stringMatching(/indeterminate.*reconciled/i) }),
+      ],
+    });
+  });
+
+  it("reports an in-flight aborted delete as indeterminate after reconciliation", async () => {
+    arrangeComputerTools();
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => (release = resolve));
+    computer.execute.mockImplementationOnce(async () => {
+      await paused;
+      return { content: [{ type: "text", text: "deleted" }], isError: false };
+    });
+    const extension = createExtension("enabled", new WorkspaceMutationFifo());
+    const remove = extension.tools?.find((tool) => tool.name === "delete");
+    const abort = new AbortController();
+    const result = remove?.execute(
+      { path: "paused.txt" },
+      { callId: "delete-paused" } as ToolExecutionApi,
+      { ...context, abortSignal: abort.signal }
+    );
+    await vi.waitFor(() => expect(computer.execute).toHaveBeenCalledOnce());
+    abort.abort();
+    release();
+
+    await expect(result).resolves.toMatchObject({
+      isError: true,
+      output: [
+        expect.objectContaining({ text: expect.stringMatching(/indeterminate.*reconciled/i) }),
+      ],
+    });
+  });
+
   it.each([
     "/workspace",
     "/workspace/",

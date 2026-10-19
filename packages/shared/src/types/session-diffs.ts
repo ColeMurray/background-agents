@@ -257,6 +257,7 @@ function validateEncodedBundle(value: unknown, ctx: z.RefinementCtx): void {
 
 const uploadShape = {
   version: z.literal(SESSION_DIFF_VERSION),
+  publicationGeneration: z.number().int().positive().optional(),
   triggerMessageId: nonEmptyIdSchema.nullable(),
   capturedAt: z.number().int().nonnegative(),
   repositories: z.array(sessionDiffRepositoryUploadSchema).min(1).max(MAX_SESSION_REPOSITORIES),

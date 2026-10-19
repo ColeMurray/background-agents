@@ -321,6 +321,8 @@ sandbox_provider = "modal"
 # publishing. Keep off unless you explicitly accept Cloudflare Computer's
 # preview status. Each Pi session snapshots this capability on first open.
 # pi_workspace_mode = "off"
+# Required before either workspace or repository editing is enabled.
+# pi_computer_preview_acknowledged = false
 # Native Pi Durable Code Mode is separately billed. Its dedicated Wrangler
 # workflow owns the Worker, v1 migration, WASM, and fixed 60000 ms CPU limit.
 # pi_codemode_mode = "off"

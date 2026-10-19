@@ -52,6 +52,11 @@ run "workspace_defaults_off" {
     condition     = module.control_plane_worker.plain_text_bindings["PI_REPOSITORY_EDITING_MODE"] == "off"
     error_message = "Pi repository editing must fail closed independently by default."
   }
+
+  assert {
+    condition     = !var.pi_computer_preview_acknowledged
+    error_message = "Cloudflare Computer preview risk acknowledgement must default off."
+  }
 }
 
 run "pi_binding_survives_admission_rollback" {
@@ -104,7 +109,8 @@ run "workspace_read_only_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_workspace_mode = "read_only"
+    pi_workspace_mode                = "read_only"
+    pi_computer_preview_acknowledged = true
   }
 
   assert {
@@ -117,7 +123,8 @@ run "workspace_writable_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_workspace_mode = "writable"
+    pi_workspace_mode                = "writable"
+    pi_computer_preview_acknowledged = true
   }
 
   assert {
@@ -130,14 +137,35 @@ run "repository_editing_reaches_the_worker_independently" {
   command = plan
 
   variables {
-    pi_workspace_mode          = "read_only"
-    pi_repository_editing_mode = "enabled"
+    pi_workspace_mode                = "read_only"
+    pi_repository_editing_mode       = "enabled"
+    pi_computer_preview_acknowledged = true
   }
 
   assert {
     condition     = module.control_plane_worker.plain_text_bindings["PI_WORKSPACE_MODE"] == "read_only" && module.control_plane_worker.plain_text_bindings["PI_REPOSITORY_EDITING_MODE"] == "enabled"
     error_message = "Repository editing must not widen the independent scratch workspace mode."
   }
+}
+
+run "computer_preview_acknowledgement_is_required_for_workspace" {
+  command = plan
+
+  variables {
+    pi_workspace_mode = "read_only"
+  }
+
+  expect_failures = [terraform_data.pi_computer_preview_gate]
+}
+
+run "computer_preview_acknowledgement_is_required_for_repository_editing" {
+  command = plan
+
+  variables {
+    pi_repository_editing_mode = "enabled"
+  }
+
+  expect_failures = [terraform_data.pi_computer_preview_gate]
 }
 
 run "workspace_rejects_unknown_modes" {

@@ -9,6 +9,7 @@ import {
 interface FileEntry {
   content?: Uint8Array;
   directory?: true;
+  symbolicLink?: true;
 }
 
 class MemoryStorage {
@@ -35,7 +36,18 @@ function memoryWorkspace(seed: Record<string, string> = {}) {
   }
   const normalize = (path: string) => path.replace(/\/+$/, "") || "/";
   const failures = { nextWrite: false };
+  let revision = 0;
   const fs = {
+    async readFile(path: string) {
+      const entry = files.get(normalize(path));
+      if (!entry?.content) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(entry.content);
+          controller.close();
+        },
+      });
+    },
     async stat(path: string) {
       const entry = files.get(normalize(path));
       if (!entry) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -46,7 +58,7 @@ function memoryWorkspace(seed: Record<string, string> = {}) {
         size: entry.content?.byteLength ?? 0,
         isFile: entry.content !== undefined,
         isDirectory: entry.directory === true,
-        isSymbolicLink: false,
+        isSymbolicLink: entry.symbolicLink === true,
       };
     },
     async lstat(path: string) {
@@ -58,9 +70,23 @@ function memoryWorkspace(seed: Record<string, string> = {}) {
         throw new Error("write failed");
       }
       files.set(normalize(path), { content: new Uint8Array(content) });
+      revision += 1;
     },
-    async mkdir(path: string) {
-      files.set(normalize(path), { directory: true });
+    async mkdir(path: string, options?: { recursive?: boolean }) {
+      const normalized = normalize(path);
+      if (options?.recursive) {
+        let current = "";
+        for (const segment of normalized.split("/").filter(Boolean)) {
+          current += `/${segment}`;
+          if (!files.has(current)) {
+            files.set(current, { directory: true });
+            revision += 1;
+          }
+        }
+        return;
+      }
+      files.set(normalized, { directory: true });
+      revision += 1;
     },
     async rm(path: string, options?: { recursive?: boolean; force?: boolean }) {
       const target = normalize(path);
@@ -68,6 +94,7 @@ function memoryWorkspace(seed: Record<string, string> = {}) {
       for (const candidate of [...files.keys()]) {
         if (candidate === target || (options?.recursive && candidate.startsWith(`${target}/`))) {
           files.delete(candidate);
+          revision += 1;
         }
       }
     },
@@ -90,8 +117,28 @@ function memoryWorkspace(seed: Record<string, string> = {}) {
       const offset = options?.offset ?? 0;
       return direct.slice(offset, offset + (options?.limit ?? direct.length));
     },
+    async find() {
+      return [];
+    },
+    async grep() {
+      return [];
+    },
   };
-  return { workspace: { fs } as unknown as Workspace, files, failures, readdirCalls };
+  const workspace = {
+    fs,
+    db: {
+      scalar(query: string) {
+        if (!query.includes("vfs_meta")) throw new Error(`unexpected query: ${query}`);
+        return revision;
+      },
+    },
+    runtime: { exec: () => undefined },
+    git: { status: () => undefined },
+    assets: { publish: () => undefined },
+    artifacts: { list: () => undefined },
+    mounts: () => new Map(),
+  } as unknown as Workspace;
+  return { workspace, files, failures, readdirCalls, revision: () => revision };
 }
 
 describe("createQuotaWorkspace", () => {
@@ -110,7 +157,8 @@ describe("createQuotaWorkspace", () => {
     ).rejects.toThrow("entry quota");
 
     expect(new TextDecoder().decode(files.get("/workspace/scratch/a.txt")?.content)).toBe("12345");
-    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toEqual({
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
       bytes: 9,
       entries: 2,
       dirty: false,
@@ -127,29 +175,33 @@ describe("createQuotaWorkspace", () => {
 
     await reopened.fs.writeFile("/workspace/scratch/c.txt", new TextEncoder().encode("4567"));
 
-    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toEqual({
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
       bytes: 7,
       entries: 3,
       dirty: false,
     });
   });
 
-  it("counts directories and refuses a create while allowing an overwrite at the entry cap", async () => {
+  it("counts deep-write directories and allows overwrites at the entry cap", async () => {
     const storage = new MemoryStorage();
     const { workspace, files } = memoryWorkspace({ "/workspace/scratch/a.txt": "1" });
-    const bounded = createQuotaWorkspace(workspace, storage, 8, 2);
+    const bounded = createQuotaWorkspace(workspace, storage, 8, 3);
 
     await bounded.fs.mkdir("/workspace/scratch/notes", { recursive: true });
+    await bounded.fs.writeFile("/workspace/scratch/notes/new.txt", new TextEncoder().encode("x"));
     await bounded.fs.writeFile("/workspace/scratch/a.txt", new TextEncoder().encode("12"));
     await expect(
-      bounded.fs.writeFile("/workspace/scratch/notes/new.txt", new TextEncoder().encode("x"))
+      bounded.fs.writeFile("/workspace/scratch/other.txt", new TextEncoder().encode("x"))
     ).rejects.toThrow("entry quota");
 
     expect(files.has("/workspace/scratch/notes")).toBe(true);
-    expect(files.has("/workspace/scratch/notes/new.txt")).toBe(false);
-    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toEqual({
-      bytes: 2,
-      entries: 2,
+    expect(files.has("/workspace/scratch/notes/new.txt")).toBe(true);
+    expect(files.has("/workspace/scratch/other.txt")).toBe(false);
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
+      bytes: 3,
+      entries: 3,
       dirty: false,
     });
   });
@@ -181,7 +233,8 @@ describe("createQuotaWorkspace", () => {
       bounded.fs.writeFile("/workspace/scratch/a.txt", new TextEncoder().encode("x"))
     ).rejects.toThrow("write failed");
 
-    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toEqual({
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
       bytes: 4,
       entries: 2,
       dirty: false,
@@ -198,7 +251,8 @@ describe("createQuotaWorkspace", () => {
 
     await bounded.fs.writeFile("/workspace/scratch/final.txt", new TextEncoder().encode("x"));
 
-    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toEqual({
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
       bytes: 1_002,
       entries: 1_002,
       dirty: false,
@@ -239,7 +293,8 @@ describe("createQuotaWorkspace", () => {
     const bounded = createQuotaWorkspace(workspace, storage, 8);
 
     await bounded.fs.rm("/workspace/scratch/nested", { recursive: true, force: true });
-    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toEqual({
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
       bytes: 4,
       entries: 1,
       dirty: false,
@@ -258,6 +313,120 @@ describe("createQuotaWorkspace", () => {
       await expect(bounded.fs.rm(path, { recursive: true })).rejects.toThrow("workspace root");
     }
     expect(files.has("/workspace/scratch/a.txt")).toBe(true);
+  });
+
+  it("returns a least-authority tool facade without hidden Workspace capabilities", () => {
+    const storage = new MemoryStorage();
+    const { workspace } = memoryWorkspace();
+
+    const bounded = createQuotaWorkspace(workspace, storage);
+
+    expect(Object.keys(bounded)).toEqual(["fs"]);
+    expect("runtime" in bounded).toBe(false);
+    expect("git" in bounded).toBe(false);
+    expect("assets" in bounded).toBe(false);
+    expect("artifacts" in bounded).toBe(false);
+    expect("mounts" in bounded).toBe(false);
+    expect("provider" in bounded).toBe(false);
+    expect("rename" in bounded.fs).toBe(false);
+    expect("symlink" in bounded.fs).toBe(false);
+    expect("chmod" in bounded.fs).toBe(false);
+  });
+
+  it("reconciles a shape-valid clean undercount after an untracked VFS revision", async () => {
+    const storage = new MemoryStorage();
+    const { workspace } = memoryWorkspace({ "/workspace/scratch/a.txt": "1234" });
+    const bounded = createQuotaWorkspace(workspace, storage, 5, 2);
+    await bounded.fs.writeFile("/workspace/scratch/b.txt", new TextEncoder().encode("x"));
+    const clean = await storage.get<Record<string, unknown>>(WORKSPACE_QUOTA_STATE_KEY);
+    storage.values.set(WORKSPACE_QUOTA_STATE_KEY, { ...clean, bytes: 0, entries: 0 });
+    await workspace.fs.writeFile("/workspace/scratch/untracked.txt", new TextEncoder().encode("x"));
+
+    await expect(
+      bounded.fs.writeFile("/workspace/scratch/c.txt", new TextEncoder().encode("x"))
+    ).rejects.toThrow(/quota/);
+  });
+
+  it("fails closed when the workspace or scratch root is a symlink", async () => {
+    const storage = new MemoryStorage();
+    const first = memoryWorkspace();
+    first.files.set("/workspace", { symbolicLink: true });
+    await expect(
+      createQuotaWorkspace(first.workspace, storage).fs.writeFile(
+        "/workspace/scratch/a.txt",
+        new Uint8Array()
+      )
+    ).rejects.toThrow(/real directory/);
+
+    const second = memoryWorkspace();
+    second.files.set("/workspace/scratch", { symbolicLink: true });
+    await expect(
+      createQuotaWorkspace(second.workspace, new MemoryStorage()).fs.writeFile(
+        "/workspace/scratch/a.txt",
+        new Uint8Array()
+      )
+    ).rejects.toThrow(/real directory/);
+  });
+
+  it("does not create deep parents before file and byte quota preflight", async () => {
+    const storage = new MemoryStorage();
+    const { workspace, files } = memoryWorkspace();
+    const bounded = createQuotaWorkspace(workspace, storage, 1, 2);
+
+    await bounded.fs.mkdir("/workspace/scratch/a/b/c", { recursive: true });
+    expect(files.has("/workspace/scratch/a")).toBe(false);
+    await expect(
+      bounded.fs.writeFile("/workspace/scratch/a/b/c/file.txt", new TextEncoder().encode("xx"))
+    ).rejects.toThrow(/quota/);
+    expect([...files.keys()].filter((path) => path.startsWith("/workspace/scratch/a"))).toEqual([]);
+  });
+
+  it("removes newly-created empty parents after a failed deep write", async () => {
+    const storage = new MemoryStorage();
+    const { workspace, files, failures } = memoryWorkspace();
+    const bounded = createQuotaWorkspace(workspace, storage, 10, 10);
+    failures.nextWrite = true;
+
+    await expect(
+      bounded.fs.writeFile("/workspace/scratch/a/b/file.txt", new TextEncoder().encode("x"))
+    ).rejects.toThrow("write failed");
+
+    expect([...files.keys()].filter((path) => path.startsWith("/workspace/scratch/a"))).toEqual([]);
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
+      bytes: 0,
+      entries: 0,
+      dirty: false,
+    });
+  });
+
+  it("cleans reserved empty parents after eviction between mkdir and file write", async () => {
+    const storage = new MemoryStorage();
+    const { workspace, files, revision } = memoryWorkspace();
+    await workspace.fs.mkdir("/workspace/scratch/a/b", { recursive: true });
+    storage.values.set(WORKSPACE_QUOTA_STATE_KEY, {
+      version: 2,
+      bytes: 0,
+      entries: 0,
+      dirty: true,
+      vfsRevision: revision(),
+      pendingWrite: {
+        path: "/workspace/scratch/a/b/file.txt",
+        newParents: ["/workspace/scratch/a", "/workspace/scratch/a/b"],
+      },
+    });
+    const reopened = createQuotaWorkspace(workspace, storage, 10, 10);
+
+    await reopened.fs.writeFile("/workspace/scratch/kept.txt", new TextEncoder().encode("x"));
+
+    expect(files.has("/workspace/scratch/a")).toBe(false);
+    expect(files.has("/workspace/scratch/a/b")).toBe(false);
+    await expect(storage.get(WORKSPACE_QUOTA_STATE_KEY)).resolves.toMatchObject({
+      version: 2,
+      bytes: 1,
+      entries: 1,
+      dirty: false,
+    });
   });
 });
 

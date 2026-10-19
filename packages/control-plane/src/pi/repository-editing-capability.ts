@@ -1,4 +1,3 @@
-import type { Workspace } from "@cloudflare/computer";
 import { createPiTools, type PiToolResult } from "@cloudflare/computer/tools/pi-ai";
 import {
   PI_TOOL_EFFECT_REGISTRY,
@@ -12,7 +11,11 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
-import { COMPUTER_SCRATCH_ROOT, normalizeWorkspaceAbsolutePath } from "./computer-workspace-quota";
+import {
+  COMPUTER_SCRATCH_ROOT,
+  normalizeWorkspaceAbsolutePath,
+  type WorkspaceToolFacade,
+} from "./computer-workspace-quota";
 import type { WorkspaceMutationFifo } from "./computer-workspace-quota";
 import { COMPUTER_WORKSPACE_MUTATION_EFFECTS } from "./computer-workspace-extension";
 import {
@@ -21,6 +24,7 @@ import {
 } from "./computer-workspace-policy";
 import type { PiToolPolicyDelegate } from "./tool-policy-extension";
 import type { PiRepositoryWorkspace, RepositoryMutationName } from "./repository-workspace";
+import { validateWorkspaceToolInput } from "./workspace-input-limits";
 
 const REPOSITORY_ROOT = "/workspace/repos";
 const READ_TOOL_NAMES = ["read", "ls", "find", "grep"] as const;
@@ -32,9 +36,9 @@ const mutationEffects = new Map(
 );
 
 interface RepositoryEditingCapabilityOptions {
-  scratchWorkspace: Workspace;
-  repositoryWorkspace: Workspace;
-  overlay: PiRepositoryWorkspace;
+  scratchWorkspace: WorkspaceToolFacade;
+  repositoryWorkspace: WorkspaceToolFacade;
+  initializeOverlay(signal?: AbortSignal): Promise<PiRepositoryWorkspace>;
   mutations: WorkspaceMutationFifo;
   scratchMode: "off" | "read_only" | "enabled";
   publishDiff(bundle: SessionDiffUpload): Promise<void>;
@@ -103,11 +107,26 @@ export function createRepositoryEditingWorkspaceCapability(
           : { constrainedSampling: tool.constrainedSampling }),
         replay: effect.replay,
         callers: effect.callers,
+        prepareArguments: (args) => validateWorkspaceToolInput(tool.name, args, tool.parameters),
         ...(mutating ? { executionMode: "sequential" as const } : {}),
         async execute(args, api, context): Promise<ToolExecutionResult> {
-          const record = z.record(z.string(), z.unknown()).parse(args);
+          let record: Record<string, unknown>;
+          try {
+            record = validateWorkspaceToolInput(tool.name, args, tool.parameters);
+          } catch (error) {
+            return toolError(error);
+          }
           const repositoryPath = targetsRepository(record);
           const selected = repositoryPath ? repository : scratch;
+          let overlay: PiRepositoryWorkspace | undefined;
+          if (repositoryPath) {
+            try {
+              overlay = await options.initializeOverlay(context.abortSignal);
+            } catch (error) {
+              return toolError(error);
+            }
+          }
+          let dispatched = false;
           const invoke = (): Promise<PiToolResult> => {
             if (context.abortSignal?.aborted) {
               return Promise.resolve({
@@ -121,20 +140,40 @@ export function createRepositoryEditingWorkspaceCapability(
                 isError: true,
               });
             }
+            dispatched = true;
             return selected.execute(
-              { id: api.callId, name: tool.name, arguments: args },
+              { id: api.callId, name: tool.name, arguments: record },
               { abortSignal: context.abortSignal }
             );
           };
           let result: PiToolResult;
+          let repositoryProjection: "published" | "pending" | "failed" | undefined;
           if (mutating && repositoryPath) {
-            result = await options.overlay.runMutation(
+            const outcome = await overlay!.runMutation(
               tool.name as RepositoryMutationName,
               record,
               invoke,
               options.publishDiff,
               options.triggerMessageId
             );
+            result = outcome.value;
+            repositoryProjection = outcome.projection;
+            if (outcome.mutation === "applied" && outcome.projection !== "published") {
+              result = {
+                ...result,
+                content: [
+                  ...result.content,
+                  {
+                    type: "text",
+                    text:
+                      outcome.projection === "pending"
+                        ? "Mutation applied; repository diff projection is pending durable retry."
+                        : "Mutation applied; repository diff projection is not durably queued and requires manual retry.",
+                  },
+                ],
+                details: mergeProjectionDetails(result.details, outcome.projection),
+              };
+            }
           } else if (mutating) {
             if (options.scratchMode !== "enabled") {
               result = {
@@ -146,6 +185,22 @@ export function createRepositoryEditingWorkspaceCapability(
             }
           } else {
             result = await invoke();
+          }
+          if (mutating && dispatched && context.abortSignal?.aborted) {
+            result = {
+              content: [
+                {
+                  type: "text",
+                  text: `Workspace mutation was dispatched when cancellation arrived; outcome is indeterminate, durable state was reconciled${repositoryProjection ? `, and diff projection is ${repositoryProjection}` : ""}.`,
+                },
+              ],
+              isError: true,
+              details: {
+                mutationOutcome: "indeterminate_or_applied",
+                reconciled: true,
+                ...(repositoryProjection ? { projection: repositoryProjection } : {}),
+              },
+            };
           }
           const details = normalizeDetails(result.details);
           return {
@@ -172,6 +227,13 @@ export function createRepositoryEditingWorkspaceCapability(
   };
 }
 
+function toolError(error: unknown): ToolExecutionResult {
+  return {
+    output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+    isError: true,
+  };
+}
+
 function toolEffect(name: string): ToolEffectRegistration | undefined {
   return PI_TOOL_EFFECT_REGISTRY.get(name) ?? mutationEffects.get(name);
 }
@@ -187,9 +249,18 @@ function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): PiToo
   return {
     async beforeTool(call, declaration) {
       if (declaration.effect !== "local_mutation") return;
+      let argumentsValue: Record<string, unknown>;
+      try {
+        argumentsValue = validateWorkspaceToolInput(call.name, call.arguments);
+      } catch (error) {
+        return {
+          block:
+            error instanceof Error ? error.message : "Repository mutation arguments are invalid",
+        };
+      }
       const path =
-        typeof call.arguments.path === "string"
-          ? normalizeWorkspaceAbsolutePath(call.arguments.path)
+        typeof argumentsValue.path === "string"
+          ? normalizeWorkspaceAbsolutePath(argumentsValue.path)
           : null;
       if (path?.startsWith(`${REPOSITORY_ROOT}/`)) {
         return;
@@ -199,9 +270,10 @@ function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): PiToo
     },
     async memoFinalAllow(call, declaration, api, context) {
       if (declaration.effect !== "local_mutation") return;
+      const boundedArguments = validateWorkspaceToolInput(call.name, call.arguments);
       const path =
-        typeof call.arguments.path === "string"
-          ? normalizeWorkspaceAbsolutePath(call.arguments.path)
+        typeof boundedArguments.path === "string"
+          ? normalizeWorkspaceAbsolutePath(boundedArguments.path)
           : null;
       if (!path?.startsWith(`${REPOSITORY_ROOT}/`)) return;
       await api.memo(
@@ -224,7 +296,15 @@ function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): PiToo
           scope: "repository",
           tool: call.name,
           path,
-          outcome: result.isError === true ? "failed" : "succeeded",
+          outcome:
+            typeof result.details === "object" &&
+            result.details !== null &&
+            "mutationOutcome" in result.details &&
+            result.details.mutationOutcome === "indeterminate_or_applied"
+              ? "indeterminate_or_applied"
+              : result.isError === true
+                ? "failed"
+                : "succeeded",
         },
         context
       );
@@ -262,4 +342,15 @@ function normalizeDetails(value: unknown) {
   if (value === undefined) return undefined;
   const serialized = JSON.stringify(value);
   return serialized === undefined ? undefined : z.json().parse(JSON.parse(serialized));
+}
+
+function mergeProjectionDetails(
+  value: unknown,
+  projection: "pending" | "failed"
+): Record<string, unknown> {
+  return {
+    ...(typeof value === "object" && value !== null && !Array.isArray(value) ? value : {}),
+    mutationApplied: true,
+    projection,
+  };
 }
