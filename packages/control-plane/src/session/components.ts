@@ -807,7 +807,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionCoreRepository,
     piControlRepository,
     env.PI_SESSION,
-    log
+    log,
+    (input) => messageQueue.recordPiControlMessage(input)
   );
   const visiblePiTokens = new Set<string>();
   const piEventHandler = new PiEventHandler(

@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
-import { initSession, queryDO } from "./helpers";
+import { collectMessages, initSession, openClientWs, queryDO } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
@@ -714,6 +714,8 @@ describe("PiSessionDO", () => {
       },
     });
     expect(JSON.stringify(agents)).not.toContain("private sentinel prompt");
+    expect(JSON.stringify(agents)).not.toContain("controlled answer");
+    expect(JSON.stringify(agents)).not.toContain("lastMessage");
     const lastMessage = await controlPi(stub, {
       sessionId: sessionName,
       requestId: "last-message-1",
@@ -765,7 +767,7 @@ describe("PiSessionDO", () => {
     });
   });
 
-  it("reconciles native control completion and cost without a SessionDO transcript", async () => {
+  it("projects a human control once into SessionDO while keeping Pi assistant state subordinate", async () => {
     const { sessionName, stub } = await initializedPiStub("pi-control-completion");
     await stub.status(sessionName);
     await runInPiSessionDO(stub, async (instance) => {
@@ -799,7 +801,7 @@ describe("PiSessionDO", () => {
           control: {
             sessionId: sessionName,
             requestId: "native-submit-1",
-            action: "submit",
+            action: "send",
             content: "native input",
           },
         }),
@@ -816,13 +818,120 @@ describe("PiSessionDO", () => {
       ).resolves.toEqual([{ state: "completed" }]);
     });
     await expect(
-      queryDO(sessionStub, "SELECT id FROM messages WHERE id = ?", "native-submit-1")
-    ).resolves.toEqual([]);
+      queryDO<{ id: string; author_id: string; content: string; status: string }>(
+        sessionStub,
+        "SELECT id, author_id, content, status FROM messages WHERE id = ?",
+        "pi-control:native-submit-1"
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "pi-control:native-submit-1",
+        content: "native input",
+        status: "completed",
+      }),
+    ]);
+    const timelineEvents = await queryDO<{ data: string }>(
+      sessionStub,
+      "SELECT data FROM events WHERE id = ?",
+      "user_message:pi-control:native-submit-1"
+    );
+    expect(timelineEvents).toHaveLength(1);
+    expect(JSON.parse(timelineEvents[0]!.data)).toMatchObject({
+      type: "user_message",
+      content: "native input",
+      piControl: { action: "send" },
+    });
+    expect(timelineEvents[0]!.data).not.toContain("native answer");
+    expect(
+      (
+        await sessionStub.fetch(
+          new Request(`http://session${SessionInternalPaths.piControl}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              actorId: "user-1",
+              source: "web",
+              control: {
+                sessionId: sessionName,
+                requestId: "native-submit-1",
+                action: "send",
+                content: "native input",
+              },
+            }),
+          })
+        )
+      ).status
+    ).toBe(200);
+    await expect(
+      queryDO<{ count: number }>(
+        sessionStub,
+        "SELECT COUNT(*) AS count FROM events WHERE id = ?",
+        "user_message:pi-control:native-submit-1"
+      )
+    ).resolves.toEqual([{ count: 1 }]);
     const [{ total_cost: totalCost }] = await queryDO<{ total_cost: number }>(
       sessionStub,
       "SELECT total_cost FROM session"
     );
     expect(totalCost).toBeGreaterThan(0);
+  });
+
+  it("broadcasts one attributed Pi control event to multiple existing session collaborators", async () => {
+    const { sessionName } = await initializedPiStub("pi-control-multiplayer");
+    const first = await openClientWs(sessionName, {
+      subscribe: true,
+      userId: "user-1",
+      canonicalUserId: "user-1",
+    });
+    const second = await openClientWs(sessionName, {
+      subscribe: true,
+      userId: "user-2",
+      canonicalUserId: "user-2",
+    });
+    const isControlEvent = (message: Record<string, unknown>) => {
+      const event = message.event as Record<string, unknown> | undefined;
+      return (
+        message.type === "sandbox_event" &&
+        event?.type === "user_message" &&
+        event.messageId === "pi-control:multiplayer-reset"
+      );
+    };
+    const firstEvents = collectMessages(first.ws, { until: isControlEvent });
+    const secondEvents = collectMessages(second.ws, { until: isControlEvent });
+    const sessionStub = env.SESSION.getByName(sessionName);
+    const response = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.piControl}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: "service-user-3",
+          canonicalUserId: "canonical-user-3",
+          source: "web",
+          control: {
+            sessionId: sessionName,
+            requestId: "multiplayer-reset",
+            action: "reset",
+          },
+        }),
+      })
+    );
+    expect(response.status).toBe(200);
+    const [firstFrames, secondFrames] = await Promise.all([firstEvents, secondEvents]);
+    for (const frames of [firstFrames, secondFrames]) {
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          type: "sandbox_event",
+          event: expect.objectContaining({
+            type: "user_message",
+            content: "Reset a Pi agent conversation.",
+            author: expect.objectContaining({ userId: "canonical-user-3" }),
+            piControl: { action: "reset" },
+          }),
+        })
+      );
+    }
+    expect(first.ws.readyState).toBe(WebSocket.OPEN);
+    expect(second.ws.readyState).toBe(WebSocket.OPEN);
   });
 
   it("keeps active A and explicit steer/follow-up controls attributed to one conversation", async () => {

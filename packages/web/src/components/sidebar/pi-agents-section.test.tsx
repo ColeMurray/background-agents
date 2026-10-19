@@ -27,7 +27,7 @@ vi.mock("@/hooks/use-pi-agents", () => ({
           usage: { input: 10, output: 4, cacheRead: 0, cacheWrite: 0, total: 14 },
           costUsd: 0.01,
         },
-        lastMessage: { entryId: 3, text: "Working through the failing test." },
+        lastEntryId: 3,
       },
     ],
     error: null,

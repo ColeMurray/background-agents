@@ -41,6 +41,8 @@ export interface RecordedMessageCompletion {
   status: "completed" | "failed";
 }
 
+export type ControlMessageAdmission = "created" | "duplicate" | "conflict";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -379,6 +381,44 @@ export class MessageRepository {
       data.status,
       data.createdAt
     );
+  }
+
+  /** Persist one authorized Pi control as a completed canonical user message and timeline event. */
+  recordCompletedControlMessage(
+    data: Omit<CreateMessageData, "status"> & { requestFingerprint: string },
+    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
+  ): ControlMessageAdmission {
+    return this.transactionSync(() => {
+      const existing =
+        this.getMessageById(data.id) ??
+        (data.clientRequestId ? this.getMessageByClientRequestId(data.clientRequestId) : null);
+      if (existing) {
+        return existing.id === data.id &&
+          existing.author_id === data.authorId &&
+          existing.content === data.content &&
+          existing.source === data.source &&
+          existing.status === "completed" &&
+          existing.client_request_id === (data.clientRequestId ?? null) &&
+          existing.request_fingerprint === data.requestFingerprint
+          ? "duplicate"
+          : "conflict";
+      }
+      this.createMessage({ ...data, status: "completed" });
+      this.sql.exec(
+        `UPDATE messages SET started_at = ?, completed_at = ? WHERE id = ?`,
+        data.createdAt,
+        data.createdAt,
+        data.id
+      );
+      this.eventRepository.createEvent({
+        id: `user_message:${data.id}`,
+        type: "user_message",
+        data: JSON.stringify(userMessageEvent),
+        messageId: data.id,
+        createdAt: data.createdAt,
+      });
+      return "created";
+    });
   }
 
   /** Persist a message, its attachments, and canonical timeline event atomically. */

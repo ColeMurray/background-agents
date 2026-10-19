@@ -11,9 +11,13 @@ local evidence. Live credentials, provider calls, pushes, and deployments are ex
 
 ## Authority and non-regression invariants
 
-1. Pi Durable exclusively owns transcripts, inbox ordering, tasks, conversations, and compaction.
-2. SessionDO exclusively owns authentication/RBAC, the Open-Inspect message queue, budgets,
-   callbacks, approvals, audit, and external-effect ledgers.
+1. SessionDO exclusively owns the Open-Inspect product session: participants, presence, typing/read
+   state, author identity, canonical human messages and shared timeline ordering, WebSocket
+   snapshots/events, visibility/team/collaborators, budgets, callbacks, approvals, audit,
+   archive/delete/export, and external-effect ledgers.
+2. Pi Durable owns only subordinate model execution state: its model-facing transcript, inbox,
+   conversations, tasks, compaction, journals, and usage. Pi conversation/task IDs are opaque within
+   the owning SessionDO and never define a separate product room or transcript.
 3. D1 exclusively owns long-lived credentials, grants, OAuth authority, and cross-session receipts.
 4. Browsers, bots, and public routes reach Pi only through SessionDO. `PiSessionDO` has no public
    route and receives no D1 binding.
@@ -47,8 +51,13 @@ MCP transport/OAuth documentation. Newer upstream APIs are not assumed to exist 
 Official references reviewed on 2026-10-19:
 
 - Cloudflare Agents [Pi harness](https://developers.cloudflare.com/agents/harnesses/pi),
-  [extensions](https://developers.cloudflare.com/agents/harnesses/pi/extensions), and
+  [extensions](https://developers.cloudflare.com/agents/harnesses/pi/extensions),
+  [Browser](https://developers.cloudflare.com/agents/tools/browser/), and
   [MCP OAuth](https://developers.cloudflare.com/agents/guides/oauth-mcp-client).
+- Cloudflare Browser Run [overview](https://developers.cloudflare.com/browser-run/),
+  [limits](https://developers.cloudflare.com/browser-run/limits/), and
+  [Kitesurf](https://developers.cloudflare.com/browser-run/kitesurf/). Browser capability is not
+  implemented in this repository.
 - Cloudflare Workers [observability](https://developers.cloudflare.com/workers/observability),
   [versions and deployments](https://developers.cloudflare.com/workers/versions-and-deployments),
   and
@@ -93,9 +102,19 @@ an immutable operation-local outbox back through the binding-only `/internal/pi/
 persists/broadcasts normalized events, usage, budget decisions, callbacks, and terminal state. Pi
 creation and ordinary prompting create no sandbox row.
 
+Explicit human Pi controls also terminate at SessionDO. SessionDO records one completed canonical
+message and ordinary `user_message` event with the verified participant before dispatching the
+idempotent Pi receipt. Pi internal assistant text is not a BFF/timeline source; public child views
+contain opaque conversation ancestry, status, tasks, usage, cost, and fork entry IDs only.
+
 Repository reads enter `open-inspect` tools, call the SessionDO capability bridge for fresh scope,
 and read immutable provider blobs. Writable repository overlays and Computer VFS are capability
 gated and default off. Code Mode is a private auxiliary Worker and default off.
+
+`/workspace/scratch` and `/workspace/repos/N` are paths in one credential-free Computer VFS scoped
+to PiSessionDO. They are not Open-Inspect workspace/team concepts. There is no browser VFS route or
+cross-session path. See `MULTIPLAYER-COMPATIBILITY-AUDIT.md` for capability placement, current
+Browser/Kitesurf research, and the only authorized future cross-session route.
 
 ### Bots and automations
 
@@ -253,6 +272,20 @@ SLOs for the personal Pi canary:
       on deployment capabilities and signed actor/session authority, and leaves all other text
       queued.
 
+### Multiplayer compatibility gate before Slice 5
+
+- [x] Audit `d484e480..a1e4bd95` against the existing Open-Inspect session contract; record the
+      capability map and future cross-session path in `MULTIPLAYER-COMPATIBILITY-AUDIT.md`.
+- [x] Remove Pi assistant text from public/BFF child inspection. Public child state is opaque
+      metadata only; `get_last_message` remains root-agent-only through SessionDO.
+- [x] Project every authorized human Pi control exactly once as an attributed completed SessionDO
+      message and ordinary shared `user_message` event. Receipts remain metadata/idempotency only.
+- [x] Prove two connected collaborators receive the same sequenced control event, stale receipt IDs
+      cannot re-execute, and existing visibility, participant, read-state, merge, export, callback,
+      bot, automation, and non-Pi paths remain unchanged.
+- [x] Confirm Computer is one credential-free session VFS, browser capability is absent/default-off,
+      and Code Mode/execution/MCP/external actions remain behind SessionDO and existing boundaries.
+
 ### Slice 5 — Code Mode production safety
 
 - [ ] Replace call identity with authoritative `taskId`/`parentTaskId`; enforce truthful policy.
@@ -314,18 +347,19 @@ SLOs for the personal Pi canary:
 
 ## Evidence ledger
 
-| Slice | Commit      | Reachable-flow evidence                                                                                                                                                                                  | Test/canary evidence                                                                                                                                                      | Remaining live-only gate                                        |
-| ----- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| 0     | `d484e480`  | Existing sandbox dispatch is unchanged; Pi queue still never asks for a socket or spawn; Slack still verifies signature/schema and keeps its current ACK path                                            | control-plane 5,111/1 skipped; Slack 638; focused 154; control-plane typecheck/lint/build; Slack lint/build; Prettier/diff check                                          | none                                                            |
-| 1     | pending     | Server capability authority now drives web/Slack; Pi opens bootstrap context only; repository pin, provider reads, and Computer are first-tool lazy                                                      | shared 1,303; control-plane 5,115/1 skipped; focused workerd 51; Slack 638; web 2,532/2,533 plus isolated timeout pass; affected typecheck/lint                           | capability reachability in deployed account                     |
-| 2     | pending     | pending                                                                                                                                                                                                  | pending                                                                                                                                                                   | personal provider credential/browser canary                     |
-| 3A    | `d888b169`  | D1 0092 and Slack-only internal routes own bounded ingress admission, leases, stable IDs, staged CAS, reconciliation, and retention; Slack ACK is unchanged                                              | shared 1,303; control-plane 5,115/1 skipped; focused unit 163; workerd store/user merge 17; SQL portability green                                                         | none; Queue wiring belongs to 3B                                |
-| 3B    | `0f554777`  | Feature-gated D1 admit and Queue persistence precede ACK; fast path and Queue share one claim; old KV path is unchanged while off                                                                        | Slack 645; focused workerd 3; control-plane policy 151; Terraform 95 total including 2 ingress plans; build/type/lint/format/SQL green                                    | real Slack retry/latency canary                                 |
-| 3C    | this commit | Stable receipt IDs now own idempotent D1/SessionDO creation, first-message admission, staged mapping, KV repair, and queued Pi follow-ups                                                                | shared 1,305; control-plane 5,115/1 skipped; workerd ingress/session/user-merge 18; Slack 647; web 8; docs 44/build 185; Terraform 95; build/type/lint/format/SQL green   | real Slack SLO/redelivery canary                                |
-| 4A    | this commit | SessionDO migration 64 and RBAC-separated routes own idempotent native controls; Pi Durable owns conversations, submissions, tasks, reset/fork/compaction and one event router                           | shared 1,305; control-plane 5,126/1 skipped; workerd 2,470/1 skipped; Slack 647; focused authority, callback, attribution, eviction, redaction, cost, and bounds coverage | real model native-control canary                                |
-| 4B    | this commit | Root-only tools and signed web/Slack actors traverse SessionDO receipts into same-session Pi conversations; child/fork capability subsets prevent recursive messaging and ordinary prompts remain queued | shared 1,305; control-plane 5,129/1 skipped; workerd 2,470/1 skipped plus current Pi 54; web 2,539; Slack 655; docs 44/build 185; type/lint/build/format/SQL green        | authenticated browser and real-model multi-agent/Slack canaries |
-| 5     | pending     | pending                                                                                                                                                                                                  | pending                                                                                                                                                                   | paid Cloudflare deployment/version canary                       |
-| 6     | pending     | pending                                                                                                                                                                                                  | pending                                                                                                                                                                   | provider execution canaries                                     |
-| 7     | pending     | pending                                                                                                                                                                                                  | pending                                                                                                                                                                   | provider comment/reply canaries                                 |
-| 8     | pending     | pending                                                                                                                                                                                                  | pending                                                                                                                                                                   | approved MCP OAuth server canary                                |
-| 9     | pending     | pending                                                                                                                                                                                                  | pending                                                                                                                                                                   | 10-minute deployed soak                                         |
+| Slice         | Commit      | Reachable-flow evidence                                                                                                                                                                                                     | Test/canary evidence                                                                                                                                                      | Remaining live-only gate                                             |
+| ------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 0             | `d484e480`  | Existing sandbox dispatch is unchanged; Pi queue still never asks for a socket or spawn; Slack still verifies signature/schema and keeps its current ACK path                                                               | control-plane 5,111/1 skipped; Slack 638; focused 154; control-plane typecheck/lint/build; Slack lint/build; Prettier/diff check                                          | none                                                                 |
+| 1             | pending     | Server capability authority now drives web/Slack; Pi opens bootstrap context only; repository pin, provider reads, and Computer are first-tool lazy                                                                         | shared 1,303; control-plane 5,115/1 skipped; focused workerd 51; Slack 638; web 2,532/2,533 plus isolated timeout pass; affected typecheck/lint                           | capability reachability in deployed account                          |
+| 2             | pending     | pending                                                                                                                                                                                                                     | pending                                                                                                                                                                   | personal provider credential/browser canary                          |
+| 3A            | `d888b169`  | D1 0092 and Slack-only internal routes own bounded ingress admission, leases, stable IDs, staged CAS, reconciliation, and retention; Slack ACK is unchanged                                                                 | shared 1,303; control-plane 5,115/1 skipped; focused unit 163; workerd store/user merge 17; SQL portability green                                                         | none; Queue wiring belongs to 3B                                     |
+| 3B            | `0f554777`  | Feature-gated D1 admit and Queue persistence precede ACK; fast path and Queue share one claim; old KV path is unchanged while off                                                                                           | Slack 645; focused workerd 3; control-plane policy 151; Terraform 95 total including 2 ingress plans; build/type/lint/format/SQL green                                    | real Slack retry/latency canary                                      |
+| 3C            | this commit | Stable receipt IDs now own idempotent D1/SessionDO creation, first-message admission, staged mapping, KV repair, and queued Pi follow-ups                                                                                   | shared 1,305; control-plane 5,115/1 skipped; workerd ingress/session/user-merge 18; Slack 647; web 8; docs 44/build 185; Terraform 95; build/type/lint/format/SQL green   | real Slack SLO/redelivery canary                                     |
+| 4A            | this commit | SessionDO migration 64 and RBAC-separated routes own idempotent native controls; Pi Durable owns conversations, submissions, tasks, reset/fork/compaction and one event router                                              | shared 1,305; control-plane 5,126/1 skipped; workerd 2,470/1 skipped; Slack 647; focused authority, callback, attribution, eviction, redaction, cost, and bounds coverage | real model native-control canary                                     |
+| 4B            | this commit | Root-only tools and signed web/Slack actors traverse SessionDO receipts into same-session Pi conversations; child/fork capability subsets prevent recursive messaging and ordinary prompts remain queued                    | shared 1,305; control-plane 5,129/1 skipped; workerd 2,470/1 skipped plus current Pi 54; web 2,539; Slack 655; docs 44/build 185; type/lint/build/format/SQL green        | authenticated browser and real-model multi-agent/Slack canaries      |
+| compatibility | this commit | SessionDO again owns the only public participant/message/timeline contract; human controls project once with canonical actor identity; Pi inspection is metadata-only and all future capability paths stay behind SessionDO | shared 1,306; control-plane 5,135/1 skipped; workerd 2,471/1 skipped; web 2,540; Slack 655; GitHub 335; Linear 317; docs 44/build 185; type/lint/build/format green       | authenticated browser remains unavailable locally; no Slice 5 canary |
+| 5             | pending     | pending                                                                                                                                                                                                                     | pending                                                                                                                                                                   | paid Cloudflare deployment/version canary                            |
+| 6             | pending     | pending                                                                                                                                                                                                                     | pending                                                                                                                                                                   | provider execution canaries                                          |
+| 7             | pending     | pending                                                                                                                                                                                                                     | pending                                                                                                                                                                   | provider comment/reply canaries                                      |
+| 8             | pending     | pending                                                                                                                                                                                                                     | pending                                                                                                                                                                   | approved MCP OAuth server canary                                     |
+| 9             | pending     | pending                                                                                                                                                                                                                     | pending                                                                                                                                                                   | 10-minute deployed soak                                              |

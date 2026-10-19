@@ -519,6 +519,11 @@ function UserMessageEvent({
             <img src={avatar} alt={authorName} className="w-5 h-5 rounded-full" />
           )}
           <span className="text-xs text-accent">{authorName}</span>
+          {event.piControl && (
+            <span className="rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              Pi {formatPiControlAction(event.piControl.action)}
+            </span>
+          )}
         </div>
       }
       time={formatEventTime(event)}
@@ -578,6 +583,17 @@ function UserMessageEvent({
       )}
     </MessageFrame>
   );
+}
+
+function formatPiControlAction(action: NonNullable<UserMessageEventData["piControl"]>["action"]) {
+  switch (action) {
+    case "follow_up":
+      return "follow-up";
+    case "cancel_exact":
+      return "cancel";
+    default:
+      return action;
+  }
 }
 
 function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererProps) {

@@ -61,6 +61,20 @@ function toolCall(callId: string, tool: string, filePath: string): SandboxEvent 
 }
 
 describe("user message authors", () => {
+  it("labels explicit Pi controls inside the canonical session timeline", () => {
+    render(
+      <EventItem
+        event={{ ...event("user-2"), piControl: { action: "steer", conversationId: 2 } }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+    expect(screen.getByText("Pi steer")).toBeInTheDocument();
+    expect(screen.getByText("hello")).toBeInTheDocument();
+  });
+
   it("uses the canonical profile name and avatar when available", () => {
     render(
       <EventItem

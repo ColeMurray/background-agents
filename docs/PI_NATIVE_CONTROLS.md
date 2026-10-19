@@ -3,8 +3,8 @@
 Pi native controls are routed through the authenticated control plane and owning `SessionDO`. No
 browser, bot, or public route calls `PiSessionDO` directly.
 
-Read access exposes bounded conversation summaries, a sanitized live inspection, and the task graph.
-Collaborators may submit, send, explicitly steer or follow up, fork one level, and request manual
+Read access exposes bounded conversation metadata, a sanitized live inspection, and the task graph.
+Collaborators may send, explicitly steer or follow up, fork one level, and request manual
 compaction. Lifecycle-authorized users may cancel an exact submission/task or reset/handoff a
 conversation. Ordinary web and Slack prompts continue through the existing SessionDO queue and never
 implicitly steer.
@@ -12,9 +12,11 @@ implicitly steer.
 Every mutation requires a stable request ID. SessionDO migration 64 stores the action, actor,
 source, request fingerprint, target IDs, state, bounded result, and terminal timestamp. A repeated
 request returns its receipt; reusing its ID for a different payload is rejected. A mutation whose
-RPC response is lost becomes `indeterminate` and is never blindly replayed. Completion reconciles
-cost and terminal state without copying Pi's transcript into SessionDO. Rollback keeps migration 64,
-the `PI_SESSION` binding, and control status/cancellation readers.
+RPC response is lost becomes `indeterminate` and is never blindly replayed. Each authorized human
+control is also projected once as an attributed, completed SessionDO user message and shared
+timeline event. Pi's internal assistant transcript remains subordinate and is not copied into
+SessionDO. Completion reconciles cost and terminal receipt state. Rollback keeps migration 64, the
+`PI_SESSION` binding, and control status/cancellation readers.
 
 Limits: 20,000 input characters, 4,000 compaction-instruction characters, 32 conversations, one fork
 level, four active tasks/subagents, a ten-minute subagent deadline, 200 inspected
@@ -33,10 +35,11 @@ delegation and agent-messaging tools, so delegation remains depth one. The four-
 timeout, budget, and cancellation bounds apply to tool calls and human controls alike. Each
 conversation accepts at most 16 pending native messages.
 
-The session inspector's Tasks tab lists Pi conversations, active/queued work, bounded visible last
-messages, token usage, and cost. Collaborators can explicitly send, follow up, steer, fork, or
-compact. Lifecycle-authorized users can reset, hand off, and cancel exact tasks. Confirmation
-dialogs protect context-changing actions. The ordinary composer still queues a new turn.
+The session inspector's Tasks tab lists opaque Pi conversations, active/queued work, token usage,
+and cost. It does not render Pi's internal transcript. Collaborators can explicitly send, follow up,
+steer, fork, or compact. Lifecycle-authorized users can reset, hand off, and cancel exact tasks.
+Confirmation dialogs protect context-changing actions. The ordinary composer still queues a new
+turn, and every explicit human control appears in the existing shared timeline.
 
 In an existing Pi Slack thread, two exact text commands opt into immediate control:
 

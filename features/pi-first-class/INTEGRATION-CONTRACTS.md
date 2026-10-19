@@ -4,6 +4,16 @@ These contracts are coordination points for the parallel first-class Pi feature 
 validate declarations, latch capability admission, and enforce the composite caller policy. They do
 not execute a feature tool effect, apply a migration, or independently enable a feature.
 
+## Product-session boundary
+
+SessionDO remains the canonical Open-Inspect multiplayer session for every harness. It owns
+participants, presence, typing/read state, canonical human messages and timeline ordering,
+WebSockets, visibility/team/collaborators, budgets, callbacks, audit, lifecycle, and export. Pi's
+transcript, inbox, conversations, tasks, compaction, and journals are subordinate execution state.
+No Pi extension may create a parallel room, participant system, read state, visibility model, or
+public transcript API. Human Pi controls must first create one attributed SessionDO timeline
+projection; internal agent controls must remain bound to the canonical source operation.
+
 ## Tool effects
 
 Import `@open-inspect/shared/pi-tool-effects`. Every feature tool must declare a unique name, one of
@@ -85,13 +95,14 @@ Contribute one extension to the assigned slot and let `PiSessionDO` install the 
 1. `policy`
 2. `core`
 3. `delegation`
-4. `skills`
-5. `workspace`
-6. `repository_editing`
-7. `code_mode`
-8. `sandbox_execution`
-9. `external_actions`
-10. `mcp`
+4. `agent_messaging`
+5. `skills`
+6. `workspace`
+7. `repository_editing`
+8. `code_mode`
+9. `sandbox_execution`
+10. `external_actions`
+11. `mcp`
 
 The assembler rejects duplicate slots and duplicate extension names. Feature branches must not add
 independent `registry.install(...)` calls.

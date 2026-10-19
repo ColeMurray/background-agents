@@ -1307,6 +1307,26 @@ describe("boundary schemas", () => {
       expect(current.success).toBe(true);
     });
 
+    it("accepts bounded Pi control metadata without admitting internal transcript fields", () => {
+      const parsed = sandboxEventSchema.parse({
+        type: "user_message",
+        content: "Focus on tests",
+        messageId: "pi-control:request-1",
+        timestamp: 1,
+        author: { participantId: "participant-1", userId: "user-1", name: "Ada" },
+        piControl: { action: "steer", conversationId: 2 },
+        prompt: "hidden prompt",
+        credential: "secret",
+      });
+      expect(parsed).toMatchObject({
+        type: "user_message",
+        content: "Focus on tests",
+        piControl: { action: "steer", conversationId: 2 },
+      });
+      expect(parsed).not.toHaveProperty("prompt");
+      expect(parsed).not.toHaveProperty("credential");
+    });
+
     it("accepts both structured and legacy Autofix origins", () => {
       const baseEvent = {
         type: "user_message",

@@ -946,7 +946,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             queued,
             tasks,
             usage,
-            lastMessage: lastAgentMessage({ items: view.value.entries }, 256),
+            lastEntryId: latestAssistantEntryId(view.value.entries),
           };
         } finally {
           view.dispose();
@@ -2118,6 +2118,21 @@ function lastAgentMessage(
     }
   }
   return null;
+}
+
+function latestAssistantEntryId(entries: readonly EntryRecord[]): number | null {
+  let latest: number | null = null;
+  for (const entry of entries) {
+    const hasAssistantText = entry.model?.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.content.some((part) => part.type === "text" && part.text.length > 0)
+    );
+    if (!hasAssistantText) continue;
+    const id = Number(entry.id);
+    if (latest === null || id > latest) latest = id;
+  }
+  return latest;
 }
 
 function nativeControlSubmissionRequestId(requestId: string): string {

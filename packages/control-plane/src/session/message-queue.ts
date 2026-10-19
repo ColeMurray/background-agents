@@ -52,7 +52,7 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
-import type { PiRuntimeDispatch, PiRuntimeReceipt } from "../pi/runtime-contract";
+import type { PiHumanControl, PiRuntimeDispatch, PiRuntimeReceipt } from "../pi/runtime-contract";
 import type { PiOperationRepository } from "./pi-operation-repository";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
@@ -147,6 +147,25 @@ function isAuthoritativePiAbort(status: Awaited<ReturnType<PiRuntimeDispatch["lo
     status.result.status === "unanswered" &&
     (status.result.reason === "aborted" || status.result.reason === "withdrawn")
   );
+}
+
+function piControlTimelineContent(control: PiHumanControl): string {
+  switch (control.action) {
+    case "send":
+    case "follow_up":
+    case "steer":
+      return control.content;
+    case "handoff":
+      return control.handoff;
+    case "cancel_exact":
+      return "Requested Pi agent cancellation.";
+    case "fork":
+      return "Forked a Pi agent conversation.";
+    case "reset":
+      return "Reset a Pi agent conversation.";
+    case "compact":
+      return "Requested Pi conversation compaction.";
+  }
 }
 
 function completionBarrier(): { promise: Promise<void>; resolve(): void } {
@@ -405,6 +424,61 @@ export class SessionMessageQueue {
     });
 
     await this.processMessageQueue();
+  }
+
+  /** Project an authorized human Pi control into the canonical SessionDO message timeline. */
+  recordPiControlMessage(input: {
+    actorId: string;
+    canonicalUserId?: string | null;
+    source: "web" | "slack";
+    requestId: string;
+    requestFingerprint: string;
+    control: PiHumanControl;
+  }): { messageId: string; deduplicated: boolean; conflict: boolean } {
+    this.assertPromptableSession();
+    this.assertBudgetAvailable();
+    let participant = this.participantService.getByUserId(input.actorId);
+    participant ??= this.participantService.create(
+      input.actorId,
+      input.actorId,
+      input.canonicalUserId ?? undefined
+    );
+    const now = Date.now();
+    const messageId = `pi-control:${input.requestId}`;
+    const content = piControlTimelineContent(input.control);
+    const event = {
+      ...this.createUserMessageEvent(participant, content, messageId, now),
+      piControl: {
+        action: input.control.action,
+        ...(input.control.conversationId === undefined
+          ? {}
+          : { conversationId: input.control.conversationId }),
+        ...(input.control.action === "cancel_exact" && input.control.taskId !== undefined
+          ? { taskId: input.control.taskId }
+          : {}),
+      },
+    } satisfies Extract<SandboxEvent, { type: "user_message" }>;
+    const admission = this.messageRepository.recordCompletedControlMessage(
+      {
+        id: messageId,
+        authorId: participant.id,
+        content,
+        source: input.source,
+        clientRequestId: messageId,
+        requestFingerprint: input.requestFingerprint,
+        createdAt: now,
+      },
+      event
+    );
+    if (admission === "created") {
+      this.messenger.broadcast({ type: "sandbox_event", event });
+      this.touchSessionActivity();
+    }
+    return {
+      messageId,
+      deduplicated: admission === "duplicate",
+      conflict: admission === "conflict",
+    };
   }
 
   async cancelQueuedPrompt(

@@ -754,6 +754,62 @@ describe("MessageRepository", () => {
     }
   });
 
+  it("records a Pi control once as a completed canonical message and user event", () => {
+    const db = new DatabaseSync(":memory:");
+    const storage = createNodeSqlStorage(db);
+    try {
+      initSchema(storage.sql);
+      storage.sql.exec(
+        "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user-1', 'owner', 1)"
+      );
+      const events = new EventRepository(storage.sql, storage.transactionSync);
+      const realRepository = new MessageRepository(
+        storage.sql,
+        storage.transactionSync,
+        new SessionAttachmentRepository(storage.sql),
+        events
+      );
+      const message = {
+        id: "pi-control:request-1",
+        authorId: "author",
+        content: "Focus on tests",
+        source: "web" as const,
+        clientRequestId: "pi-control:request-1",
+        requestFingerprint: "a".repeat(64),
+        createdAt: 100,
+      };
+      const event = {
+        type: "user_message" as const,
+        content: message.content,
+        messageId: message.id,
+        timestamp: 0.1,
+        author: { participantId: "author", userId: "user-1", name: "User" },
+        piControl: { action: "steer" as const, conversationId: 1 },
+      };
+
+      expect(realRepository.recordCompletedControlMessage(message, event)).toBe("created");
+      expect(realRepository.recordCompletedControlMessage(message, event)).toBe("duplicate");
+      expect(
+        realRepository.recordCompletedControlMessage(
+          { ...message, content: "Different", requestFingerprint: "b".repeat(64) },
+          { ...event, content: "Different" }
+        )
+      ).toBe("conflict");
+      expect(realRepository.getMessageById(message.id)).toMatchObject({
+        author_id: "author",
+        content: "Focus on tests",
+        status: "completed",
+        started_at: 100,
+        completed_at: 100,
+      });
+      expect(events.listEventPage({ limit: 10 }).events).toEqual([
+        expect.objectContaining({ id: `user_message:${message.id}`, message_id: message.id }),
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("selects the latest terminal message", () => {
     repository.getLatestTerminalMessage();
     expect(mock.calls[0].query).toContain("status IN ('completed', 'failed')");

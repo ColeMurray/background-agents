@@ -30,6 +30,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
   const addSessionCost = vi.fn(() => 0.25);
   const setSessionBudget = vi.fn();
   const receipts = new PiControlRepository(storage.sql);
+  const recordHumanControl = vi.fn();
   const handler = new PiControlHandler(
     {
       getSession: () => session,
@@ -39,9 +40,10 @@ function fixture(overrides: Record<string, unknown> = {}) {
     } as never,
     receipts,
     runtime,
-    { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never
+    { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
+    recordHumanControl
   );
-  return { handler, runtime, receipts, addSessionCost, setSessionBudget };
+  return { handler, runtime, receipts, addSessionCost, setSessionBudget, recordHumanControl };
 }
 function request(requestId = "request-1") {
   return new Request("http://session/internal/pi-control", {
@@ -49,6 +51,7 @@ function request(requestId = "request-1") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       actorId: "user-1",
+      canonicalUserId: "canonical-user-1",
       source: "web",
       control: { sessionId: "session-1", requestId, action: "steer", content: "focus" },
     }),
@@ -80,6 +83,7 @@ describe("PiControlHandler", () => {
       method: "POST",
       body: JSON.stringify({
         actorId: "user-1",
+        canonicalUserId: "canonical-user-1",
         source: "web",
         control: { sessionId: "other", requestId: "request-1", action: "steer", content: "x" },
       }),
@@ -118,5 +122,71 @@ describe("PiControlHandler", () => {
     expect(h.addSessionCost).toHaveBeenCalledOnce();
     expect(h.setSessionBudget).toHaveBeenCalledExactlyOnceWith(0.2, true, expect.any(Number));
     expect(h.receipts.get("request-1")?.state).toBe("completed");
+  });
+  it("projects human controls with verified actor metadata but not internal Pi controls", async () => {
+    const human = fixture();
+    expect((await human.handler.handle(request("human-control"))).status).toBe(202);
+    expect(human.recordHumanControl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user-1",
+        source: "web",
+        requestId: "human-control",
+        requestFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        control: expect.objectContaining({ action: "steer", content: "focus" }),
+      })
+    );
+
+    const internal = fixture();
+    const internalRequest = new Request("http://session/internal/pi-control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actorId: "pi:operation-1",
+        source: "pi",
+        control: {
+          sessionId: "session-1",
+          requestId: "internal-control",
+          action: "steer",
+          content: "focus",
+        },
+      }),
+    });
+    expect((await internal.handler.handle(internalRequest)).status).toBe(202);
+    expect(internal.recordHumanControl).not.toHaveBeenCalled();
+  });
+  it("does not re-execute a human control after its bounded receipt was pruned", async () => {
+    const h = fixture();
+    h.recordHumanControl.mockReturnValue({ conflict: false, deduplicated: true });
+    const response = await h.handler.handle(request("expired-control"));
+    expect(response.status).toBe(409);
+    expect(h.runtime.control).not.toHaveBeenCalled();
+    expect(h.receipts.get("expired-control")?.state).toBe("failed");
+  });
+  it("rejects receipt conflicts before projecting a canonical message", async () => {
+    const h = fixture();
+    expect((await h.handler.handle(request("reused-control"))).status).toBe(202);
+    h.recordHumanControl.mockClear();
+
+    const response = await h.handler.handle(
+      new Request("http://session/internal/pi-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: "user-1",
+          canonicalUserId: "user-1",
+          source: "web",
+          control: {
+            sessionId: "session-1",
+            requestId: "reused-control",
+            action: "steer",
+            content: "different content",
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(h.recordHumanControl).not.toHaveBeenCalled();
+    expect(h.runtime.control).toHaveBeenCalledOnce();
   });
 });

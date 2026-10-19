@@ -27,9 +27,13 @@ function forward(control: unknown, sessionId: string, ctx: SessionRouteContext) 
   }
   const authority =
     principal?.kind === "user"
-      ? { actorId: principal.userId, source: "web" }
+      ? { actorId: principal.userId, canonicalUserId: principal.userId, source: "web" }
       : principal?.kind === "service" && principal.service === "slack-bot" && principal.actor
-        ? { actorId: principal.actor.participantUserId, source: "slack" }
+        ? {
+            actorId: principal.actor.participantUserId,
+            canonicalUserId: principal.actor.canonicalUserId,
+            source: "slack",
+          }
         : null;
   if (!authority) return error("Pi controls require an authorized actor", 403);
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.piControl, {
@@ -38,7 +42,7 @@ function forward(control: unknown, sessionId: string, ctx: SessionRouteContext) 
     body: JSON.stringify({ ...authority, control: parsed.data }),
   });
 }
-const COLLABORATION_ACTIONS = new Set(["submit", "send", "steer", "follow_up", "fork", "compact"]);
+const COLLABORATION_ACTIONS = new Set(["send", "steer", "follow_up", "fork", "compact"]);
 const LIFECYCLE_ACTIONS = new Set(["cancel_exact", "reset", "handoff"]);
 function post(allowed: Set<string>) {
   return async (
@@ -56,13 +60,7 @@ function post(allowed: Set<string>) {
   };
 }
 function readAction(
-  action:
-    | "list_conversations"
-    | "get_conversation"
-    | "get_last_message"
-    | "inspect_agents"
-    | "inspect"
-    | "task_graph"
+  action: "list_conversations" | "get_conversation" | "inspect_agents" | "inspect" | "task_graph"
 ) {
   return async (
     request: Request,
@@ -104,9 +102,6 @@ piControlRoutes.get("/sessions/:id/pi/inspect", READ, (c) =>
 );
 piControlRoutes.get("/sessions/:id/pi/agents", READ, (c) =>
   dispatchSession(c, readAction("inspect_agents"))
-);
-piControlRoutes.get("/sessions/:id/pi/conversations/:conversationId/last-message", READ, (c) =>
-  dispatchSession(c, readAction("get_last_message"))
 );
 piControlRoutes.get("/sessions/:id/pi/task-graph", READ, (c) =>
   dispatchSession(c, readAction("task_graph"))

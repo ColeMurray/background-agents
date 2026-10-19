@@ -284,6 +284,22 @@ const nonArtifactSandboxEventSchemas = [
     // events table and every broadcast. attachmentId lets clients stream attachments.
     attachments: resolvedSessionAttachmentsSchema.optional(),
     origin: githubAutofixOriginSchema.optional(),
+    piControl: z
+      .object({
+        action: z.enum([
+          "send",
+          "follow_up",
+          "steer",
+          "cancel_exact",
+          "fork",
+          "reset",
+          "handoff",
+          "compact",
+        ]),
+        conversationId: z.number().int().positive().optional(),
+        taskId: z.number().int().positive().optional(),
+      })
+      .optional(),
   }),
 ] as const;
 

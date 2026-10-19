@@ -4,40 +4,8 @@ import { useCallback } from "react";
 import useSWR from "swr";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { sessionActionErrorMessage } from "@/lib/session-action-error";
-
-export interface PiAgentUsage {
-  usage: {
-    input: number;
-    output: number;
-    reasoning?: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-  };
-  costUsd: number;
-}
-
-export interface PiAgentSnapshot {
-  conversationId: number;
-  parent?: { conversationId: number; entryId: number };
-  owner?: { conversationId: number; taskId: number };
-  status: "active" | "queued" | "idle";
-  queued: number;
-  tasks: Array<{
-    id: number;
-    kind: string;
-    status: string;
-    phase?: string;
-    abortRequested: boolean;
-  }>;
-  usage: PiAgentUsage;
-  lastMessage: { entryId: number; text: string } | null;
-}
-
-interface PiAgentsEnvelope {
-  state: "completed";
-  result: { agents: PiAgentSnapshot[] };
-}
+import { piAgentsEnvelopeSchema, type PiAgentsEnvelope } from "@/lib/pi-agents";
+export type { PiAgentSnapshot } from "@/lib/pi-agents";
 
 type PiAgentAction =
   | { action: "send" | "follow_up" | "steer"; conversationId: number; content: string }
@@ -51,7 +19,7 @@ async function fetchPiAgents(path: BrowserApiPath): Promise<PiAgentsEnvelope> {
   const response = await browserApiFetch(path);
   if (!response.ok)
     throw new Error(await sessionActionErrorMessage(response, "Failed to load agents"));
-  return (await response.json()) as PiAgentsEnvelope;
+  return piAgentsEnvelopeSchema.parse(await response.json());
 }
 
 export function usePiAgents(sessionId: string, enabled: boolean) {

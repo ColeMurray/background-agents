@@ -2,6 +2,8 @@ import { z } from "zod";
 import {
   piRuntimeControlCompletionSchema,
   piRuntimeControlSchema,
+  type PiHumanControl,
+  type PiRuntimeControl,
   type PiRuntimeDispatch,
 } from "../../../pi/runtime-contract";
 import type { Logger } from "../../../logger";
@@ -13,7 +15,8 @@ import type { PiControlRepository } from "../../pi-control-repository";
 const CONTROL_TIMEOUT_MS = 15_000;
 const envelopeSchema = z.strictObject({
   actorId: z.string().min(1).max(128),
-  source: z.string().min(1).max(32),
+  canonicalUserId: z.string().min(1).max(128).nullable().optional(),
+  source: z.enum(["web", "slack", "pi"]),
   control: piRuntimeControlSchema,
 });
 const READ_ACTIONS = new Set([
@@ -24,6 +27,16 @@ const READ_ACTIONS = new Set([
   "task_graph",
   "inspect",
 ]);
+const HUMAN_CONTROL_ACTIONS = new Set([
+  "send",
+  "follow_up",
+  "steer",
+  "cancel_exact",
+  "fork",
+  "reset",
+  "handoff",
+  "compact",
+]);
 
 export class PiControlHandler {
   constructor(
@@ -33,13 +46,21 @@ export class PiControlHandler {
     >,
     private readonly receipts: PiControlRepository,
     private readonly runtime: Pick<PiRuntimeDispatch, "control"> | undefined,
-    private readonly log: Logger
+    private readonly log: Logger,
+    private readonly recordHumanControl: (input: {
+      actorId: string;
+      canonicalUserId?: string | null;
+      source: "web" | "slack";
+      requestId: string;
+      requestFingerprint: string;
+      control: PiHumanControl;
+    }) => { conflict: boolean; deduplicated: boolean }
   ) {}
   async handle(request: Request): Promise<Response> {
     const parsed = envelopeSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success)
       return Response.json({ error: "Invalid Pi control request" }, { status: 400 });
-    const { actorId, source, control } = parsed.data;
+    const { actorId, canonicalUserId, source, control } = parsed.data;
     const session = this.sessions.getSession();
     if (!session || session.harness !== "pi")
       return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
@@ -52,12 +73,13 @@ export class PiControlHandler {
       return Response.json({ error: "Session budget is exhausted" }, { status: 409 });
     if (!this.runtime)
       return Response.json({ error: "Pi Durable is unavailable" }, { status: 503 });
+    const requestHash = await controlRequestHash(control);
     let admission;
     try {
       admission = this.receipts.admit(
         {
           requestId: control.requestId,
-          requestHash: await controlRequestHash(control),
+          requestHash,
           action: control.action,
           actorId,
           source,
@@ -78,6 +100,60 @@ export class PiControlHandler {
       return Response.json({ error: "Pi control request id conflict" }, { status: 409 });
     }
     const receipt = admission.receipt;
+    let projection: { conflict: boolean; deduplicated: boolean } | undefined;
+    if ((source === "web" || source === "slack") && isHumanControl(control)) {
+      try {
+        projection = this.recordHumanControl({
+          actorId,
+          canonicalUserId,
+          source,
+          requestId: control.requestId,
+          requestFingerprint: requestHash,
+          control,
+        });
+        if (projection?.conflict) {
+          if (admission.created) {
+            this.receipts.settle(
+              control.requestId,
+              "failed",
+              undefined,
+              "message_projection_conflict",
+              Date.now()
+            );
+          }
+          return Response.json({ error: "Pi control request id conflict" }, { status: 409 });
+        }
+      } catch (error) {
+        if (admission.created) {
+          this.receipts.settle(
+            control.requestId,
+            "failed",
+            undefined,
+            "message_projection_failed",
+            Date.now()
+          );
+        }
+        this.log.error("pi.control_projection_failed", {
+          event: "pi.control_projection_failed",
+          request_id: control.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return Response.json({ error: "Pi control projection failed" }, { status: 500 });
+      }
+    }
+    if (admission.created && projection?.deduplicated) {
+      this.receipts.settle(
+        control.requestId,
+        "failed",
+        undefined,
+        "expired_idempotency_receipt",
+        Date.now()
+      );
+      return Response.json(
+        { error: "Pi control receipt expired; use a new request id" },
+        { status: 409 }
+      );
+    }
     if (!admission.created) {
       if (receipt.state !== "processing")
         return Response.json(
@@ -155,6 +231,9 @@ export class PiControlHandler {
     this.receipts.prune();
     return Response.json({ status: completion.changed ? "recorded" : "already_recorded" });
   }
+}
+function isHumanControl(control: PiRuntimeControl): control is PiHumanControl {
+  return HUMAN_CONTROL_ACTIONS.has(control.action);
 }
 async function controlRequestHash(control: unknown): Promise<string> {
   return sha256Hex(JSON.stringify(control));

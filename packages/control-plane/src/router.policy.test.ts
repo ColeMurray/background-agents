@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(254);
+    expect(routes).toHaveLength(253);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(196);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(254);
+    expect(new Set(paths).size).toBe(195);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(253);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },

@@ -15,6 +15,7 @@ import {
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
+import { piControlRoutes } from "./pi-controls";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
@@ -24,7 +25,7 @@ vi.mock("../auth/authenticate", async (importOriginal) => ({
   authenticate: mocks.authenticate,
 }));
 
-const handleRequest = createTestRequestHandler([sessionRuntimeProxyRoutes]);
+const handleRequest = createTestRequestHandler([sessionRuntimeProxyRoutes, piControlRoutes]);
 
 const USER: Principal = { kind: "user", userId: "user-1" };
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -789,6 +790,82 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "repoOwner must be a string" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  describe("Pi controls", () => {
+    it("forwards canonical browser identity into SessionDO", async () => {
+      const requests: Request[] = [];
+      const fetch = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return Response.json({ state: "accepted" }, { status: 202 });
+      });
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ requestId: "web-control", action: "steer", content: "focus" }),
+        }),
+        createEnv(fetch)
+      );
+
+      expect(response.status).toBe(202);
+      expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.piControl);
+      await expect(requests[0].json()).resolves.toMatchObject({
+        actorId: "user-1",
+        canonicalUserId: "user-1",
+        source: "web",
+      });
+    });
+
+    it("forwards verified Slack actor identity and only explicit Slack actions", async () => {
+      authenticateAs({
+        kind: "service",
+        service: "slack-bot",
+        actor: {
+          provider: "slack",
+          providerUserId: "U0123",
+          canonicalUserId: "user-1",
+          participantUserId: "slack:U0123",
+        },
+      });
+      const requests: Request[] = [];
+      const fetch = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return Response.json({ state: "accepted" }, { status: 202 });
+      });
+      const env = createEnv(fetch);
+
+      const allowed = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            requestId: "slack-control",
+            action: "follow_up",
+            content: "check tests",
+          }),
+        }),
+        env
+      );
+      const denied = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ requestId: "slack-send", action: "send", content: "bypass" }),
+        }),
+        env
+      );
+
+      expect(allowed.status).toBe(202);
+      await expect(requests[0].json()).resolves.toMatchObject({
+        actorId: "slack:U0123",
+        canonicalUserId: "user-1",
+        source: "slack",
+      });
+      expect(denied.status).toBe(403);
+      expect(fetch).toHaveBeenCalledOnce();
+    });
   });
 
   describe("budget updates", () => {

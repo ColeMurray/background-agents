@@ -175,12 +175,12 @@ function confirmedActionPlan(
 ): { action: AgentAction; success: string; clear?: boolean } | null {
   switch (confirmed.kind) {
     case "fork":
-      return confirmed.agent.lastMessage
+      return confirmed.agent.lastEntryId !== null
         ? {
             action: {
               action: "fork",
               conversationId: confirmed.agent.conversationId,
-              entryId: confirmed.agent.lastMessage.entryId,
+              entryId: confirmed.agent.lastEntryId,
             },
             success: "Agent conversation forked",
           }
@@ -254,12 +254,6 @@ function AgentSummary({ agent }: { agent: PiAgentSnapshot }) {
         <span>{agent.usage.usage.total.toLocaleString()} tokens</span>
         <span>{formatSessionCost(agent.usage.costUsd)}</span>
       </div>
-      {agent.lastMessage && (
-        <p className="max-h-24 overflow-y-auto whitespace-pre-wrap rounded-sm bg-muted px-3 py-2 text-muted-foreground">
-          <span className="sr-only">Last agent message: </span>
-          {agent.lastMessage.text}
-        </p>
-      )}
     </div>
   );
 }
@@ -340,7 +334,7 @@ function AgentConversationActions({
 }) {
   return (
     <div className="flex flex-wrap gap-2" aria-label="Conversation actions">
-      {capabilities.collaborate && agent.lastMessage && (
+      {capabilities.collaborate && agent.lastEntryId !== null && (
         <button
           type="button"
           className={actionClass}
