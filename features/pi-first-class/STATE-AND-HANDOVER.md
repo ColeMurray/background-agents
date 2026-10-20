@@ -324,6 +324,31 @@ its UI belong to the MCP transport and stay open with it.
    own instance, and the fourth adversarial audit round. The first three audit rounds over the new
    code are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, and `AUDIT-ROUND-3.md`.
 
+## The gaps the deep audit found
+
+Every item below was found by reading the code against the boundary rules, and every item is either
+fixed or listed as still open above.
+
+| Gap                                                                                                           | Severity | Status                                                             |
+| ------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------ |
+| The target session refused every cross-session delivery because it compared the target against its own id     | blocking | fixed                                                              |
+| A cross-session receipt was never confirmed by the target, so the provenance could be asserted by the sender  | blocking | fixed                                                              |
+| The source session never checked its own status, its own authority, or that the turn belonged to it           | high     | fixed                                                              |
+| The actor could be a namespaced identity, which violated the receipt's foreign key and broke every second hop | high     | fixed                                                              |
+| A rejected receipt could never be delivered again, and a retry could duplicate the message                    | high     | fixed                                                              |
+| A receipt was written before the authority check, so a denied attempt still wrote a row                       | medium   | fixed                                                              |
+| The fan-out count rejected a legitimate retry of the same request                                             | medium   | fixed                                                              |
+| The initiator of a cross-session message became a participant of the target session                           | medium   | fixed                                                              |
+| "Workspace" named the tenant, the scratch VFS, and the execution sandbox at once                              | high     | fixed, with a version 3 snapshot that reads an older one unchanged |
+| A scratch write kept no attribution                                                                           | medium   | fixed                                                              |
+| Code Mode's nested-call restriction lived only in memory and failed open after an eviction                    | medium   | fixed, the parent record is now durable                            |
+| The two Code Mode model tools were declared but could never be called                                         | low      | written down; the policy blocks them on purpose                    |
+| The native execution slice cannot run in any real deployment                                                  | low      | written down; it stays dormant until the isolation canary passes   |
+| The execution endpoint trusts the approval revision in its body                                               | low      | written down; the endpoint is not publicly reachable               |
+| The MCP transport, its OAuth lifecycle, and its elicitation receipt do not exist                              | high     | open, listed above                                                 |
+| The browser transport and its Worker bindings do not exist                                                    | high     | open, listed above                                                 |
+| The external-action providers have no credential source                                                       | high     | open, listed above                                                 |
+
 ## How to work in this repository
 
 - Both `feat/pi-first-class` and `feat/pi-go-live-integration-v2` are at the same commit, so the
