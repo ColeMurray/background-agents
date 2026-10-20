@@ -210,7 +210,7 @@ export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS: readonly string[] = [
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
 ];
 /** One-shot clone token used only by image-build sandboxes. */
-export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
+const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 
 /** Host/username pair git pairs with the brokered clone token in the sandbox. */
 export interface ScmCloneIdentity {

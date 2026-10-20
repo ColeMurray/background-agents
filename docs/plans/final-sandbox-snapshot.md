@@ -64,7 +64,7 @@ Current source independently confirms the scheduling gap:
 2. Halt the active prompt before the normal final capture, and prevent another prompt or managed
    workspace mutation from starting on the retiring generation.
 3. Preserve saved workspace files, including uncommitted/untracked files and sandbox-local agent
-   state covered by that provider's persistence mechanism, across all five supported providers.
+   state covered by that provider's persistence mechanism, across all four supported providers.
 4. Survive Control Plane restart, duplicate alarms, reconnects, and ambiguous provider responses.
 5. Never report checkpoint-and-shutdown success or silently restore an older recovery point after
    that operation failed.
