@@ -1434,7 +1434,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     crossSessionMessage: (request) => crossSessionHandler.outbound(request),
     crossSessionAuthorize: (request) => crossSessionHandler.authorize(request),
     piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
-    piMcpList: () => mcpSessionHandler.list(),
+    piMcpList: (request) => mcpSessionHandler.list(request),
     piMcpRead: (request) => mcpSessionHandler.read(request),
     crossSessionInbound: (request) => crossSessionHandler.inbound(request),
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),

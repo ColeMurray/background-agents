@@ -9,6 +9,7 @@ function harness(
   options: {
     claimedBaseline?: boolean;
     activeControl?: boolean;
+    processingMessageId?: string;
     spawnSource?: "user" | "automation";
   } = {}
 ) {
@@ -70,7 +71,10 @@ function harness(
           },
         ] as never,
     },
-    messages: { getProcessingMessage: () => null },
+    messages: {
+      getProcessingMessage: () =>
+        options.processingMessageId ? ({ id: options.processingMessageId } as never) : null,
+    },
     controls: { isActiveOperation: () => options.activeControl === true },
     agentControls,
     credentials: {
@@ -310,12 +314,15 @@ describe("PiBridgeHandler context", () => {
   });
 
   it("resolves and claims repository heads only for an explicit lazy pin request", async () => {
-    const h = harness();
+    const h = harness({ processingMessageId: "message-1" });
 
     const response = await h.handler.context(
       new Request("http://session/internal/pi-context", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": "message-1",
+        },
         body: JSON.stringify({ mode: "pin" }),
       })
     );
@@ -326,7 +333,7 @@ describe("PiBridgeHandler context", () => {
   });
 
   it("restores durable repository pins without resolving branch heads", async () => {
-    const h = harness();
+    const h = harness({ processingMessageId: "message-1" });
     const repositoryPins = [
       {
         repoOwner: "acme",
@@ -339,7 +346,10 @@ describe("PiBridgeHandler context", () => {
     const response = await h.handler.context(
       new Request("http://session/internal/pi-context", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": "message-1",
+        },
         body: JSON.stringify({ mode: "pin", repositoryPins }),
       })
     );
@@ -353,7 +363,7 @@ describe("PiBridgeHandler context", () => {
   });
 
   it("recovers SessionDO baselines after a crash before Pi persisted its pins", async () => {
-    const h = harness({ claimedBaseline: true });
+    const h = harness({ claimedBaseline: true, processingMessageId: "message-1" });
     h.pin.mockResolvedValueOnce([
       {
         repoOwner: "acme",
@@ -367,7 +377,10 @@ describe("PiBridgeHandler context", () => {
     const response = await h.handler.context(
       new Request("http://session/internal/pi-context", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": "message-1",
+        },
         body: JSON.stringify({ mode: "pin" }),
       })
     );
@@ -388,12 +401,15 @@ describe("PiBridgeHandler context", () => {
   });
 
   it("returns one credential-free materialization only for a Pi session", async () => {
-    const h = harness({ claimedBaseline: true });
+    const h = harness({ claimedBaseline: true, processingMessageId: "message-1" });
 
     const response = await h.handler.repositoryMaterialization(
       new Request("http://session/internal/pi-repository-materialization", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": "message-1",
+        },
         body: JSON.stringify({ operation: "manifest", repository: 0, commitSha: h.fullSha }),
       })
     );
@@ -426,7 +442,7 @@ describe("PiBridgeHandler context", () => {
   });
 
   it("marks transient provider materialization failures as retryable", async () => {
-    const h = harness({ claimedBaseline: true });
+    const h = harness({ claimedBaseline: true, processingMessageId: "message-1" });
     h.prepareMaterialization.mockRejectedValueOnce(
       new SourceControlProviderError("provider unavailable", "transient", 503)
     );
@@ -434,7 +450,10 @@ describe("PiBridgeHandler context", () => {
     const response = await h.handler.repositoryMaterialization(
       new Request("http://session/internal/pi-repository-materialization", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": "message-1",
+        },
         body: JSON.stringify({ operation: "manifest", repository: 0, commitSha: h.fullSha }),
       })
     );

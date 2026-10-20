@@ -212,6 +212,13 @@ interface NativeControlCompletion {
   readonly requestId: string;
   readonly baseline: PiAccountingSnapshot;
   readonly suppressCost: boolean;
+  /**
+   * The turn a queued follow-up was submitted behind.
+   *
+   * The follow-up starts its own run when that turn answers, so the running
+   * turn's final accounting is where the follow-up's own spend begins.
+   */
+  readonly runningOperationId?: string;
   readonly target:
     | { readonly kind: "submission"; readonly id: number }
     | { readonly kind: "task"; readonly id: number };
@@ -659,11 +666,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         this.ctx.waitUntil(this.resumeNativeControlCompletion(record));
         return Promise.resolve();
       }),
-      ...pending.map((operation) =>
-        this.startEventRelay(sessionId, operation.operationId, {
+      ...pending.map(async (operation) => {
+        // A native control submission was never admitted as a message of
+        // this session, so it has no operation metadata. Its completion is
+        // recorded by the control path. Relaying it would fail the whole
+        // startup and strand every later prompt.
+        if (!(await this.operationMetadata(operation.operationId))) return;
+        return this.startEventRelay(sessionId, operation.operationId, {
           recoverSnapshot: operation.status === "running",
-        })
-      ),
+        });
+      }),
     ]);
   }
 
@@ -1028,7 +1040,15 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         sessionId: input.sessionId,
         requestId: input.requestId,
         baseline,
-        suppressCost: input.action === "steer" || input.action === "follow_up",
+        // A steer joins the running turn, so its spend is already inside that
+        // turn's accounting. A follow-up starts its own run, so its spend is
+        // charged here; when it was queued behind a running turn, the running
+        // turn's final accounting is the baseline, so that turn is not
+        // counted twice.
+        suppressCost: input.action === "steer",
+        ...(input.action === "follow_up" && conversationBusy
+          ? { runningOperationId: (await this.attributedOperationId(ROOT_SESSION)) ?? undefined }
+          : {}),
         target: { kind: "submission", id: submission.id },
       });
       return {
@@ -1066,12 +1086,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       status = task.state.outcome.status === "completed" ? "completed" : "failed";
     }
     const current = await this.accountingTotals();
+    const costBaseline = record.runningOperationId
+      ? ((await this.finalRunningCost(record.runningOperationId)) ?? record.baseline.costUsd)
+      : record.baseline.costUsd;
     const accounting = record.suppressCost
       ? { costUsd: 0 }
-      : operationAccountingDelta(current, {
-          usage: record.baseline.usage,
-          costUsd: record.baseline.costUsd,
-        });
+      : {
+          ...operationAccountingDelta(current, {
+            usage: record.baseline.usage,
+            costUsd: record.baseline.costUsd,
+          }),
+          // The follow-up's own spend, measured from the turn it was queued
+          // behind. The running turn is charged to its own message.
+          costUsd: Math.max(0, current.costUsd - costBaseline),
+        };
     const response = await this.env.SESSION.getByName(record.sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piControlCompletion}`, {
         method: "POST",
@@ -1082,6 +1110,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!response.ok && response.status !== 404)
       throw new Error(`Pi control completion rejected (${response.status})`);
     await this.ctx.storage.delete(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`);
+  }
+
+  /**
+   * The cumulative cost a running turn ended at.
+   *
+   * A follow-up queued behind a running turn starts its own run when that
+   * turn answers, so the follow-up's own spend begins where the running turn
+   * ended. The running turn's baseline and its own projected cost add up to
+   * that point.
+   */
+  private async finalRunningCost(operationId: string): Promise<number | undefined> {
+    const metadata = await this.operationMetadata(operationId);
+    if (!metadata) return undefined;
+    return metadata.baseline.costUsd + metadata.projectedCostUsd;
   }
 
   private async controlConversation(
@@ -1581,10 +1623,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = mode === "pin" ? await this.currentOperationId() : null;
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piContext}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
+        },
         body: JSON.stringify({ mode, ...(repositoryPins ? { repositoryPins } : {}) }),
       })
     );
@@ -1758,9 +1804,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = await this.currentOperationId();
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piMcpList}`, {
         method: "GET",
+        headers: { "X-Pi-Operation-ID": operationId },
         ...(signal ? { signal } : {}),
       })
     );
@@ -2191,10 +2240,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   ): Promise<unknown> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = await this.currentOperationId();
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piRepositoryMaterialization}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
+        },
         body: JSON.stringify(body),
         signal,
       })

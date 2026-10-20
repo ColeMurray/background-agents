@@ -69,10 +69,18 @@ export class McpSessionHandler {
   constructor(private readonly options: McpSessionHandlerOptions) {}
 
   /** The session's authorized attachments. It never names a credential. */
-  async list(): Promise<Response> {
+  async list(request: Request): Promise<Response> {
     const bridge = this.options.mcp;
     if (bridge.sessionCapability() === "off" || bridge.liveMode() === "off") {
       return Response.json({ pins: [] }, { headers: { "Cache-Control": "no-store" } });
+    }
+    // The grant roster is the session's capability surface. It names the
+    // turn it belongs to, exactly as the read does.
+    if (!request.headers.get("X-Pi-Operation-ID")) {
+      return Response.json(
+        { error: "An MCP grant list requires an active operation" },
+        { status: 409 }
+      );
     }
     const grants = await bridge.grants();
     return Response.json(

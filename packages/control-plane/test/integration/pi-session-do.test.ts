@@ -453,6 +453,31 @@ describe("PiSessionDO", () => {
     expect(malformedResult).not.toBe("accepted");
   });
 
+  it("survives a restart while a native control submission is in flight", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-control-restart");
+    await stub.status(sessionName);
+
+    // A follow-up starts its own run, so the submission is in flight when
+    // the object is evicted. It was never admitted as a message of this
+    // session, so it has no operation metadata.
+    const accepted = await controlPi(stub, {
+      sessionId: sessionName,
+      requestId: "control-restart-1",
+      action: "follow_up",
+      content: "keep going",
+    });
+    expect(accepted.state).toBe("accepted");
+
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: control eviction"))
+    ).rejects.toThrow();
+    const restored = piStub(sessionName);
+
+    // The restart must not fail: a control submission with no operation
+    // metadata is not the event relay's business.
+    await expect(restored.status(sessionName)).resolves.toMatchObject({ busy: true });
+  });
+
   it("retains installed workspace tools but emergency-denies new mutations after Pi eviction", async () => {
     const { sessionName, stub: sessionStub } = await initSession({
       sessionName: `pi-emergency-workspace-${crypto.randomUUID()}`,

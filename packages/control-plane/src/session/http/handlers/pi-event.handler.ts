@@ -34,6 +34,13 @@ export class PiEventHandler {
     }
     const operation = this.operations.get(operationId);
     if (!operation) return Response.json({ error: "Unknown Pi operation" }, { status: 409 });
+    // An operation whose dispatch outcome is unknown takes no projections:
+    // the turn may never have been admitted, so its events belong to
+    // nothing. The window before the session admits the operation is
+    // accepted, because the first events can arrive first.
+    if (operation.state === "ambiguous") {
+      return Response.json({ error: "Pi operation dispatch is ambiguous" }, { status: 409 });
+    }
     if (sequence <= operation.lastProjectionSequence) {
       return Response.json({ status: "already_projected" });
     }

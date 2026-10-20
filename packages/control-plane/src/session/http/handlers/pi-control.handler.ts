@@ -241,7 +241,7 @@ async function controlRequestHash(control: unknown): Promise<string> {
 function isDeterministicControlError(error: unknown) {
   return (
     error instanceof Error &&
-    /(limit reached|not found|not active|requires a child|cannot change model|bound to an active submission|unsupported|target is required)/i.test(
+    /(limit reached|not found|not active|requires a child|cannot change model|bound to an active submission|unsupported|target is required|\bbusy\b)/i.test(
       error.message
     )
   );

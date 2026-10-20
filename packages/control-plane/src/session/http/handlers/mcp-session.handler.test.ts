@@ -194,10 +194,22 @@ describe("McpSessionHandler", () => {
     );
   });
 
+  it("refuses a grant list with no active operation", async () => {
+    const h = harness();
+
+    const response = await h.handler.list(new Request("http://session/internal/pi-mcp/list"));
+
+    expect(response.status).toBe(409);
+  });
+
   it("lists the session's authorized attachments without a credential", async () => {
     const h = harness();
 
-    const response = await h.handler.list();
+    const response = await h.handler.list(
+      new Request("http://session/internal/pi-mcp/list", {
+        headers: { "X-Pi-Operation-ID": "operation-1" },
+      })
+    );
 
     expect(response.status).toBe(200);
     // The canonical pin shape, so the agent and the session agree on one.
