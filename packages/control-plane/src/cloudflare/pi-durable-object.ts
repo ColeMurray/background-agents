@@ -104,6 +104,7 @@ import {
   type ExternalActionPrepareRequest,
 } from "@open-inspect/shared";
 import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
+import { createBrowserPolicyDelegate } from "../pi/browser-policy-extension";
 import {
   createSandboxExecutionExtension,
   createSandboxExecutionPolicyDelegate,
@@ -286,6 +287,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           slot: "policy",
           effects: [],
           createExtension: (effects) => {
+            const browserDelegate = createBrowserPolicyDelegate({
+              client: {
+                authorize: async (request, signal) => {
+                  const decision = await this.authorizeBrowser(request, signal);
+                  return decision;
+                },
+              },
+            });
             const externalActionDelegate = createExternalActionPolicyDelegate({
               client: {
                 prepare: (request, signal) => this.prepareExternalAction(request, signal),
@@ -313,11 +322,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               workspacePolicyDelegate
                 ? [
                     externalActionDelegate,
+                    browserDelegate,
                     workspacePolicyDelegate,
                     codeModePolicyDelegate,
                     sandboxExecutionPolicyDelegate,
                   ]
-                : [externalActionDelegate, codeModePolicyDelegate, sandboxExecutionPolicyDelegate],
+                : [
+                    externalActionDelegate,
+                    browserDelegate,
+                    codeModePolicyDelegate,
+                    sandboxExecutionPolicyDelegate,
+                  ],
               emergencyPolicy
             );
           },
@@ -1486,7 +1501,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         method: "POST",
         headers: {
           "X-Pi-Operation-ID": operationId,
-          ...piTraceHeader(operationId),
+          ...piTraceHeader(operationId ?? undefined),
           ...(rejectedCredentialVersion === undefined
             ? {}
             : { "X-Pi-Rejected-Credential-Version": String(rejectedCredentialVersion) }),
@@ -1808,6 +1823,45 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return body;
+  }
+
+  /**
+   * Ask the owning session whether this turn may drive a browser.
+   *
+   * The session decides. The agent learns only whether it may proceed.
+   */
+  private async authorizeBrowser(
+    request: { url?: string },
+    signal?: AbortSignal
+  ): Promise<{ allowed: boolean; code?: string; reason?: string }> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) return { allowed: false, reason: "The session is not initialized" };
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piBrowserAuthorize}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
+          ...(operationId ? piTraceHeader(operationId) : {}),
+        },
+        body: JSON.stringify(request),
+        signal,
+      })
+    );
+    const body = (await response.json().catch(() => null)) as {
+      allowed?: boolean;
+      code?: string;
+      reason?: string;
+    } | null;
+    if (!response.ok || !body?.allowed) {
+      return {
+        allowed: false,
+        ...(body?.code ? { code: body.code } : {}),
+        reason: body?.reason ?? "The browser is not available for this session",
+      };
+    }
+    return { allowed: true };
   }
 
   private async prepareExternalAction(request: ExternalActionPrepareRequest, signal?: AbortSignal) {

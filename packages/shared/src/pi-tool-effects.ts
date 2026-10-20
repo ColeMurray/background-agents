@@ -120,6 +120,22 @@ export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
  * MCP mutation never becomes a tool, it becomes an external action that a
  * person approves.
  */
+/**
+ * The browser tool.
+ *
+ * Driving a browser is not replay-safe: a replayed run would navigate again.
+ * The tool is declared here, before any extension is assembled, so the
+ * assembler knows its effect without asking the session.
+ */
+export const PI_BROWSER_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "browser",
+    effect: "external_mutation",
+    callers: ["model"],
+    replay: "unsafe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
 export const PI_MCP_TOOL_EFFECT_REGISTRATIONS = [
   {
     name: "mcp_read",
