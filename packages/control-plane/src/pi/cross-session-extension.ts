@@ -44,12 +44,11 @@ export function createCrossSessionPolicyDelegate(
       let decision: CrossSessionAuthorizationDecision;
       try {
         decision = await options.client.authorize(context.abortSignal);
-      } catch (error) {
+      } catch {
+        // An unexpected failure is not the agent's business. The session's
+        // own reason arrives in the answer, never an internal string.
         return {
-          block:
-            error instanceof Error
-              ? error.message
-              : "Cross-session messaging could not be authorized for this session",
+          block: "Cross-session messaging could not be authorized for this session",
         };
       }
       if (decision.allowed) return undefined;

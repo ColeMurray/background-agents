@@ -127,7 +127,8 @@ describe("cross session policy delegate", () => {
     const delegate = createCrossSessionPolicyDelegate({ client: { authorize } });
 
     await expect(delegate.beforeTool?.(call, declaration, {} as never, context)).resolves.toEqual({
-      block: "The session is unreachable",
+      // The internal string never reaches the model.
+      block: "Cross-session messaging could not be authorized for this session",
     });
   });
 

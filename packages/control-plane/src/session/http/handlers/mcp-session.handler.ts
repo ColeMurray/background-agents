@@ -1,6 +1,7 @@
 import {
   MAX_MCP_READ_RESULT_BYTES,
   mcpReadRequestSchema,
+  mcpReadResultSchema,
   type McpReadResult,
 } from "@open-inspect/shared/types/mcp-read";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
@@ -188,6 +189,33 @@ export class McpSessionHandler {
     }
 
     const bounded = boundResult(content);
+    // The gateway is the boundary. A provider answer that carries a
+    // credential-shaped key is refused here, so it never leaves the session
+    // and never reaches the model, the timeline, or the audit.
+    const credentialFree = mcpReadResultSchema.safeParse({
+      connectionId: parsed.data.connectionId,
+      toolName: parsed.data.toolName,
+      content: bounded.content,
+      truncated: bounded.truncated,
+    });
+    if (!credentialFree.success) {
+      await bridge.audit({
+        requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
+        actorUserId: actorId,
+        connectionId: parsed.data.connectionId,
+        toolName: parsed.data.toolName,
+        outcome: "refused",
+        reasonCode: "mcp_result_carried_a_credential",
+        occurredAt: Date.now(),
+      });
+      return Response.json(
+        {
+          error: "The MCP tool returned a result this session may not carry",
+          code: "mcp_result_not_credential_free",
+        },
+        { status: 502 }
+      );
+    }
     await bridge.audit({
       requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
       actorUserId: actorId,

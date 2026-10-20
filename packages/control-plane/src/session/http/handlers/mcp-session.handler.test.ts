@@ -165,6 +165,23 @@ describe("McpSessionHandler", () => {
     expect(body.content.preview.length).toBeLessThanOrEqual(64 * 1024);
   });
 
+  it("refuses a provider answer that carries a credential", async () => {
+    const h = harness({ result: { account: { accessToken: "gho_secret" } } });
+
+    const response = await h.handler.read(readRequest());
+
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      code: "mcp_result_not_credential_free",
+    });
+    // The credential never leaves the session.
+    expect(JSON.stringify(body)).not.toContain("gho_secret");
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "refused", reasonCode: "mcp_result_carried_a_credential" })
+    );
+  });
+
   it("reports a failed provider call without inventing a result", async () => {
     const h = harness({ failure: "the provider refused" });
 
