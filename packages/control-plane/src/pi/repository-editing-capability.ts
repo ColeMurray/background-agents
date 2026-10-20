@@ -80,7 +80,7 @@ export function createRepositoryEditingWorkspaceCapability(
   const extension = defineExtension({
     name: "open-inspect.workspace",
     sections: [
-      section("workspace", () =>
+      section("scratch_workspace", () =>
         [
           `${REPOSITORY_ROOT}/{position} contains durable repository overlays.`,
           `${COMPUTER_SCRATCH_ROOT} remains the canonical scratch workspace.`,

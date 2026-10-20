@@ -22,9 +22,9 @@ describe("readPiFeatureCapabilitySnapshot", () => {
 
     await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toBeUndefined();
     expect(PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT).toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "off",
+        scratchWorkspace: "off",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
@@ -37,9 +37,9 @@ describe("readPiFeatureCapabilitySnapshot", () => {
 
   it("returns the exact complete durable snapshot", async () => {
     const original = {
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "read_only",
+        scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
@@ -54,7 +54,7 @@ describe("readPiFeatureCapabilitySnapshot", () => {
     expect(fake.values.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)).toBe(original);
   });
 
-  it("reads an older snapshot with the newer feature closed", async () => {
+  it("reads an older snapshot with the renamed feature under its new name", async () => {
     const original = {
       version: 1,
       capabilities: {
@@ -69,9 +69,9 @@ describe("readPiFeatureCapabilitySnapshot", () => {
     const fake = storage(original);
 
     await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "read_only",
+        scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",

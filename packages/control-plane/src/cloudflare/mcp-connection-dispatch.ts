@@ -1,4 +1,6 @@
 import type {
+  McpBrokerCall,
+  McpBrokerCallResult,
   McpConnectionBrokerDispatch,
   McpConnectionBrokerStatus,
 } from "../mcp/broker-contract";
@@ -12,6 +14,10 @@ export function createMcpConnectionBrokerDispatch(
     initialize: (connectionId, ownerUserId) =>
       stub(connectionId).initialize(connectionId, ownerUserId),
     status: (connectionId): Promise<McpConnectionBrokerStatus> => stub(connectionId).status(),
+    // The explicit annotation keeps the Durable Object RPC types from being
+    // instantiated through the whole request surface.
+    callTool: (call: McpBrokerCall): Promise<McpBrokerCallResult> =>
+      stub(call.connectionId).callTool(call),
     destroy: (connectionId, ownerUserId) => stub(connectionId).destroy(connectionId, ownerUserId),
   };
 }

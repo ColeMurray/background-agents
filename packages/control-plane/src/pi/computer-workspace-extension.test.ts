@@ -66,7 +66,7 @@ describe("createComputerWorkspaceCapability", () => {
 
     const extension = createExtension("read_only");
 
-    expect(extension.name).toBe("open-inspect.workspace");
+    expect(extension.name).toBe("open-inspect.scratch-workspace");
     expect(computer.createPiTools).toHaveBeenCalledWith({
       workspace: expect.anything(),
       root: "/workspace/scratch",
@@ -146,6 +146,8 @@ describe("createComputerWorkspaceCapability", () => {
         path: "/workspace/scratch/large.txt",
         firstChangedLine: 1,
         diffTruncated: true,
+        // The write keeps the attribution of the turn that caused it.
+        scratchCallId: "edit-large",
       },
     });
   });
@@ -192,7 +194,7 @@ describe("createComputerWorkspaceCapability", () => {
 
     const capability = createComputerWorkspaceCapability({} as Workspace, "enabled");
 
-    expect(capability.extension.name).toBe("open-inspect.workspace");
+    expect(capability.extension.name).toBe("open-inspect.scratch-workspace");
     expect(capability.toolPolicyDelegate).toEqual(
       expect.objectContaining({ beforeTool: expect.any(Function), afterTool: expect.any(Function) })
     );

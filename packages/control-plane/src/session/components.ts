@@ -190,9 +190,13 @@ import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
 import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
+import { McpSessionHandler } from "./http/handlers/mcp-session.handler";
+import { McpSessionPinStore } from "../db/mcp-session-pins";
+import { McpConnectionStore } from "../db/mcp-connections";
+import { McpReadAuditStore } from "../db/mcp-read-audit";
 import { CrossSessionHandler } from "./http/handlers/cross-session.handler";
 import { CrossSessionReceiptStore } from "../db/cross-session-receipts";
-import { evaluateCrossSessionTarget } from "./cross-session-authority";
+import { evaluateCrossSessionSource, evaluateCrossSessionTarget } from "./cross-session-authority";
 import { ExternalActionGateway } from "./external-action-gateway";
 import { ExternalActionDefinitionRegistry } from "./external-action-definitions";
 import { AutomationExternalActionGrantStore } from "../db/automation-external-action-grants";
@@ -667,6 +671,52 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
+  const mcpSessionHandler = new McpSessionHandler({
+    mcp: {
+      liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.mcp,
+      sessionCapability: () =>
+        sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.mcp ?? "off",
+      grants: async () => {
+        const pins = await new McpSessionPinStore(db).listForSession(getPublicSessionId());
+        const connections = new McpConnectionStore(db);
+        const grants = [];
+        for (const pin of pins) {
+          const connection = await connections.getOwned(pin.connectionId, pin.ownerUserId);
+          if (!connection) continue;
+          grants.push({
+            id: pin.id,
+            connectionId: pin.connectionId,
+            serverName: connection.serverName,
+            endpointHost: new URL(connection.endpointUrl).host,
+            toolNames: pin.toolNames,
+            ownerUserId: pin.ownerUserId,
+          });
+        }
+        return grants;
+      },
+      callTool: async (request) => {
+        const broker = env.MCP_CONNECTION;
+        if (!broker) throw new Error("MCP connections are not enabled for this deployment");
+        const pins = await new McpSessionPinStore(db).listForSession(getPublicSessionId());
+        const pin = pins.find((entry) => entry.connectionId === request.connectionId);
+        if (!pin) throw new Error("This MCP connection is not granted to the session");
+        const result = await broker.callTool({
+          connectionId: request.connectionId,
+          // The provider sees the connection owner's identity, never the
+          // actor's and never a credential.
+          ownerUserId: pin.ownerUserId,
+          toolName: request.toolName,
+          arguments: request.arguments as Record<string, never>,
+        });
+        return result.content;
+      },
+      audit: async (input) => {
+        await new McpReadAuditStore(db).write({ ...input, sessionId: getPublicSessionId() });
+      },
+      operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
+    },
+    getSessionId: getPublicSessionId,
+  });
   const crossSessionHandler = new CrossSessionHandler({
     crossSession: {
       liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.crossSessionMessaging,
@@ -674,14 +724,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities
           .crossSessionMessaging ?? "off",
       receipts: new CrossSessionReceiptStore(db),
-      authorizeTarget: (actorId, targetSessionId) =>
-        evaluateCrossSessionTarget(
-          db,
-          parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT),
-          actorId,
-          targetSessionId,
-          { sourceSessionId: getPublicSessionId() }
-        ),
+      authorizeTarget: (request) =>
+        evaluateCrossSessionTarget(db, parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT), request),
+      authorizeSource: (request) =>
+        evaluateCrossSessionSource(db, parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT), request),
       deliver: (targetSessionId, delivery) =>
         createSessionRuntimeClientForTrace(env, durableObjectId).fetch(
           targetSessionId,
@@ -692,8 +738,24 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             body: JSON.stringify(delivery),
           }
         ),
-      operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
-      operationDepth: (operationId) => messageRepository.getMessageCrossSessionDepth(operationId),
+      operationActor: (operationId) => messageRepository.getMessageHumanActor(operationId),
+      operationBelongsToSession: (operationId) =>
+        messageRepository.getMessageById(operationId) !== null,
+      recordSend: (input) => {
+        eventRepository.createEvent({
+          id: `cross-session:${input.receiptId}`,
+          type: "cross_session_message",
+          data: JSON.stringify({
+            targetSessionId: input.targetSessionId,
+            receiptId: input.receiptId,
+            status: input.status,
+            reason: input.reason,
+            actorId: input.actorId,
+          }),
+          messageId: input.operationId,
+          createdAt: Date.now(),
+        });
+      },
     },
     messages: messageService,
     getSessionId: getPublicSessionId,
@@ -1282,6 +1344,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
     crossSessionMessage: (request) => crossSessionHandler.outbound(request),
+    piMcpList: () => mcpSessionHandler.list(),
+    piMcpRead: (request) => mcpSessionHandler.read(request),
     crossSessionInbound: (request) => crossSessionHandler.inbound(request),
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),
     externalActionPending: (request) => piBridgeHandler.externalActionPending(request),

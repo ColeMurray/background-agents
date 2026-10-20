@@ -159,6 +159,10 @@ export class SessionSandboxEventProcessor {
       case "context_compacted":
         this.streaming.handleContextCompacted(event, context);
         return;
+      case "cross_session_message":
+        // The source session recorded its own cross-session send; there is
+        // nothing to stream from the sandbox for it.
+        return;
       case "step_start":
       case "step_finish":
         await this.streaming.handleStep(event, context);

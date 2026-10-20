@@ -50,14 +50,14 @@ export function createPiDeploymentEmergencyPolicy(
 function requiredMutationFeature(
   call: ToolHookCall,
   declaration: ToolEffectRegistration
-): "workspace" | "repositoryEditing" | undefined {
+): "scratchWorkspace" | "repositoryEditing" | undefined {
   if (declaration.effect !== "local_mutation") return undefined;
   const path = call.arguments.path;
   const normalized =
     typeof path === "string" ? normalizeWorkspaceAbsolutePath(path) : "/workspace/scratch";
   return normalized === REPOSITORY_ROOT || normalized.startsWith(`${REPOSITORY_ROOT}/`)
     ? "repositoryEditing"
-    : "workspace";
+    : "scratchWorkspace";
 }
 
 function isTopLevelCodeMode(call: ToolHookCall): boolean {

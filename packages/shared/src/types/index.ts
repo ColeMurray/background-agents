@@ -227,6 +227,26 @@ export {
   crossSessionDeliverySchema,
   crossSessionDeliveryResultSchema,
 } from "./cross-session";
+export {
+  mcpToolReviewInputSchema,
+  mcpServerReviewInputSchema,
+  mcpServerReviewViewSchema,
+  mcpSessionGrantInputSchema,
+  mcpSessionPinSchema,
+  mcpSessionPinListSchema,
+  mcpReadRequestSchema,
+  mcpReadResultSchema,
+  MAX_MCP_READ_RESULT_BYTES,
+} from "./mcp-read";
+export type {
+  McpServerReviewInput,
+  McpServerReviewView,
+  McpSessionGrantInput,
+  McpSessionPin,
+  McpSessionPinList,
+  McpReadRequest,
+  McpReadResult,
+} from "./mcp-read";
 export type {
   CrossSessionMessageRequest,
   CrossSessionReceipt,

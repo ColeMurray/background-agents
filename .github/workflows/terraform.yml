@@ -266,7 +266,7 @@ jobs:
           TF_VAR_cloudflare_custom_domain: ${{ vars.CLOUDFLARE_CUSTOM_DOMAIN || secrets.CLOUDFLARE_CUSTOM_DOMAIN }}
           TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
           TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
-          TF_VAR_pi_workspace_mode: "${{ vars.PI_WORKSPACE_MODE || 'off' }}"
+          TF_VAR_pi_scratch_workspace_mode: "${{ vars.PI_SCRATCH_WORKSPACE_MODE || vars.PI_WORKSPACE_MODE || 'off' }}"
           TF_VAR_pi_cross_session_messaging_mode: "${{ vars.PI_CROSS_SESSION_MESSAGING_MODE || 'off' }}"
           TF_VAR_pi_external_actions_mode: "${{ vars.PI_EXTERNAL_ACTIONS_MODE || 'off' }}"
           TF_VAR_pi_computer_preview_acknowledged: "${{ vars.PI_COMPUTER_PREVIEW_ACKNOWLEDGED || 'false' }}"
@@ -605,7 +605,7 @@ jobs:
           TF_VAR_cloudflare_custom_domain: ${{ vars.CLOUDFLARE_CUSTOM_DOMAIN || secrets.CLOUDFLARE_CUSTOM_DOMAIN }}
           TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
           TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
-          TF_VAR_pi_workspace_mode: "${{ vars.PI_WORKSPACE_MODE || 'off' }}"
+          TF_VAR_pi_scratch_workspace_mode: "${{ vars.PI_SCRATCH_WORKSPACE_MODE || vars.PI_WORKSPACE_MODE || 'off' }}"
           TF_VAR_pi_cross_session_messaging_mode: "${{ vars.PI_CROSS_SESSION_MESSAGING_MODE || 'off' }}"
           TF_VAR_pi_external_actions_mode: "${{ vars.PI_EXTERNAL_ACTIONS_MODE || 'off' }}"
           TF_VAR_pi_computer_preview_acknowledged: "${{ vars.PI_COMPUTER_PREVIEW_ACKNOWLEDGED || 'false' }}"

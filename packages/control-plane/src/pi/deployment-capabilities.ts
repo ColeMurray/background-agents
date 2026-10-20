@@ -11,6 +11,7 @@ import {
 
 type PiDeploymentCapabilityConfig = Pick<
   EnvConfig,
+  | "PI_SCRATCH_WORKSPACE_MODE"
   | "PI_WORKSPACE_MODE"
   | "PI_REPOSITORY_EDITING_MODE"
   | "PI_CODE_MODE"
@@ -23,7 +24,9 @@ type PiDeploymentCapabilityConfig = Pick<
 /** Resolve current deployment policy through the canonical shared normalizer. */
 function resolvePiDeploymentCapabilities(config: PiDeploymentCapabilityConfig) {
   return resolvePiFeatureCapabilities({
-    workspace: config.PI_WORKSPACE_MODE,
+    // The scratch VFS was renamed. The old variable still works until it is
+    // removed, so a deployment does not silently lose the capability.
+    scratchWorkspace: config.PI_SCRATCH_WORKSPACE_MODE ?? config.PI_WORKSPACE_MODE,
     repositoryEditing: config.PI_REPOSITORY_EDITING_MODE,
     codeMode: config.PI_CODE_MODE,
     sandboxExecution: config.PI_SANDBOX_EXECUTION_MODE,

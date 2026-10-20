@@ -224,10 +224,15 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /mcp-servers/:id owner=404",
   "PUT /mcp-servers/:id owner=404",
   "DELETE /mcp-servers/:id owner=404",
+  "PUT /mcp-servers/:id/review owner=400",
+  "GET /mcp-servers/:id/review owner=404",
   "GET /mcp-connections owner=200",
   "POST /mcp-connections owner=400",
   "GET /mcp-connections/:id owner=404",
   "DELETE /mcp-connections/:id owner=200",
+  "POST /mcp-connections/:id/session-pins owner=400",
+  "DELETE /mcp-connections/:id/session-pins/:pinId owner=200",
+  "GET /sessions/:id/mcp-pins owner=200",
   "GET /analytics/dashboard owner=200",
   "GET /analytics/summary owner=200",
   "GET /analytics/timeseries owner=200",
@@ -483,10 +488,15 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "GET /mcp-servers/:id anonymous=401",
   "PUT /mcp-servers/:id anonymous=401",
   "DELETE /mcp-servers/:id anonymous=401",
+  "PUT /mcp-servers/:id/review anonymous=401",
+  "GET /mcp-servers/:id/review anonymous=401",
   "GET /mcp-connections anonymous=401",
   "POST /mcp-connections anonymous=401",
   "GET /mcp-connections/:id anonymous=401",
   "DELETE /mcp-connections/:id anonymous=401",
+  "POST /mcp-connections/:id/session-pins anonymous=401",
+  "DELETE /mcp-connections/:id/session-pins/:pinId anonymous=401",
+  "GET /sessions/:id/mcp-pins anonymous=401",
   "GET /analytics/dashboard anonymous=401",
   "GET /analytics/summary anonymous=401",
   "GET /analytics/timeseries anonymous=401",
@@ -674,6 +684,7 @@ exports[`route admission sentinel > conceals all team item routes from another t
   "POST /sessions/:id/pi/control other-team=404",
   "POST /sessions/:id/pi/lifecycle-control other-team=404",
   "POST /sessions/:id/slack-notify other-team=404",
+  "GET /sessions/:id/mcp-pins other-team=404",
 ]
 `;
 
@@ -730,6 +741,7 @@ exports[`route admission sentinel > reports action denials for a same-team Viewe
   "POST /sessions/:id/pi/control same-team-viewer=403",
   "POST /sessions/:id/pi/lifecycle-control same-team-viewer=403",
   "POST /sessions/:id/slack-notify same-team-viewer=403",
+  "GET /sessions/:id/mcp-pins same-team-viewer=200",
 ]
 `;
 

@@ -20,7 +20,7 @@ describe("deploymentCapabilities", () => {
     expect(capabilities.pi).toMatchObject({
       enabled: true,
       bindingReachable: true,
-      modes: { workspace: "read_only", codeMode: "off" },
+      modes: { scratchWorkspace: "read_only", codeMode: "off" },
     });
     expect(JSON.stringify(capabilities)).not.toContain("SECRET_SENTINEL");
   });

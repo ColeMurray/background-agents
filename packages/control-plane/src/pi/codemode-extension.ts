@@ -34,7 +34,8 @@ interface QueueEntry {
 }
 
 export interface PiCodeModePolicyState {
-  readonly activeTasks: Map<TaskId, string>;
+  /** The durable record of which Code Mode task is running. */
+  readonly parents: CodeModeParentRegistry;
   readonly coordinator: PiCodeModeExecutionCoordinator;
   readonly authorizeStart: (signal?: AbortSignal) => Promise<void>;
 }
@@ -42,6 +43,69 @@ export interface PiCodeModePolicyState {
 export interface PiCodeModePolicyOptions {
   coordinator?: PiCodeModeExecutionCoordinator;
   authorizeStart?: (signal?: AbortSignal) => Promise<void>;
+  parents?: CodeModeParentRegistry;
+}
+
+/**
+ * The durable record of the running Code Mode tasks.
+ *
+ * The restriction on what a nested call may do must survive a Durable Object
+ * eviction. A nested task that the scheduler resumes after an eviction has to
+ * learn that its parent is a Code Mode task from durable state, not from a map
+ * that only exists while the object is awake.
+ */
+export interface CodeModeParentRegistry {
+  /** The call id of the Code Mode task with this id, if one is running. */
+  get(taskId: TaskId): Promise<string | undefined>;
+  set(taskId: TaskId, callId: string): Promise<void>;
+  remove(taskId: TaskId): Promise<void>;
+}
+
+/** The storage surface a durable registry needs. */
+export interface CodeModeParentStorage {
+  get(key: string): Promise<unknown>;
+  put(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<boolean>;
+}
+
+const CODE_MODE_PARENT_KEY_PREFIX = "open-inspect:codemode-parent:";
+
+function codeModeParentKey(taskId: TaskId): string {
+  return `${CODE_MODE_PARENT_KEY_PREFIX}${String(taskId)}`;
+}
+
+/** The registry backed by the Durable Object's own storage. */
+export function createDurableCodeModeParentRegistry(
+  storage: CodeModeParentStorage
+): CodeModeParentRegistry {
+  return {
+    async get(taskId) {
+      const value = await storage.get(codeModeParentKey(taskId));
+      return typeof value === "string" ? value : undefined;
+    },
+    async set(taskId, callId) {
+      await storage.put(codeModeParentKey(taskId), callId);
+    },
+    async remove(taskId) {
+      await storage.delete(codeModeParentKey(taskId));
+    },
+  };
+}
+
+/** The registry used when no durable storage is available. */
+export function createMemoryCodeModeParentRegistry(): CodeModeParentRegistry {
+  const parents = new Map<string, string>();
+  return {
+    async get(taskId) {
+      return parents.get(String(taskId));
+    },
+    async set(taskId, callId) {
+      parents.set(String(taskId), callId);
+    },
+    async remove(taskId) {
+      parents.delete(String(taskId));
+    },
+  };
 }
 
 /** One fair, abort-aware Code Mode execution lane shared by every conversation in a Pi session. */
@@ -149,7 +213,7 @@ export function createPiCodeModePolicyState(
   options: PiCodeModePolicyOptions = {}
 ): PiCodeModePolicyState {
   return {
-    activeTasks: new Map(),
+    parents: options.parents ?? createMemoryCodeModeParentRegistry(),
     coordinator: options.coordinator ?? new PiCodeModeExecutionCoordinator(),
     authorizeStart: options.authorizeStart ?? (async () => {}),
   };
@@ -159,11 +223,12 @@ export function createPiCodeModePolicyState(
 export function createPiCodeModePolicyDelegate(state: PiCodeModePolicyState): PiToolPolicyDelegate {
   return {
     beforeTool: async (call, declaration) => {
-      if (call.parent && state.activeTasks.get(call.parent.taskId) === call.parent.callId) {
-        const read = declaration.effect === "local_read" || declaration.effect === "external_read";
-        if (!read || declaration.replay !== "safe") {
-          return { block: "Code Mode may call only replay-safe read tools" };
-        }
+      if (!call.parent) return undefined;
+      const parentCallId = await state.parents.get(call.parent.taskId);
+      if (parentCallId !== call.parent.callId) return undefined;
+      const read = declaration.effect === "local_read" || declaration.effect === "external_read";
+      if (!read || declaration.replay !== "safe") {
+        return { block: "Code Mode may call only replay-safe read tools" };
       }
       return undefined;
     },
@@ -205,7 +270,7 @@ export function createOpenInspectCodemodeExtension(
                 }
                 const remainingMs = deadline.deadlineMs - Date.now();
                 if (remainingMs <= 0) throw deadlineError();
-                policy.activeTasks.set(api.taskId, api.callId);
+                await policy.parents.set(api.taskId, api.callId);
                 try {
                   return await tool.execute(
                     { code: sourceWithDeadline(input.code, remainingMs) },
@@ -213,7 +278,7 @@ export function createOpenInspectCodemodeExtension(
                     context
                   );
                 } finally {
-                  policy.activeTasks.delete(api.taskId);
+                  await policy.parents.remove(api.taskId);
                 }
               });
             },

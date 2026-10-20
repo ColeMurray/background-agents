@@ -74,9 +74,9 @@ export function createComputerWorkspaceCapability(
   }
 
   const extension = defineExtension({
-    name: "open-inspect.workspace",
+    name: "open-inspect.scratch-workspace",
     sections: [
-      section("workspace", () =>
+      section("scratch_workspace", () =>
         [
           `${COMPUTER_SCRATCH_ROOT} is durable session scratch space.`,
           "It survives turns and Durable Object eviction, and is deleted with the Open-Inspect session.",
@@ -147,10 +147,21 @@ export function createComputerWorkspaceCapability(
             };
           }
           const details = normalizeDetails(result.details);
+          // The write keeps the attribution of the turn that caused it: the
+          // task and the call. The timeline attaches the operation, and the
+          // operation names the participant.
+          const attributed =
+            mutating && details !== undefined
+              ? {
+                  ...(details as Record<string, unknown>),
+                  ...(api.taskId === undefined ? {} : { scratchTaskId: String(api.taskId) }),
+                  scratchCallId: api.callId,
+                }
+              : details;
           return {
             output: result.content,
             isError: result.isError,
-            ...(details === undefined ? {} : { details }),
+            ...(attributed === undefined ? {} : { details: attributed }),
           };
         },
       };

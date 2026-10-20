@@ -49,7 +49,7 @@ describe("createOpenInspectCodemodeExtension", () => {
 
   it("limits only active Code Mode nested calls to replay-safe reads", async () => {
     const state = createPiCodeModePolicyState();
-    state.activeTasks.set(1 as never, "parent");
+    await state.parents.set(1 as never, "parent");
     const delegate = createPiCodeModePolicyDelegate(state);
     const api = {} as HookApi;
 

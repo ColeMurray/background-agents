@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { MCPClientManager } from "agents/mcp/client";
 import { requireMcpOAuthEncryptionKey } from "../env-validation";
+import type { McpBrokerCall, McpBrokerCallResult } from "../mcp/broker-contract";
 import {
   D1McpOAuthStorage,
   EncryptedMcpOAuthClientProvider,
@@ -115,6 +116,50 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
       transportCacheEntries: 0,
       reason: "Live MCP transport is not enabled",
     };
+  }
+
+  /**
+   * Read one reviewed tool.
+   *
+   * The broker is the last authority before the provider. It rechecks the
+   * owner, the connection's status, and the reviewed catalog from D1, so a
+   * connection that was revoked or a tool that was never reviewed cannot
+   * reach the provider even if the caller asked for it.
+   */
+  async callTool(call: McpBrokerCall): Promise<McpBrokerCallResult> {
+    const connectionId =
+      this.connectionId ?? (await this.ctx.storage.get<string>(CONNECTION_ID_KEY));
+    const ownerUserId = this.ownerUserId ?? (await this.ctx.storage.get<string>(OWNER_USER_ID_KEY));
+    if (!connectionId || !ownerUserId) throw new Error("MCP broker identity is not initialized");
+    if (connectionId !== call.connectionId || ownerUserId !== call.ownerUserId) {
+      throw new Error("MCP broker identity does not match the call");
+    }
+    // eslint-disable-next-line no-restricted-syntax -- every broker use rechecks the D1 credential/ownership authority
+    const authority = await this.env.DB.prepare(
+      `SELECT owner_user_id, status FROM mcp_connections WHERE id = ?`
+    )
+      .bind(connectionId)
+      .first<{ owner_user_id: string; status: string }>();
+    if (!authority || authority.owner_user_id !== ownerUserId) {
+      throw new Error("MCP broker identity is no longer authorized by D1");
+    }
+    if (authority.status === "revoking" || authority.status === "revoked") {
+      throw new Error("MCP connection is no longer usable");
+    }
+    // eslint-disable-next-line no-restricted-syntax -- the reviewed catalog is D1 authority
+    const reviewed = await this.env.DB.prepare(
+      `SELECT 1 FROM mcp_connection_tool_snapshots
+       WHERE connection_id = ? AND tool_name = ? AND effect = 'external_read'`
+    )
+      .bind(connectionId, call.toolName)
+      .first();
+    if (!reviewed) {
+      throw new Error("MCP tool is not part of the reviewed read-only catalog");
+    }
+    // The transport is not installed in this slice, so a reviewed read reaches
+    // the transport gate rather than the provider. The authorization above is
+    // complete and is what the live transport will inherit.
+    throw new Error("Live MCP transport is not enabled");
   }
 
   async destroy(connectionId: string, ownerUserId: string): Promise<void> {

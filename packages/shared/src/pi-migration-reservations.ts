@@ -16,6 +16,7 @@ export const PI_D1_MCP_MIGRATION_VERSION = 91;
 export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
 export const PI_D1_SLACK_MAPPING_MIGRATION_VERSION = 95;
 export const PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION = 93;
+export const PI_D1_MCP_READ_PROJECTION_MIGRATION_VERSION = 94;
 
 export type PiMigrationOwner =
   | PiFeatureId
@@ -129,6 +130,12 @@ export const PI_MIGRATION_RESERVATIONS = [
     version: PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
     feature: "crossSessionMessaging",
     purpose: "durable cross-session message receipts",
+  },
+  {
+    store: "d1",
+    version: PI_D1_MCP_READ_PROJECTION_MIGRATION_VERSION,
+    feature: "mcp",
+    purpose: "MCP session attachments and OAuth keyring",
   },
 ] as const satisfies readonly MigrationReservation[];
 

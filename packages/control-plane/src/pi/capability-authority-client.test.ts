@@ -6,8 +6,8 @@ import {
 } from "./capability-authority-client";
 
 const authority = {
-  snapshot: createPiFeatureCapabilitySnapshot({ workspace: "enabled" }),
-  current: createPiFeatureCapabilitySnapshot({ workspace: "off" }),
+  snapshot: createPiFeatureCapabilitySnapshot({ scratchWorkspace: "enabled" }),
+  current: createPiFeatureCapabilitySnapshot({ scratchWorkspace: "off" }),
 };
 
 function hangingFetcher(onAbort?: (reason: unknown) => void) {

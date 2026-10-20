@@ -44,7 +44,7 @@ export function deploymentCapabilities(env: Env): DeploymentCapabilities {
       canary: {
         codeModeReady: modes.codeMode === "enabled",
         workspacePreviewAcknowledged:
-          modes.workspace !== "off" || modes.repositoryEditing !== "off",
+          modes.scratchWorkspace !== "off" || modes.repositoryEditing !== "off",
         mcpReady:
           modes.mcp !== "off" &&
           env.MCP_CONNECTIONS_ENABLED === "true" &&

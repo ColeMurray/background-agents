@@ -61,7 +61,7 @@ The runtime installs Pi extensions before opening the durable harness:
 
 Repository-backed web, Slack, and automation sessions are supported for remote read/analysis work
 without a checkout or sandbox. In personal or staging deployments that explicitly accept Cloudflare
-Computer's preview status, `PI_WORKSPACE_MODE=read_only` gives Pi a durable credential-free
+Computer's preview status, `PI_SCRATCH_WORKSPACE_MODE=read_only` gives Pi a durable credential-free
 `/workspace/scratch` area with `read`, `ls`, `find`, and `grep`; `writable` also provides bounded
 `write`, `edit`, and `delete`. Writable scratch files have an 8 MiB and 1,000-entry aggregate quota,
 mutations run one at a time, interrupted mutations are not replayed, and neither `/workspace/scratch`

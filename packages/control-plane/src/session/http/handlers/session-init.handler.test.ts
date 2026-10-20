@@ -7,7 +7,7 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 
 const ENABLED_PI_SNAPSHOT = createPiFeatureCapabilitySnapshot({
-  workspace: "writable",
+  scratchWorkspace: "writable",
   repositoryEditing: "enabled",
   codeMode: "enabled",
 });

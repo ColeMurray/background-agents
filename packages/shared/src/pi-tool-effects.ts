@@ -112,6 +112,23 @@ export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 
+/**
+ * The MCP read tools.
+ *
+ * They are declared here, before any extension is assembled, so the assembler
+ * knows their effect without asking the session. The tool is read-only: an
+ * MCP mutation never becomes a tool, it becomes an external action that a
+ * person approves.
+ */
+export const PI_MCP_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "mcp_read",
+    effect: "external_read",
+    callers: ["model"],
+    replay: "safe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
 /** Build a lookup while rejecting accidental tool shadowing across extensions. */
 export function createToolEffectRegistry(
   ...registrationGroups: readonly (readonly ToolEffectRegistration[])[]

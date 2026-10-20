@@ -489,7 +489,7 @@ export function SessionRightSidebarContent({
       </InspectorPanel>
 
       <InspectorPanel value="tools" activeTab={activeTab} className="space-y-5">
-        <h3 className="text-sm font-semibold">Workspace tools</h3>
+        <h3 className="text-sm font-semibold">Scratch files</h3>
         {sessionState?.harness === "pi" && (
           <ExecutionsSection sessionId={sessionId} capabilities={capabilities} />
         )}

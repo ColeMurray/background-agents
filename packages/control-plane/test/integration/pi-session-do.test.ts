@@ -127,7 +127,7 @@ describe("PiSessionDO", () => {
   it("initializes idempotently only for the exact session identity and snapshot", async () => {
     const sessionName = `pi-initialize-${crypto.randomUUID()}`;
     const stub = piStub(sessionName);
-    const snapshot = createPiFeatureCapabilitySnapshot({ workspace: "enabled" });
+    const snapshot = createPiFeatureCapabilitySnapshot({ scratchWorkspace: "enabled" });
 
     await expect(stub.initialize(sessionName, snapshot)).resolves.toBeUndefined();
     await expect(stub.initialize(sessionName, snapshot)).resolves.toBeUndefined();
@@ -135,7 +135,7 @@ describe("PiSessionDO", () => {
       try {
         await instance.initialize(
           sessionName,
-          createPiFeatureCapabilitySnapshot({ workspace: "off" })
+          createPiFeatureCapabilitySnapshot({ scratchWorkspace: "off" })
         );
         return "accepted";
       } catch (error) {
@@ -187,9 +187,9 @@ describe("PiSessionDO", () => {
       "SELECT pi_feature_capability_snapshot FROM session"
     );
     expect(JSON.parse(rows[0]!.pi_feature_capability_snapshot)).toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "enabled",
+        scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
         // Sandbox execution stays off until a provider passes the generation-78
@@ -238,7 +238,7 @@ describe("PiSessionDO", () => {
       runInDurableObject(piStub(sessionName), (_instance, state) =>
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
-    ).resolves.toMatchObject({ capabilities: { workspace: "enabled" } });
+    ).resolves.toMatchObject({ capabilities: { scratchWorkspace: "enabled" } });
   });
 
   it("fails a creation retry closed when SessionDO's stored snapshot is malformed", async () => {
@@ -1017,9 +1017,9 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "enabled",
+        scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
         // Sandbox execution stays off until a provider passes the generation-78
@@ -1594,9 +1594,9 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "enabled",
+        scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
         // Sandbox execution stays off until a provider passes the generation-78

@@ -1453,7 +1453,7 @@ Secrets for credentials:
 | `UNSAFE_ALLOW_ALL_USERS`                  | `true` to allow any authenticated user when every allowlist is empty (defaults to `false`)      |
 | `ENABLE_DURABLE_OBJECT_BINDINGS`          | Optional Terraform CI flag for Durable Object phase 1 (defaults to `true`)                      |
 | `PI_DURABLE_ENABLED`                      | Enables the Cloudflare-only Pi Durable harness after its two-phase DO migration                 |
-| `PI_WORKSPACE_MODE`                       | Pi scratch workspace: `off` (default), `read_only`, or `writable`                               |
+| `PI_SCRATCH_WORKSPACE_MODE`               | Pi session scratch VFS: `off` (default), `read_only`, or `writable`                             |
 | `PI_REPOSITORY_EDITING_MODE`              | Independent position-rooted repository overlay/edit/diff gate: `off` or `enabled`               |
 | `PI_SANDBOX_EXECUTION_MODE`               | Pi execution capability: `off`, `read_only`, or `enabled`; no model tool is exposed yet         |
 | `PI_CODEMODE_MODE`                        | Native Pi Code Mode: `off` (default) or explicit paid-plan opt-in `paid`                        |
@@ -1501,20 +1501,27 @@ account's refresh token in the Pi Durable Object. For an existing deployment:
 4. When the web app runs on Vercel, dispatch the **Deploy Web** workflow so the build-time
    `NEXT_PUBLIC_PI_DURABLE_ENABLED` value is included in the active bundle.
 
-The workspace currently depends on exact-pinned `@cloudflare/computer@0.5.1`, which Cloudflare marks
-preview-only and not production-ready. Keep `PI_WORKSPACE_MODE=off` for production deployments until
-that status changes or your deployment owner explicitly accepts and validates the preview risk. For
-a personal or staging canary, set `pi_computer_preview_acknowledged = true` in `terraform.tfvars` or
-set the Actions variable `PI_COMPUTER_PREVIEW_ACKNOWLEDGED=true`, **and** set the workspace mode.
-Both plan and apply receive the acknowledgement, and Terraform hard-fails if either workspace mode
-or repository editing is enabled without it:
+The scratch VFS is not the Open-Inspect workspace. The Open-Inspect workspace is the tenant: it is
+what the team switcher, the workspace permissions, and the session visibility `workspace` mean. The
+scratch VFS is the session's own Computer filesystem under `/workspace/scratch`. The native
+execution sandbox has a third `/workspace`, which is its own empty filesystem. The three are
+unrelated and are named distinctly in the APIs and in the interface.
 
-- `PI_WORKSPACE_MODE=read_only` adds `read`, `ls`, `find`, and `grep` under `/workspace/scratch`.
-- `PI_WORKSPACE_MODE=writable` also adds `write`, `edit`, and forced `delete`. It enforces an 8 MiB
-  and 1,000-entry aggregate quota across files and directories, serializes all mutations, refuses
-  deletion of `/workspace/scratch` or its `/workspace` container, marks mutations unsafe to replay
-  after interruption, records only metadata in durable policy memos, and redacts write contents and
-  edit contents/diffs from projected timeline events.
+The workspace currently depends on exact-pinned `@cloudflare/computer@0.5.1`, which Cloudflare marks
+preview-only and not production-ready. Keep `PI_SCRATCH_WORKSPACE_MODE=off` for production
+deployments until that status changes or your deployment owner explicitly accepts and validates the
+preview risk. For a personal or staging canary, set `pi_computer_preview_acknowledged = true` in
+`terraform.tfvars` or set the Actions variable `PI_COMPUTER_PREVIEW_ACKNOWLEDGED=true`, **and** set
+the workspace mode. Both plan and apply receive the acknowledgement, and Terraform hard-fails if
+either workspace mode or repository editing is enabled without it:
+
+- `PI_SCRATCH_WORKSPACE_MODE=read_only` adds `read`, `ls`, `find`, and `grep` under
+  `/workspace/scratch`.
+- `PI_SCRATCH_WORKSPACE_MODE=writable` also adds `write`, `edit`, and forced `delete`. It enforces
+  an 8 MiB and 1,000-entry aggregate quota across files and directories, serializes all mutations,
+  refuses deletion of `/workspace/scratch` or its `/workspace` container, marks mutations unsafe to
+  replay after interruption, records only metadata in durable policy memos, and redacts write
+  contents and edit contents/diffs from projected timeline events.
 
 Neither mode adds a checkout, Git, shell, network, mounts, publishing, or an execution backend.
 Leave the value `off` to avoid initializing Computer VFS tables.
@@ -1522,8 +1529,8 @@ Leave the value `off` to avoid initializing Computer VFS tables.
 `PI_REPOSITORY_EDITING_MODE=enabled` independently materializes strict commit-pinned repositories
 under `/workspace/repos/{position}`. Repository and scratch mutations share the canonical workspace
 FIFO, policy, redaction, and SessionDiff publication order. Scratch remains governed by
-`PI_WORKSPACE_MODE`, including its durable aggregate quota when writable. Repository bytes cross
-SessionDO in bounded batches and never carry source-control credentials.
+`PI_SCRATCH_WORKSPACE_MODE`, including its durable aggregate quota when writable. Repository bytes
+cross SessionDO in bounded batches and never carry source-control credentials.
 
 The materialized bytes are pinned session state. Authorized session participants can continue to
 read a complete durable overlay after a source-control grant or provider installation is revoked;

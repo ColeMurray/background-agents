@@ -186,6 +186,10 @@
       "import": "./dist/types/cross-session.js",
       "types": "./dist/types/cross-session.d.ts"
     },
+    "./types/mcp-read": {
+      "import": "./dist/types/mcp-read.js",
+      "types": "./dist/types/mcp-read.d.ts"
+    },
     "./types/session-activity": {
       "import": "./dist/types/session-activity.js",
       "types": "./dist/types/session-activity.d.ts"

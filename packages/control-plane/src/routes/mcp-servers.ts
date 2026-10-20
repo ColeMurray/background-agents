@@ -8,6 +8,12 @@ import {
   McpServerStore,
   McpServerValidationError,
 } from "../db/mcp-servers";
+import {
+  buildMcpToolReview,
+  McpReviewValidationError,
+  McpServerReviewStore,
+} from "../db/mcp-server-reviews";
+import { mcpServerReviewInputSchema } from "@open-inspect/shared/types/mcp-read";
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
@@ -187,3 +193,105 @@ mcpServerRoutes.post("/mcp-servers", MCP_MANAGE, (c) => dispatch(c, handleCreate
 mcpServerRoutes.get("/mcp-servers/:id", MCP_READ, (c) => dispatch(c, handleGetMcpServer));
 mcpServerRoutes.put("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleUpdateMcpServer));
 mcpServerRoutes.delete("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleDeleteMcpServer));
+
+/**
+ * The reviewed catalog of one server revision.
+ *
+ * Only an account that holds `mcp_servers.manage` may write a review, and
+ * the review is not delegable to a personal connection: a connection stages
+ * an immutable, hash-pinned copy of the reviewed reads.
+ */
+async function handleReviewMcpServer(
+  request: Request,
+  env: Env,
+  params: { id: string },
+  ctx: RequestContext
+): Promise<Response> {
+  if (!ctx.db) return error("Database not configured", 503);
+  const body = await parseBody(
+    request,
+    mcpServerReviewInputSchema,
+    "serverRevision and tools are required"
+  );
+  if (body instanceof Response) return body;
+  const reviewerId = ctx.authorization?.userId;
+  if (!reviewerId) return error("Unauthorized", 401);
+  const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+  const server = await store.get(params.id);
+  if (!server) return error("MCP server not found", 404);
+  try {
+    const reviewed = await new McpServerReviewStore(ctx.db).review({
+      reviewedByUserId: reviewerId,
+      serverId: server.id,
+      serverRevision: body.serverRevision,
+      tools: await Promise.all(
+        body.tools.map((tool) =>
+          buildMcpToolReview({
+            toolName: tool.toolName,
+            title: tool.title,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            effect: tool.effect,
+          })
+        )
+      ),
+    });
+    return json({
+      review: {
+        serverId: reviewed.serverId,
+        serverRevision: reviewed.serverRevision,
+        reviewedByUserId: reviewed.reviewedByUserId,
+        reviewedAt: reviewed.reviewedAt,
+        tools: reviewed.tools.map((tool) => ({
+          stableToolId: tool.stableToolId,
+          toolName: tool.toolName,
+          title: tool.title,
+          description: tool.description,
+          effect: tool.effect,
+          reviewedAt: tool.reviewedAt,
+        })),
+      },
+    });
+  } catch (cause) {
+    if (cause instanceof McpReviewValidationError) return error(cause.message, 400);
+    throw cause;
+  }
+}
+
+async function handleGetMcpServerReview(
+  _request: Request,
+  env: Env,
+  params: { id: string },
+  ctx: RequestContext
+): Promise<Response> {
+  if (!ctx.db) return error("Database not configured", 503);
+  const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+  const server = await store.get(params.id);
+  if (!server) return error("MCP server not found", 404);
+  const review = await new McpServerReviewStore(ctx.db).get(server.id, server.revision);
+  if (!review) return error("MCP server has no reviewed catalog", 404);
+  return json({
+    review: {
+      serverId: review.serverId,
+      serverRevision: review.serverRevision,
+      reviewedByUserId: review.reviewedByUserId,
+      reviewedAt: review.reviewedAt,
+      tools: review.tools.map((tool) => ({
+        stableToolId: tool.stableToolId,
+        toolName: tool.toolName,
+        title: tool.title,
+        description: tool.description,
+        effect: tool.effect,
+        reviewedAt: tool.reviewedAt,
+      })),
+    },
+  });
+}
+
+mcpServerRoutes.put("/mcp-servers/:id/review", MCP_MANAGE, (c) =>
+  dispatch(c, handleReviewMcpServer)
+);
+mcpServerRoutes.get("/mcp-servers/:id/review", MCP_READ, (c) =>
+  dispatch(c, handleGetMcpServerReview)
+);

@@ -97,6 +97,9 @@ import { z } from "zod";
 import {
   externalActionStatusResponseSchema,
   crossSessionDeliveryResultSchema,
+  mcpReadResultSchema,
+  mcpSessionPinListSchema,
+  type McpReadResult,
   type CrossSessionDeliveryResult,
   type ExternalActionPrepareRequest,
 } from "@open-inspect/shared";
@@ -111,12 +114,17 @@ import {
   createCrossSessionExtension,
   CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
 } from "../pi/cross-session-extension";
-import { PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS } from "@open-inspect/shared";
+import { createMcpExtension } from "../pi/mcp-extension";
+import {
+  PI_MCP_TOOL_EFFECT_REGISTRATIONS,
+  PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
+} from "@open-inspect/shared";
 import {
   PiCodeModeExecutionCoordinator,
   createOpenInspectCodemodeExtension,
   createPiCodeModePolicyDelegate,
   createPiCodeModePolicyState,
+  createDurableCodeModeParentRegistry,
 } from "../pi/codemode-extension";
 import {
   SESSION_DIFF_MAX_ERROR_LENGTH,
@@ -251,6 +259,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       this.codeModeCoordinator = codeModeCoordinator;
       const codeModePolicy = createPiCodeModePolicyState({
         coordinator: codeModeCoordinator,
+        // The nested-call restriction is durable: it survives an eviction.
+        parents: createDurableCodeModeParentRegistry(this.ctx.storage),
         authorizeStart: async (signal) => {
           if ((await currentCapabilities(signal)).codeMode !== "enabled") {
             throw new Error("Code Mode is disabled for new calls by deployment policy");
@@ -347,16 +357,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         capabilities.repositoryEditing === "enabled" && sessionContext.repositories.length > 0;
       if (repositoryEditing) {
         const scratchWorkspace = createLazyWorkspaceToolFacade(() =>
-          this.openWorkspace(capabilities.workspace === "enabled")
+          this.openWorkspace(capabilities.scratchWorkspace === "enabled")
         );
         this.workspace = scratchWorkspace;
         const repositoryWorkspace = createLazyWorkspaceToolFacade(async () => {
-          await this.openWorkspace(capabilities.workspace === "enabled");
+          await this.openWorkspace(capabilities.scratchWorkspace === "enabled");
           if (!this.rawWorkspace) throw new Error("Pi repository workspace is unavailable");
           return createWorkspaceToolFacade(this.rawWorkspace);
         });
         this.repositoryWorkspaceInitializer = async (signal) => {
-          await this.openWorkspace(capabilities.workspace === "enabled");
+          await this.openWorkspace(capabilities.scratchWorkspace === "enabled");
           return this.initializeRepositoryWorkspace(
             (await this.ensureRepositoryPins(signal)).repositories,
             workspaceMutations,
@@ -368,13 +378,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           repositoryWorkspace,
           initializeOverlay: (signal) => this.repositoryWorkspaceInitializer!(signal),
           mutations: workspaceMutations,
-          scratchMode: capabilities.workspace,
+          scratchMode: capabilities.scratchWorkspace,
           publishDiff: (bundle) => this.publishDiffBundle(bundle),
           triggerMessageId: () => this.currentOperationId(),
         });
         workspacePolicyDelegate = capability.toolPolicyDelegate;
         extensions.push({
-          slot: "workspace",
+          slot: "scratch_workspace",
           feature: "repositoryEditing",
           minimumCapability: "enabled",
           extension: capability.extension,
@@ -387,20 +397,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           extension: defineExtension({ name: "open-inspect.repository-overlay" }),
           effects: [],
         });
-      } else if (capabilities.workspace !== "off") {
+      } else if (capabilities.scratchWorkspace !== "off") {
         const workspace = createLazyWorkspaceToolFacade(() =>
-          this.openWorkspace(capabilities.workspace === "enabled")
+          this.openWorkspace(capabilities.scratchWorkspace === "enabled")
         );
         this.workspace = workspace;
         const capability = createComputerWorkspaceCapability(
           workspace,
-          capabilities.workspace,
+          capabilities.scratchWorkspace,
           workspaceMutations
         );
         workspacePolicyDelegate = capability.toolPolicyDelegate;
         extensions.push({
-          slot: "workspace",
-          feature: "workspace",
+          slot: "scratch_workspace",
+          feature: "scratchWorkspace",
           minimumCapability: "read_only",
           extension: capability.extension,
           effects: capability.effects,
@@ -438,6 +448,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             },
           }),
           effects: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
+        });
+      }
+      if (capabilities.mcp !== "off") {
+        extensions.push({
+          slot: "mcp",
+          feature: "mcp",
+          minimumCapability: "read_only",
+          extension: createMcpExtension({
+            client: {
+              read: (request, signal) => this.readMcpTool(request, signal),
+              list: (signal) => this.listMcpGrants(signal),
+            },
+          }),
+          effects: PI_MCP_TOOL_EFFECT_REGISTRATIONS,
         });
       }
       const assembly = assemblePiExtensions(extensions, capabilities);
@@ -567,7 +591,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       timestamp_ms: initializedAt,
       duration_ms: initializedAt - initializeStartedAt,
       session_id: sessionId,
-      capability_workspace: snapshot.capabilities.workspace,
+      capability_workspace: snapshot.capabilities.scratchWorkspace,
       capability_repository_editing: snapshot.capabilities.repositoryEditing,
       capability_code_mode: snapshot.capabilities.codeMode,
       sandbox_avoided: 1,
@@ -1605,6 +1629,69 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return z.json().parse(body);
+  }
+
+  /**
+   * Read one reviewed MCP tool through the owning session.
+   *
+   * The session resolves the grant, the reviewed catalog, and the owner's
+   * identity. The agent never holds a credential and never names one.
+   */
+  private async readMcpTool(
+    request: { connectionId: string; toolName: string; arguments: Record<string, unknown> },
+    signal?: AbortSignal
+  ): Promise<McpReadResult> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piMcpRead}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
+        },
+        body: JSON.stringify(request),
+        signal,
+      })
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(
+        typeof (body as { error?: unknown } | null)?.error === "string"
+          ? (body as { error: string }).error
+          : "The MCP read did not complete"
+      );
+    }
+    return mcpReadResultSchema.parse(body);
+  }
+
+  /** The session's authorized MCP attachments. */
+  private async listMcpGrants(signal?: AbortSignal): Promise<{
+    grants: Array<{ connectionId: string; serverName: string; toolNames: string[] }>;
+  }> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piMcpList}`, {
+        method: "GET",
+        ...(signal ? { signal } : {}),
+      })
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok) return { grants: [] };
+    const parsed = mcpSessionPinListSchema.safeParse(body);
+    return parsed.success
+      ? {
+          grants: parsed.data.pins.map((pin) => ({
+            connectionId: pin.connectionId,
+            serverName: pin.serverName,
+            toolNames: pin.toolNames,
+          })),
+        }
+      : { grants: [] };
   }
 
   /**

@@ -16,7 +16,7 @@ import {
 import { createPiToolPolicyExtension } from "./tool-policy-extension";
 
 const capabilities = resolvePiFeatureCapabilities({
-  workspace: "enabled",
+  scratchWorkspace: "enabled",
   repositoryEditing: "enabled",
   codeMode: "enabled",
   sandboxExecution: "enabled",
@@ -74,7 +74,7 @@ describe("assemblePiExtensions", () => {
     const assembled = assemblePiExtensions(
       [
         contribution("mcp", "mcp"),
-        contribution("workspace", "workspace"),
+        contribution("scratch_workspace", "scratchWorkspace"),
         contribution("repository_editing", "repository-editing"),
         contribution("core", "core"),
         policy((effects) => (policyEffects = effects)),
@@ -93,7 +93,7 @@ describe("assemblePiExtensions", () => {
       "delegation",
       "agent_messaging",
       "skills",
-      "workspace",
+      "scratch_workspace",
       "repository_editing",
       "code_mode",
       "sandbox_execution",
@@ -106,7 +106,7 @@ describe("assemblePiExtensions", () => {
       "core",
       "delegation",
       "skills",
-      "workspace",
+      "scratchWorkspace",
       "repository-editing",
       "code-mode",
       "sandbox",

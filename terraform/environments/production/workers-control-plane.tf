@@ -104,7 +104,7 @@ module "control_plane_worker" {
       SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
       TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
       PI_DURABLE_ENABLED            = { value = tostring(local.pi_durable_available) }
-      PI_WORKSPACE_MODE             = { value = var.pi_workspace_mode }
+      PI_SCRATCH_WORKSPACE_MODE             = { value = var.pi_scratch_workspace_mode }
       PI_REPOSITORY_EDITING_MODE    = { value = var.pi_repository_editing_mode }
       PI_SANDBOX_EXECUTION_MODE     = { value = var.pi_sandbox_execution_mode }
       PI_SANDBOX_EXECUTION_ATTESTATION = { value = var.pi_sandbox_execution_attestation }

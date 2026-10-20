@@ -44,7 +44,7 @@ run "workspace_defaults_off" {
   command = plan
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_WORKSPACE_MODE"] == "off"
+    condition     = module.control_plane_worker.plain_text_bindings["PI_SCRATCH_WORKSPACE_MODE"] == "off"
     error_message = "The Pi workspace must fail closed by default."
   }
 
@@ -109,12 +109,12 @@ run "workspace_read_only_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_workspace_mode                = "read_only"
+    pi_scratch_workspace_mode                = "read_only"
     pi_computer_preview_acknowledged = true
   }
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_WORKSPACE_MODE"] == "read_only"
+    condition     = module.control_plane_worker.plain_text_bindings["PI_SCRATCH_WORKSPACE_MODE"] == "read_only"
     error_message = "The read-only Pi workspace mode must reach the control-plane Worker."
   }
 }
@@ -123,12 +123,12 @@ run "workspace_writable_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_workspace_mode                = "writable"
+    pi_scratch_workspace_mode                = "writable"
     pi_computer_preview_acknowledged = true
   }
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_WORKSPACE_MODE"] == "writable"
+    condition     = module.control_plane_worker.plain_text_bindings["PI_SCRATCH_WORKSPACE_MODE"] == "writable"
     error_message = "The writable Pi workspace mode must reach the control-plane Worker."
   }
 }
@@ -137,13 +137,13 @@ run "repository_editing_reaches_the_worker_independently" {
   command = plan
 
   variables {
-    pi_workspace_mode                = "read_only"
+    pi_scratch_workspace_mode                = "read_only"
     pi_repository_editing_mode       = "enabled"
     pi_computer_preview_acknowledged = true
   }
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_WORKSPACE_MODE"] == "read_only" && module.control_plane_worker.plain_text_bindings["PI_REPOSITORY_EDITING_MODE"] == "enabled"
+    condition     = module.control_plane_worker.plain_text_bindings["PI_SCRATCH_WORKSPACE_MODE"] == "read_only" && module.control_plane_worker.plain_text_bindings["PI_REPOSITORY_EDITING_MODE"] == "enabled"
     error_message = "Repository editing must not widen the independent scratch workspace mode."
   }
 }
@@ -152,7 +152,7 @@ run "computer_preview_acknowledgement_is_required_for_workspace" {
   command = plan
 
   variables {
-    pi_workspace_mode = "read_only"
+    pi_scratch_workspace_mode = "read_only"
   }
 
   expect_failures = [terraform_data.pi_computer_preview_gate]
@@ -172,8 +172,8 @@ run "workspace_rejects_unknown_modes" {
   command = plan
 
   variables {
-    pi_workspace_mode = "write"
+    pi_scratch_workspace_mode = "write"
   }
 
-  expect_failures = [var.pi_workspace_mode]
+  expect_failures = [var.pi_scratch_workspace_mode]
 }

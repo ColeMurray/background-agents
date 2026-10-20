@@ -61,6 +61,8 @@ export interface SessionInternalRouteHandlers {
   piExternalActionStatus: SessionInternalRouteHandler;
   piExternalActionExecute: SessionInternalRouteHandler;
   crossSessionMessage: SessionInternalRouteHandler;
+  piMcpList: SessionInternalRouteHandler;
+  piMcpRead: SessionInternalRouteHandler;
   crossSessionInbound: SessionInternalRouteHandler;
   externalActionStatus: SessionInternalRouteHandler;
   externalActionPending: SessionInternalRouteHandler;
@@ -198,6 +200,16 @@ export function createSessionInternalRoutes(
       method: "GET",
       path: SessionInternalPaths.externalActionStatus,
       handler: handlers.externalActionStatus,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piMcpList,
+      handler: handlers.piMcpList,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMcpRead,
+      handler: handlers.piMcpRead,
     },
     {
       method: "POST",

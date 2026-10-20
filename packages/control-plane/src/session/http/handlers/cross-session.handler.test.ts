@@ -11,6 +11,7 @@ function harness(
     delivered?: boolean;
     depth?: number;
     fanOut?: number;
+    sourceDecision?: { kind: "allowed" } | { kind: "denied"; reason: string };
   } = {}
 ) {
   const receipts = new Map<
@@ -52,6 +53,13 @@ function harness(
         }
         return null;
       },
+      depthForOperation: async () => options.depth ?? 0,
+      findById: async (id: string) => {
+        for (const receipt of receipts.values()) {
+          if (receipt.id === id) return receipt;
+        }
+        return null;
+      },
       countForOperation: async (sourceSessionId: string, operationId: string) => {
         if (options.fanOut !== undefined) return options.fanOut;
         let total = 0;
@@ -88,9 +96,11 @@ function harness(
     } as unknown as CrossSessionBridge["receipts"],
     authorizeTarget: async () =>
       options.decision ?? { kind: "allowed", row: {} as never, actorId: "user-1" },
+    authorizeSource: async () => options.sourceDecision ?? { kind: "allowed" },
+    operationBelongsToSession: () => true,
+    recordSend: vi.fn(),
     deliver,
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
-    operationDepth: () => options.depth ?? 0,
   };
   const enqueuePrompt = vi.fn(async () => ({ messageId: "message-1", status: "queued" as const }));
   const handler = new CrossSessionHandler({
@@ -98,7 +108,32 @@ function harness(
     messages: { enqueuePrompt } as never,
     getSessionId: () => "session-1",
   });
-  return { handler, bridge, deliver, enqueuePrompt, receipts };
+  return {
+    handler,
+    bridge,
+    deliver,
+    enqueuePrompt,
+    receipts,
+    seedReceipt() {
+      receipts.set("xsr_1", {
+        id: "xsr_1",
+        sourceSessionId: "session-1",
+        targetSessionId: "session-1",
+        operationId: "message-1",
+        humanActorId: "user-1",
+        agentConversationId: "conversation-1",
+        sourceTaskId: "task-1",
+        depth: 0,
+        idempotencyKey: "pi:message-1:call-1",
+        contentSha256: "hash",
+        status: "pending",
+        targetMessageId: null,
+        rejectionReason: null,
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+    },
+  };
 }
 
 const request = {
@@ -242,6 +277,7 @@ describe("CrossSessionHandler", () => {
 
   it("accepts a delivery in the target and records its provenance", async () => {
     const h = harness();
+    h.seedReceipt();
     const delivery = {
       receipt: {
         receiptId: "xsr_1",
@@ -309,8 +345,90 @@ describe("CrossSessionHandler", () => {
     expect(h.enqueuePrompt).not.toHaveBeenCalled();
   });
 
+  it("refuses a delivery whose receipt it cannot confirm", async () => {
+    const h = harness();
+
+    const response = await h.handler.inbound(
+      new Request("http://session/internal/cross-session-inbound", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          receipt: {
+            receiptId: "xsr_forged",
+            sourceSessionId: "session-1",
+            targetSessionId: "session-1",
+            humanActorId: "user-1",
+            agentConversationId: null,
+            sourceTaskId: null,
+            depth: 0,
+            idempotencyKey: "pi:forged",
+            createdAt: 1000,
+          },
+          content: "hello",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(h.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it("refuses a delivery when the target does not accept agent messages", async () => {
+    const h = harness({ sessionCapability: "off" });
+    h.seedReceipt();
+
+    const response = await h.handler.inbound(
+      new Request("http://session/internal/cross-session-inbound", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          receipt: {
+            receiptId: "xsr_1",
+            sourceSessionId: "session-1",
+            targetSessionId: "session-1",
+            humanActorId: "user-1",
+            agentConversationId: null,
+            sourceTaskId: null,
+            depth: 0,
+            idempotencyKey: "pi:message-1:call-1",
+            createdAt: 1000,
+          },
+          content: "hello",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(h.enqueuePrompt).not.toHaveBeenCalled();
+  });
+
+  it("refuses a send when the actor lost authority in the source session", async () => {
+    const h = harness({
+      sourceDecision: { kind: "denied", reason: "The actor may no longer collaborate" },
+    });
+
+    const response = await h.handler.outbound(outboundRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "cross_session_source_denied",
+    });
+    expect(h.deliver).not.toHaveBeenCalled();
+  });
+
+  it("refuses a send whose turn does not belong to this session", async () => {
+    const h = harness();
+    h.bridge.operationBelongsToSession = () => false;
+
+    const response = await h.handler.outbound(outboundRequest());
+
+    expect(response.status).toBe(403);
+    expect(h.deliver).not.toHaveBeenCalled();
+  });
+
   it("refuses a delivery the target can no longer authorize", async () => {
     const h = harness({ decision: { kind: "denied", reason: "the actor lost membership" } });
+    h.seedReceipt();
     const delivery = {
       receipt: {
         receiptId: "xsr_1",

@@ -107,6 +107,42 @@ export class CrossSessionReceiptStore {
     return result.meta.changes === 1;
   }
 
+  /**
+   * One receipt by its id.
+   *
+   * The target reads the receipt before it accepts a delivery, so the
+   * provenance of a message is proven rather than asserted.
+   */
+  async findById(id: string): Promise<CrossSessionReceiptRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, source_session_id, target_session_id, operation_id, human_actor_id,
+                agent_conversation_id, source_task_id, depth, idempotency_key, content_sha256,
+                status, target_message_id, rejection_reason, created_at, updated_at
+         FROM cross_session_receipts WHERE id = ?`
+      )
+      .bind(id)
+      .first<ReceiptRow>();
+    return row ? toRecord(row) : null;
+  }
+
+  /**
+   * How deep the message chain of one turn already is.
+   *
+   * A message that arrived from another session carries its depth; a message
+   * that started here has none.
+   */
+  async depthForOperation(sourceSessionId: string, operationId: string): Promise<number> {
+    const row = await this.db
+      .prepare(
+        `SELECT MAX(depth) AS depth FROM cross_session_receipts
+         WHERE source_session_id = ? AND operation_id = ?`
+      )
+      .bind(sourceSessionId, operationId)
+      .first<{ depth: number | null }>();
+    return row?.depth ?? 0;
+  }
+
   /** How many messages one turn already produced in this session. */
   async countForOperation(sourceSessionId: string, operationId: string): Promise<number> {
     const row = await this.db
@@ -124,7 +160,7 @@ export class CrossSessionReceiptStore {
       .prepare(
         `UPDATE cross_session_receipts
          SET status = 'delivered', target_message_id = ?, rejection_reason = NULL, updated_at = ?
-         WHERE id = ? AND status = 'pending'`
+         WHERE id = ? AND status IN ('pending', 'rejected')`
       )
       .bind(targetMessageId, now, id)
       .run();

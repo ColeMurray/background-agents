@@ -777,14 +777,14 @@ variable "mcp_connection_binding_enabled" {
   default     = false
 }
 
-variable "pi_workspace_mode" {
+variable "pi_scratch_workspace_mode" {
   description = "Pi Durable Computer workspace mode: off, read_only, or writable"
   type        = string
   default     = "off"
 
   validation {
-    condition     = contains(["off", "read_only", "writable"], var.pi_workspace_mode)
-    error_message = "pi_workspace_mode must be 'off', 'read_only', or 'writable'."
+    condition     = contains(["off", "read_only", "writable"], var.pi_scratch_workspace_mode)
+    error_message = "pi_scratch_workspace_mode must be 'off', 'read_only', or 'writable'."
   }
 }
 

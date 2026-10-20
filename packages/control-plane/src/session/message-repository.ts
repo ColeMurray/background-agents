@@ -159,6 +159,36 @@ export class MessageRepository {
   }
 
   /**
+   * The human behind one message.
+   *
+   * A message that arrived from another session was started by that session's
+   * agent on behalf of a human, so the human who initiated it is the actor.
+   * A message that started here is authored by its own participant.
+   */
+  getMessageHumanActor(messageId: string): string | null {
+    const raw = this.sql
+      .exec(
+        `SELECT COALESCE(p.canonical_user_id, p.user_id) AS actor_id, m.origin_context
+         FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+      .toArray()[0];
+    if (!raw) return null;
+    const originContext = (raw as { origin_context?: string | null }).origin_context ?? null;
+    if (originContext) {
+      try {
+        const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
+        if (parsed.success) return parsed.data.humanActorId;
+      } catch {
+        // A malformed provenance falls back to the message author.
+      }
+    }
+    const actorId = (raw as { actor_id?: string | null }).actor_id ?? null;
+    return typeof actorId === "string" && actorId.length > 0 ? actorId : null;
+  }
+
+  /**
    * How many session-to-session hops the message behind one operation made.
    *
    * A message that arrived from another session carries its depth. A message

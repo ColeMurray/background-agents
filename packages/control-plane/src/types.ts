@@ -103,6 +103,8 @@ export interface EnvConfig {
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
   TEAMS_ENFORCEMENT?: string; // "off" | "shadow" (default) | "on"
   PI_DURABLE_ENABLED?: string; // "true" enables the optional PiSessionDO runtime
+  PI_SCRATCH_WORKSPACE_MODE?: string; // Session scratch VFS capability; not the Open-Inspect workspace
+  /** @deprecated The scratch VFS was renamed; use PI_SCRATCH_WORKSPACE_MODE. */
   PI_WORKSPACE_MODE?: string; // Creation admission plus live scratch-mutation emergency deny; supports "writable" as "enabled"
   PI_REPOSITORY_EDITING_MODE?: string; // Creation admission plus live repository-mutation emergency deny
   PI_CODE_MODE?: string; // Creation admission plus live deny for top-level calls still in Pi's call phase

@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   FEATURE_CAPABILITY_MODES,
   PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION,
+  PI_FEATURE_CAPABILITY_SNAPSHOT_RENAMED_VERSION,
   PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
   PI_FEATURE_IDS,
   createPiFeatureCapabilitySnapshot,
@@ -14,7 +15,7 @@ describe("Pi feature capability contracts", () => {
   it("uses one fail-closed capability vocabulary for every feature gate", () => {
     expect(FEATURE_CAPABILITY_MODES).toEqual(["off", "read_only", "enabled"]);
     expect(PI_FEATURE_IDS).toEqual([
-      "workspace",
+      "scratchWorkspace",
       "repositoryEditing",
       "codeMode",
       "sandboxExecution",
@@ -26,7 +27,7 @@ describe("Pi feature capability contracts", () => {
 
   it("requires every feature to have an explicit capability", () => {
     const matrix = {
-      workspace: "read_only",
+      scratchWorkspace: "read_only",
       repositoryEditing: "off",
       codeMode: "off",
       sandboxExecution: "off",
@@ -42,13 +43,13 @@ describe("Pi feature capability contracts", () => {
   it("resolves one complete snapshot and fails unknown values closed", () => {
     expect(
       resolvePiFeatureCapabilities({
-        workspace: " READ_ONLY ",
+        scratchWorkspace: " READ_ONLY ",
         repositoryEditing: "enabled",
         codeMode: "enabled",
         sandboxExecution: "unexpected",
       })
     ).toEqual({
-      workspace: "read_only",
+      scratchWorkspace: "read_only",
       repositoryEditing: "enabled",
       codeMode: "enabled",
       sandboxExecution: "off",
@@ -58,21 +59,23 @@ describe("Pi feature capability contracts", () => {
     });
   });
 
-  it("normalizes the deployment workspace writable alias exactly once", () => {
-    expect(resolvePiFeatureCapabilities({ workspace: " WrItAbLe " }).workspace).toBe("enabled");
+  it("normalizes the deployment scratch writable alias exactly once", () => {
+    expect(resolvePiFeatureCapabilities({ scratchWorkspace: " WrItAbLe " }).scratchWorkspace).toBe(
+      "enabled"
+    );
     expect(resolvePiFeatureCapabilities({ repositoryEditing: "writable" }).repositoryEditing).toBe(
       "off"
     );
   });
 
   it("creates one validated versioned snapshot for durable per-session latching", () => {
-    const snapshot = createPiFeatureCapabilitySnapshot({ workspace: "read_only" });
+    const snapshot = createPiFeatureCapabilitySnapshot({ scratchWorkspace: "read_only" });
 
-    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(2);
+    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(3);
     expect(snapshot).toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "read_only",
+        scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
@@ -84,7 +87,7 @@ describe("Pi feature capability contracts", () => {
     expect(piFeatureCapabilitySnapshotSchema.parse(snapshot)).toEqual(snapshot);
   });
 
-  it("reads an older snapshot with the newer feature closed", () => {
+  it("reads a snapshot written before cross-session messaging with the new feature closed", () => {
     const legacy = {
       version: PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION,
       capabilities: {
@@ -98,9 +101,10 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(legacy)).toEqual({
-      version: 2,
+      version: 3,
       capabilities: {
-        workspace: "enabled",
+        // The rename never changes what a session may do.
+        scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
         sandboxExecution: "off",
@@ -108,6 +112,34 @@ describe("Pi feature capability contracts", () => {
         mcp: "off",
         // A feature that did not exist cannot have been enabled.
         crossSessionMessaging: "off",
+      },
+    });
+  });
+
+  it("reads a snapshot written before the scratch workspace was renamed", () => {
+    const renamed = {
+      version: PI_FEATURE_CAPABILITY_SNAPSHOT_RENAMED_VERSION,
+      capabilities: {
+        workspace: "enabled",
+        repositoryEditing: "off",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "enabled",
+      },
+    };
+
+    expect(piFeatureCapabilitySnapshotSchema.parse(renamed)).toEqual({
+      version: 3,
+      capabilities: {
+        scratchWorkspace: "enabled",
+        repositoryEditing: "off",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "enabled",
       },
     });
   });

@@ -23,6 +23,7 @@ import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
 import { mcpConnectionRoutes } from "./mcp-connections";
+import { mcpSessionPinRoutes } from "./mcp-session-pins";
 import { piControlRoutes } from "./pi-controls";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
@@ -96,6 +97,7 @@ export const catalog: readonly RouteModule[] = [
   // MCP servers
   mcpServerRoutes,
   mcpConnectionRoutes,
+  mcpSessionPinRoutes,
 
   // Analytics
   analyticsRoutes,

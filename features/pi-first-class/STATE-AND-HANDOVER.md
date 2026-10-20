@@ -237,10 +237,52 @@ Pi session A → SessionDO A → D1 authority → durable receipt → SessionDO 
 
 ### Slice 8 — read-only MCP and OAuth
 
-D1 catalog and read projection, owner-only non-delegable review, session pins, identity-first
-Lifecycle, opaque callback, S256 enforcement, refresh/revoke/tombstone, RESTRICT user merge, key
-rotation, DNS and redirect-safe egress, and stable read tools declared before extension assembly.
-Mutations stay prohibited.
+The authority boundary now exists; the live transport does not.
+
+- **Session attachments.** A personal MCP connection is not available to a session until its owner
+  grants it. The grant names one session, records the catalog snapshot it was made against, and
+  exposes only the reviewed read-only tools. Revoking a grant stays available even when the
+  capability is switched off.
+- **The review.** A server's catalog is reviewed by an account that holds `mcp_servers.manage`. A
+  tool classified as a mutation is recorded so the decision is auditable, and it can never reach a
+  connection snapshot: the snapshot table only accepts reads.
+- **The gateway.** The session revalidates the grant, the reviewed catalog, and the tool's
+  classification before anything reaches the provider, and it returns a bounded, credential-free
+  result. A refused call is audited with the reason, and a provider result that is too large is cut
+  and says so.
+- **The broker.** The last authority before the provider rechecks the owner, the connection's
+  status, and the reviewed catalog from D1.
+- **The tool.** `mcp_read` is a single stable read tool, declared in the shared effect registry
+  before any extension is assembled.
+
+**Still open in Slice 8:** the live transport. The broker's authorization is complete and tested,
+but the transport itself is not installed, so a reviewed read reaches the transport gate rather than
+a provider. The OAuth dance (the opaque callback, S256, refresh, revoke, tombstone), the rotatable
+keyring, the `RESTRICT` user merge, and the DNS and redirect-safe egress still have to be built on
+top of it.
+
+### The scratch workspace is not the workspace
+
+The Pi scratch VFS, the Open-Inspect workspace, and the native execution sandbox's `/workspace` are
+three unrelated filesystems, and they are now named distinctly everywhere:
+
+| Concept                               | Name                                                                                               |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| The session's own Computer filesystem | `scratchWorkspace`, `PI_SCRATCH_WORKSPACE_MODE`, `open-inspect.scratch-workspace`, "Scratch files" |
+| The tenant                            | "workspace" in the team switcher, the permissions, and the visibility                              |
+| The execution sandbox's filesystem    | the native execution sandbox's own `/workspace`                                                    |
+
+The capability snapshot moved to version 3. A version 2 snapshot is read with the same mode under
+the new name, so a rename never changes what a session may do. The old `PI_WORKSPACE_MODE`
+environment variable still works until it is removed.
+
+### The adversarial audit rounds
+
+Three rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, and `AUDIT-ROUND-3.md`. Round
+3 is the deep audit of the cross-session and capability slices, and it found a defect that made the
+whole feature unusable: the target session compared the target against _its own_ id, so every
+delivery was refused. It is fixed, along with the source-side authority, the receipt confirmation,
+the idempotency state machine, the actor identity, and the depth and fan-out limits.
 
 ### Slice 9 — browser gateway and finish
 
