@@ -360,6 +360,8 @@ fixed or listed as still open above.
   `/Users/param/.local/share/opencode/worktree/0e6d72/pi-go-live-v2` on
   `feat/pi-go-live-integration-v2`, and fast-forward `feat/pi-first-class` to it once the lanes are
   green. Nothing has been pushed and nothing has been deployed.
+- The upstream pull requests stay on `ColeMurray/background-agents`. The `fork` remote is the user's
+  own fork; nothing is pushed without explicit authorization.
 - One implementation owner at a time. A capability slice commits once, focused.
 - Every slice ends with: shared build first, then focused tests, then the full affected lane, then
   typecheck, lint, format, SQL portability, and the Terraform workflow contracts.
