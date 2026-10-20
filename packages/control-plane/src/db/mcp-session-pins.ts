@@ -37,6 +37,24 @@ interface PinRow {
 export class McpSessionPinValidationError extends Error {}
 export class McpSessionPinConflictError extends Error {}
 
+/**
+ * The reviewed tool names a grant may carry.
+ *
+ * The schema cannot check the payload — the JSON functions are not portable —
+ * so the store checks it in the one place that writes the column. The names
+ * are identifiers, so anything else is refused rather than stored.
+ */
+const REVIEWED_TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
+
+function assertReviewableToolNames(toolNames: readonly string[]): void {
+  if (toolNames.length === 0) {
+    throw new McpSessionPinValidationError("An MCP session grant needs at least one reviewed tool");
+  }
+  if (toolNames.some((name) => !REVIEWED_TOOL_NAME.test(name))) {
+    throw new McpSessionPinValidationError("An MCP session grant has an invalid tool name");
+  }
+}
+
 function toPin(row: PinRow): McpSessionPin {
   let toolNames: unknown;
   try {
@@ -95,6 +113,7 @@ export class McpSessionPinStore {
         "The MCP connection catalog changed; review it again before granting"
       );
     }
+    assertReviewableToolNames(input.toolNames);
     const id = `mcppin_${generateId()}`;
     const now = Date.now();
     try {

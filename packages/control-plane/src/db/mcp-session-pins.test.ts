@@ -80,6 +80,32 @@ describe("McpSessionPinStore", () => {
     await expect(store.listForSession("session-1")).resolves.toHaveLength(1);
   });
 
+  it("refuses a grant that carries no reviewed tool", async () => {
+    await expect(
+      store.grant({
+        ownerUserId: "owner-1",
+        connectionId: "mcpconn_1",
+        sessionId: "session-1",
+        catalogSnapshotSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        toolNames: [],
+      })
+    ).rejects.toThrow(/at least one reviewed tool/);
+    await expect(store.listForSession("session-1")).resolves.toHaveLength(0);
+  });
+
+  it("refuses a grant that carries a tool name that is not an identifier", async () => {
+    await expect(
+      store.grant({
+        ownerUserId: "owner-1",
+        connectionId: "mcpconn_1",
+        sessionId: "session-1",
+        catalogSnapshotSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        toolNames: ["search", "not a tool name"],
+      })
+    ).rejects.toThrow(/invalid tool name/);
+    await expect(store.listForSession("session-1")).resolves.toHaveLength(0);
+  });
+
   it("refuses a grant from anyone but the connection owner", async () => {
     await expect(
       store.grant({

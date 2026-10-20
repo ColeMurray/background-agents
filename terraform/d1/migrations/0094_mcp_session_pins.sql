@@ -15,7 +15,9 @@ CREATE TABLE mcp_session_pins (
   -- The catalog snapshot the grant was made against.
   catalog_snapshot_sha256 TEXT NOT NULL CHECK (length(catalog_snapshot_sha256) = 64),
   -- The reviewed read-only tools this grant exposes, as a JSON array of names.
-  tool_names              TEXT NOT NULL CHECK (json_valid(tool_names) AND json_type(tool_names) = 'array'),
+  -- The payload is assembled in TypeScript and bound as a parameter, so the
+  -- schema checks only its shape. The JSON functions are not portable.
+  tool_names              TEXT NOT NULL CHECK (length(tool_names) > 2 AND tool_names LIKE '[%]'),
   status                  TEXT NOT NULL DEFAULT 'active'
                           CHECK (status IN ('active', 'revoking', 'revoked')),
   created_at              INTEGER NOT NULL,
