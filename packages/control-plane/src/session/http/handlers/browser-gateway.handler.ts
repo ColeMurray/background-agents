@@ -76,7 +76,9 @@ export class BrowserGateway {
     operationId: string | null
   ): BrowserAuthorization {
     const bridge = this.options.browser;
-    if (bridge.sessionCapability() !== "enabled" || bridge.liveMode() !== "enabled") {
+    // Every browser action this session may take reads a page, so a
+    // read-only capability may use it.
+    if (bridge.sessionCapability() === "off" || bridge.liveMode() === "off") {
       return {
         kind: "denied",
         code: "browser_disabled",

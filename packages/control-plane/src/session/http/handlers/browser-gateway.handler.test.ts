@@ -97,7 +97,7 @@ describe("BrowserGateway", () => {
   });
 
   it("refuses a page when the live deployment mode denies it", () => {
-    const h = harness({ liveMode: "read_only" });
+    const h = harness({ liveMode: "off" });
 
     expect(h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
       code: "browser_disabled",

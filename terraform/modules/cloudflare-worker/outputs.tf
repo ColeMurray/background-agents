@@ -58,3 +58,8 @@ output "external_durable_object_bindings" {
     }
   }
 }
+
+output "browser_binding_names" {
+  description = "Names of configured Browser Rendering bindings."
+  value       = keys(var.browser_bindings)
+}

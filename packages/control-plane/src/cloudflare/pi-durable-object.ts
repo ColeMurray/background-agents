@@ -485,7 +485,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           ownedToolNames: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS.map((effect) => effect.name),
         });
       }
-      if (capabilities.browser === "enabled" && this.browserTransport.available()) {
+      if (capabilities.browser !== "off" && this.browserTransport.available()) {
         extensions.push({
           slot: "browser",
           feature: "browser",
