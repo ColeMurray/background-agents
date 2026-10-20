@@ -21,7 +21,6 @@ import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/
 import { HarnessSelect } from "./harness-select";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -43,6 +42,7 @@ import {
   IntegrationSettingsSection,
 } from "./integration-settings-section";
 import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
+import { RepositoryScopeSelector } from "./repository-scope-selector";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 
@@ -304,69 +304,21 @@ export function GlobalSettingsSection({
         </p>
       </div>
 
-      <div className="mb-4">
-        <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
-        <div className="grid sm:grid-cols-2 gap-2 mb-3">
-          <RadioCard
-            name="repo-scope"
-            checked={repoScopeMode === "all"}
-            onChange={() => {
-              setRepoScopeMode("all");
-              setDirty(true);
-              setError("");
-            }}
-            label="All repositories"
-            description="Bot responds in every accessible repository."
-          />
-          <RadioCard
-            name="repo-scope"
-            checked={repoScopeMode === "selected"}
-            onChange={() => {
-              setRepoScopeMode("selected");
-              setDirty(true);
-              setError("");
-            }}
-            label="Selected repositories"
-            description="Bot only responds in the allowlisted repositories."
-          />
-        </div>
-
-        {repoScopeMode === "selected" && (
-          <>
-            {availableRepos.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 py-3 border border-border rounded-sm">
-                Repository filtering is unavailable because no repositories are accessible.
-              </p>
-            ) : (
-              <div className="border border-border max-h-56 overflow-y-auto rounded-sm">
-                {availableRepos.map((repo) => {
-                  const fullName = repo.fullName.toLowerCase();
-                  const isChecked = enabledRepos.includes(fullName);
-
-                  return (
-                    <label
-                      key={repo.fullName}
-                      className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
-                    >
-                      <Checkbox
-                        checked={isChecked}
-                        onCheckedChange={() => toggleRepo(repo.fullName)}
-                      />
-                      <span className="text-foreground">{repo.fullName}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-
-            {enabledRepos.length === 0 && availableRepos.length > 0 && (
-              <p className="text-xs text-warning mt-1">
-                No repositories selected. The bot will not respond to webhooks.
-              </p>
-            )}
-          </>
-        )}
-      </div>
+      <RepositoryScopeSelector
+        name="repo-scope"
+        mode={repoScopeMode}
+        onModeChange={(mode) => {
+          setRepoScopeMode(mode);
+          setDirty(true);
+          setError("");
+        }}
+        availableRepos={availableRepos}
+        enabledRepos={enabledRepos}
+        onToggleRepo={toggleRepo}
+        allRepositoriesDescription="Bot responds in every accessible repository."
+        selectedRepositoriesDescription="Bot only responds in the allowlisted repositories."
+        emptySelectionWarning="No repositories selected. The bot will not respond to webhooks."
+      />
 
       <div className="mb-4 border-t border-border pt-4">
         <p className="text-sm font-medium text-foreground mb-1">PR Feedback Autofix</p>
