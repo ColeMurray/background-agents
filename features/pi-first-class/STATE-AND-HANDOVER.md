@@ -84,6 +84,10 @@ its own authorization.
 | `75be1a63` | External-action lifecycle hardening, grant administration, provider adapters and conformance suite | 5,289 unit, 2,472 workerd, 2,576 web, 49 provider conformance |
 | `1c9ec044` | `crossSessionMessaging` capability gate with a version 2 snapshot                                  | 1,308 shared, 5,303 unit                                      |
 | `37ef29e8` | Authorized cross-session messaging with durable receipts and provenance                            | 5,305 unit, 2,578 web, 98 Terraform                           |
+| `0a8ed61b` | Read-only MCP gateway, session grants, reviewed catalog, and the cross-session authority fixes     | 5,338 unit, 2,473 workerd, 1,309 shared                       |
+| `d62cccc1` | Browser gateway, MCP OAuth keyring, DNS and redirect-safe egress, RESTRICT user merge              | 5,348 unit, 104 Terraform                                     |
+| `f641896b` | The browser tool gated on the owning session                                                       | 5,352 unit                                                    |
+| `83ce188a` | The web suite waits for its requests instead of assuming them                                      | 2,578 web                                                     |
 
 ## Slice 7A — what landed
 
