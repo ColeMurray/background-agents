@@ -1626,14 +1626,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const operationId = mode === "pin" ? await this.currentOperationId() : null;
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piContext}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, ...(repositoryPins ? { repositoryPins } : {}) }),
       })
     );
@@ -2273,14 +2269,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   ): Promise<unknown> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const operationId = await this.currentOperationId();
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piRepositoryMaterialization}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal,
       })

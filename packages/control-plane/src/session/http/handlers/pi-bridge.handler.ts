@@ -243,12 +243,7 @@ export class PiBridgeHandler {
     if (!parsed.success) {
       return Response.json({ error: "Invalid Pi session context request" }, { status: 400 });
     }
-    // The bootstrap answer is what a session needs before its first turn, so
-    // it is not gated. The pin mode resolves a credentialed reference and
-    // claims the session's diff baselines, so it belongs to a turn.
-    if (parsed.data.mode === "pin" && !this.activeOperation(request)) {
-      return Response.json({ error: "Pi execution is not active" }, { status: 409 });
-    }
+
     const sessionId = this.options.getSessionId();
     const session = this.options.sessions.getSession();
     const sessionRepositories = this.options.sessions.getSessionRepositories();
@@ -306,12 +301,7 @@ export class PiBridgeHandler {
     if (this.options.sessions.getSession()?.harness !== "pi") {
       return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
     }
-    // The materialization streams the session's repository through the
-    // deployment's source-control credential. It belongs to a turn, so the
-    // turn is what authorizes it.
-    if (!this.activeOperation(request)) {
-      return Response.json({ error: "Pi execution is not active" }, { status: 409 });
-    }
+
     const parsed = piRepositoryMaterializationRequestSchema.safeParse(
       await request.json().catch(() => null)
     );
