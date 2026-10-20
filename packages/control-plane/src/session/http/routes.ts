@@ -63,6 +63,9 @@ export interface SessionInternalRouteHandlers {
   externalActionStatus: SessionInternalRouteHandler;
   externalActionDecision: SessionInternalRouteHandler;
   piSandboxCommand: SessionInternalRouteHandler;
+  piExecutions: SessionInternalRouteHandler;
+  piExecutionCancel: SessionInternalRouteHandler;
+  piExecutionOutput: SessionInternalRouteHandler;
   piResult: SessionInternalRouteHandler;
   piEvent: SessionInternalRouteHandler;
   xaiTokenRefresh: SessionInternalRouteHandler;
@@ -202,6 +205,17 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.piSandboxCommand,
       handler: handlers.piSandboxCommand,
+    },
+    { method: "GET", path: SessionInternalPaths.piExecutions, handler: handlers.piExecutions },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piExecutionCancel,
+      handler: handlers.piExecutionCancel,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piExecutionOutput,
+      handler: handlers.piExecutionOutput,
     },
     { method: "POST", path: SessionInternalPaths.piResult, handler: handlers.piResult },
     { method: "POST", path: SessionInternalPaths.piEvent, handler: handlers.piEvent },

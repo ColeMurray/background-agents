@@ -18,7 +18,10 @@ export class PiResultHandler {
     private readonly isPiSession: () => boolean,
     private readonly getSessionId: () => string,
     private readonly now: () => number = Date.now,
-    private readonly settleOperation: (operationId: string, settledAt: number) => void = () => {}
+    private readonly settleOperation: (
+      operationId: string,
+      settledAt: number
+    ) => void | Promise<void> = () => {}
   ) {}
 
   async handle(request: Request): Promise<Response> {
@@ -42,7 +45,7 @@ export class PiResultHandler {
         });
         const settledAt = this.now();
         this.receipts.record(result.operationId, settledAt);
-        this.settleOperation(result.operationId, settledAt);
+        await this.settleOperation(result.operationId, settledAt);
         return Response.json({ status: "recovered" });
       }
       return Response.json({ error: "Pi operation is not processing" }, { status: 409 });
@@ -81,7 +84,7 @@ export class PiResultHandler {
     });
     const settledAt = this.now();
     this.receipts.record(result.operationId, settledAt);
-    this.settleOperation(result.operationId, settledAt);
+    await this.settleOperation(result.operationId, settledAt);
     return Response.json({ status: "projected" });
   }
 }

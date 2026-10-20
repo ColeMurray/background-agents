@@ -1,10 +1,15 @@
 import { z } from "zod";
 import { SANDBOX_EXECUTION_TOOL_EFFECT } from "../pi-tool-effects";
 
-export const MAX_SANDBOX_COMMAND_TIMEOUT_MS = 60 * 60 * 1_000;
+export const DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS = 15 * 60 * 1_000;
+export const MAX_SANDBOX_COMMAND_TIMEOUT_MS = 2 * 60 * 60 * 1_000;
 export const MAX_SANDBOX_COMMAND_ARGV_ITEMS = 256;
 export const MAX_SANDBOX_COMMAND_ARG_BYTES = 32 * 1024;
 export const MAX_SANDBOX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+export const MAX_PERSISTED_SANDBOX_COMMAND_OUTPUT_BYTES = 256 * 1024;
+export const MAX_PERSISTED_SANDBOX_OPERATION_OUTPUT_BYTES = 1024 * 1024;
+export const MAX_SANDBOX_COMMANDS_PER_OPERATION = 8;
+export const MAX_QUEUED_SANDBOX_COMMANDS_PER_SESSION = 4;
 
 export const sandboxRuntimeModeSchema = z.enum(["agent", "execution"]).default("agent");
 export type SandboxRuntimeMode = z.infer<typeof sandboxRuntimeModeSchema>;
@@ -70,6 +75,9 @@ const executionEventBaseSchema = z.object({
 });
 
 export const sandboxExecutionEventSchemas = [
+  executionEventBaseSchema.extend({
+    type: z.literal("command_accepted"),
+  }),
   executionEventBaseSchema.extend({
     type: z.literal("command_started"),
   }),

@@ -107,6 +107,7 @@ module "control_plane_worker" {
       PI_WORKSPACE_MODE             = { value = var.pi_workspace_mode }
       PI_REPOSITORY_EDITING_MODE    = { value = var.pi_repository_editing_mode }
       PI_SANDBOX_EXECUTION_MODE     = { value = var.pi_sandbox_execution_mode }
+      PI_SANDBOX_EXECUTION_ATTESTATION = { value = var.pi_sandbox_execution_attestation }
       PI_CODE_MODE                  = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
     },
     local.github_oauth_enabled ? {

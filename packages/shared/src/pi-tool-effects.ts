@@ -91,6 +91,27 @@ export const PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS = [
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 
+export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "run_shell",
+    effect: SANDBOX_EXECUTION_TOOL_EFFECT,
+    callers: ["model"],
+    replay: "safe",
+  },
+  {
+    name: "run_build",
+    effect: SANDBOX_EXECUTION_TOOL_EFFECT,
+    callers: ["model"],
+    replay: "safe",
+  },
+  {
+    name: "run_tests",
+    effect: SANDBOX_EXECUTION_TOOL_EFFECT,
+    callers: ["model"],
+    replay: "safe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
 /** Build a lookup while rejecting accidental tool shadowing across extensions. */
 export function createToolEffectRegistry(
   ...registrationGroups: readonly (readonly ToolEffectRegistration[])[]

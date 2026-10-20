@@ -32,6 +32,7 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
+const messageActorRowSchema = z.object({ user_id: z.string(), source: z.string() });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -138,6 +139,22 @@ export class MessageRepository {
     const result = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
     const rows = parseStorageRows(result.toArray(), messageIdRowSchema);
     return rows[0] ?? null;
+  }
+
+  getMessageActor(messageId: string): { kind: "user" | "service"; id: string } | null {
+    const raw = this.sql
+      .exec(
+        `SELECT p.user_id, m.source FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+      .toArray()[0];
+    const row = messageActorRowSchema.safeParse(raw);
+    if (!row.success) return null;
+    return {
+      kind: ["web", "extension"].includes(row.data.source) ? "user" : "service",
+      id: row.data.user_id,
+    };
   }
 
   getMessageAwaitingStopConfirmation(): { id: string; deadline: number } | null {

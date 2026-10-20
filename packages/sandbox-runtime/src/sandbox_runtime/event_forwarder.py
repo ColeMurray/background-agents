@@ -36,6 +36,7 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "preservation_prepared",
         "sandbox_generation_ready",
         "command_completed",
+        "command_accepted",
         "command_replay_gap",
     }
 )

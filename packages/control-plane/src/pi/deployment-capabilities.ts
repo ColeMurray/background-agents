@@ -4,6 +4,10 @@ import {
   type PiFeatureCapabilitySnapshot,
 } from "@open-inspect/shared/pi-feature-capabilities";
 import type { EnvConfig } from "../types";
+import {
+  resolveSandboxExecutionCapability,
+  type SandboxExecutionCapability,
+} from "../sandbox/execution-capability";
 
 type PiDeploymentCapabilityConfig = Pick<
   EnvConfig,
@@ -27,8 +31,28 @@ function resolvePiDeploymentCapabilities(config: PiDeploymentCapabilityConfig) {
   });
 }
 
+export function currentSandboxExecutionCapability(
+  config: PiDeploymentCapabilityConfig &
+    Pick<EnvConfig, "SANDBOX_PROVIDER" | "PI_SANDBOX_EXECUTION_ATTESTATION">,
+  providerIsolation?: "enforced" | "canary_blocked"
+): SandboxExecutionCapability {
+  return resolveSandboxExecutionCapability({
+    mode: config.PI_SANDBOX_EXECUTION_MODE,
+    provider: config.SANDBOX_PROVIDER,
+    attestation: config.PI_SANDBOX_EXECUTION_ATTESTATION,
+    providerIsolation,
+  });
+}
+
 export function createPiDeploymentCapabilitySnapshot(
-  config: PiDeploymentCapabilityConfig
+  config: PiDeploymentCapabilityConfig &
+    Partial<Pick<EnvConfig, "SANDBOX_PROVIDER" | "PI_SANDBOX_EXECUTION_ATTESTATION">>,
+  providerIsolation?: "enforced" | "canary_blocked"
 ): PiFeatureCapabilitySnapshot {
-  return createPiFeatureCapabilitySnapshot(resolvePiDeploymentCapabilities(config));
+  const capabilities = resolvePiDeploymentCapabilities(config);
+  const execution = currentSandboxExecutionCapability(config, providerIsolation);
+  return createPiFeatureCapabilitySnapshot({
+    ...capabilities,
+    sandboxExecution: execution.available ? capabilities.sandboxExecution : "off",
+  });
 }

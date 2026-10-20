@@ -33,7 +33,9 @@ test("all provider adapters remain explicitly blocked without live isolation pro
   );
   const evidence = {
     runtimeVersion: runtime.runtimeVersion,
+    artifactGeneration: runtime.generation,
     artifactSha256: await digest(),
+    networkProfile: "package-install-v1",
     providers,
   };
 

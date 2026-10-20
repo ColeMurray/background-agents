@@ -26,6 +26,13 @@ export function createPiDeploymentEmergencyPolicy(
           : { block: "Code Mode is disabled for new calls by deployment policy" };
       }
 
+      if (["run_shell", "run_build", "run_tests"].includes(call.name)) {
+        const current = await currentCapabilities(context.abortSignal);
+        return current.sandboxExecution === "enabled"
+          ? undefined
+          : { block: "Sandbox execution is disabled by deployment policy" };
+      }
+
       const feature = requiredMutationFeature(call, declaration);
       if (!feature) return;
       const current = await currentCapabilities(context.abortSignal);

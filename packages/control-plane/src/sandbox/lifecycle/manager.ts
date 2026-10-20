@@ -1902,6 +1902,22 @@ export class SandboxLifecycleManager
     }
   }
 
+  async replaceExecutionSandbox(reason: string): Promise<void> {
+    const sandbox = this.storage.getSandbox();
+    if (!sandbox || sandbox.runtime_mode !== "execution") return;
+    this.storage.fenceSandboxGeneration();
+    this.storage.updateSandboxStatus("stale");
+    this.access.clearAccess();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
+    this.wsManager.detachSandboxWebSocket(1011, "Execution sandbox replacement required");
+    this.log.warn("Execution sandbox generation fenced", {
+      event: "sandbox.execution_generation_fenced",
+      reason,
+      sandbox_id: sandbox.modal_sandbox_id,
+    });
+    await this.spawnSandbox("spawn", "execution");
+  }
+
   /**
    * Fail the live sandbox after a fatal runtime report and stop it where the
    * provider allows. Resolves true only when this call took the sandbox down,

@@ -10,6 +10,7 @@ import {
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   validateMigrationArtifacts,
 } from "@open-inspect/shared/pi-migration-reservations";
@@ -37,6 +38,10 @@ it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
     { id: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID, feature: "piProjection" },
     { id: PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID, feature: "repositoryEditing" },
     { id: PI_SESSION_DO_CONTROLS_MIGRATION_ID, feature: "piControls" },
+    {
+      id: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+      feature: "sandboxExecution",
+    },
   ]);
 });
 

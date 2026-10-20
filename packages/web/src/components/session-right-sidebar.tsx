@@ -47,6 +47,7 @@ import { SessionVisibilityControl } from "./session-visibility-control";
 import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
 import { PiAgentsSection } from "./sidebar/pi-agents-section";
+import { ExecutionsSection } from "./sidebar/executions-section";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -481,12 +482,15 @@ export function SessionRightSidebarContent({
 
       <InspectorPanel value="tools" activeTab={activeTab} className="space-y-5">
         <h3 className="text-sm font-semibold">Workspace tools</h3>
+        {sessionState?.harness === "pi" && (
+          <ExecutionsSection sessionId={sessionId} capabilities={capabilities} />
+        )}
         {!hasSandboxTools && (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {!sessionState
               ? "Loading workspace tools…"
               : isDurable
-                ? "Pi tools are capability-gated and appear in the timeline when used. No sandbox is running."
+                ? "Pi tools are capability-gated and appear in the timeline when used. The agent workspace remains sandbox-free."
                 : !capabilities.sandboxAccess
                   ? "Sandbox access is not available with your permissions."
                   : "Sandbox tools will appear here when available."}

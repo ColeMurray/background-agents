@@ -30,6 +30,20 @@ export const deploymentCapabilitiesSchema = z.object({
       codeModeReady: z.boolean(),
       workspacePreviewAcknowledged: z.boolean(),
       mcpReady: z.boolean(),
+      sandboxExecution: z.discriminatedUnion("available", [
+        z.object({
+          available: z.literal(true),
+          provider: z.string(),
+          artifactGeneration: z.number().int(),
+          runtimeVersion: z.string(),
+          networkProfile: z.literal("package-install-v1"),
+        }),
+        z.object({
+          available: z.literal(false),
+          provider: z.string(),
+          reason: z.string(),
+        }),
+      ]),
     }),
   }),
   runtimeVersions: z.object({

@@ -816,6 +816,12 @@ variable "pi_sandbox_execution_mode" {
   }
 }
 
+variable "pi_sandbox_execution_attestation" {
+  description = "Generation 78+ provider execution-isolation canary evidence JSON; capability remains unavailable unless the selected adapter also enforces the profile"
+  type        = string
+  default     = ""
+}
+
 variable "pi_codemode_mode" {
   description = "Pi Durable Code Mode admission: off, or paid after accepting Durable Object duration billing"
   type        = string

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-MAX_TIMEOUT_MS = 60 * 60 * 1000
+MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000
 OUTPUT_CHUNK_BYTES = 16 * 1024
 MAX_REPLAY_BYTES = 1024 * 1024
 
@@ -100,6 +100,9 @@ class CommandRunner:
         task = asyncio.create_task(self.execute(command))
         self._tasks[command_id] = task
         return task
+
+    def has_command(self, command_id: str) -> bool:
+        return command_id in self._tasks or command_id in self._history
 
     async def started(self, command_id: str) -> None:
         await self._started.setdefault(command_id, asyncio.Event()).wait()

@@ -53,6 +53,12 @@ export async function verifyExecutionIsolationEvidence(
   if (runtime.generation < 78 || evidence.runtimeVersion !== runtime.runtimeVersion) {
     throw new Error("Execution evidence does not cover runtime generation 78+");
   }
+  if (
+    evidence.artifactGeneration !== runtime.generation ||
+    evidence.networkProfile !== "package-install-v1"
+  ) {
+    throw new Error("Execution evidence has the wrong artifact generation or network profile");
+  }
   if (evidence.artifactSha256 !== expectedDigest) {
     throw new Error("Execution artifact digest does not match the reviewed inputs");
   }
@@ -78,6 +84,8 @@ export async function verifyExecutionIsolationEvidence(
     }
     if (
       !record.attacks ||
+      typeof record.attestedAt !== "string" ||
+      !Number.isFinite(Date.parse(record.attestedAt)) ||
       REQUIRED_ATTACKS.some((attack) => record.attacks[attack] !== "passed") ||
       JSON.stringify(record.allowedDomains) !==
         JSON.stringify([
@@ -90,7 +98,13 @@ export async function verifyExecutionIsolationEvidence(
       throw new Error(`${provider} did not pass every isolation attack and exact network profile`);
     }
   }
-  return { runtimeVersion: runtime.runtimeVersion, artifactSha256: expectedDigest, providers };
+  return {
+    runtimeVersion: runtime.runtimeVersion,
+    artifactGeneration: runtime.generation,
+    artifactSha256: expectedDigest,
+    networkProfile: "package-install-v1",
+    providers,
+  };
 }
 
 async function main() {

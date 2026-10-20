@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(253);
+    expect(routes).toHaveLength(256);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(195);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(253);
+    expect(new Set(paths).size).toBe(198);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(256);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },
@@ -74,6 +74,14 @@ describe("route policy table", () => {
     });
     expect(routeFor("GET", "/sessions/session-1/pi/agents")?.authorization).toMatchObject({
       allOf: [{ kind: "session", action: "read" }],
+    });
+    expect(routeFor("GET", "/sessions/session-1/executions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "read" }] },
+    });
+    expect(routeFor("POST", "/sessions/session-1/executions/cmd-1/cancel")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
     });
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
       authentication: { kind: "user" },

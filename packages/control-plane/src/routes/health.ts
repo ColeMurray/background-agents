@@ -4,9 +4,12 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { json, NO_AUTHORIZATION, type RequestContext } from "./shared";
 import type { Env } from "../types";
 import {
+  createPiDeploymentCapabilitySnapshot,
+  currentSandboxExecutionCapability,
+} from "../pi/deployment-capabilities";
+import {
   HARNESS_IDS,
   OPEN_INSPECT_RUNTIME_VERSIONS,
-  createPiFeatureCapabilitySnapshot,
   type DeploymentCapabilities,
 } from "@open-inspect/shared";
 
@@ -22,14 +25,7 @@ async function handleHealth(
 export const healthRoutes = new Hono<ControlPlaneHonoEnv>();
 
 export function deploymentCapabilities(env: Env): DeploymentCapabilities {
-  const modes = createPiFeatureCapabilitySnapshot({
-    workspace: env.PI_WORKSPACE_MODE,
-    repositoryEditing: env.PI_REPOSITORY_EDITING_MODE,
-    codeMode: env.PI_CODE_MODE,
-    sandboxExecution: env.PI_SANDBOX_EXECUTION_MODE,
-    externalActions: env.PI_EXTERNAL_ACTIONS_MODE,
-    mcp: env.PI_MCP_MODE,
-  }).capabilities;
+  const modes = createPiDeploymentCapabilitySnapshot(env).capabilities;
   const bindingReachable = env.PI_SESSION !== undefined;
   const piEnabled = /^(?:true|1)$/i.test(env.PI_DURABLE_ENABLED?.trim() ?? "") && bindingReachable;
   return {
@@ -53,6 +49,7 @@ export function deploymentCapabilities(env: Env): DeploymentCapabilities {
           modes.mcp !== "off" &&
           env.MCP_CONNECTIONS_ENABLED === "true" &&
           env.MCP_CONNECTION !== undefined,
+        sandboxExecution: currentSandboxExecutionCapability(env),
       },
     },
     runtimeVersions: OPEN_INSPECT_RUNTIME_VERSIONS,

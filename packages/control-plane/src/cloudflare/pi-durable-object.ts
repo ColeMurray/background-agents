@@ -100,6 +100,13 @@ import {
 } from "@open-inspect/shared";
 import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
 import {
+  createSandboxExecutionExtension,
+  createSandboxExecutionPolicyDelegate,
+  type SandboxExecutionToolRequest,
+  type SandboxExecutionToolResponse,
+} from "../pi/sandbox-execution-extension";
+import { PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS } from "@open-inspect/shared";
+import {
   PiCodeModeExecutionCoordinator,
   createOpenInspectCodemodeExtension,
   createPiCodeModePolicyDelegate,
@@ -134,6 +141,30 @@ const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
+const sandboxExecutionToolResponseSchema = z
+  .object({
+    command: z
+      .object({
+        id: z.string(),
+        state: z.string(),
+        outputTruncated: z.boolean(),
+        exitCode: z.number().nullable(),
+        signal: z.string().nullable(),
+        error: z.string().nullable(),
+      })
+      .optional(),
+    chunks: z
+      .array(
+        z.object({
+          sequence: z.number().int(),
+          stream: z.enum(["stdout", "stderr"]),
+          data: z.string(),
+        })
+      )
+      .optional(),
+    nextSequence: z.number().int().nullable().optional(),
+  })
+  .passthrough();
 const OPERATION_METADATA_PREFIX = "open-inspect:operation:";
 const CONTROL_COMPLETION_PREFIX = "open-inspect:control-completion:";
 const CONTROL_SUBMISSION_REQUEST_PREFIX = "open-inspect-control:";
@@ -216,6 +247,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         },
       });
       const codeModePolicyDelegate = createPiCodeModePolicyDelegate(codeModePolicy);
+      const sandboxExecutionPolicyDelegate = createSandboxExecutionPolicyDelegate();
       const emergencyPolicy = createPiDeploymentEmergencyPolicy(currentCapabilities);
       const core = createOpenInspectExtension({
         repositories: sessionContext.repositories,
@@ -246,8 +278,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             return createPiToolPolicyExtension(
               effects,
               workspacePolicyDelegate
-                ? [externalActionDelegate, workspacePolicyDelegate, codeModePolicyDelegate]
-                : [externalActionDelegate, codeModePolicyDelegate],
+                ? [
+                    externalActionDelegate,
+                    workspacePolicyDelegate,
+                    codeModePolicyDelegate,
+                    sandboxExecutionPolicyDelegate,
+                  ]
+                : [externalActionDelegate, codeModePolicyDelegate, sandboxExecutionPolicyDelegate],
               emergencyPolicy
             );
           },
@@ -354,6 +391,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           minimumCapability: "enabled",
           extension: createOpenInspectCodemodeExtension(sandbox, codeModePolicy),
           effects: PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
+        });
+      }
+      if (capabilities.sandboxExecution === "enabled") {
+        extensions.push({
+          slot: "sandbox_execution",
+          feature: "sandboxExecution",
+          minimumCapability: "enabled",
+          extension: createSandboxExecutionExtension({
+            invoke: (request, signal) => this.invokeSandboxExecution(request, signal),
+          }),
+          effects: PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
         });
       }
       const assembly = assemblePiExtensions(extensions, capabilities);
@@ -1474,6 +1522,40 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return z.json().parse(body);
+  }
+
+  private async invokeSandboxExecution(
+    request: SandboxExecutionToolRequest,
+    signal?: AbortSignal
+  ): Promise<SandboxExecutionToolResponse> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piSandboxCommand}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+        },
+        body: JSON.stringify(request),
+        signal,
+      })
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message =
+        body &&
+        typeof body === "object" &&
+        !Array.isArray(body) &&
+        "error" in body &&
+        typeof body.error === "string"
+          ? body.error
+          : `Sandbox execution failed (${response.status})`;
+      throw new Error(message);
+    }
+    return sandboxExecutionToolResponseSchema.parse(body);
   }
 
   private async invokeAgentControl(

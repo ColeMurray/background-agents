@@ -9,6 +9,7 @@ export const PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID = 61;
 export const PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID = 62;
 export const PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID = 63;
 export const PI_SESSION_DO_CONTROLS_MIGRATION_ID = 64;
+export const PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID = 65;
 export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_MIGRATION_VERSION = 91;
 export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
@@ -79,6 +80,12 @@ export const PI_MIGRATION_RESERVATIONS = [
     version: PI_SESSION_DO_CONTROLS_MIGRATION_ID,
     feature: "piControls",
     purpose: "Pi native control receipts",
+  },
+  {
+    store: "session_do",
+    version: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+    feature: "sandboxExecution",
+    purpose: "sandbox execution authority, cancellation, and retention",
   },
   {
     store: "d1",

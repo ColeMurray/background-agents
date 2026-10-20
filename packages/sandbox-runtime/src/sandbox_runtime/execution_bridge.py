@@ -151,7 +151,15 @@ class ExecutionBridge:
         if self._fenced and isinstance(command_type, str) and command_type.startswith("command_"):
             return
         if command_type == "command_execute":
+            command_id = command.get("commandId")
+            if isinstance(command_id, str):
+                await self._send_event({"type": "command_accepted", "commandId": command_id})
+                existing = self.runner.has_command(command_id)
+            else:
+                existing = False
             self.runner.start(command)
+            if existing:
+                await self.runner.replay(command_id, after_sequence=-1)
         elif command_type == "command_cancel":
             command_id = command.get("commandId")
             if isinstance(command_id, str):

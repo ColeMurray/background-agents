@@ -14,8 +14,18 @@ describe("SandboxCommandEventHandler", () => {
         sandboxId: "sandbox-1",
         timestamp: 1,
       },
-      method: "markIndeterminate" as const,
+      method: "recordReplayGap" as const,
       args: ["cmd-1", "Command output replay gap: unknown_command", 100] as const,
+    },
+    {
+      event: {
+        type: "command_accepted" as const,
+        commandId: "cmd-1",
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+      },
+      method: "recordAccepted" as const,
+      args: ["cmd-1", 100] as const,
     },
     {
       event: {
@@ -57,9 +67,10 @@ describe("SandboxCommandEventHandler", () => {
   ])("persists $event.type", ({ event, method, args }) => {
     const repository = {
       recordStarted: vi.fn(),
+      recordAccepted: vi.fn(),
       recordOutput: vi.fn(),
       complete: vi.fn(),
-      markIndeterminate: vi.fn(),
+      recordReplayGap: vi.fn(),
     };
     const handler = new SandboxCommandEventHandler(repository, () => 100);
 

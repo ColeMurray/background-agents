@@ -6,6 +6,7 @@ from sandbox_runtime.execution_bridge import ExecutionBridge, ExecutionBridgeOwn
 class FakeRunner:
     def __init__(self):
         self.start = MagicMock()
+        self.has_command = MagicMock(return_value=False)
         self.cancel = AsyncMock(return_value=True)
         self.replay = AsyncMock()
         self.shutdown = AsyncMock()
@@ -26,6 +27,7 @@ def bridge(runner):
 async def test_execution_bridge_routes_only_the_command_protocol():
     runner = FakeRunner()
     execution_bridge = bridge(runner)
+    execution_bridge._send_event = AsyncMock(return_value=True)
     command = {
         "type": "command_execute",
         "effect": "sandbox_execution",
@@ -42,6 +44,9 @@ async def test_execution_bridge_routes_only_the_command_protocol():
     await execution_bridge._handle_command({"type": "prompt", "content": "do not run"})
 
     runner.start.assert_called_once_with(command)
+    execution_bridge._send_event.assert_awaited_once_with(
+        {"type": "command_accepted", "commandId": "cmd-1"}
+    )
     runner.replay.assert_awaited_once_with("cmd-1", after_sequence=3)
     runner.cancel.assert_awaited_once_with("cmd-1")
 
@@ -56,6 +61,25 @@ async def test_execution_bridge_shutdown_cancels_processes_and_socket():
     assert execution_bridge.shutdown_event.is_set()
     runner.shutdown.assert_awaited_once()
     execution_bridge.ws.close.assert_awaited_once()
+
+
+async def test_duplicate_execute_replays_started_state_without_starting_another_process():
+    runner = FakeRunner()
+    runner.has_command.return_value = True
+    execution_bridge = bridge(runner)
+    execution_bridge._send_event = AsyncMock(return_value=True)
+    command = {
+        "type": "command_execute",
+        "effect": "sandbox_execution",
+        "commandId": "cmd-1",
+        "purpose": "test",
+        "argv": ["npm", "test"],
+    }
+
+    await execution_bridge._handle_command(command)
+
+    runner.start.assert_called_once_with(command)
+    runner.replay.assert_awaited_once_with("cmd-1", after_sequence=-1)
 
 
 def test_execution_bridge_ready_event_has_no_agent_harness():

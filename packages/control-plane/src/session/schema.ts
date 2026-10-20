@@ -143,6 +143,14 @@ const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands 
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL,
   request_json TEXT NOT NULL,
+  request_fingerprint TEXT,
+  actor_kind TEXT,
+  actor_id TEXT,
+  approval_revision INTEGER,
+  credential_profile TEXT,
+  egress_profile TEXT,
+  task_id INTEGER,
+  tool_call_id TEXT,
   state TEXT NOT NULL,
   sandbox_id TEXT,
   bridge_instance_id TEXT,
@@ -154,8 +162,17 @@ const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands 
   error TEXT,
   created_at INTEGER NOT NULL,
   dispatched_at INTEGER,
+  dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+  last_dispatch_at INTEGER,
+  accepted_at INTEGER,
   deadline_at INTEGER,
   started_at INTEGER,
+  cancel_requested_at INTEGER,
+  cancel_deadline_at INTEGER,
+  cancel_attempts INTEGER NOT NULL DEFAULT 0,
+  replay_gap INTEGER NOT NULL DEFAULT 0,
+  late_completion_at INTEGER,
+  metadata_expires_at INTEGER,
   completed_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS sandbox_command_output (
@@ -428,6 +445,7 @@ import {
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
 } from "@open-inspect/shared/pi-migration-reservations";
 import type { PiMigrationOwner } from "@open-inspect/shared/pi-migration-reservations";
@@ -1001,6 +1019,34 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       sql.exec(
         "CREATE INDEX idx_pi_control_receipts_actor ON pi_control_receipts(actor_id,created_at)"
       );
+    },
+  },
+  {
+    id: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+    description: "Persist sandbox execution authority, cancellation, and retention",
+    feature: "sandboxExecution",
+    run: (sql) => {
+      for (const statement of [
+        "ALTER TABLE sandbox_commands ADD COLUMN request_fingerprint TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN actor_kind TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN actor_id TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN approval_revision INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN credential_profile TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN egress_profile TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN task_id INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN tool_call_id TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN dispatch_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sandbox_commands ADD COLUMN last_dispatch_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN accepted_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN cancel_requested_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN cancel_deadline_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN cancel_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sandbox_commands ADD COLUMN replay_gap INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sandbox_commands ADD COLUMN late_completion_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN metadata_expires_at INTEGER",
+      ]) {
+        runMigration(sql, statement);
+      }
     },
   },
 ];

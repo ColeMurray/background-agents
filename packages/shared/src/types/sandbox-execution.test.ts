@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS,
+  MAX_SANDBOX_COMMAND_TIMEOUT_MS,
   sandboxExecutionCommandSchema,
   sandboxExecutionEventSchema,
   sandboxRuntimeModeSchema,
@@ -56,8 +58,13 @@ describe("sandbox execution protocol", () => {
     expect(sandboxExecutionCommandSchema.safeParse({ ...base, argv: [] }).success).toBe(false);
     expect(sandboxExecutionCommandSchema.safeParse({ ...base, cwd: "/etc" }).success).toBe(false);
     expect(
-      sandboxExecutionCommandSchema.safeParse({ ...base, timeoutMs: 24 * 60 * 60 * 1_000 }).success
+      sandboxExecutionCommandSchema.safeParse({
+        ...base,
+        timeoutMs: MAX_SANDBOX_COMMAND_TIMEOUT_MS + 1,
+      }).success
     ).toBe(false);
+    expect(DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS).toBe(15 * 60 * 1_000);
+    expect(MAX_SANDBOX_COMMAND_TIMEOUT_MS).toBe(2 * 60 * 60 * 1_000);
   });
 
   it("accepts cancellation and sequence-based replay commands", () => {

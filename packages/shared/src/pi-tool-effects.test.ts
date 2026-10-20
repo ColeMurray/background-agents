@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
+  PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
   SANDBOX_EXECUTION_TOOL_EFFECT,
   TOOL_CALLERS,
@@ -76,5 +77,16 @@ describe("Pi tool effect registry", () => {
         replay: "unsafe",
       },
     ]);
+  });
+
+  it("classifies run, build, and test equally as model-only sandbox execution", () => {
+    expect(PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS).toEqual(
+      ["run_shell", "run_build", "run_tests"].map((name) => ({
+        name,
+        effect: "sandbox_execution",
+        callers: ["model"],
+        replay: "safe",
+      }))
+    );
   });
 });

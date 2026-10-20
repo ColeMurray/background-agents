@@ -139,6 +139,7 @@ describe("session runtime proxy routes", () => {
       init: { headers: SANDBOX_HEADERS, body: JSON.stringify({ error: "crash", fatal: true }) },
     },
     { method: "GET", path: "/sessions/session-1/events", internal: "events" },
+    { method: "GET", path: "/sessions/session-1/executions", internal: "piExecutions" },
     { method: "GET", path: "/sessions/session-1/artifacts", internal: "artifacts" },
     { method: "GET", path: "/sessions/session-1/participants", internal: "participants" },
     {

@@ -30,4 +30,17 @@ describe("deploymentCapabilities", () => {
     expect(capabilities.pi.enabled).toBe(false);
     expect(capabilities.harnesses.find((harness) => harness.id === "pi")?.available).toBe(false);
   });
+
+  it("keeps sandbox execution undiscoverable while the selected provider is canary-blocked", () => {
+    const capabilities = deploymentCapabilities({
+      PI_SANDBOX_EXECUTION_MODE: "enabled",
+      SANDBOX_PROVIDER: "modal",
+    } as never);
+    expect(capabilities.pi.modes.sandboxExecution).toBe("off");
+    expect(capabilities.pi.canary.sandboxExecution).toEqual({
+      available: false,
+      provider: "modal",
+      reason: "provider_canary_blocked",
+    });
+  });
 });

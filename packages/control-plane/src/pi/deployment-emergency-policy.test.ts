@@ -98,4 +98,30 @@ describe("Pi deployment emergency policy", () => {
     ).resolves.toBeUndefined();
     expect(current).toHaveBeenCalledWith(abort.signal);
   });
+
+  it("dynamically denies new run, build, and test calls without affecting Code Mode", async () => {
+    const current = vi.fn(async () =>
+      resolvePiFeatureCapabilities({ codeMode: "enabled", sandboxExecution: "off" })
+    );
+    const policy = createPiDeploymentEmergencyPolicy(current);
+
+    for (const name of ["run_shell", "run_build", "run_tests"]) {
+      await expect(
+        policy.beforeFeatureDelegates(
+          call(name),
+          declaration(name, "sandbox_execution"),
+          api,
+          context
+        )
+      ).resolves.toEqual({ block: "Sandbox execution is disabled by deployment policy" });
+    }
+    await expect(
+      policy.beforeFeatureDelegates(
+        call("codemode"),
+        declaration("codemode", "sandbox_execution"),
+        api,
+        context
+      )
+    ).resolves.toBeUndefined();
+  });
 });

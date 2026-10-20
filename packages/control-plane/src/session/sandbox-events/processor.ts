@@ -47,6 +47,7 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
   "sandbox_generation_ready",
   "preservation_prepared",
+  "command_accepted",
   "command_completed",
   "command_replay_gap",
 ]);
@@ -189,6 +190,7 @@ export class SessionSandboxEventProcessor {
         // the delivery ack below, which stops the bridge re-sending it.
         return;
       case "command_started":
+      case "command_accepted":
       case "command_output":
       case "command_replay_gap":
       case "command_completed":

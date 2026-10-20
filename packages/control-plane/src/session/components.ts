@@ -136,6 +136,7 @@ import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
 import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
 import { PiSandboxExecutionHandler } from "./http/handlers/pi-sandbox-execution.handler";
+import { PiExecutionsHandler } from "./http/handlers/pi-executions.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -735,8 +736,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     generateId,
     now: () => Date.now(),
   });
-  const commandEventHandler = new SandboxCommandEventHandler(sandboxCommandRepository, () =>
-    Date.now()
+  const commandEventHandler = new SandboxCommandEventHandler(
+    sandboxCommandRepository,
+    () => Date.now(),
+    () =>
+      backgroundTasks.submit(() => piSandboxExecution.onCommandTerminal(), {
+        name: "sandbox_command.dispatch_next",
+      })
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -795,12 +801,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     isPiSession,
     getPublicSessionId,
     Date.now,
-    (operationId, settledAt) =>
+    (operationId, settledAt) => {
+      piSandboxExecution.cancelOperation(operationId);
       piOperations.settle(
         operationId,
         ["dispatching", "ambiguous", "admitted", "stopping"],
         settledAt
-      )
+      );
+    }
   );
   const piControlRepository = new PiControlRepository(sql);
   const piControlHandler = new PiControlHandler(
@@ -988,6 +996,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     execution: piSandboxExecution,
     commands: sandboxCommandRepository,
     getProcessingMessageId: () => messageRepository.getProcessingMessage()?.id ?? null,
+    getOperationActor: (operationId) => messageRepository.getMessageActor(operationId),
+  });
+  const piExecutionsHandler = new PiExecutionsHandler({
+    commands: sandboxCommandRepository,
+    execution: piSandboxExecution,
   });
 
   const sandboxHandler = new SandboxHandler(
@@ -1225,6 +1238,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),
     externalActionDecision: (request) => piBridgeHandler.externalActionDecision(request),
     piSandboxCommand: (request) => piSandboxExecutionHandler.handle(request),
+    piExecutions: (request) => Promise.resolve(piExecutionsHandler.list(request)),
+    piExecutionCancel: (request) => Promise.resolve(piExecutionsHandler.cancel(request)),
+    piExecutionOutput: (request) => Promise.resolve(piExecutionsHandler.output(request)),
     piResult: (request) => piResultHandler.handle(request),
     piControl: (request) => piControlHandler.handle(request),
     piControlCompletion: (request) => piControlHandler.complete(request),
