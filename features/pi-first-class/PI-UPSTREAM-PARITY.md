@@ -1,63 +1,123 @@
-# Pi Durable upstream parity: hibernation and telemetry
+# Pi Durable upstream parity: hibernation, wake, and telemetry
 
 ## Why this document exists
 
-Upstream `@earendil-works/pi-durable` on `main` has moved ahead of the published release. Two
-upstream capabilities matter to Open-Inspect, and Open-Inspect must stay compatible with both the
-published release and the next one.
+Upstream `@earendil-works/pi-durable` on `main` is ahead of the published release. Open-Inspect must
+stay compatible with both, and must not re-implement what upstream is about to ship. This records
+what upstream actually says, checked against the upstream sources, and what Open-Inspect does about
+each item.
 
-| Upstream capability                            | Published `1.3.0` | Upstream `main` |
-| ---------------------------------------------- | ----------------- | --------------- |
-| Serverless wake contract (`onWake`, `wake()`)  | Not published     | Published       |
-| Harness telemetry (`HarnessOptions.telemetry`) | Not published     | Published       |
-| `resume()`                                     | Published         | Published       |
-| `whenBusy: "steer" \| "followUp" \| "reject"`  | Published         | Published       |
-| `harness.submission(id)` reacquisition         | Published         | Published       |
-| `harness.waitForTask(id)`                      | Published         | Published       |
-| Deferred tools + `tool-search` export          | Published         | Published       |
-| Hibernatable tools                             | Not yet           | In progress     |
+**Last verified:** 2026-10-21, against `github.com/earendil-works/pi`, `packages/durable`
+(`README.md`, `src/harness/types.ts`, `src/harness/task-graph.ts`, `package.json`) on `main`, and
+against the published `@earendil-works/pi-durable@1.3.0` in `node_modules`.
 
-`@earendil-works/pi-telemetry@1.3.0` **is** published and already ships as a dependency of
-`@earendil-works/pi-ai@1.3.0`, so the telemetry _contract_ is usable today even though the Durable
-harness does not consume it yet.
+## The upstream state
 
-## What Open-Inspect does now
+Upstream `main` still carries the version `1.3.0` in its `package.json`, so the published package
+and the branch share a version number while differing in content. The published `1.3.0` on npm is
+unchanged since the last check.
 
-### Hibernation
+| Upstream capability                                   | Published `1.3.0` | Upstream `main` | Open-Inspect          |
+| ----------------------------------------------------- | ----------------- | --------------- | --------------------- |
+| Serverless wake contract (`onWake`, `wake()`)         | Not published     | Published       | Adapted, see below    |
+| Harness telemetry (`HarnessOptions.telemetry`)        | Not published     | Published       | Conforms              |
+| `DURABLE_TELEMETRY_SCHEMA`                            | Not published     | Published       | Mirrored              |
+| `resume()`                                            | Published         | Published       | Used                  |
+| `whenBusy: "steer" \| "followUp" \| "reject"`         | Published         | Published       | Used                  |
+| `harness.submission(id)` reacquisition                | Published         | Published       | Used                  |
+| `harness.waitForTask(id)`                             | Published         | Published       | Used                  |
+| Deferred tools and the `tool-search` export           | Published         | Published       | Not adopted           |
+| `settings.restartLimit`, `retryTask`, `restart_limit` | Not published     | Published       | Not available yet     |
+| `settings.afterFailedRun`                             | Not published     | Published       | Upstream default kept |
+| `modelTools`                                          | Not published     | Published       | Not adopted           |
+| `outputLimits`, `prepareArguments`, `control.handoff` | Not published     | Published       | Not adopted           |
+| `contextRetentionMs`, `documentRetentionMs`           | Not published     | Published       | Not adopted           |
+| Hibernatable tools                                    | Not present       | Not present     | Nothing to do yet     |
 
-`packages/control-plane/src/pi/pi-harness-wake.ts` implements the upstream wake contract against the
-published release:
+### The wake contract, exactly as upstream states it
 
-- `PiHarnessWake` is `{ active, at? }`, identical to upstream's `Wake`.
-- The controller resumes the harness after a reopen and when a hibernated object wakes with pending
-  work.
-- `wake()` prefers the native contract when the installed harness exposes it, and otherwise derives
-  the answer from Open-Inspect's own durable state.
+Upstream `main` defines:
 
-The published `1.3.0` release keeps interrupted work pending but does not schedule it until
-something asks for progress. A reopened Pi session therefore resumes explicitly, which is what makes
-a Durable Object eviction or a hibernation recoverable instead of leaving a run parked.
+```ts
+export type Wake = { readonly active: boolean; readonly at?: number };
 
-`PiSessionDO` calls `resume()`:
+export interface HarnessOptions {
+  readonly onWake?: (wake: Wake) => void;
+}
 
-- right after the harness opens,
-- when a hibernated object wakes with pending operations,
-- never after the harness closed, which the deletion path reaches.
+export interface Harness {
+  wake(): Wake;
+  resume(): void;
+}
+```
+
+and the documentation says: _"Wakes the process for sleeping tasks instead of a `setTimer` timer.
+Without it, while scheduling runs, a timer that keeps the process alive resumes sleeping tasks when
+they are due. With it, the Harness arms no timer for them: it calls `onWake` after open and whenever
+`Harness.wake()` changes, and the host arms its own wakeup, such as a Durable Object alarm, and
+calls `resume()` when it fires. Called off the Session line, after the commit that changed the
+value, so a host arms a recovery wakeup before calls that can start work. It may call `wake()` and
+`resume()`, and must not block."_
+
+The same source says of `setTimer`: _"Default `setTimeout`, with background timers unreferenced, or
+**declined in Cloudflare Workers** and where they cannot be unreferenced."_ So on a Durable Object
+the harness does not keep itself alive; the host owns the wakeup.
+
+**Open-Inspect's shape matches upstream exactly.** `PiHarnessWake` in
+`packages/control-plane/src/pi/pi-harness-wake.ts` is `{ active, at? }`, which is upstream's `Wake`
+field for field, and the controller prefers the native `wake()` when the installed release exposes
+it.
+
+### Who owns the physical alarm in Open-Inspect
+
+**The Cloudflare `agents` SDK, not Open-Inspect.** `PiSessionDO` installs
+`Lifecycle.install(this).use(this.harness)`, where `this.harness` is the SDK's `PiHarness`. That
+harness keeps one `Lifecycle` job per session: the job waits while pi has live tasks, reschedules
+itself as a heartbeat, and completes when there are none. The `Lifecycle` derives the physical
+Durable Object alarm from its job queue and installs the object's `alarm` handler. Upstream's own
+`agents` documentation states the guarantee: _"An eviction mid-run leaves the job due, so its alarm
+restarts the object, pi reopens and resumes its own tasks, and the job waits again."_
+
+Two consequences Open-Inspect must keep:
+
+1. **Open-Inspect must never arm the alarm itself.** The `Lifecycle` owns the physical alarm; a
+   second owner would overwrite it. `pi-harness-wake.ts` therefore never calls `setAlarm` and never
+   deletes one. It is the _resume_ seam, not the alarm owner.
+2. **`PiSessionDO.onStart()` resumes the harness** when a hibernated object wakes with pending
+   operations, before it reattaches its relays, so a run that lost its instance continues.
 
 ### Telemetry
 
-`packages/control-plane/src/pi/pi-telemetry.ts` defines a schema whose span vocabulary mirrors
-upstream's `DURABLE_TELEMETRY_SCHEMA`, so Open-Inspect spans compose with Pi's own spans once the
-harness exposes its telemetry option.
+Upstream `main` adds `HarnessOptions.telemetry`, which accepts a host-owned `TelemetryContext` from
+`@earendil-works/pi-telemetry`, and exports `DURABLE_TELEMETRY_SCHEMA` describing its typed spans,
+events, and metrics. The published `@earendil-works/pi-telemetry@1.3.0` already ships the contract,
+so the interface is usable today even though the Durable harness does not consume it yet.
+
+`packages/control-plane/src/pi/pi-telemetry.ts` conforms to that published contract: it uses
+`defineTelemetrySchema` and implements `TelemetryContext`, and its span vocabulary mirrors
+upstream's `DURABLE_TELEMETRY_SCHEMA` so Open-Inspect spans compose with Pi's own once the option
+exists.
 
 - Spans: `pi.durable.submit`, `pi.durable.phase`, `pi.open-inspect.latency`.
-- `OpenInspectPiTelemetryContext` implements the published `TelemetryContext` contract and publishes
-  spans as structured log records.
 - `assertContentFreeAttributes` refuses content-shaped attributes before they reach a sink. Prompts,
   tool arguments, tool output, and credentials never reach a span.
 - `packages/control-plane/src/pi/pi-trace.ts` derives one trace id per Pi operation from the shared
   message id, so every SessionDO and PiSessionDO hop of one operation correlates without new
   persisted state. The Pi-to-SessionDO hops send it as `x-trace-id`.
+
+## What Open-Inspect deliberately does not adopt
+
+Each of these is an upstream convenience that would move authority away from Open-Inspect or add a
+surface the product does not have. They are decisions, not gaps.
+
+| Upstream feature                   | Why Open-Inspect does not use it                                                                                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `modelTools`                       | It narrows what the model is offered at the harness level. Open-Inspect enforces the same rule as authority: the Code Mode restriction is the policy delegate's, backed by the durable parent registry. |
+| `deferred` tools and `tool_search` | A tool that loads other tools by name is a model-reachable way to widen the tool set. Open-Inspect's tool set is small, explicit, and installed per session.                                            |
+| `settings.afterFailedRun`          | Open-Inspect keeps upstream's default, `keep`: a failed turn leaves the queued prompts queued, which is the existing Open-Inspect behavior for a failed turn.                                           |
+| `outputLimits`, `prepareArguments` | They shape a tool's ergonomics, not its authority. Open-Inspect's own tool layers already bound their results.                                                                                          |
+| `contextRetentionMs`               | A memory optimization. The Durable Object's own eviction, and the `agents` wake job, already decide when memory is released.                                                                            |
+| `control.handoff` from a tool      | Open-Inspect's handoff is a session lifecycle action with its own audit, reached through the control route, not a tool result. The upstream `handoff` control is a Pi-internal detail.                  |
 
 ## The single upgrade point
 
@@ -71,6 +131,15 @@ When a release ships `onWake`, `wake()`, and `HarnessOptions.telemetry`:
 
 No other Open-Inspect file changes, and no stored state is migrated.
 
+Two upstream additions to pick up when the release carries them:
+
+- `settings.restartLimit` parks a task that was cut off too many times, with the reason
+  `restart_limit`, and `harness.retryTask(id)` runs it again. The published release has neither the
+  limit nor the reason. Open-Inspect's sanitized inspection already names the reasons the published
+  release has (`missing_task`, `task_too_old`, `migration_failed`), so the parked reason arrives in
+  the same place with no new surface.
+- `DURABLE_TELEMETRY_SCHEMA` can replace the mirrored vocabulary in `pi-telemetry.ts` verbatim.
+
 ## Rules that survive the upgrade
 
 - Open-Inspect keeps its own authority boundaries. Pi telemetry is observability, never
@@ -80,3 +149,4 @@ No other Open-Inspect file changes, and no stored state is migrated.
   capability admission.
 - The installed version is exact-pinned. An upgrade is its own reviewed change with its own canary,
   not a side effect of another feature.
+- One alarm owner. The `agents` `Lifecycle` owns the physical alarm; Open-Inspect owns the resume.
