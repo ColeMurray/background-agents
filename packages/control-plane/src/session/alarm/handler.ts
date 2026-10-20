@@ -93,7 +93,9 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
       if (lifecycleResult !== "no_action") {
-        await deps.messageQueue.failStuckProcessingMessage();
+        await deps.messageQueue.failStuckProcessingMessage(
+          "Execution interrupted because the sandbox stopped or became unavailable."
+        );
       }
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
