@@ -28,13 +28,13 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "@vitest/coverage-v8": "^4.1.11",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11",
-    "wrangler": "^4.103.0"
+    "wrangler": "^4.149.0"
   }
 }
