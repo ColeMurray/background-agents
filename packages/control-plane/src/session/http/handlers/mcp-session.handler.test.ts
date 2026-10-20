@@ -12,6 +12,8 @@ function harness(
       serverName: string;
       endpointHost: string;
       toolNames: string[];
+      sessionId: string;
+      createdAt: number;
       ownerUserId: string;
     }>;
     result?: unknown;
@@ -25,6 +27,8 @@ function harness(
       serverName: "Docs",
       endpointHost: "mcp.example.com",
       toolNames: ["search"],
+      sessionId: "session-1",
+      createdAt: 1_000,
       ownerUserId: "user-1",
     },
   ];
@@ -179,8 +183,10 @@ describe("McpSessionHandler", () => {
     const response = await h.handler.list();
 
     expect(response.status).toBe(200);
-    const body = await response.json<{ grants: unknown[] }>();
-    expect(body.grants).toHaveLength(1);
-    expect(JSON.stringify(body)).not.toMatch(/token|secret|authorization/i);
+    // The canonical pin shape, so the agent and the session agree on one.
+    const body = await response.json<{ pins: Array<Record<string, unknown>> }>();
+    expect(body.pins).toHaveLength(1);
+    // The owner of the connection is not part of the answer.
+    expect(JSON.stringify(body)).not.toMatch(/token|secret|authorization|ownerUserId/i);
   });
 });

@@ -360,6 +360,15 @@ function redactToolArguments(tool: string, args: Record<string, unknown>): Recor
   };
 }
 
+/**
+ * The tools whose output is kept out of the shared timeline.
+ *
+ * A read can carry a secret that happened to be in a file or a provider
+ * answer, and the timeline is visible to every collaborator of the session.
+ * The model still receives the full result; the timeline keeps the shape.
+ */
+const REDACTED_OUTPUT_TOOLS = new Set(["write", "edit", "read", "mcp_read", "repository_read"]);
+
 function redactToolOutput(tool: string, output: string): string {
-  return tool === "write" || tool === "edit" ? REDACTED : output;
+  return REDACTED_OUTPUT_TOOLS.has(tool) ? REDACTED : output;
 }

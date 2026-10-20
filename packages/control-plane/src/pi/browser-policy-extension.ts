@@ -37,7 +37,12 @@ export function createBrowserPolicyDelegate(options: BrowserPolicyOptions): PiTo
       if (declaration.effect !== "external_mutation") return undefined;
       let decision: BrowserAuthorizationDecision;
       try {
-        decision = await options.client.authorize({}, context.abortSignal);
+        decision = await options.client.authorize(
+          {
+            url: typeof call.arguments.url === "string" ? call.arguments.url : undefined,
+          },
+          context.abortSignal
+        );
       } catch (error) {
         return {
           block:

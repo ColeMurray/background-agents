@@ -281,6 +281,36 @@ describe("PiSessionDO", () => {
     expect(outcome).toContain("Malformed persisted Pi capability snapshot");
   });
 
+  it("installs the cross-session tool once when the capability is enabled", async () => {
+    const { sessionName } = await initSession({
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      configureSessionEnv: (sessionEnv) => {
+        sessionEnv.PI_WORKSPACE_MODE = "off";
+        sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
+        sessionEnv.PI_CODE_MODE = "off";
+        sessionEnv.PI_SANDBOX_EXECUTION_MODE = "off";
+        sessionEnv.PI_EXTERNAL_ACTIONS_MODE = "off";
+        sessionEnv.PI_MCP_MODE = "off";
+        sessionEnv.PI_CROSS_SESSION_MESSAGING_MODE = "enabled";
+      },
+    });
+
+    await piStub(sessionName).status(sessionName);
+    const tools = await runInPiSessionDO(piStub(sessionName), async (instance) => {
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
+    });
+
+    // The tool is installed exactly once. A second contribution for the same
+    // slot is refused by the assembler, so a duplicate never reaches a
+    // session.
+    expect(tools.filter((name) => name === "message_session")).toHaveLength(1);
+  });
+
   it("keeps an all-off creation snapshot after deployment flags enable before first prompt", async () => {
     const { sessionName, stub: sessionStub } = await initSession({
       harness: "pi",

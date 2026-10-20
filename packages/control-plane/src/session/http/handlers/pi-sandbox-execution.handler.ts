@@ -57,6 +57,21 @@ interface PiSandboxExecutionHandlerDependencies {
   };
   getProcessingMessageId(): string | null;
   getOperationActor(operationId: string): { kind: "user" | "service"; id: string } | null;
+  /**
+   * The session's own capability for sandbox execution.
+   *
+   * It is the session's authority, not the caller's, that decides whether a
+   * new command may run.
+   */
+  sessionCapability(): "off" | "read_only" | "enabled";
+  /**
+   * The live deployment mode.
+   *
+   * A live deny stops new submissions. A command that was already admitted
+   * keeps its status, its output, and its cancellation reachable, so an
+   * emergency never strands work in flight.
+   */
+  liveMode(): "off" | "read_only" | "enabled";
 }
 
 /** SessionDO-owned execution authority. Reachable only from the private Pi bridge. */
@@ -79,6 +94,17 @@ export class PiSandboxExecutionHandler {
       if (input.action === "submit") {
         if (input.command.type !== "command_execute") {
           return Response.json({ error: "Invalid command request" }, { status: 400 });
+        }
+        // The session decides whether a new command may run. The body may
+        // echo the approval revision, but it never grants one.
+        if (this.deps.sessionCapability() === "off" || this.deps.liveMode() === "off") {
+          return Response.json(
+            {
+              error: "Sandbox execution is disabled for this session",
+              code: "sandbox_execution_disabled",
+            },
+            { status: 403 }
+          );
         }
         const actor = this.deps.getOperationActor(operationId);
         if (!actor)
@@ -132,7 +158,9 @@ async function commandAuthority(
     operationId,
     command: input.command,
     actor,
-    approvalRevision: input.approvalRevision,
+    // The session records its own approval revision, so the ledger never
+    // depends on the caller's assertion.
+    approvalRevision: EXECUTION_APPROVAL_REVISION,
     credentialProfile: EXECUTION_CREDENTIAL_PROFILE,
     egressProfile: EXECUTION_EGRESS_PROFILE,
     taskId: input.taskId,
@@ -142,7 +170,7 @@ async function commandAuthority(
     fingerprint: await hashToken(JSON.stringify(immutable)),
     actorKind: actor.kind,
     actorId: actor.id,
-    approvalRevision: input.approvalRevision,
+    approvalRevision: EXECUTION_APPROVAL_REVISION,
     credentialProfile: EXECUTION_CREDENTIAL_PROFILE,
     egressProfile: EXECUTION_EGRESS_PROFILE,
     taskId: input.taskId,

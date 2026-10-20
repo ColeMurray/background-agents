@@ -37,8 +37,13 @@ export type BrowserAuthorization =
 /** The request the agent makes. */
 export const browserRequestSchema = z
   .object({
-    /** The URL the agent wants to reach. */
-    url: z.string().min(1).max(4_096),
+    /**
+     * The URL the agent wants to reach.
+     *
+     * It is optional because the early gate asks whether the session may
+     * drive a browser at all, before any URL is known.
+     */
+    url: z.string().min(1).max(4_096).optional(),
   })
   .strict();
 
@@ -56,7 +61,7 @@ export class BrowserGateway {
    * The order is the boundary: the session's own capability, the live
    * deployment mode, the turn's actor, and then the reviewed hosts.
    */
-  authorize(request: { url: string }, operationId: string | null): BrowserAuthorization {
+  authorize(request: { url?: string }, operationId: string | null): BrowserAuthorization {
     const bridge = this.options.browser;
     if (bridge.sessionCapability() !== "enabled" || bridge.liveMode() !== "enabled") {
       return {
@@ -78,6 +83,13 @@ export class BrowserGateway {
         kind: "denied",
         code: "browser_actor_missing",
         reason: "The originating turn has no workspace actor",
+      };
+    }
+    if (!request.url) {
+      return {
+        kind: "denied",
+        code: "browser_url_missing",
+        reason: "The browser request does not name a page",
       };
     }
     let hostname: string;
@@ -109,11 +121,11 @@ export class BrowserGateway {
   }
 
   /** Record the decision so collaborators can see what the browser did. */
-  record(request: { url: string }, operationId: string, decision: BrowserAuthorization): void {
+  record(request: { url?: string }, operationId: string, decision: BrowserAuthorization): void {
     this.options.browser.recordActivity({
       operationId,
       actorId: decision.kind === "allowed" ? decision.actorId : "system",
-      url: request.url,
+      url: request.url ?? null,
       outcome: decision.kind === "allowed" ? "authorized" : "refused",
       reason: decision.kind === "allowed" ? null : decision.reason,
     });

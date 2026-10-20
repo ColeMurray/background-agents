@@ -33,6 +33,9 @@ export function createPiDeploymentEmergencyPolicy(
           : { block: "Sandbox execution is disabled by deployment policy" };
       }
 
+      // A read inside the session's own scratch space stays operable during
+      // an emergency deny. The deny stops new effects and new mutations; it
+      // does not strand a turn that is already reading its own workspace.
       const feature = requiredMutationFeature(call, declaration);
       if (!feature) return;
       const current = await currentCapabilities(context.abortSignal);

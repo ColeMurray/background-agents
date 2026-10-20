@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertNoCredentialLikeKeys } from "./credential-shaped";
 
 export const MAX_EXTERNAL_ACTION_DOCUMENT_BYTES = 256 * 1024;
 
@@ -59,8 +60,8 @@ export const externalActionPrepareRequestSchema = z
   })
   .strict()
   .superRefine((request, context) => {
-    findCredentialLikeKey(request.target, ["target"], context);
-    findCredentialLikeKey(request.arguments, ["arguments"], context);
+    assertNoCredentialLikeKeys(request.target, context, ["target"]);
+    assertNoCredentialLikeKeys(request.arguments, context, ["arguments"]);
     const documentBytes = new TextEncoder().encode(
       JSON.stringify({ target: request.target, arguments: request.arguments })
     ).byteLength;
@@ -72,40 +73,6 @@ export const externalActionPrepareRequestSchema = z
       });
     }
   });
-
-const CREDENTIAL_KEYS = new Set([
-  "accesstoken",
-  "refreshtoken",
-  "authorization",
-  "password",
-  "secret",
-  "clientsecret",
-  "privatekey",
-  "cookie",
-]);
-
-function findCredentialLikeKey(
-  value: unknown,
-  path: PropertyKey[],
-  context: z.RefinementCtx
-): void {
-  if (Array.isArray(value)) {
-    value.forEach((entry, index) => findCredentialLikeKey(entry, [...path, index], context));
-    return;
-  }
-  if (typeof value !== "object" || value === null) return;
-  for (const [key, entry] of Object.entries(value)) {
-    const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
-    if (CREDENTIAL_KEYS.has(normalized)) {
-      context.addIssue({
-        code: "custom",
-        path: [...path, key],
-        message: "credential-like fields cannot cross the external action boundary",
-      });
-    }
-    findCredentialLikeKey(entry, [...path, key], context);
-  }
-}
 
 export const externalActionSchema = z
   .object({
@@ -197,3 +164,14 @@ export type ExternalActionPrepareRequest = z.infer<typeof externalActionPrepareR
 export type ExternalAction = z.infer<typeof externalActionSchema>;
 export type ExternalActionHistoryEvent = z.infer<typeof externalActionHistoryEventSchema>;
 export type ExternalActionStatusResponse = z.infer<typeof externalActionStatusResponseSchema>;
+
+/**
+ * The stable tool name for one publication.
+ *
+ * The model calls it by this name, so it has to be the same on both sides of
+ * the boundary and it has to stay the same when the deployment changes.
+ */
+export function externalActionToolName(provider: string, action: string): string {
+  const safe = (value: string) => value.replace(/[^A-Za-z0-9_]/g, "_");
+  return `publish_${safe(provider)}_${safe(action)}`;
+}

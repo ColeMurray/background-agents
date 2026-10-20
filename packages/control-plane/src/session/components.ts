@@ -730,6 +730,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             serverName: connection.serverName,
             endpointHost: new URL(connection.endpointUrl).host,
             toolNames: pin.toolNames,
+            sessionId: pin.sessionId,
+            createdAt: pin.createdAt,
             ownerUserId: pin.ownerUserId,
           });
         }
@@ -1179,6 +1181,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     commands: sandboxCommandRepository,
     getProcessingMessageId: () => messageRepository.getProcessingMessage()?.id ?? null,
     getOperationActor: (operationId) => messageRepository.getMessageActor(operationId),
+    sessionCapability: () =>
+      sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.sandboxExecution ??
+      "off",
+    liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.sandboxExecution,
   });
   const piExecutionsHandler = new PiExecutionsHandler({
     commands: sandboxCommandRepository,
@@ -1418,6 +1424,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
     crossSessionMessage: (request) => crossSessionHandler.outbound(request),
+    crossSessionAuthorize: (request) => crossSessionHandler.authorize(request),
     piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
     piMcpList: () => mcpSessionHandler.list(),
     piMcpRead: (request) => mcpSessionHandler.read(request),

@@ -61,6 +61,7 @@ export interface SessionInternalRouteHandlers {
   piExternalActionStatus: SessionInternalRouteHandler;
   piExternalActionExecute: SessionInternalRouteHandler;
   crossSessionMessage: SessionInternalRouteHandler;
+  crossSessionAuthorize: SessionInternalRouteHandler;
   piBrowserAuthorize: SessionInternalRouteHandler;
   piMcpList: SessionInternalRouteHandler;
   piMcpRead: SessionInternalRouteHandler;
@@ -216,6 +217,11 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.piMcpRead,
       handler: handlers.piMcpRead,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.crossSessionAuthorize,
+      handler: handlers.crossSessionAuthorize,
     },
     {
       method: "POST",

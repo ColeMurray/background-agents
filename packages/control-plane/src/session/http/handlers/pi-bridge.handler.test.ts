@@ -170,6 +170,7 @@ function externalActionHarness(
       provider: string,
       action: string
     ) => Promise<{ source: "automation_grant"; actorId: string; grantId: string } | undefined>;
+    credentialAvailable?: (provider: string) => Promise<boolean>;
   } = {}
 ) {
   const base = harness();
@@ -238,6 +239,7 @@ function externalActionHarness(
       gateway: gateway as never,
       definitions,
       liveMode: options.liveMode,
+      credentialAvailable: options.credentialAvailable,
       resolveAutomationApproval: options.resolveAutomationApproval,
       flushAudit,
       nextDeadline: () => null,
@@ -247,6 +249,40 @@ function externalActionHarness(
 }
 
 describe("PiBridgeHandler context", () => {
+  it("lists a publication only for a provider the deployment holds a credential for", async () => {
+    const credentialAvailable = vi.fn(async (provider: string) => provider === "fake");
+    const h = externalActionHarness(true, { credentialAvailable });
+
+    const response = await h.handler.context(
+      new Request("http://session/internal/pi-context", {
+        method: "POST",
+        body: JSON.stringify({ mode: "bootstrap" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      externalActions: [
+        { provider: "fake", action: "publish_comment", toolName: "publish_fake_publish_comment" },
+      ],
+    });
+    expect(credentialAvailable).toHaveBeenCalledWith("fake");
+  });
+
+  it("lists no publication when the deployment holds no credential", async () => {
+    const h = externalActionHarness(true, { credentialAvailable: async () => false });
+
+    const response = await h.handler.context(
+      new Request("http://session/internal/pi-context", {
+        method: "POST",
+        body: JSON.stringify({ mode: "bootstrap" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ externalActions: [] });
+  });
+
   it("returns lightweight repository identities without resolving heads", async () => {
     const h = harness();
 

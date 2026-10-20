@@ -15,6 +15,7 @@ import type { PiCredentialService } from "../../pi-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
 import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
+import { externalActionToolName } from "@open-inspect/shared/types/external-actions";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
 import type { ExternalActionGateway } from "../../external-action-gateway";
 import { DEFAULT_EXTERNAL_ACTION_APPROVAL_TTL_MS } from "../../external-action-gateway";
@@ -247,6 +248,7 @@ export class PiBridgeHandler {
           skills,
           agentMessagingEnabled:
             session?.spawn_source === "user" || session?.spawn_source === "slack-bot",
+          externalActions: await this.availableExternalActions(),
         }),
         { headers: { "Cache-Control": "no-store" } }
       );
@@ -350,9 +352,12 @@ export class PiBridgeHandler {
           : await this.options.repositories.read(parsed.data.arguments);
       return Response.json(result, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
+      // The provider's own string may name an internal URL, a repository, or
+      // a credential-fetch failure. The model is not its audience.
+      const publicError = publicSourceControlError(error, "Repository tool failed");
       return Response.json(
-        { error: error instanceof Error ? error.message : "Repository tool failed" },
-        { status: 400 }
+        { error: publicError.message },
+        { status: publicError.retryable ? 503 : 400 }
       );
     }
   }
@@ -434,6 +439,31 @@ export class PiBridgeHandler {
     } catch (error) {
       return externalActionFailure(error);
     }
+  }
+
+  /**
+   * The publications this session may propose.
+   *
+   * A provider is listed only when the deployment named it and the deployment
+   * holds a credential for it, so the model never sees a publication that
+   * could not complete.
+   */
+  private async availableExternalActions(): Promise<
+    Array<{ provider: string; action: string; toolName: string }>
+  > {
+    const definitions = this.options.externalActions?.definitions;
+    const credentialAvailable = this.options.externalActions?.credentialAvailable;
+    if (!definitions || !credentialAvailable) return [];
+    const available: Array<{ provider: string; action: string; toolName: string }> = [];
+    for (const provider of definitions.providers()) {
+      if (!(await credentialAvailable(provider))) continue;
+      available.push({
+        provider,
+        action: definitions.actionFor(provider),
+        toolName: externalActionToolName(provider, definitions.actionFor(provider)),
+      });
+    }
+    return available;
   }
 
   externalActionStatus(request: Request): Response {

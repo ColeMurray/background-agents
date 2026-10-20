@@ -27,6 +27,10 @@ export interface McpSessionBridge {
       serverName: string;
       endpointHost: string;
       toolNames: string[];
+      /** The session the grant was made for. */
+      sessionId: string;
+      /** When the grant was made. */
+      createdAt: number;
       /** The account whose identity the provider sees. */
       ownerUserId: string;
     }>
@@ -65,9 +69,23 @@ export class McpSessionHandler {
 
   /** The session's authorized attachments. It never names a credential. */
   async list(): Promise<Response> {
-    const grants = await this.options.mcp.grants();
+    const bridge = this.options.mcp;
+    if (bridge.sessionCapability() === "off" || bridge.liveMode() === "off") {
+      return Response.json({ pins: [] }, { headers: { "Cache-Control": "no-store" } });
+    }
+    const grants = await bridge.grants();
     return Response.json(
-      { grants: grants.map((grant) => ({ ...grant })) },
+      {
+        pins: grants.map((grant) => ({
+          id: grant.id,
+          sessionId: grant.sessionId,
+          connectionId: grant.connectionId,
+          serverName: grant.serverName,
+          endpointHost: grant.endpointHost,
+          toolNames: grant.toolNames,
+          createdAt: grant.createdAt,
+        })),
+      },
       { headers: { "Cache-Control": "no-store" } }
     );
   }
@@ -148,7 +166,7 @@ export class McpSessionHandler {
         toolName: parsed.data.toolName,
         arguments: parsed.data.arguments,
       });
-    } catch (error) {
+    } catch {
       await bridge.audit({
         requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
         actorUserId: actorId,
@@ -158,9 +176,11 @@ export class McpSessionHandler {
         reasonCode: "mcp_tool_failed",
         occurredAt: Date.now(),
       });
+      // The provider's own string stays in the audit; the model only learns
+      // that the tool did not complete.
       return Response.json(
         {
-          error: error instanceof Error ? error.message : "The MCP tool did not complete",
+          error: "The MCP tool did not complete",
           code: "mcp_tool_failed",
         },
         { status: 502 }

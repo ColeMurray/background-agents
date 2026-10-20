@@ -324,4 +324,68 @@ describe("assemblePiExtensions", () => {
 
     expect([...assembled.effects]).toHaveLength(3);
   });
+
+  it("refuses an external mutation that no delegate owns", () => {
+    expect(() =>
+      assemblePiExtensions(
+        [
+          policy(),
+          {
+            slot: "external_actions",
+            feature: "externalActions",
+            minimumCapability: "enabled",
+            extension: defineExtension({
+              name: "external-actions",
+              tools: [tool("publish_comment", { replay: "safe" })],
+            }),
+            effects: [effect("publish_comment", { effect: "external_mutation" })],
+          },
+        ],
+        capabilities
+      )
+    ).toThrow('Pi tool effect declaration has no owning policy delegate: "publish_comment"');
+  });
+
+  it("accepts an external mutation whose delegate names it", () => {
+    const assembled = assemblePiExtensions(
+      [
+        policy(),
+        {
+          slot: "external_actions",
+          feature: "externalActions",
+          minimumCapability: "enabled",
+          extension: defineExtension({
+            name: "external-actions",
+            tools: [tool("publish_comment", { replay: "safe" })],
+          }),
+          effects: [effect("publish_comment", { effect: "external_mutation" })],
+          ownedToolNames: ["publish_comment"],
+        },
+      ],
+      capabilities
+    );
+
+    expect([...assembled.effects.keys()]).toEqual(["publish_comment"]);
+  });
+
+  it("does not require an owner for the effects the policy extension owns itself", () => {
+    const assembled = assemblePiExtensions(
+      [
+        policy(),
+        {
+          slot: "scratch_workspace",
+          feature: "scratchWorkspace",
+          minimumCapability: "enabled",
+          extension: defineExtension({
+            name: "scratch",
+            tools: [tool("write", { replay: "safe" })],
+          }),
+          effects: [effect("write", { effect: "local_mutation" })],
+        },
+      ],
+      capabilities
+    );
+
+    expect([...assembled.effects.keys()]).toEqual(["write"]);
+  });
 });

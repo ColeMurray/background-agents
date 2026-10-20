@@ -10,6 +10,7 @@ import {
   type ToolEffectRegistration,
 } from "@open-inspect/shared";
 import { RemoteCodemodeSandbox } from "@earendil-works/pi-codemode/portable";
+import { Type } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import {
@@ -25,6 +26,7 @@ import {
   type SubmissionId,
   type UsageState,
 } from "@earendil-works/pi-durable";
+import type { ToolCall } from "@earendil-works/pi-ai";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
@@ -103,7 +105,10 @@ import {
   type CrossSessionDeliveryResult,
   type ExternalActionPrepareRequest,
 } from "@open-inspect/shared";
-import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
+import {
+  createExternalActionPolicyDelegate,
+  createGatewayExternalActionTool,
+} from "../pi/external-action-policy-extension";
 import { createBrowserPolicyDelegate } from "../pi/browser-policy-extension";
 import {
   createSandboxExecutionExtension,
@@ -111,12 +116,13 @@ import {
   type SandboxExecutionToolRequest,
   type SandboxExecutionToolResponse,
 } from "../pi/sandbox-execution-extension";
-import {
-  createCrossSessionExtension,
-  CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
-} from "../pi/cross-session-extension";
 import { createMcpExtension } from "../pi/mcp-extension";
 import {
+  createCrossSessionExtension,
+  createCrossSessionPolicyDelegate,
+} from "../pi/cross-session-extension";
+import {
+  CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
   PI_MCP_TOOL_EFFECT_REGISTRATIONS,
   PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
 } from "@open-inspect/shared";
@@ -282,11 +288,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       });
       let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const workspaceMutations = new WorkspaceMutationFifo();
+      const externalActions = this.externalActionContributions(sessionContext.externalActions);
       const extensions: PiExtensionContribution[] = [
         {
           slot: "policy",
           effects: [],
           createExtension: (effects) => {
+            const crossSessionDelegate = createCrossSessionPolicyDelegate({
+              client: {
+                authorize: async (signal) => this.authorizeCrossSession(signal),
+              },
+            });
             const browserDelegate = createBrowserPolicyDelegate({
               client: {
                 authorize: async (request, signal) => {
@@ -303,7 +315,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               },
               // Provider-specific tools are contributed to the external_actions
               // slot together with their canonical effect registrations.
-              externalActions: {},
+              externalActions: externalActions.describers,
               // The live deployment mode gates only a new prepare. An effect
               // that is already prepared keeps its status and reconciliation
               // reachable, so an emergency deny cannot strand admitted work.
@@ -322,6 +334,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               workspacePolicyDelegate
                 ? [
                     externalActionDelegate,
+                    crossSessionDelegate,
                     browserDelegate,
                     workspacePolicyDelegate,
                     codeModePolicyDelegate,
@@ -329,6 +342,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                   ]
                 : [
                     externalActionDelegate,
+                    crossSessionDelegate,
                     browserDelegate,
                     codeModePolicyDelegate,
                     sandboxExecutionPolicyDelegate,
@@ -343,13 +357,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           extension: delegation,
           effects: declaredEffects(delegation),
         },
-        {
-          slot: "external_actions",
-          feature: "externalActions",
-          minimumCapability: "enabled",
-          extension: defineExtension({ name: "open-inspect.external-actions" }),
-          effects: [],
-        },
+        externalActions.contribution,
       ];
       if (sessionContext.agentMessagingEnabled) {
         extensions.push({
@@ -463,6 +471,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             },
           }),
           effects: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
+          ownedToolNames: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS.map((effect) => effect.name),
         });
       }
       if (capabilities.mcp !== "off") {
@@ -1647,6 +1656,45 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   /**
+   * Ask the owning session whether this turn may hand a message to another
+   * session.
+   *
+   * The session decides. The agent learns only whether it may proceed.
+   */
+  private async authorizeCrossSession(
+    signal?: AbortSignal
+  ): Promise<{ allowed: boolean; code?: string; reason?: string }> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) return { allowed: false, reason: "The session is not initialized" };
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.crossSessionAuthorize}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
+          ...(operationId ? piTraceHeader(operationId) : {}),
+        },
+        body: JSON.stringify({}),
+        signal,
+      })
+    );
+    const body = (await response.json().catch(() => null)) as {
+      allowed?: boolean;
+      code?: string;
+      reason?: string;
+    } | null;
+    if (!response.ok || !body?.allowed) {
+      return {
+        allowed: false,
+        ...(body?.code ? { code: body.code } : {}),
+        reason: body?.reason ?? "Cross-session messaging is not available for this session",
+      };
+    }
+    return { allowed: true };
+  }
+
+  /**
    * Read one reviewed MCP tool through the owning session.
    *
    * The session resolves the grant, the reviewed catalog, and the owner's
@@ -1862,6 +1910,86 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       };
     }
     return { allowed: true };
+  }
+
+  /**
+   * The publication tools this session may call.
+   *
+   * A tool exists only for a provider the deployment named and holds a
+   * credential for, so the model never sees a publication that could not
+   * complete. Every tool is owned by the external-action policy delegate,
+   * which asks this session to authorize the effect before anything is
+   * published.
+   */
+  private externalActionContributions(
+    providers: ReadonlyArray<PiSessionContext["externalActions"][number]>
+  ): {
+    contribution: PiExtensionContribution;
+    describers: Record<
+      string,
+      (call: ToolCall) => ExternalActionPrepareRequest | Promise<ExternalActionPrepareRequest>
+    >;
+  } {
+    const describers: Record<
+      string,
+      (call: ToolCall) => ExternalActionPrepareRequest | Promise<ExternalActionPrepareRequest>
+    > = {};
+    if (providers.length === 0) {
+      return {
+        contribution: {
+          slot: "external_actions",
+          feature: "externalActions",
+          minimumCapability: "enabled",
+          extension: defineExtension({ name: "open-inspect.external-actions" }),
+          effects: [],
+          ownedToolNames: [],
+        },
+        describers,
+      };
+    }
+    const effects: ToolEffectRegistration[] = [];
+    const tools = [];
+    for (const provider of providers) {
+      const toolName = provider.toolName;
+      const { tool, describe, registration } = createGatewayExternalActionTool(
+        {
+          name: toolName,
+          description: `Publish a ${provider.action} to ${provider.provider}.`,
+          parameters: Type.Object({
+            target: Type.Record(Type.String(), Type.Unknown()),
+            arguments: Type.Record(Type.String(), Type.Unknown()),
+          }),
+          prepare: (args, toolCallId) => ({
+            toolCallId,
+            idempotencyKey: `pi:${toolCallId}`,
+            provider: provider.provider,
+            action: provider.action,
+            summary: `Publish a ${provider.action} to ${provider.provider}`,
+            target: args.target as Record<string, JsonValue>,
+            arguments: args.arguments as Record<string, JsonValue>,
+          }),
+        },
+        {
+          prepare: (request, signal) => this.prepareExternalAction(request, signal),
+          status: (actionId, signal) => this.externalActionStatus(actionId, signal),
+          execute: (actionId, signal) => this.executeExternalAction(actionId, signal),
+        }
+      );
+      tools.push(tool);
+      effects.push(registration);
+      describers[toolName] = describe;
+    }
+    return {
+      contribution: {
+        slot: "external_actions",
+        feature: "externalActions",
+        minimumCapability: "enabled",
+        extension: defineExtension({ name: "open-inspect.external-actions", tools }),
+        effects,
+        ownedToolNames: effects.map((effect) => effect.name),
+      },
+      describers,
+    };
   }
 
   private async prepareExternalAction(request: ExternalActionPrepareRequest, signal?: AbortSignal) {

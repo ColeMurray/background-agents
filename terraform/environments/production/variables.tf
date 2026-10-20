@@ -822,6 +822,17 @@ variable "pi_external_action_providers" {
   default     = ""
 }
 
+variable "pi_mcp_mode" {
+  description = "Pi Durable read-only MCP capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_mcp_mode)
+    error_message = "pi_mcp_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
 variable "pi_browser_mode" {
   description = "Pi Durable browser capability: off, read_only, or enabled"
   type        = string

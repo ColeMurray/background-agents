@@ -321,6 +321,49 @@ export class CrossSessionHandler {
   }
 
   /**
+   * The early gate for a cross-session message.
+   *
+   * It answers whether this turn may reach for another session at all, before
+   * the target is chosen. The full decision, with the target and the receipt,
+   * happens in the outbound path.
+   */
+  async authorize(request: Request): Promise<Response> {
+    const bridge = this.options.crossSession;
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    if (!operationId || !bridge.operationBelongsToSession(operationId)) {
+      return Response.json(
+        {
+          allowed: false,
+          code: "cross_session_turn_not_in_session",
+          reason: "The turn does not belong to this session",
+        },
+        { status: 403 }
+      );
+    }
+    if (bridge.sessionCapability() !== "enabled" || bridge.liveMode() !== "enabled") {
+      return Response.json(
+        {
+          allowed: false,
+          code: "cross_session_messaging_disabled",
+          reason: "Cross-session messaging is disabled for this session",
+        },
+        { status: 403 }
+      );
+    }
+    if (!bridge.operationActor(operationId)) {
+      return Response.json(
+        {
+          allowed: false,
+          code: "cross_session_actor_missing",
+          reason: "The originating turn has no workspace actor",
+        },
+        { status: 403 }
+      );
+    }
+    return Response.json({ allowed: true }, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  /**
    * The target side: accept one message from another session.
    *
    * The target confirms the receipt, revalidates the sender's authority for

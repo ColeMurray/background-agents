@@ -117,6 +117,9 @@ describe("Pi external action approval integration", () => {
           minimumCapability: "enabled",
           extension: defineExtension({ name: "fake.publication", tools: [publication.tool] }),
           effects: [publication.registration],
+          // The external-action delegate owns this tool, so the assembler
+          // knows who authorizes it.
+          ownedToolNames: [publication.registration.name],
         },
       ],
       resolvePiFeatureCapabilities({ externalActions: "enabled" })

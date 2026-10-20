@@ -126,6 +126,14 @@ export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
  * Driving a browser is not replay-safe: a replayed run would navigate again.
  * The tool is declared here, before any extension is assembled, so the
  * assembler knows its effect without asking the session.
+ *
+ * Reserved for the browser slot. The declaration is not consumed yet,
+ * because the browser transport — the `BROWSER` and `LOADER` bindings in the
+ * control plane's Worker — is not in place. Whoever adds the transport must
+ * add the `browser` slot, contribute this registration with the tool, and
+ * give the browser policy delegate ownership of it, or the assembler will
+ * refuse the runtime: an external mutation with no owning delegate is never
+ * installed.
  */
 export const PI_BROWSER_TOOL_EFFECT_REGISTRATIONS = [
   {
@@ -133,6 +141,21 @@ export const PI_BROWSER_TOOL_EFFECT_REGISTRATIONS = [
     effect: "external_mutation",
     callers: ["model"],
     replay: "unsafe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
+/**
+ * The cross-session messaging tool.
+ *
+ * It changes something outside the model, so it is owned by the cross-session
+ * policy delegate and authorized by the owning session on every call.
+ */
+export const CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "message_session",
+    effect: "external_mutation",
+    callers: ["model"],
+    replay: "safe",
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 

@@ -52,6 +52,7 @@ function hookHarness(
     registration("local_write", "local_mutation"),
     registration("run_code", "sandbox_execution"),
     registration("publish_comment", "external_mutation"),
+    registration("message_session", "external_mutation"),
   ]);
   const delegate = createExternalActionPolicyDelegate({
     client,
@@ -95,6 +96,22 @@ function hookHarness(
 }
 
 describe("external action policy extension", () => {
+  it("leaves an external mutation it does not own to the delegate that owns it", async () => {
+    const h = hookHarness(status("awaiting_approval"));
+
+    // `message_session` is an external mutation, but it belongs to the
+    // cross-session delegate. Claiming it here would silently disable
+    // cross-session messaging for every session.
+    await expect(
+      h.handlers.beforeTool(
+        { id: "call-1", name: "message_session", arguments: {} } as never,
+        h.api as never,
+        {} as never
+      )
+    ).resolves.toBeUndefined();
+    expect(h.client.prepare).not.toHaveBeenCalled();
+  });
+
   it("uses the canonical composite registry to default-deny unknown tools", async () => {
     const h = hookHarness(status("awaiting_approval"));
 

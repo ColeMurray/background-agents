@@ -43,7 +43,13 @@ function record(): SandboxCommandRecord {
   };
 }
 
-function fixture(processingId: string | null = "operation-1") {
+function fixture(
+  processingId: string | null = "operation-1",
+  options: {
+    sessionCapability?: "off" | "read_only" | "enabled";
+    liveMode?: "off" | "read_only" | "enabled";
+  } = {}
+) {
   const execution = {
     submit: vi.fn(async () => record()),
     cancel: vi.fn(() => "cancelling" as const),
@@ -59,6 +65,8 @@ function fixture(processingId: string | null = "operation-1") {
       commands,
       getProcessingMessageId: () => processingId,
       getOperationActor: () => ({ kind: "user", id: "user-1" }),
+      sessionCapability: () => options.sessionCapability ?? "enabled",
+      liveMode: () => options.liveMode ?? "enabled",
     }),
     execution,
   };
@@ -104,6 +112,34 @@ describe("PiSandboxExecutionHandler", () => {
         fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
       })
     );
+  });
+
+  it("refuses a new submission when the deployment has denied execution", async () => {
+    const h = fixture("operation-1", { liveMode: "off" });
+
+    const response = await h.handler.handle(request(submit));
+
+    expect(response.status).toBe(403);
+    expect(h.execution.submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a new submission when the session never had the capability", async () => {
+    const h = fixture("operation-1", { sessionCapability: "off" });
+
+    const response = await h.handler.handle(request(submit));
+
+    expect(response.status).toBe(403);
+    expect(h.execution.submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps an admitted command reachable when the deployment denies execution", async () => {
+    const h = fixture("operation-1", { liveMode: "off" });
+
+    const response = await h.handler.handle(
+      request({ action: "status", commandId: "cmd-1", afterSequence: -1 })
+    );
+
+    expect(response.status).toBe(200);
   });
 
   it.each([null, "another-operation"])(

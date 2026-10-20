@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCrossSessionExtension } from "./cross-session-extension";
+import {
+  createCrossSessionExtension,
+  createCrossSessionPolicyDelegate,
+} from "./cross-session-extension";
 
 function harness(result: {
   receiptId: string;
@@ -87,5 +90,59 @@ describe("cross session extension", () => {
 
     expect(result.isError).toBe(false);
     expect(JSON.stringify(result.output)).toContain("already delivered");
+  });
+});
+
+describe("cross session policy delegate", () => {
+  const declaration = { name: "message_session", effect: "external_mutation" } as never;
+  const call = { id: "call-1", name: "message_session", arguments: {} } as never;
+
+  it("lets the turn proceed when the owning session authorizes it", async () => {
+    const authorize = vi.fn(async () => ({ allowed: true }));
+    const delegate = createCrossSessionPolicyDelegate({ client: { authorize } });
+
+    await expect(
+      delegate.beforeTool?.(call, declaration, {} as never, context)
+    ).resolves.toBeUndefined();
+    expect(authorize).toHaveBeenCalledOnce();
+  });
+
+  it("blocks the turn with the session's own reason when it refuses", async () => {
+    const authorize = vi.fn(async () => ({
+      allowed: false,
+      code: "cross_session_messaging_disabled",
+      reason: "Cross-session messaging is disabled for this session",
+    }));
+    const delegate = createCrossSessionPolicyDelegate({ client: { authorize } });
+
+    await expect(delegate.beforeTool?.(call, declaration, {} as never, context)).resolves.toEqual({
+      block: "Cross-session messaging is disabled for this session",
+    });
+  });
+
+  it("blocks the turn when the owning session cannot be asked", async () => {
+    const authorize = vi.fn(async () => {
+      throw new Error("The session is unreachable");
+    });
+    const delegate = createCrossSessionPolicyDelegate({ client: { authorize } });
+
+    await expect(delegate.beforeTool?.(call, declaration, {} as never, context)).resolves.toEqual({
+      block: "The session is unreachable",
+    });
+  });
+
+  it("leaves a tool of another capability alone", async () => {
+    const authorize = vi.fn(async () => ({ allowed: false, reason: "no" }));
+    const delegate = createCrossSessionPolicyDelegate({ client: { authorize } });
+
+    await expect(
+      delegate.beforeTool?.(
+        { id: "call-2", name: "repository_read", arguments: {} } as never,
+        { name: "repository_read", effect: "external_read" } as never,
+        {} as never,
+        context
+      )
+    ).resolves.toBeUndefined();
+    expect(authorize).not.toHaveBeenCalled();
   });
 });

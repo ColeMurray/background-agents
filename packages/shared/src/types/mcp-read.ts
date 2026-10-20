@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertNoCredentialLikeKeys } from "./credential-shaped";
 
 /**
  * The MCP read path.
@@ -101,14 +102,22 @@ export const mcpReadRequestSchema = z
 export type McpReadRequest = z.infer<typeof mcpReadRequestSchema>;
 
 /** The bounded, credential-free result of one reviewed read. */
-export const mcpReadResultSchema = z.object({
-  connectionId: z.string().min(1),
-  toolName: z.string().min(1),
-  /** The provider's own result, bounded by the SessionDO before it is stored. */
-  content: z.unknown(),
-  /** Whether the result was cut to stay inside the bound. */
-  truncated: z.boolean(),
-});
+export const mcpReadResultSchema = z
+  .object({
+    connectionId: z.string().min(1),
+    toolName: z.string().min(1),
+    /**
+     * The provider's own result, bounded by the SessionDO before it is
+     * stored. It is refused when it carries a credential-shaped key, so a
+     * token can never reach the model, the timeline, or the audit.
+     */
+    content: z.unknown(),
+    /** Whether the result was cut to stay inside the bound. */
+    truncated: z.boolean(),
+  })
+  .superRefine((value, context) => {
+    assertNoCredentialLikeKeys(value.content, context, ["content"]);
+  });
 
 export type McpReadResult = z.infer<typeof mcpReadResultSchema>;
 

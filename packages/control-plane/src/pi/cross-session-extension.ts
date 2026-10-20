@@ -1,21 +1,64 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
-import {
-  MAX_CROSS_SESSION_MESSAGE_CHARACTERS,
-  type CrossSessionDeliveryResult,
-  type ToolEffectRegistration,
-} from "@open-inspect/shared";
+import type { PiToolPolicyDelegate } from "./tool-policy-extension";
 
-/** The effect declaration for the one tool this extension contributes. */
-export const CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS = [
-  {
-    name: "message_session",
-    effect: "external_mutation",
-    callers: ["model"],
-    replay: "safe",
-  },
-] as const satisfies readonly ToolEffectRegistration[];
+/** The cross-session tool's stable name. */
+export const CROSS_SESSION_TOOL_NAME = "message_session";
+
+/**
+ * The session's answer to "may this turn hand a message to another session?".
+ *
+ * The session owns the decision. The agent learns only whether it may
+ * proceed and why not; it never receives a session client.
+ */
+export interface CrossSessionAuthorizationDecision {
+  allowed: boolean;
+  code?: string;
+  reason?: string;
+}
+
+export interface CrossSessionAuthorizationClient {
+  authorize(signal?: AbortSignal): Promise<CrossSessionAuthorizationDecision>;
+}
+
+export interface CrossSessionPolicyOptions {
+  client: CrossSessionAuthorizationClient;
+}
+
+/**
+ * The cross-session policy.
+ *
+ * The tool's real authority is the owning session, which checks the source,
+ * the actor, the target, and the receipt. This delegate is the early gate:
+ * it refuses the call with a clear reason when the deployment or the session
+ * has switched the capability off, so the model is not left guessing.
+ */
+export function createCrossSessionPolicyDelegate(
+  options: CrossSessionPolicyOptions
+): PiToolPolicyDelegate {
+  return {
+    async beforeTool(call, declaration, _api, context) {
+      if (call.name !== CROSS_SESSION_TOOL_NAME) return undefined;
+      if (declaration.effect !== "external_mutation") return undefined;
+      let decision: CrossSessionAuthorizationDecision;
+      try {
+        decision = await options.client.authorize(context.abortSignal);
+      } catch (error) {
+        return {
+          block:
+            error instanceof Error
+              ? error.message
+              : "Cross-session messaging could not be authorized for this session",
+        };
+      }
+      if (decision.allowed) return undefined;
+      return {
+        block: decision.reason ?? "Cross-session messaging is not available for this session",
+      };
+    },
+  };
+}
 
 export interface CrossSessionToolClient {
   /**
@@ -34,7 +77,11 @@ export interface CrossSessionToolClient {
       sourceTaskId: string | null;
     },
     signal?: AbortSignal
-  ): Promise<CrossSessionDeliveryResult>;
+  ): Promise<{
+    status: "delivered" | "duplicate" | "rejected";
+    messageId: string | null;
+    reason: string | null;
+  }>;
 }
 
 export interface CrossSessionExtensionOptions {
@@ -44,9 +91,9 @@ export interface CrossSessionExtensionOptions {
 /**
  * The agent's cross-session coordination tool.
  *
- * The tool carries a message and nothing else. It never carries a credential,
- * never names a user it speaks for, and never reaches another session
- * directly: the owning session authorizes the delivery and the target
+ * The tool carries a message and nothing else. It never carries a
+ * credential, never names a user it speaks for, and never reaches another
+ * session directly: the owning session authorizes the delivery and the target
  * revalidates it.
  */
 export function createCrossSessionExtension(options: CrossSessionExtensionOptions) {
@@ -62,12 +109,12 @@ export function createCrossSessionExtension(options: CrossSessionExtensionOption
     ],
     tools: [
       defineTool({
-        name: "message_session",
+        name: CROSS_SESSION_TOOL_NAME,
         description:
           "Send a message to another Open-Inspect session you are authorized to collaborate in.",
         parameters: Type.Object({
           targetSessionId: Type.String({ minLength: 1, maxLength: 256 }),
-          content: Type.String({ minLength: 1, maxLength: MAX_CROSS_SESSION_MESSAGE_CHARACTERS }),
+          content: Type.String({ minLength: 1, maxLength: 8_000 }),
         }),
         structuredOutputSchema: Type.Any(),
         replay: "safe",
@@ -95,7 +142,7 @@ export function createCrossSessionExtension(options: CrossSessionExtensionOption
                   text: result.reason ?? "The target session refused the message",
                 },
               ],
-              details: { status: result.status } as Record<string, JsonValue>,
+              details: { status: result.status } satisfies Record<string, JsonValue>,
             };
           }
           return {
@@ -109,11 +156,8 @@ export function createCrossSessionExtension(options: CrossSessionExtensionOption
                     : "The message was delivered.",
               },
             ],
-            structuredOutput: {
-              status: result.status,
-              messageId: result.messageId,
-            },
-            details: { receiptId: result.receiptId, status: result.status },
+            structuredOutput: { status: result.status, messageId: result.messageId },
+            details: { status: result.status },
           };
         },
       }),

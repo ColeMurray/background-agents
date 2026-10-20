@@ -102,7 +102,7 @@ describe("translatePiEvents", () => {
         callId: "call-1",
         args: { path: "a" },
         status: "running",
-        output: "reading",
+        output: "[redacted]",
       }),
     ]);
   });
@@ -181,6 +181,51 @@ describe("translatePiEvents", () => {
       expect.objectContaining({ type: "tool_call", output: "listed", status: "running" }),
       expect.objectContaining({ type: "tool_call", output: "listed", status: "completed" }),
     ]);
+  });
+
+  it("keeps a read's content out of the shared timeline", () => {
+    const state = { text: "" };
+    const events = [
+      {
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "read",
+        taskId: 2,
+        args: { path: "/workspace/scratch/secret.txt" },
+      },
+      {
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "read",
+        taskId: 2,
+        entry: {
+          id: 42,
+          model: [
+            {
+              role: "toolResult",
+              toolCallId: "call-1",
+              toolName: "read",
+              content: [{ type: "text", text: "the secret value" }],
+              isError: false,
+            },
+          ],
+        },
+      },
+    ] as unknown as AgentEvent[];
+
+    const translated = translatePiEvents(events, state, {
+      sessionId: "session-1",
+      operationId: "message-1",
+      timestamp: 126,
+    });
+
+    // The timeline is visible to every collaborator, so a read keeps its
+    // shape and not its content.
+    expect(translated).toEqual([
+      expect.objectContaining({ type: "tool_call", status: "running" }),
+      expect.objectContaining({ type: "tool_call", output: "[redacted]", status: "completed" }),
+    ]);
+    expect(JSON.stringify(translated)).not.toContain("the secret value");
   });
 
   it("projects model usage when an assistant message is committed", () => {
@@ -301,7 +346,7 @@ describe("translatePiEvents", () => {
           type: "tool_call",
           callId: "call-final",
           status: "completed",
-          output: "contents",
+          output: "[redacted]",
         }),
       ])
     );

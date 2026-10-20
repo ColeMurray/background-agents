@@ -119,7 +119,11 @@ export function createExternalActionPolicyDelegate(
     beforeTool: async (call, declaration, api, context) => {
       if (declaration.effect !== "external_mutation") return undefined;
       const describe = options.externalActions[call.name];
-      if (!describe) return { block: "Open-Inspect policy does not authorize this tool" };
+      if (!describe) {
+        // Another delegate owns this tool. Claiming it here would silently
+        // disable every other external mutation the session has.
+        return undefined;
+      }
       const memoName = memoKey(call);
       let memo = await api.memo<PolicyMemo>(memoName, context);
       let status: ExternalActionStatusResponse;

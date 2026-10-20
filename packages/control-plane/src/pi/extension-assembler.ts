@@ -50,6 +50,15 @@ type PiExtensionSource =
 export type PiExtensionContribution = {
   readonly slot: PiExtensionSlot;
   readonly effects: readonly ToolEffectRegistration[];
+  /**
+   * The tools whose authority this contribution owns.
+   *
+   * Every tool that can change something outside the model needs an owner: the
+   * owner's policy delegate authorizes it. A mutation tool with no owner would
+   * be reachable without any authorization at all, so the assembler refuses
+   * to install one.
+   */
+  readonly ownedToolNames?: readonly string[];
 } & PiExtensionGate &
   PiExtensionSource;
 
@@ -90,6 +99,7 @@ export function assemblePiExtensions(
   if (effects.size > 0 && !hasPolicy) {
     throw new Error("Pi tool contributions require the composite policy extension");
   }
+  validateMutationOwnership(active, effects);
 
   return {
     effects,
@@ -100,6 +110,35 @@ export function assemblePiExtensions(
       )
       .map(({ extension }) => extension),
   };
+}
+
+/**
+ * Every tool that changes something outside the model needs an owner.
+ *
+ * The owner's policy delegate is what authorizes the call, so a mutation tool
+ * with no owner would be reachable without any authorization. The assembler
+ * refuses to install such a runtime rather than leaving the capability open.
+ *
+ * The check covers the external mutations. Their authority lives in a
+ * delegate of their own — the external-action delegate, the cross-session
+ * delegate — so one of them has to name the tool it owns. The local and the
+ * sandbox effects are authorized by the delegates inside the policy
+ * extension, which is always installed.
+ */
+function validateMutationOwnership(
+  contributions: readonly PiExtensionContribution[],
+  effects: ReadonlyMap<string, ToolEffectRegistration>
+): void {
+  const owned = new Set<string>();
+  for (const contribution of contributions) {
+    for (const name of contribution.ownedToolNames ?? []) owned.add(name);
+  }
+  for (const [name, registration] of effects) {
+    if (registration.effect !== "external_mutation") continue;
+    if (!owned.has(name)) {
+      throw new Error(`Pi tool effect declaration has no owning policy delegate: "${name}"`);
+    }
+  }
 }
 
 function isContributionEnabled(

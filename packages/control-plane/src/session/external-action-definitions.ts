@@ -50,6 +50,19 @@ export class ExternalActionDefinitionRegistry {
     };
   }
 
+  /** The providers this registry holds. */
+  providers(): string[] {
+    return [...new Set([...this.definitions.values()].map(({ provider }) => provider))];
+  }
+
+  /** The action this registry holds for one provider. */
+  actionFor(provider: string): string {
+    for (const definition of this.definitions.values()) {
+      if (definition.provider === provider) return definition.action;
+    }
+    throw new Error(`No external action definition for provider: ${provider}`);
+  }
+
   executorFor(provider: string, action: string): ExternalActionExecutor | undefined {
     const definition = this.get(provider, action);
     return definition ? this.validatingExecutor(definition) : undefined;

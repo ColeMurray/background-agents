@@ -207,6 +207,7 @@ export {
   externalActionStatusResponseSchema,
   externalActionPendingSchema,
   externalActionPendingListSchema,
+  externalActionToolName,
 } from "./external-actions";
 export type {
   ExternalActionState,
