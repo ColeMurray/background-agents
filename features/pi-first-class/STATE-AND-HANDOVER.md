@@ -134,19 +134,19 @@ The external-action authority now holds to the rule that reading a session is no
 
 ## Capability status
 
-| Capability                   | State                                | Why                                                                                             |
-| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Durable Pi chat and recovery | Ready                                | Pi Durable is the transcript and task authority                                                 |
-| Credential brokerage         | Ready                                | Memory-only short-lived access token; no API-key fallback                                       |
-| Repository analysis          | Ready                                | Commit-pinned, credential-free, provider-backed reads                                           |
-| Cloudflare Computer VFS      | Ready behind preview acknowledgement | Lazy, least-authority facade, bounded quota                                                     |
-| Repository editing and diffs | Ready behind preview acknowledgement | Lazy overlay, durable diff outbox, generation fence                                             |
-| Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, observed attestation                                          |
-| Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes                         |
-| External publication         | Definitions and conformance ready    | Four credential-closed providers pass the generic suite; the credential source is still missing |
-| MCP/OAuth                    | Dormant                              | Transport deliberately not installed                                                            |
-| Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts                               |
-| Browser/Kitesurf             | Not started                          | Needs the current official API and a SessionDO browser gateway                                  |
+| Capability                   | State                                | Why                                                                                         |
+| ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| Durable Pi chat and recovery | Ready                                | Pi Durable is the transcript and task authority                                             |
+| Credential brokerage         | Ready                                | Memory-only short-lived access token; no API-key fallback                                   |
+| Repository analysis          | Ready                                | Commit-pinned, credential-free, provider-backed reads                                       |
+| Cloudflare Computer VFS      | Ready behind preview acknowledgement | Lazy, least-authority facade, bounded quota; named apart from the workspace and the sandbox |
+| Repository editing and diffs | Ready behind preview acknowledgement | Lazy overlay, durable diff outbox, generation fence                                         |
+| Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, durable parent record, observed attestation               |
+| Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes                     |
+| External publication         | Boundary ready, credential open      | Four credential-closed providers pass the generic suite; no credential source yet           |
+| MCP read                     | Boundary ready, transport open       | Grants, reviewed catalog, gateway, broker authority, keyring, egress, RESTRICT merge        |
+| Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts and confirmed provenance  |
+| Browser                      | Boundary ready, transport open       | Session gateway, host allowlist, activity on the timeline, the tool gated on the session    |
 
 ## Upstream Pi Durable parity
 
