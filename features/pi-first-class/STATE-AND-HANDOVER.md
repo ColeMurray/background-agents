@@ -94,6 +94,10 @@ its own authorization.
 | `b2b79341` | The fourth audit round's repairs: the owning delegate, the publication tool, the credential guard  | 5,370 unit, 2,578 web, 1,314 shared, 108 Terraform, 13 workflow |
 | `b2891bf5` | The MCP gateway refuses a credential-shaped answer before it leaves the session                    | 5,371 unit                                                      |
 | `47775993` | The credential availability check stays cheap and off the provider path                            | 5,377 unit                                                      |
+| `ec8a6aba` | The verified upstream wake and telemetry contract, and who owns the physical alarm                 | —                                                               |
+| `ae507189` | A blocked Pi task says why it cannot run                                                           | 5,388 unit                                                      |
+| `8c53d6b8` | The browser transport: a bounded, untrusted, session-authorized page read                          | 5,405 unit, 113 Terraform                                       |
+| `d368bd3f` | The browser binding in Terraform, and a read-only browser mode that means something                | 5,405 unit, 113 Terraform, 13 workflow                          |
 
 ## Slice 7A — what landed
 
@@ -152,7 +156,7 @@ The external-action authority now holds to the rule that reading a session is no
 | External publication         | Ready behind its own gate            | Four credential-closed providers, a per-call credential source, the generic suite, a tool   |
 | MCP read                     | Boundary ready, transport open       | Grants, reviewed catalog, gateway, broker authority, keyring, egress, RESTRICT merge        |
 | Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts and confirmed provenance  |
-| Browser                      | Boundary ready, transport open       | Session gateway, host allowlist, activity on the timeline, the tool gated on the session    |
+| Browser                      | Ready behind its own gate            | Session gateway, host allowlist, activity on the timeline, and a bounded transport          |
 
 ## Upstream Pi Durable parity
 
@@ -293,12 +297,12 @@ environment variable still works until it is removed.
 
 ### The adversarial audit rounds
 
-Four rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`, and
-`AUDIT-ROUND-4.md`. Round 3 is the deep audit of the cross-session and capability slices, and it
-found a defect that made the whole feature unusable: the target session compared the target against
-_its own_ id, so every delivery was refused. It is fixed, along with the source-side authority, the
-receipt confirmation, the idempotency state machine, the actor identity, and the depth and fan-out
-limits.
+Five rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`,
+`AUDIT-ROUND-4.md`, and `AUDIT-ROUND-5.md`. Round 3 is the deep audit of the cross-session and
+capability slices, and it found a defect that made the whole feature unusable: the target session
+compared the target against _its own_ id, so every delivery was refused. It is fixed, along with the
+source-side authority, the receipt confirmation, the idempotency state machine, the actor identity,
+and the depth and fan-out limits.
 
 Round 4 audits the whole Pi surface — every tool, every route the agent calls on the owning session,
 every credential path, and every cross-session reach. Its blocking finding was that the
@@ -341,9 +345,11 @@ its UI belong to the MCP transport and stay open with it.
    session grants, the broker authority, the rotatable keyring, the DNS and redirect-safe egress,
    and the `RESTRICT` user merge are built. The live transport, the opaque callback with S256, the
    refresh, revoke, and tombstone, and the identity-first lifecycle remain.
-2. **The browser transport.** The browser gateway is built and gated; the transport needs the
-   `BROWSER` and `LOADER` bindings in the Pi Durable Object's Worker, the Terraform that stages
-   them, the guardrails allowlist, the session scope, and a live canary.
+2. **The browser canary.** The transport exists: the session gateway authorizes every request, the
+   page is loaded in a fresh browser with no cookie jar, the content is marked untrusted, and the
+   result is bounded. What remains is a live canary on a deployment with Browser Rendering, the
+   approval path for logging in, uploading, and downloading, and the accessibility review of the
+   browser surface.
 3. **The finish.** Accessibility review, the browser journeys, the ten-minute canary on the user's
    own instance, and the provider canaries. The four adversarial audit rounds over the new code are
    written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`, and `AUDIT-ROUND-4.md`.
@@ -370,7 +376,7 @@ fixed or listed as still open above.
 | The native execution slice cannot run in any real deployment                                                  | low      | written down; it stays dormant until the isolation canary passes   |
 | The execution endpoint trusts the approval revision in its body                                               | low      | fixed: the session records its own revision and gates new work     |
 | The MCP transport, its OAuth lifecycle, and its elicitation receipt do not exist                              | high     | open, listed above                                                 |
-| The browser transport and its Worker bindings do not exist                                                    | high     | open, listed above                                                 |
+| The browser transport and its Worker bindings do not exist                                                    | high     | fixed: a bounded transport behind the session gateway              |
 | The external-action providers had no credential source                                                        | high     | fixed: a per-call credential from the deployment credential        |
 | The external-action delegate claimed every external mutation, so the cross-session tool was unreachable       | blocking | fixed, with an assembler invariant for an unowned mutation         |
 | The publication capability had no model-facing surface                                                        | medium   | fixed: a tool per provider the deployment holds a credential for   |
