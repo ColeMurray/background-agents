@@ -46,6 +46,7 @@ interface ExternalActionBridge {
     | "approve"
     | "deny"
     | "isBoundToOperation"
+    | "listPending"
     | "nextReconciliationAt"
   >;
   definitions: ExternalActionDefinitionRegistry;
@@ -417,6 +418,29 @@ export class PiBridgeHandler {
     } catch {
       return Response.json({ error: "External action not found" }, { status: 404 });
     }
+  }
+
+  /**
+   * List the external effects an approver can act on.
+   *
+   * The list is a SessionDO-owned projection of the durable ledger, so an
+   * approver never needs an out-of-band action id and never sees an effect
+   * from another session.
+   */
+  externalActionPending(request: Request): Response {
+    if (!this.options.externalActions?.enabled) {
+      return Response.json({ error: "External actions are disabled" }, { status: 404 });
+    }
+    const search = new URL(request.url).searchParams;
+    const limit = Number(search.get("limit") ?? "25");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      return Response.json({ error: "Invalid limit" }, { status: 400 });
+    }
+    const list = this.options.externalActions.gateway.listPending(this.options.getSessionId(), {
+      limit,
+      cursor: search.get("cursor"),
+    });
+    return Response.json(list, { headers: { "Cache-Control": "no-store" } });
   }
 
   async externalActionDecision(request: Request): Promise<Response> {

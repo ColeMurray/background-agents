@@ -61,6 +61,7 @@ export interface SessionInternalRouteHandlers {
   piExternalActionStatus: SessionInternalRouteHandler;
   piExternalActionExecute: SessionInternalRouteHandler;
   externalActionStatus: SessionInternalRouteHandler;
+  externalActionPending: SessionInternalRouteHandler;
   externalActionDecision: SessionInternalRouteHandler;
   piSandboxCommand: SessionInternalRouteHandler;
   piExecutions: SessionInternalRouteHandler;
@@ -195,6 +196,11 @@ export function createSessionInternalRoutes(
       method: "GET",
       path: SessionInternalPaths.externalActionStatus,
       handler: handlers.externalActionStatus,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.externalActionPending,
+      handler: handlers.externalActionPending,
     },
     {
       method: "POST",

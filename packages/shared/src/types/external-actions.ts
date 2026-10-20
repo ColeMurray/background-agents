@@ -142,6 +142,32 @@ export const externalActionStatusResponseSchema = z
   })
   .strict();
 
+/** A pending external effect an approver can act on. */
+export const externalActionPendingSchema = z
+  .object({
+    id: z.string().min(1),
+    provider: z.string().min(1),
+    action: z.string().min(1),
+    summary: z.string().min(1),
+    state: externalActionStateSchema,
+    target: z.record(z.string(), z.json()),
+    arguments: z.record(z.string(), z.json()),
+    approval: externalActionApprovalSchema.nullable(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/** Cursor-bounded page of pending external effects. */
+export const externalActionPendingListSchema = z
+  .object({
+    actions: z.array(externalActionPendingSchema),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
+export type ExternalActionPending = z.infer<typeof externalActionPendingSchema>;
+export type ExternalActionPendingList = z.infer<typeof externalActionPendingListSchema>;
 export type ExternalActionState = z.infer<typeof externalActionStateSchema>;
 export type ExternalActionApproval = z.infer<typeof externalActionApprovalSchema>;
 export type ExternalActionPrepareRequest = z.infer<typeof externalActionPrepareRequestSchema>;

@@ -55,7 +55,26 @@ export async function handleExternalActionDecision(
   });
 }
 
+export async function handleExternalActionPending(
+  request: Request,
+  _env: Env,
+  params: { id: string },
+  ctx: SessionRouteContext
+): Promise<Response> {
+  return ctx.sessionRuntime.fetch(
+    params.id,
+    SessionInternalPaths.externalActionPending,
+    undefined,
+    new URL(request.url).search
+  );
+}
+
 export const sessionExternalActionRoutes = new Hono<ControlPlaneHonoEnv>();
+sessionExternalActionRoutes.get(
+  "/sessions/:id/external-actions",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
+  (c) => dispatchSession(c, handleExternalActionPending)
+);
 sessionExternalActionRoutes.get(
   "/sessions/:id/external-actions/:actionId",
   admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
@@ -66,7 +85,10 @@ sessionExternalActionRoutes.post(
   admit({
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requireAll(
-      sessionRequirement("read"),
+      // Deciding an external effect is an action, not a read. A private
+      // break-glass reader and a workspace administrator without current
+      // owning-team membership must not be able to approve a publication.
+      sessionRequirement("collaborate"),
       permissionRequirement("external_actions.approve")
     ),
   }),

@@ -119,6 +119,7 @@ export const SessionInternalPaths = {
   piExternalActionStatus: "/internal/pi-external-action/status",
   piExternalActionExecute: "/internal/pi-external-action/execute",
   externalActionStatus: "/internal/external-action/status",
+  externalActionPending: "/internal/external-action/pending",
   externalActionDecision: "/internal/external-action/decision",
   piSandboxCommand: "/internal/pi-sandbox-command",
   piExecutions: "/internal/pi-executions",

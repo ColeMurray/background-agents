@@ -790,6 +790,21 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       observed.push(`${route.method} ${route.path} same-team-viewer=${response.status}`);
       expect(response.status, `${route.method} ${route.path}`).toBe(expected);
       if (expected === 403) {
+        // A viewer lacks every session action except read, so a route that
+        // requires an action is denied at the session layer before the
+        // permission layer is consulted.
+        const missingSessionAction =
+          route.authorization.kind === "active-user"
+            ? route.authorization.allOf.find(
+                (entry) => entry.kind === "session" && entry.action !== "read"
+              )
+            : undefined;
+        if (missingSessionAction?.kind === "session") {
+          await expect(response.json()).resolves.toMatchObject({
+            code: "session_action_denied",
+          });
+          continue;
+        }
         const missingPermission =
           route.authorization.kind === "active-user"
             ? route.authorization.allOf.find(

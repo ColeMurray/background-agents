@@ -133,6 +133,9 @@ import {
   type RepositoryDiffPublicationOutcome,
 } from "../pi/repository-diff-outbox";
 import { RepositoryDiffPublicationCapability } from "../pi/repository-diff-publication";
+import { OpenInspectPiTelemetryContext } from "../pi/pi-telemetry";
+import { PiHarnessWakeController } from "../pi/pi-harness-wake";
+import { piTraceHeader, piTraceId } from "../pi/pi-trace";
 import { createLogger } from "../logger";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
@@ -193,6 +196,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     harness: "pi",
     execution_backend: "durable_object",
   });
+  private readonly telemetry = new OpenInspectPiTelemetryContext({ logger: this.log });
+  private wakeController: PiHarnessWakeController | undefined;
   private readonly credentials = new CodexBrokerCredentialStore((version, signal) =>
     this.fetchCodexCredential(version, signal)
   );
@@ -424,6 +429,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         cold: !this.harnessOpened,
       });
       this.harnessOpened = true;
+      // A reopened harness keeps interrupted work pending but does not schedule
+      // it until something asks for progress. Resuming here is what lets a
+      // hibernated or evicted session continue a run it lost.
+      this.wakeController = new PiHarnessWakeController({
+        harness: opened,
+        hasPendingWork: async () =>
+          (await this.harness.pending({ session: ROOT_SESSION })).length > 0,
+        nextDeadline: async () => null,
+      });
+      this.wakeController.resume();
       return opened;
     },
     defaults: {
@@ -534,6 +549,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!sessionId) return;
     await this.ensureSession(sessionId);
     const pending = await this.harness.pending({ session: ROOT_SESSION });
+    // A hibernated object wakes with its harness closed over pending work but
+    // no scheduler. Resume before reattaching relays so a run that lost its
+    // instance continues.
+    if (pending.length > 0) this.resumeHarness();
     const completionRecords = await this.ctx.storage.list<NativeControlCompletion>({
       prefix: CONTROL_COMPLETION_PREFIX,
     });
@@ -548,6 +567,23 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         })
       ),
     ]);
+  }
+
+  /**
+   * Resume the Pi scheduler after a reopen or a hibernation.
+   *
+   * `resume()` is idempotent and throws only after the harness closed, which
+   * a deleting session reaches; a closed harness has nothing to resume.
+   */
+  private resumeHarness(): void {
+    try {
+      this.wakeController?.resume();
+    } catch (error) {
+      this.log.debug("pi.resume_skipped", {
+        event: "pi.resume_skipped",
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+    }
   }
 
   async submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt> {
@@ -585,7 +621,21 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       operation_id: receipt.operationId,
       model: input.model,
       sandbox_avoided: 1,
+      trace_id: piTraceId(receipt.operationId),
     });
+    await this.telemetry.startSpan(
+      {
+        name: "pi.durable.submit",
+        attributes: {
+          "submission.type": "input",
+          harness: "pi",
+          execution_backend: "durable_object",
+        },
+      },
+      async (span) => {
+        span.setAttributes({ result: "placed" });
+      }
+    );
     return { operationId: receipt.operationId, accepted: receipt.accepted };
   }
 
@@ -1381,6 +1431,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         method: "POST",
         headers: {
           "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
           ...(rejectedCredentialVersion === undefined
             ? {}
             : { "X-Pi-Rejected-Credential-Version": String(rejectedCredentialVersion) }),
@@ -1505,6 +1556,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         headers: {
           "Content-Type": "application/json",
           "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
         },
         body: JSON.stringify({ tool, arguments: { ...args, commitSha: repository.commitSha } }),
         signal,
@@ -1538,6 +1590,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         headers: {
           "Content-Type": "application/json",
           "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
         },
         body: JSON.stringify(request),
         signal,
@@ -1579,6 +1632,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         headers: {
           "Content-Type": "application/json",
           "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
         },
         body: JSON.stringify(control),
         signal,
@@ -1639,6 +1693,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         headers: {
           "Content-Type": "application/json",
           "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
         },
         signal,
       })
@@ -2103,6 +2158,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         headers: {
           "Content-Type": "application/json",
           "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
           "X-Pi-Projection-ID": displayId,
           "X-Pi-Projection-Sequence": String(sequence),
         },

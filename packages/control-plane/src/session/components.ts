@@ -1236,6 +1236,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),
+    externalActionPending: (request) => piBridgeHandler.externalActionPending(request),
     externalActionDecision: (request) => piBridgeHandler.externalActionDecision(request),
     piSandboxCommand: (request) => piSandboxExecutionHandler.handle(request),
     piExecutions: (request) => Promise.resolve(piExecutionsHandler.list(request)),

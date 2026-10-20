@@ -9,6 +9,7 @@ import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
 import type { PiAccountingSnapshot } from "../../src/pi/accounting";
+import type { PiHarnessWakeController } from "../../src/pi/pi-harness-wake";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
@@ -191,7 +192,9 @@ describe("PiSessionDO", () => {
         workspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
-        sandboxExecution: "enabled",
+        // Sandbox execution stays off until a provider passes the generation-78
+        // isolation canary, so a creation snapshot never admits it.
+        sandboxExecution: "off",
         externalActions: "enabled",
         mcp: "off",
       },
@@ -1018,7 +1021,9 @@ describe("PiSessionDO", () => {
         workspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
-        sandboxExecution: "enabled",
+        // Sandbox execution stays off until a provider passes the generation-78
+        // isolation canary, so a creation snapshot never admits it.
+        sandboxExecution: "off",
         externalActions: "enabled",
         mcp: "off",
       },
@@ -1592,7 +1597,9 @@ describe("PiSessionDO", () => {
         workspace: "enabled",
         repositoryEditing: "enabled",
         codeMode: "off",
-        sandboxExecution: "enabled",
+        // Sandbox execution stays off until a provider passes the generation-78
+        // isolation canary, so a creation snapshot never admits it.
+        sandboxExecution: "off",
         externalActions: "enabled",
         mcp: "off",
       },
@@ -2233,6 +2240,35 @@ describe("PiSessionDO", () => {
     expect(outcome.afterFirst).toEqual([]);
     expect(outcome.afterSecond).toEqual([]);
     expect(outcome.metadata?.settledAt).toEqual(expect.any(Number));
+  });
+
+  it("resumes the Pi harness after object eviction so pending work continues", async () => {
+    const { sessionName } = await initSession({
+      sessionName: `pi-hibernation-resume-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    const stub = piStub(sessionName);
+    await stub.status(sessionName);
+    await expect(
+      runInPiSessionDO(stub, (_instance, state) => state.abort("test: hibernation"))
+    ).rejects.toThrow();
+
+    // A reopened object must schedule the Pi work that survived the eviction,
+    // which is what the upstream onWake contract does for a serverless host.
+    const restored = piStub(sessionName);
+    await runInPiSessionDO(restored, async (instance) => {
+      await instance.harness.pi();
+      const controller = (instance as unknown as { wakeController?: PiHarnessWakeController })
+        .wakeController;
+      expect(controller).toBeDefined();
+      expect(controller?.resumes).toBeGreaterThan(0);
+      expect(controller?.nativeWakeSupported).toBe(false);
+      await expect(controller?.wake()).resolves.toMatchObject({ active: expect.any(Boolean) });
+    });
   });
 
   it("drains an undelivered Pi projection through Lifecycle after object eviction", async () => {

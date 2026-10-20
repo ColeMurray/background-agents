@@ -3,6 +3,7 @@ import type {
   ExternalAction,
   ExternalActionApproval,
   ExternalActionHistoryEvent,
+  ExternalActionPendingList,
   ExternalActionPrepareRequest,
   ExternalActionStatusResponse,
 } from "@open-inspect/shared";
@@ -11,6 +12,58 @@ import type { SqlStorage, TransactionSync } from "./sql-storage";
 const EXECUTION_LEASE_MS = 30_000;
 const RECONCILIATION_POLL_MS = 5_000;
 const MAX_RECONCILIATION_BACKOFF_MS = 60_000;
+
+interface PendingRow {
+  id: string;
+  provider: string;
+  action: string;
+  summary: string;
+  state: ExternalAction["state"];
+  target_json: string;
+  arguments_json: string;
+  approval_source: string | null;
+  approval_actor_id: string | null;
+  approval_grant_id: string | null;
+  approved_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface PendingCursor {
+  createdAt: number;
+  id: string;
+}
+
+/** Encode a pending-list cursor as an opaque, bounded token. */
+function encodePendingCursor(cursor: PendingCursor): string {
+  return btoa(`${cursor.createdAt}:${cursor.id}`);
+}
+
+/** Decode a pending-list cursor, refusing anything malformed. */
+function decodePendingCursor(value: string | null | undefined): PendingCursor | null {
+  if (!value) return null;
+  let decoded: string;
+  try {
+    decoded = atob(value);
+  } catch {
+    return null;
+  }
+  const separator = decoded.indexOf(":");
+  if (separator <= 0) return null;
+  const createdAt = Number(decoded.slice(0, separator));
+  const id = decoded.slice(separator + 1);
+  if (!Number.isSafeInteger(createdAt) || createdAt < 0 || id.length === 0) return null;
+  return { createdAt, id };
+}
+
+/** Parse a stored JSON object column, refusing anything that is not an object. */
+function parseJsonObject(value: string): Record<string, JsonValue> {
+  const parsed: unknown = JSON.parse(value);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("External action document is not an object");
+  }
+  return parsed as Record<string, JsonValue>;
+}
 
 export type ExternalActionExecutionResult =
   | { kind: "succeeded"; publicResult: JsonValue }
@@ -242,6 +295,67 @@ export class ExternalActionGateway {
         reason: row.reason,
         occurredAt: row.occurred_at,
       })),
+    };
+  }
+
+  /**
+   * List the external effects an approver can still act on.
+   *
+   * The page is cursor bounded and oldest first, so an approver sees the
+   * longest-waiting effect first and a large ledger cannot be drained in one
+   * request.
+   */
+  listPending(
+    sessionId: string,
+    options: { limit?: number; cursor?: string | null } = {}
+  ): ExternalActionPendingList {
+    const limit = Math.max(1, Math.min(options.limit ?? 25, 100));
+    const cursor = decodePendingCursor(options.cursor);
+    const rows = this.sql
+      .exec(
+        `SELECT id, provider, action, summary, state, target_json, arguments_json,
+                approval_source, approval_actor_id, approval_grant_id, approved_at,
+                created_at, updated_at
+         FROM external_actions
+         WHERE session_id = ?
+           AND state IN ('awaiting_approval', 'approved', 'executing', 'indeterminate')
+           AND (created_at > ? OR (created_at = ? AND id > ?))
+         ORDER BY created_at, id
+         LIMIT ?`,
+        sessionId,
+        cursor?.createdAt ?? 0,
+        cursor?.createdAt ?? 0,
+        cursor?.id ?? "",
+        limit + 1
+      )
+      .toArray() as unknown as PendingRow[];
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      actions: page.map((row) => ({
+        id: row.id,
+        provider: row.provider,
+        action: row.action,
+        summary: row.summary,
+        state: row.state,
+        target: parseJsonObject(row.target_json),
+        arguments: parseJsonObject(row.arguments_json),
+        approval:
+          row.approval_source === null
+            ? null
+            : {
+                source: row.approval_source as "human" | "automation_grant",
+                actorId: row.approval_actor_id ?? "",
+                grantId: row.approval_grant_id ?? null,
+                approvedAt: row.approved_at ?? 0,
+              },
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+      nextCursor:
+        rows.length > limit && last
+          ? encodePendingCursor({ createdAt: last.created_at, id: last.id })
+          : null,
     };
   }
 

@@ -178,6 +178,10 @@
       "import": "./dist/types/session-inbox.js",
       "types": "./dist/types/session-inbox.d.ts"
     },
+    "./types/external-actions": {
+      "import": "./dist/types/external-actions.js",
+      "types": "./dist/types/external-actions.d.ts"
+    },
     "./types/session-activity": {
       "import": "./dist/types/session-activity.js",
       "types": "./dist/types/session-activity.d.ts"

@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(256);
+    expect(routes).toHaveLength(257);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(198);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(256);
+    expect(new Set(paths).size).toBe(199);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(257);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },
@@ -94,13 +94,20 @@ describe("route policy table", () => {
         allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
       },
     });
+    expect(routeFor("GET", "/sessions/session-1/external-actions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
+      },
+    });
     expect(
       routeFor("POST", "/sessions/session-1/external-actions/action-1/decision")
     ).toMatchObject({
       authentication: { kind: "user" },
       authorization: {
         allOf: [
-          { kind: "session", action: "read", sessionIdParam: "id" },
+          // Deciding an external effect is an action, not a read.
+          { kind: "session", action: "collaborate", sessionIdParam: "id" },
           { kind: "permission", permission: "external_actions.approve" },
         ],
       },

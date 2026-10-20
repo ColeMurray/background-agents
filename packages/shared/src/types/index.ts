@@ -205,6 +205,8 @@ export {
   externalActionSchema,
   externalActionHistoryEventSchema,
   externalActionStatusResponseSchema,
+  externalActionPendingSchema,
+  externalActionPendingListSchema,
 } from "./external-actions";
 export type {
   ExternalActionState,
@@ -213,6 +215,8 @@ export type {
   ExternalAction,
   ExternalActionHistoryEvent,
   ExternalActionStatusResponse,
+  ExternalActionPending,
+  ExternalActionPendingList,
 } from "./external-actions";
 export {
   DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS,

@@ -309,21 +309,55 @@ SLOs for the personal Pi canary:
 
 #### Slice 6B — durable execution tools
 
-- [ ] Add the next unclaimed SessionDO migration for dispatch/ack/retry/cancel/fence/indeterminate,
+- [x] Add the next unclaimed SessionDO migration for dispatch/ack/retry/cancel/fence/indeterminate,
       replay-gap/late completion, quotas, and retention.
-- [ ] Expose authorized `run_shell`, `run_build`, and `run_tests` only after emergency policy.
-- [ ] Provider contract/canary scripts cover Modal/OpenComputer/Daytona/Vercel/E2B generation 78+
+- [x] Expose authorized `run_shell`, `run_build`, and `run_tests` only after emergency policy.
+- [x] Provider contract/canary scripts cover Modal/OpenComputer/Daytona/Vercel/E2B generation 78+
       without making live calls.
+- [x] Every real provider stays `canary_blocked` until a live isolation canary passes, so the
+      creation snapshot never admits sandbox execution.
+
+#### Slice 6C — upstream Pi Durable parity
+
+- [x] Serverless wake contract: a reopened or hibernated Pi session resumes its pending work; the
+      derived wake mirrors upstream's `{ active, at }` shape.
+- [x] Telemetry: a content-free span vocabulary that mirrors upstream `DURABLE_TELEMETRY_SCHEMA`,
+      published through the `@earendil-works/pi-telemetry@1.3.0` contract.
+- [x] One trace id per Pi operation across the SessionDO and PiSessionDO hops.
+- [x] Documented the single upgrade point when Pi Durable publishes `onWake`/`wake()` and
+      `HarnessOptions.telemetry` — `features/pi-first-class/PI-UPSTREAM-PARITY.md`.
 
 ### Slice 7 — external actions and publication
 
-- [ ] Correct collaborate/action authority and approval; emergency deny prepare/execute while
-      status/reconcile/revoke remain available.
-- [ ] Coalesce gateway calls, rearm only after definitive `not_admitted`, and retain expiry,
-      cancellation, provenance, bounded errors, and full occurrence audit.
-- [ ] Add pending UI/BFF and automation-grant management.
-- [ ] Add reversible credential-closed GitHub/GitLab/Slack/Linear comment/reply definitions with
-      markers, status, delete, generic fault suites, and no Pi credentials. Canary scripts only.
+#### Slice 7A — authority and gateway correctness
+
+- [ ] Require `collaborate` session action authority for an approval or denial, not `read`. A
+      read-only break-glass reader and a workspace administrator without current owning-team
+      membership must both be refused; `external_actions.approve` stays required.
+- [ ] Add a cursor-bounded pending-action list route and BFF so an approver does not need an
+      out-of-band action id.
+- [ ] Coalesce identical nonterminal effects, rearm a one-shot continuation only after a definitive
+      `not_admitted`, and add approval expiry and cancellation transitions.
+- [ ] Enforce source and grant provenance, bound public errors, and record the occurrence time of
+      every prepare, approve, deny, execution, indeterminate, reconciliation, and grant change.
+- [ ] Add a live emergency deny for new prepares and executions while status, reconciliation, audit
+      recovery, and revocation stay available.
+
+#### Slice 7B — approval and grant surfaces
+
+- [ ] Pending-action list and decision UI inside the existing session page, with exact target and
+      argument review, permission-gated controls, and recoverable error states.
+- [ ] Automation-grant list, create, and revoke API and UI requiring automation management and
+      `external_actions.manage_grants`, revoking atomically on executor change.
+
+#### Slice 7C — provider adapters
+
+- [ ] Reversible credential-closed GitHub, GitLab, Slack, and Linear comment/reply definitions with
+      action markers, status lookup, and cleanup.
+- [ ] A generic fault-injection conformance suite: pre-write rejection, post-write timeout, restart,
+      revoked grant, malformed response, duplicate execution, marker recovery, and a credential
+      sentinel scan of the ledger, outbox, public output, and logs.
+- [ ] Canary scripts for disposable provider resources. No live calls.
 
 ### Slice 8 — read-only MCP/OAuth
 
