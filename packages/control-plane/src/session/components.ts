@@ -1143,6 +1143,17 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessions: sessionCoreRepository,
     messages: messageRepository,
     controls: piControlRepository,
+    recordCodeModeActivity: (input) => {
+      // The Code Mode run is visible to the session's collaborators, with its
+      // actor.
+      eventRepository.createEvent({
+        id: `code-mode-activity:${input.operationId}:${Date.now()}`,
+        type: "code_mode_activity",
+        data: JSON.stringify({ outcome: input.outcome, actorId: input.actorId }),
+        messageId: input.operationId,
+        createdAt: Date.now(),
+      });
+    },
     agentControls: { handle: (request) => piControlHandler.handle(request) },
     credentials: piCredentialService,
     skills: new SessionSkillStore(db),
@@ -1434,6 +1445,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     crossSessionMessage: (request) => crossSessionHandler.outbound(request),
     crossSessionAuthorize: (request) => crossSessionHandler.authorize(request),
     piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
+    piCodeModeAuthorize: (request) => piBridgeHandler.codeModeAuthorize(request),
     piMcpList: (request) => mcpSessionHandler.list(request),
     piMcpRead: (request) => mcpSessionHandler.read(request),
     crossSessionInbound: (request) => crossSessionHandler.inbound(request),

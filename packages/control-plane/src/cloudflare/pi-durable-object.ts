@@ -285,6 +285,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           if ((await currentCapabilities(signal)).codeMode !== "enabled") {
             throw new Error("Code Mode is disabled for new calls by deployment policy");
           }
+          // The session owns the run: the turn, its actor, and the latched
+          // capability. The run appears on the session's timeline.
+          await this.authorizeCodeMode(signal);
         },
       });
       const codeModePolicyDelegate = createPiCodeModePolicyDelegate(codeModePolicy);
@@ -1953,6 +1956,36 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
    *
    * The session decides. The agent learns only whether it may proceed.
    */
+  /**
+   * Ask the owning session to authorize one Code Mode run.
+   *
+   * The session decides: the turn must belong to it, the turn must have a
+   * workspace actor, and the session's latched capability must allow Code
+   * Mode. The run is then recorded on the session's timeline.
+   */
+  private async authorizeCodeMode(signal?: AbortSignal): Promise<void> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piCodeModeAuthorize}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
+        },
+        body: JSON.stringify({}),
+        signal,
+      })
+    );
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error ?? "Code Mode is not available for this session");
+    }
+  }
+
   private async authorizeBrowserRequest(request: {
     action: PiBrowserAction;
     url: string;

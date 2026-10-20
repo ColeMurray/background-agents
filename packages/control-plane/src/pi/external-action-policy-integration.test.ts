@@ -56,8 +56,12 @@ describe("Pi external action approval integration", () => {
       sessions: {
         getSession: () => ({ harness: "pi" }) as never,
         getSessionRepositories: () => [],
+        getPiFeatureCapabilitySnapshot: () => null,
       },
-      messages: { getProcessingMessage: () => ({ id: activeOperationId }) as never },
+      messages: {
+        getProcessingMessage: () => ({ id: activeOperationId }) as never,
+        getMessageHumanActor: () => "user-1",
+      },
       controls: { isActiveOperation: () => false },
       agentControls: { handle: vi.fn() },
       credentials: { getOpenAIAccess: vi.fn() },

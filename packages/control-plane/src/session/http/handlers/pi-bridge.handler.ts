@@ -144,8 +144,21 @@ import type { SessionDiffService } from "../../diffs/service";
 import { publicSourceControlError } from "../../../source-control";
 
 interface PiBridgeHandlerOptions {
-  sessions: Pick<SessionCoreRepository, "getSession" | "getSessionRepositories">;
-  messages: Pick<MessageRepository, "getProcessingMessage">;
+  sessions: Pick<
+    SessionCoreRepository,
+    "getSession" | "getSessionRepositories" | "getPiFeatureCapabilitySnapshot"
+  >;
+  messages: Pick<MessageRepository, "getProcessingMessage" | "getMessageHumanActor">;
+  /**
+   * Record the Code Mode run on the session's timeline.
+   *
+   * The run is visible to the session's collaborators, with its actor.
+   */
+  recordCodeModeActivity?: (input: {
+    operationId: string;
+    actorId: string;
+    outcome: "authorized" | "refused";
+  }) => void;
   controls: Pick<PiControlRepository, "isActiveOperation">;
   agentControls: { handle(request: Request): Promise<Response> };
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
@@ -656,6 +669,40 @@ export class PiBridgeHandler {
     } catch (error) {
       return externalActionFailure(error);
     }
+  }
+
+  /**
+   * Authorize one Code Mode run.
+   *
+   * Code Mode is a capability like any other: the session that owns the turn
+   * decides whether it may run, the turn's actor is known, and the run
+   * appears on the shared timeline with its actor.
+   */
+  async codeModeAuthorize(request: Request): Promise<Response> {
+    if (this.options.sessions.getSession()?.harness !== "pi") {
+      return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
+    }
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    if (!operationId || !this.activeOperation(request)) {
+      return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+    }
+    const actorId = this.options.messages.getMessageHumanActor(operationId);
+    if (!actorId) {
+      return Response.json({ error: "The originating turn has no human actor" }, { status: 409 });
+    }
+    const capability = this.options.sessions.getPiFeatureCapabilitySnapshot()?.capabilities;
+    if (capability && capability.codeMode !== "enabled") {
+      return Response.json(
+        { error: "Code Mode is not available for this session", code: "code_mode_disabled" },
+        { status: 403 }
+      );
+    }
+    this.options.recordCodeModeActivity?.({
+      operationId,
+      actorId,
+      outcome: "authorized",
+    });
+    return Response.json({ allowed: true }, { headers: { "Cache-Control": "no-store" } });
   }
 
   private activeOperation(request: Request): boolean {

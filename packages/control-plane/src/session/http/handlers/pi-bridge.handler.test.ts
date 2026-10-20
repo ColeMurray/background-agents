@@ -54,6 +54,7 @@ function harness(
   };
   const handler = new PiBridgeHandler({
     sessions: {
+      getPiFeatureCapabilitySnapshot: () => null,
       getSession: () =>
         ({
           harness: "pi",
@@ -74,6 +75,7 @@ function harness(
     messages: {
       getProcessingMessage: () =>
         options.processingMessageId ? ({ id: options.processingMessageId } as never) : null,
+      getMessageHumanActor: (messageId) => (messageId ? "user-1" : null),
     },
     controls: { isActiveOperation: () => options.activeControl === true },
     agentControls,
@@ -107,6 +109,34 @@ function harness(
     agentControls,
   };
 }
+
+it("authorizes a Code Mode run for the turn that owns it", async () => {
+  const h = harness({ processingMessageId: "message-1" });
+
+  const response = await h.handler.codeModeAuthorize(
+    new Request("http://session/internal/pi-codemode/authorize", {
+      method: "POST",
+      headers: { "X-Pi-Operation-ID": "message-1" },
+      body: JSON.stringify({}),
+    })
+  );
+
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({ allowed: true });
+});
+
+it("refuses a Code Mode run with no turn behind it", async () => {
+  const h = harness();
+
+  const response = await h.handler.codeModeAuthorize(
+    new Request("http://session/internal/pi-codemode/authorize", {
+      method: "POST",
+      body: JSON.stringify({}),
+    })
+  );
+
+  expect(response.status).toBe(409);
+});
 
 it("recognizes an accepted native control as active bridge authority", async () => {
   const { handler } = harness({ activeControl: true });
@@ -222,8 +252,12 @@ function externalActionHarness(
     sessions: {
       getSession: () => ({ harness: "pi" }) as never,
       getSessionRepositories: () => [],
+      getPiFeatureCapabilitySnapshot: () => null,
     },
-    messages: { getProcessingMessage: () => ({ id: "message-1" }) as never },
+    messages: {
+      getProcessingMessage: () => ({ id: "message-1" }) as never,
+      getMessageHumanActor: () => "user-1",
+    },
     controls: { isActiveOperation: () => false },
     agentControls: { handle: vi.fn() },
     credentials: { getOpenAIAccess: vi.fn() },
