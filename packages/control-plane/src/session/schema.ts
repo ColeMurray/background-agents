@@ -69,6 +69,7 @@ const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
   total_tokens INTEGER,
   step_cost_usd REAL,
   message_cost_usd REAL,
+  pricing_json TEXT,
   is_subtask INTEGER NOT NULL DEFAULT 0,
   child_session_id TEXT,
   task_call_id TEXT,
@@ -758,6 +759,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Add per-step pricing provenance",
+    run: "ALTER TABLE step_usage ADD COLUMN pricing_json TEXT",
   },
 ];
 

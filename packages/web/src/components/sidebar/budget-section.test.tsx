@@ -24,16 +24,6 @@ afterEach(() => {
 });
 
 describe("BudgetSection", () => {
-  it("discloses zero native cost and does not offer an ineffective dollar limit", () => {
-    render(
-      <dl>
-        <BudgetSection sessionId="native" totalCost={0} harness="codex" canManageBudget />
-      </dl>
-    );
-    expect(screen.getByText("$0.0")).toBeInTheDocument();
-    expect(screen.getByText(/Codex dollar costs are not tracked/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Edit limit" })).not.toBeInTheDocument();
-  });
   it("toasts the server reason_code for a denied budget change", async () => {
     fetchMock.mockResolvedValue(
       Response.json({ error: "Forbidden", reason_code: "team_inactive" }, { status: 403 })
@@ -60,7 +50,9 @@ describe("BudgetSection", () => {
     expect(screen.getByRole("term")).toHaveTextContent("Cost");
     expect(screen.getByText("$3.42 of $10.00 limit")).toBeInTheDocument();
     expect(
-      screen.getByText("Costs and limits reflect reported model usage only.")
+      screen.getByText(
+        "Costs and limits reflect reported API-equivalent model usage, including subscription-funded sessions, not actual billed spend."
+      )
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit limit" })).not.toBeInTheDocument();
   });

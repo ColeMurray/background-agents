@@ -43,7 +43,7 @@ from .events import CodexTurnEvents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
 STATE_VERSION = 1
 STOP_TIMEOUT_SECONDS = 5.0
@@ -76,11 +76,13 @@ class CodexHarness:
         credential_client: OpenAIAccessTokenClient | None = None,
         client_factory: Callable[..., CodexClient] = CodexClient,
         environ: Mapping[str, str] | None = None,
+        pricing_loader: Callable[[Mapping[str, str], Any], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.config, self.log, self.limits = config, log, limits
         self._credentials = credential_client
         self._factory = client_factory
         self._environ = dict(os.environ if environ is None else environ)
+        self._pricing_loader = pricing_loader
         self._client: CodexClient | None = None
         self._token: Any = None
         self._lock = asyncio.Lock()
@@ -289,7 +291,7 @@ class CodexHarness:
                 "excludeTurns": True,
             },
         )
-        return result.get("thread", {}).get("id") == thread_id
+        return bool(result.get("thread", {}).get("id") == thread_id)
 
     async def resume_session(self, persisted_id: str) -> bool:
         if persisted_id == self.session_id:
@@ -359,6 +361,7 @@ class CodexHarness:
         model = self._model(prompt.model)
         paths: list[Path] = []
         state: CodexTurnEvents | None = None
+        cost_warning_sent = False
         duration = (
             prompt.max_duration_seconds
             if prompt.max_duration_seconds is not None
@@ -374,6 +377,11 @@ class CodexHarness:
                     await self._authenticate()
                 if not self.session_id:
                     await self.create_session()
+                pricing = (
+                    await self._pricing_loader(self._environ, self.log)
+                    if self._pricing_loader is not None
+                    else {}
+                )
                 assert self._client is not None and self.session_id is not None
                 inputs: list[dict[str, Any]] = [{"type": "text", "text": prompt.text}]
                 for attachment in prompt.attachments:
@@ -401,6 +409,7 @@ class CodexHarness:
                         "threadId": self.session_id,
                         "input": inputs,
                         "model": model,
+                        "serviceTierForTurn": "default",
                         "effort": prompt.reasoning_effort,
                         "approvalPolicy": "never",
                         "sandboxPolicy": {
@@ -418,6 +427,10 @@ class CodexHarness:
                     model,
                     self._total,
                     baseline_known=baseline_known,
+                    pricing_model=pricing.get(model),
+                    pricing_source="custom"
+                    if self._environ.get("OPENCODE_MODELS_PATH")
+                    else "models.dev",
                 )
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
@@ -426,15 +439,21 @@ class CodexHarness:
                     frame = await self._next_notification()
                     for event in state.accept(frame):
                         await emit(event)
+                    if not state.cost_complete and not cost_warning_sent:
+                        cost_warning_sent = True
+                        await emit(self._cost_warning(prompt.message_id))
                     if self._total != state.total:
                         self._total = state.total
                         self._persist()
                 self._usage_baseline_known = state.status == "completed" and state.has_usage
                 self._persist()
                 await emit(state.finish())
+                if state.message_cost_usd is None and not cost_warning_sent:
+                    cost_warning_sent = True
+                    await emit(self._cost_warning(prompt.message_id))
                 if state.status == "completed":
                     return TurnOutcome.ok(
-                        message_cost_usd=0,
+                        message_cost_usd=state.message_cost_usd,
                     )
                 return TurnOutcome(
                     False,
@@ -442,7 +461,7 @@ class CodexHarness:
                     if state.status == "interrupted"
                     else "Codex turn failed",
                     cancelled=state.status == "interrupted",
-                    message_cost_usd=0,
+                    message_cost_usd=state.message_cost_usd,
                 )
         except asyncio.CancelledError:
             stopped = await asyncio.shield(self.stop_execution(STOP_TIMEOUT_SECONDS))
@@ -460,13 +479,13 @@ class CodexHarness:
             if stopped and not self._submitting:
                 return TurnOutcome.failed(
                     "Codex could not prepare the turn within its runtime budget",
-                    message_cost_usd=0,
+                    message_cost_usd=state.message_cost_usd if state else None,
                 )
             return TurnOutcome.failed(
                 "Codex transport failed; retry to resume the conversation"
                 if stopped
                 else "Codex process containment could not be confirmed",
-                message_cost_usd=0,
+                message_cost_usd=state.message_cost_usd if state else None,
             )
         except OpenAIAccessTokenUnavailable:
             # Transient (timeout, 5xx, 429): a plain retry can succeed, so do not
@@ -474,11 +493,11 @@ class CodexHarness:
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
                 return TurnOutcome.failed(
                     "Codex process containment could not be confirmed",
-                    message_cost_usd=0,
+                    message_cost_usd=state.message_cost_usd if state else None,
                 )
             return TurnOutcome.failed(
                 "Codex could not obtain a credential right now; retry shortly",
-                message_cost_usd=0,
+                message_cost_usd=state.message_cost_usd if state else None,
             )
         except (
             CodexRpcError,
@@ -488,11 +507,11 @@ class CodexHarness:
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
                 return TurnOutcome.failed(
                     "Codex process containment could not be confirmed",
-                    message_cost_usd=0,
+                    message_cost_usd=state.message_cost_usd if state else None,
                 )
             return TurnOutcome.failed(
                 "Codex rejected this session's configuration or credential; check Settings before retrying",
-                message_cost_usd=0,
+                message_cost_usd=state.message_cost_usd if state else None,
             )
         except _InactivityTimeout:
             timeout_seconds = self.limits.inactivity_timeout_seconds
@@ -505,7 +524,7 @@ class CodexHarness:
                 f"Codex produced no output for {timeout_seconds:.0f}s."
                 if stopped
                 else "Codex process containment could not be confirmed",
-                message_cost_usd=0,
+                message_cost_usd=state.message_cost_usd if state else None,
             )
         except Exception:
             # Any other abnormal exit (e.g. the event sink) may leave native work
@@ -520,6 +539,26 @@ class CodexHarness:
             self._turn_id = None
             for path in paths:
                 path.unlink(missing_ok=True)
+            if state is not None and state.status is None:
+                state.cost_complete = False
+                # Lost completion may hide more usage. Retain the observed
+                # subtotal without allowing a broken sink to mask turn cleanup.
+                with contextlib.suppress(Exception):
+                    await emit(state.finish())
+                    if not cost_warning_sent:
+                        await emit(self._cost_warning(prompt.message_id))
+
+    @staticmethod
+    def _cost_warning(message_id: str) -> dict[str, Any]:
+        return {
+            "type": "warning",
+            "messageId": message_id,
+            "scope": "budget",
+            "message": (
+                "Codex API-equivalent cost is incomplete because pricing or attributable "
+                "usage is unavailable. Recorded costs and dollar limits cover only priced usage."
+            ),
+        }
 
     async def _next_notification(self) -> dict[str, Any]:
         """Next frame, bounded by the inactivity budget while no host tool call is running."""

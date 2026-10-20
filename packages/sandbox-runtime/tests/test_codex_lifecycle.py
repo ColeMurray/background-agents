@@ -16,7 +16,7 @@ from sandbox_runtime.harness.codex.client import CodexRpcError, CodexTransportEr
 from sandbox_runtime.memories import memory_path
 
 
-def build(tmp_path):
+def build(tmp_path, *, pricing_loader=None):
     client = MagicMock()
     client.running = True
     client.open = AsyncMock()
@@ -29,8 +29,203 @@ def build(tmp_path):
         limits=PromptLimits(1, 30, 5),
         client_factory=MagicMock(return_value=client),
         environ={"OPENAI_API_KEY": "fixture"},
+        pricing_loader=pricing_loader,
     )
     return h, client
+
+
+def usage_notification(turn_id="turn", responses=1):
+    last = {
+        "inputTokens": 100,
+        "cachedInputTokens": 0,
+        "outputTokens": 20,
+        "reasoningOutputTokens": 5,
+        "totalTokens": 120,
+    }
+    return {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+            "threadId": "thread",
+            "turnId": turn_id,
+            "tokenUsage": {
+                "total": {key: value * responses for key, value in last.items()},
+                "last": last,
+            },
+        },
+    }
+
+
+def completed_notification(turn_id="turn", status="completed"):
+    return {
+        "method": "turn/completed",
+        "params": {"threadId": "thread", "turn": {"id": turn_id, "status": status}},
+    }
+
+
+@pytest.mark.parametrize(
+    "ending", ["completed", "interrupted", "transport", "timeout", "inactivity"]
+)
+async def test_known_cost_survives_turn_outcome(tmp_path, ending):
+    rates = {"input": 2, "output": 10, "cache_read": 0.5}
+    loader = AsyncMock(return_value={"gpt-6.1-sol": {"cost": rates}})
+    harness, client = build(tmp_path, pricing_loader=loader)
+    await harness.open()
+    harness.session_id = "thread"
+    client.request.return_value = {"turn": {"id": "turn"}}
+    client.handling_requests = False
+    if ending == "inactivity":
+        harness.limits = PromptLimits(0.05, 30, 5)
+    notifications = iter([usage_notification(), usage_notification(responses=2)])
+
+    async def next_notification():
+        frame = next(notifications, None)
+        if frame is not None:
+            return frame
+        if ending == "transport":
+            raise CodexTransportError("lost stream after usage")
+        if ending in {"timeout", "inactivity"}:
+            await asyncio.Event().wait()
+        return completed_notification(status=ending)
+
+    client.next_notification = next_notification
+    emit = AsyncMock()
+    try:
+        async with asyncio.timeout(2):
+            outcome = await harness.run_prompt(
+                HarnessPrompt(
+                    "message",
+                    "work",
+                    max_duration_seconds=0.1 if ending == "timeout" else None,
+                ),
+                emit,
+            )
+        assert outcome.success is (ending == "completed")
+        assert outcome.cancelled is (ending == "interrupted")
+        # Reasoning is already part of all 20 output tokens, not an extra charge.
+        assert outcome.message_cost_usd == pytest.approx(0.0008)
+        events = [call.args[0] for call in emit.await_args_list]
+        steps = [event for event in events if event["type"] == "step_finish"]
+        assert [step["cost"] for step in steps[:2]] == pytest.approx([0.0004, 0.0008])
+        assert steps[-1]["messageCostUsd"] == pytest.approx(0.0008)
+        assert steps[-1]["pricing"] == {
+            "source": "models.dev",
+            "model": "openai/gpt-6.1-sol",
+            "rates": rates,
+        }
+        warnings = [event for event in events if event["type"] == "warning"]
+        if ending in {"transport", "timeout", "inactivity"}:
+            assert len(warnings) == 1
+            assert steps[-1]["cost"] is None
+        else:
+            assert warnings == []
+        if ending in {"completed", "interrupted"}:
+            assert steps[-1]["reason"] == ending
+        else:
+            client.close.assert_awaited_once()
+            assert outcome.error
+        loader.assert_awaited_once_with({"OPENAI_API_KEY": "fixture"}, harness.log)
+    finally:
+        await harness.close()
+
+
+@pytest.mark.parametrize("pricing", ["no-loader", "unknown-model", "missing-usage"])
+async def test_unknown_cost_warns_once_without_inventing_zero(tmp_path, pricing):
+    catalog = {"gpt-6.1-sol": {"cost": {"input": 2, "output": 10}}}
+    if pricing == "unknown-model":
+        catalog = {}
+    loader = None if pricing == "no-loader" else AsyncMock(return_value=catalog)
+    harness, client = build(tmp_path, pricing_loader=loader)
+    await harness.open()
+    harness.session_id = "thread"
+    client.request.return_value = {"turn": {"id": "turn"}}
+    notifications = []
+    if pricing != "missing-usage":
+        notifications.extend([usage_notification(), usage_notification(responses=2)])
+    notifications.append(completed_notification())
+    client.next_notification = AsyncMock(side_effect=notifications)
+    emit = AsyncMock()
+    try:
+        outcome = await harness.run_prompt(HarnessPrompt("message", "work"), emit)
+        assert outcome.success
+        assert outcome.message_cost_usd is None
+        events = [call.args[0] for call in emit.await_args_list]
+        warnings = [event for event in events if event["type"] == "warning"]
+        assert len(warnings) == 1
+        assert warnings[0]["messageId"] == "message"
+        assert warnings[0]["scope"] == "budget"
+        assert "cost is incomplete" in warnings[0]["message"]
+        steps = [event for event in events if event["type"] == "step_finish"]
+        assert steps
+        assert all(step["cost"] is None for step in steps)
+        assert all("messageCostUsd" not in step and "pricing" not in step for step in steps)
+        if pricing == "missing-usage":
+            assert all("tokens" not in step for step in steps)
+        else:
+            assert steps[-1]["tokens"]["total"] == 240
+    finally:
+        await harness.close()
+
+
+@pytest.mark.parametrize("custom_url", [None, "https://catalog.example.invalid"])
+async def test_explicit_catalog_prices_are_labeled_custom_without_exporting_location(
+    tmp_path, custom_url
+):
+    rates = {"input": 2, "output": 10}
+    loader = AsyncMock(return_value={"gpt-6.1-sol": {"cost": rates}})
+    harness, client = build(tmp_path, pricing_loader=loader)
+    harness._environ["OPENCODE_MODELS_PATH"] = str(tmp_path / "private-catalog.json")
+    if custom_url is not None:
+        harness._environ["OPENCODE_MODELS_URL"] = custom_url
+    await harness.open()
+    harness.session_id = "thread"
+    client.request.return_value = {"turn": {"id": "turn"}}
+    client.next_notification = AsyncMock(
+        side_effect=[usage_notification(), completed_notification()]
+    )
+    emit = AsyncMock()
+    try:
+        outcome = await harness.run_prompt(HarnessPrompt("message", "work"), emit)
+        assert outcome.success
+        assert outcome.message_cost_usd == pytest.approx(0.0004)
+        for call in emit.await_args_list:
+            if call.args[0]["type"] == "step_finish":
+                assert call.args[0]["pricing"] == {
+                    "source": "custom",
+                    "model": "openai/gpt-6.1-sol",
+                    "rates": rates,
+                }
+    finally:
+        await harness.close()
+
+
+async def test_pricing_loader_refreshes_each_turn_without_repricing_previous_usage(tmp_path):
+    rates = [{"input": 2, "output": 10}, {"input": 4, "output": 20}]
+    loader = AsyncMock(side_effect=[{"gpt-6.1-sol": {"cost": rate}} for rate in rates])
+    harness, client = build(tmp_path, pricing_loader=loader)
+    await harness.open()
+    harness.session_id = "thread"
+    emit = AsyncMock()
+    try:
+        for index, expected_cost in enumerate([0.0004, 0.0008], start=1):
+            turn_id = f"turn-{index}"
+            client.request.return_value = {"turn": {"id": turn_id}}
+            client.next_notification = AsyncMock(
+                side_effect=[
+                    usage_notification(turn_id, responses=index),
+                    completed_notification(turn_id),
+                ]
+            )
+            outcome = await harness.run_prompt(HarnessPrompt(f"m{index}", "work"), emit)
+            assert outcome.success
+            assert outcome.message_cost_usd == pytest.approx(expected_cost)
+            assert loader.await_count == index
+            loader.assert_awaited_with({"OPENAI_API_KEY": "fixture"}, harness.log)
+        steps = [
+            call.args[0] for call in emit.await_args_list if call.args[0]["type"] == "step_finish"
+        ]
+        assert [step["pricing"]["rates"] for step in steps] == [rates[0]] * 2 + [rates[1]] * 2
+    finally:
+        await harness.close()
 
 
 @pytest.mark.parametrize("memory", [None, "", "Pinned session directive"])
@@ -379,6 +574,7 @@ async def test_admitted_selection_is_forwarded_without_runtime_catalog(
     )
     assert submitted["model"] == expected
     assert submitted["effort"] == effort
+    assert submitted["serviceTierForTurn"] == "default"
     await harness.close()
 
 

@@ -4,7 +4,7 @@ description: What the Analytics page measures, how each number, chart, and table
 audience: team-owner
 owner: web
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-15"
 relatedCode:
   - packages/shared/src/types/analytics.ts
   - packages/web/src/app/(app)/(sidebar)/analytics/page.tsx
@@ -46,12 +46,12 @@ The headline numbers come in two groups. The first is captioned with the scope (
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Sessions**        | Sessions created in the window, with the daily average and a sparkline of sessions per day.                                                                                                                                                                    |
 | **Active users**    | The number of distinct users with a session in the window, keyed by user ID and falling back to the source-control login for sessions without a linked user. The hint shows attributed sessions per person; sessions with no recorded user are left out of it. |
-| **Spend**           | The sum of every counted session's recorded cost, with the average per session.                                                                                                                                                                                |
+| **Model cost**      | The sum of every counted session's recorded API-equivalent model usage cost, with the average per session.                                                                                                                                                     |
 | **Completion rate** | Completed divided by completed + failed + cancelled. Sessions still running, never started, or archived are not in the denominator. A dash until a session finishes.                                                                                           |
 
 The second group, **Pull requests · every source**, shows **PRs merged** (pull requests merged during the window, with their average time to merge and a sparkline of merges per day) and **Cost per merged PR** (for pull requests opened in the window; defined under [Pull requests](#pull-requests)).
 
-Below them, **Sessions per day** and **Pull requests opened and merged** chart the window, and three lists show the top five repositories by sessions (with cost), models by spend (with cost per session), and people by sessions (with completion rate). Each panel links to the tab with the full detail.
+Below them, **Sessions per day** and **Pull requests opened and merged** chart the window, and three lists show the top five repositories by sessions (with cost), models by cost (with cost per session), and people by sessions (with completion rate). Each panel links to the tab with the full detail.
 
 ## Usage
 
@@ -69,19 +69,19 @@ Below them, **Sessions per day** and **Pull requests opened and merged** chart t
 
 The numbers across the top:
 
-| Number                      | Value                                                                                                                   |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Spend**                   | The sum of every counted session's recorded cost, with the average per session.                                         |
-| **Cache hit ratio**         | Cache reads divided by cache reads plus input tokens.                                                                   |
-| **Billed to subscriptions** | The share of sessions billed through a connected subscription. Those sessions report $0.                                |
-| **Tokens**                  | Input plus output tokens, split into each.                                                                              |
-| **Private sessions**        | The cost of private sessions in the same window and scope, which Spend excludes. Only Owners and Administrators see it. |
+| Number                  | Value                                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Model cost**          | The sum of every counted session's recorded API-equivalent model usage cost, with the average per session.                   |
+| **Cache hit ratio**     | Cache reads divided by cache reads plus input tokens.                                                                        |
+| **Subscription-funded** | The share of sessions funded through a connected subscription. Their cost uses the same API-equivalent semantics.            |
+| **Tokens**              | Input plus output tokens, split into each.                                                                                   |
+| **Private sessions**    | The cost of private sessions in the same window and scope, which Model cost excludes. Only Owners and Administrators see it. |
 
 **By model**, **By provider**, and **By harness** list sessions, cost, and cost per session for each, sorted by cost. The provider table also shows how many sessions ran **On subscription**; the harness table shows the completion rate. Narrow screens hide secondary columns such as PRs and cache hit ratio.
 
 **Most expensive runs** lists the costliest runs in the window, up to 20. A run is a root session plus every sub-session it spawned, so its cost and session count include the whole family. Each run links to its root session.
 
-**Tokens** gives the totals for input, output, cache read, cache write, and reasoning tokens. Reasoning tokens are reported by OpenCode only. Token totals cover sessions created since token capture was enabled; older sessions count as zero.
+**Tokens** gives the totals for input, output, cache read, cache write, and reasoning tokens. Reasoning tokens are reported by OpenCode and native Codex. Token totals cover sessions created since token capture was enabled; older sessions count as zero.
 
 ## Pull requests
 
@@ -123,12 +123,17 @@ A sortable table of usage per person. Click any column heading to sort; click ag
 
 ## How cost is derived
 
-Cost figures are sums of each session's recorded cost. A session's cost is a running total that the agent harness reports to the control plane as each turn finishes:
+Cost figures are sums of each session's recorded API-equivalent model usage cost, not actual billed spend. Subscription-funded and API-key sessions use the same cost semantics. A session's cost is a running total that the agent harness reports to the control plane as each turn finishes:
 
 - **OpenCode** reports the priced cost of each step, and the session total accumulates those values.
 - **Claude Agent** reports a cumulative cost per turn, and the session records the increase over the previous turn. When the harness reports no cost for a turn, the turn is recorded as $0 and the session timeline shows a warning saying so. The next turn's cost cannot then be separated from the missing one, so it is also recorded as $0 before accounting resumes.
+- **Native Codex** estimates model usage cost from reported token usage and cached Models.dev prices. Missing usage or pricing data produces a warning and leaves the recorded cost incomplete; it does not mean the session was free.
 
-Nothing on this page estimates cost independently of what the harness reported. Amounts show cents below $1,000 and whole dollars above; amounts under one cent show as `<$0.01`. Per-session cost caps are covered in [Spend limits](/sessions/spend-limits).
+Native Codex prices each attributable model response at standard API rates, including cached input, cache writes, and reasoning output. It refreshes the default OpenCode catalog cache when stale and retains cached prices if refresh fails. Each turn keeps its own rate snapshot, which is included in usage exports unless oversized; omitting oversized metadata does not discard cost updates. Later catalog updates do not reprice recorded work. An explicit `OPENCODE_MODELS_PATH` is read without network refresh and labeled `custom` in pricing exports.
+
+The pinned Codex protocol does not include remote-compaction usage in its cumulative token counters. Compaction, model rerouting, or uncertain usage after interruption can therefore leave a turn only partially priced. The timeline warns when this happens; only the known subtotal counts toward the cost limit.
+
+These figures cover model inference usage, not separate tool fees or sandbox/infrastructure charges, and may differ from the provider's bill. Analytics displays the recorded totals without repricing them. Amounts show cents below $1,000 and whole dollars above; amounts under one cent show as `<$0.01`. Per-session cost caps are covered in [Spend limits](/sessions/spend-limits).
 
 ## Troubleshooting
 
@@ -139,9 +144,9 @@ Nothing on this page estimates cost independently of what the harness reported. 
 
 </Accordion>
   <Accordion title="A user shows sessions but $0 cost">
-    The sessions predate cost tracking, ran on a subscription that reports $0, or their turns ran
-    on a harness that reported no cost. Open a session and check its timeline for a provider
-    warning.
+    The sessions may predate cost tracking or have missing usage or pricing data. Subscription
+    funding does not make model usage cost zero. Open a session and check its timeline for a
+    warning; missing data can leave the recorded cost incomplete.
 
 </Accordion>
   <Accordion title="Active users looks too high">

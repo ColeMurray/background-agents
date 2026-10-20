@@ -1,5 +1,10 @@
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
-import { normalizeTokenUsage, stepUsageSchema, type StepUsage } from "@open-inspect/shared";
+import {
+  normalizeTokenUsage,
+  stepPricingSchema,
+  stepUsageSchema,
+  type StepUsage,
+} from "@open-inspect/shared";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { z } from "zod";
 import type { SqlStorage, TransactionSync } from "./sql-storage";
@@ -20,6 +25,7 @@ const stepUsageRowSchema = z.object({
   total_tokens: z.number().nullable(),
   step_cost_usd: z.number().nullable(),
   message_cost_usd: z.number().nullable(),
+  pricing_json: z.string().nullable(),
   is_subtask: z.union([z.literal(0), z.literal(1)]),
   child_session_id: z.string().nullable(),
   task_call_id: z.string().nullable(),
@@ -87,8 +93,8 @@ export class UsageRepository {
         `INSERT INTO step_usage (
           id, message_id, model, harness, input_tokens, output_tokens, reasoning_tokens,
           cache_read_tokens, cache_write_tokens, total_tokens, step_cost_usd, message_cost_usd,
-          is_subtask, child_session_id, task_call_id, reason, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          pricing_json, is_subtask, child_session_id, task_call_id, reason, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           input_tokens = excluded.input_tokens,
           output_tokens = excluded.output_tokens,
@@ -98,6 +104,7 @@ export class UsageRepository {
           total_tokens = excluded.total_tokens,
           step_cost_usd = excluded.step_cost_usd,
           message_cost_usd = excluded.message_cost_usd,
+          pricing_json = excluded.pricing_json,
           is_subtask = excluded.is_subtask,
           child_session_id = excluded.child_session_id,
           task_call_id = excluded.task_call_id,
@@ -117,6 +124,7 @@ export class UsageRepository {
         event.messageCostUsd != null && Number.isFinite(event.messageCostUsd)
           ? event.messageCostUsd
           : null,
+        event.pricing === undefined ? null : JSON.stringify(event.pricing),
         event.isSubtask ? 1 : 0,
         event.childSessionId ?? null,
         event.taskCallId ?? null,
@@ -194,6 +202,14 @@ export class UsageRepository {
       if (!parsed.success)
         throw new SessionStorageIntegrityError("Malformed persisted step usage row");
       const row = parsed.data;
+      let pricing: StepUsage["pricing"];
+      if (row.pricing_json !== null) {
+        try {
+          pricing = stepPricingSchema.parse(JSON.parse(row.pricing_json));
+        } catch {
+          throw new SessionStorageIntegrityError("Malformed persisted step usage pricing");
+        }
+      }
       return {
         id: row.id,
         messageId: row.message_id,
@@ -207,6 +223,7 @@ export class UsageRepository {
         totalTokens: row.total_tokens,
         stepCostUsd: row.step_cost_usd,
         messageCostUsd: row.message_cost_usd,
+        ...(pricing === undefined ? {} : { pricing }),
         isSubtask: row.is_subtask === 1,
         childSessionId: row.child_session_id,
         taskCallId: row.task_call_id,

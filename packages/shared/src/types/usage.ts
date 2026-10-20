@@ -11,6 +11,12 @@ export interface NormalizedTokenUsage {
   totalTokens: number | null;
 }
 
+export const stepPricingSchema = z.object({
+  source: z.enum(["models.dev", "custom"]),
+  model: z.string(),
+  rates: z.record(z.string(), z.unknown()),
+});
+
 /** `id` and `createdAt` form the page key, so they must be valid cursor parts. */
 export const stepUsageSchema = z.object({
   id: z.string().min(1),
@@ -25,6 +31,7 @@ export const stepUsageSchema = z.object({
   totalTokens: z.number().nullable(),
   stepCostUsd: z.number().nullable(),
   messageCostUsd: z.number().nullable(),
+  pricing: stepPricingSchema.optional(),
   isSubtask: z.boolean(),
   childSessionId: z.string().nullable(),
   taskCallId: z.string().nullable(),

@@ -4,6 +4,18 @@ import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { initSchema } from "./schema";
 import { UsageRepository } from "./usage-repository";
 
+const pricing = {
+  source: "models.dev" as const,
+  model: "gpt-6.1-sol",
+  rates: {
+    input: 2,
+    output: 10,
+    cache_read: 0.2,
+    cache_write: 2,
+    tiers: [{ context: 200000, input: 4, output: 15 }],
+  },
+};
+
 describe("UsageRepository", () => {
   let db: DatabaseSync;
   let usage: UsageRepository;
@@ -47,6 +59,8 @@ describe("UsageRepository", () => {
       model: "default-model",
       harness: "opencode",
     });
+    expect(usage.listStepUsage(null, 1).items[0]).not.toHaveProperty("pricing");
+    expect(db.prepare("SELECT pricing_json FROM step_usage").get()).toEqual({ pricing_json: null });
   });
 
   it("records normalized usage and the model and harness at write time", () => {
@@ -60,6 +74,7 @@ describe("UsageRepository", () => {
         tokens: { input: 4, output: 0, cache: { read: 2 } },
         cost: 0.02,
         messageCostUsd: 0.5,
+        pricing,
         isSubtask: true,
         childSessionId: "child",
         taskCallId: "call",
@@ -82,6 +97,7 @@ describe("UsageRepository", () => {
         totalTokens: 6,
         stepCostUsd: 0.02,
         messageCostUsd: 0.5,
+        pricing,
         isSubtask: true,
         childSessionId: "child",
         taskCallId: "call",
@@ -120,8 +136,15 @@ describe("UsageRepository", () => {
       stepId: "one",
       timestamp: 1,
     };
-    usage.recordStepUsage(event, "m", 10);
-    usage.recordStepUsage({ ...event, tokens: 99, cost: 0.25, reason: "corrected" }, "m", 20);
+    usage.recordStepUsage({ ...event, pricing }, "m", 10);
+    const corrected = {
+      ...event,
+      tokens: 99,
+      cost: 0.25,
+      reason: "corrected",
+      pricing: { ...pricing, rates: { ...pricing.rates, input: 3 } },
+    };
+    usage.recordStepUsage(corrected, "m", 20);
     expect(usage.getSessionTotals()).toEqual({
       rowCount: 1,
       inputTokens: null,
@@ -136,10 +159,27 @@ describe("UsageRepository", () => {
       totalTokens: 99,
       stepCostUsd: 0.25,
       reason: "corrected",
+      pricing: corrected.pricing,
     });
-    usage.recordStepUsage({ ...event, tokens: 99, cost: 0.25, reason: "corrected" }, "m", 30);
+    usage.recordStepUsage(corrected, "m", 30);
     expect(usage.getSessionTotals().rowCount).toBe(1);
     expect(usage.listStepUsage(null, 10).items[0].createdAt).toBe(10);
+    expect(usage.listStepUsage(null, 10).items[0].pricing).toEqual(corrected.pricing);
+  });
+
+  it("does not retain a stale snapshot when a corrected step is unpriced", () => {
+    const event = {
+      type: "step_finish" as const,
+      sandboxId: "s",
+      messageId: "m",
+      stepId: "one",
+      timestamp: 1,
+    };
+    usage.recordStepUsage({ ...event, cost: 0.25, pricing }, "m", 10);
+    usage.recordStepUsage({ ...event, cost: null }, "m", 20);
+    const [row] = usage.listStepUsage(null, 10).items;
+    expect(row.stepCostUsd).toBeNull();
+    expect(row).not.toHaveProperty("pricing");
   });
 
   it("uses messageId and event timestamp when stepId is absent and sums known values", () => {
@@ -238,6 +278,19 @@ describe("UsageRepository", () => {
     db.exec("UPDATE step_usage SET input_tokens = 'corrupt'");
     expect(() => usage.listStepUsage(null, 10)).toThrow("Malformed persisted step usage row");
   });
+
+  it.each(["not-json", "null", JSON.stringify({ ...pricing, rates: [] })])(
+    "rejects malformed persisted pricing %s",
+    (value) => {
+      usage.recordStepUsage(
+        { type: "step_finish", sandboxId: "s", messageId: "m", timestamp: 1 },
+        "m",
+        100
+      );
+      db.prepare("UPDATE step_usage SET pricing_json = ?").run(value);
+      expect(() => usage.listStepUsage(null, 10)).toThrow("Malformed persisted step usage pricing");
+    }
+  );
 
   it.each(["id = ''", "created_at = -1", "created_at = 1.5"])(
     "rejects a persisted row whose key cannot continue a page (%s)",

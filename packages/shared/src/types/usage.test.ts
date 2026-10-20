@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { sandboxEventSchema, tokenUsageSchema } from "./sandbox-events";
 import { normalizeTokenUsage, stepUsageSchema, type StepUsage } from "./usage";
 
+const pricing = {
+  source: "models.dev" as const,
+  model: "gpt-6.1-sol",
+  rates: {
+    input: 2,
+    output: 10,
+    cache_read: 0.2,
+    cache_write: 2,
+    tiers: [{ context: 200000, input: 4, output: 15 }],
+    extra: { preserved: true },
+  },
+};
+
 const stepUsage: StepUsage = {
   id: "step-1",
   messageId: "message-1",
@@ -25,6 +38,46 @@ const stepUsage: StepUsage = {
 describe("stepUsageSchema", () => {
   it("accepts a step usage row with unknown counts left null", () => {
     expect(stepUsageSchema.parse(stepUsage)).toEqual(stepUsage);
+    expect(stepUsageSchema.parse(stepUsage)).not.toHaveProperty("pricing");
+  });
+
+  it.each(["models.dev", "custom"] as const)(
+    "preserves %s pricing on usage and step_finish events",
+    (source) => {
+      const snapshot = { ...pricing, source };
+      expect(stepUsageSchema.parse({ ...stepUsage, pricing: snapshot })).toEqual({
+        ...stepUsage,
+        pricing: snapshot,
+      });
+      const event = { type: "step_finish", sandboxId: "s", messageId: "m", timestamp: 1 };
+      expect(sandboxEventSchema.parse({ ...event, cost: 0.01, pricing: snapshot })).toEqual({
+        ...event,
+        cost: 0.01,
+        pricing: snapshot,
+      });
+      expect(sandboxEventSchema.parse(event)).not.toHaveProperty("pricing");
+    }
+  );
+
+  it.each([
+    null,
+    { ...pricing, source: "other" },
+    { ...pricing, model: 1 },
+    { ...pricing, rates: [] },
+    { source: "models.dev", model: "gpt-6.1-sol" },
+  ])("rejects malformed pricing %j", (invalidPricing) => {
+    expect(stepUsageSchema.safeParse({ ...stepUsage, pricing: invalidPricing }).success).toBe(
+      false
+    );
+    expect(
+      sandboxEventSchema.safeParse({
+        type: "step_finish",
+        sandboxId: "s",
+        messageId: "m",
+        timestamp: 1,
+        pricing: invalidPricing,
+      }).success
+    ).toBe(false);
   });
 
   it("rejects a harness outside the catalog", () => {

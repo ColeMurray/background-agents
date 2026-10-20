@@ -17,9 +17,11 @@ export function SessionCostSettingsFields({
     <fieldset className="min-w-0">
       <legend className="block text-sm font-medium text-foreground mb-1.5">Session Cost</legend>
       <p className="text-xs text-muted-foreground mb-2">
-        Stops additional model work after reported session cost reaches the limit. Leave the limit
-        blank {isGlobal ? "for unlimited sessions" : "to inherit the broader setting"}. Unreported
-        model cost cannot be limited.
+        Stops additional model work after reported session cost reaches the limit. Cost is
+        API-equivalent model usage, including subscription-funded sessions, not actual billed spend.
+        Leave the limit blank{" "}
+        {isGlobal ? "for unlimited sessions" : "to inherit the broader setting"}. Unreported model
+        cost cannot be limited.
       </p>
       <div className="max-w-sm">
         <label

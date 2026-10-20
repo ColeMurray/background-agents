@@ -112,6 +112,8 @@ def build_agent_harness(
                 credential_client=credential_client,
             )
         case HarnessId.CODEX:
+            from .codex.pricing import load_codex_pricing
+
             codex_handoff = CodexHarnessHandoff.read()
             session_config = _session_config_from_env()
             oauth_managed = os.environ.get("OPENAI_OAUTH_MANAGED") in {"1", "true"}
@@ -143,7 +145,11 @@ def build_agent_harness(
                 else None
             )
             return CodexHarness(
-                config=codex_config, log=log, limits=limits, credential_client=token_client
+                config=codex_config,
+                log=log,
+                limits=limits,
+                credential_client=token_client,
+                pricing_loader=load_codex_pricing,
             )
     raise ValueError(f"Unsupported harness: {harness_id}")
 

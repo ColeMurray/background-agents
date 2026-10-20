@@ -683,24 +683,34 @@ describe("SessionRightSidebar", () => {
     expect(screen.queryByText("details")).not.toBeInTheDocument();
   });
 
-  it("forwards budget management to the desktop sidebar", () => {
-    render(
-      <Sidebar
-        sessionId="session-1"
-        sessionState={sessionState}
-        participants={[]}
-        presenceSynced={false}
-        events={[]}
-        artifacts={[]}
-        onOpenMedia={vi.fn()}
-        capabilities={FULL_CAPABILITIES}
-        canManageBudget
-      />
-    );
+  it.each(["opencode", "claude", "codex"] as const)(
+    "shows reported cost and budget controls for %s in the desktop sidebar",
+    async (harness) => {
+      const user = userEvent.setup();
+      render(
+        <Sidebar
+          sessionId="session-1"
+          sessionState={{ ...sessionState, harness }}
+          participants={[]}
+          presenceSynced={false}
+          events={[]}
+          artifacts={[]}
+          onOpenMedia={vi.fn()}
+          capabilities={FULL_CAPABILITIES}
+          canManageBudget
+        />
+      );
 
-    selectTab("Info");
-    expect(screen.getByRole("button", { name: "Edit limit" })).toBeInTheDocument();
-  });
+      selectTab("Info");
+      expect(screen.getByText("$3.00 of $10.00 limit")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Edit limit" }));
+      expect(screen.getByRole("spinbutton", { name: "USD limit for this session" })).toHaveValue(
+        10
+      );
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "No limit" })).toBeEnabled();
+    }
+  );
 
   it("does not render budget spacing when the budget section is hidden", () => {
     const { container } = render(
@@ -722,27 +732,31 @@ describe("SessionRightSidebar", () => {
     expect(container.querySelector(".mt-4")).not.toBeInTheDocument();
   });
 
-  it("forwards budget management to the mobile overlay", () => {
-    render(
-      <Overlay
-        open
-        isPhone
-        onOpenChange={vi.fn()}
-        sessionId="session-1"
-        sessionState={sessionState}
-        participants={[]}
-        presenceSynced={false}
-        events={[]}
-        artifacts={[]}
-        onOpenMedia={vi.fn()}
-        capabilities={FULL_CAPABILITIES}
-        canManageBudget
-      />
-    );
+  it.each(["opencode", "claude", "codex"] as const)(
+    "shows reported cost and budget controls for %s in the mobile overlay",
+    (harness) => {
+      render(
+        <Overlay
+          open
+          isPhone
+          onOpenChange={vi.fn()}
+          sessionId="session-1"
+          sessionState={{ ...sessionState, harness }}
+          participants={[]}
+          presenceSynced={false}
+          events={[]}
+          artifacts={[]}
+          onOpenMedia={vi.fn()}
+          capabilities={FULL_CAPABILITIES}
+          canManageBudget
+        />
+      );
 
-    selectTab("Info");
-    expect(screen.getByRole("button", { name: "Edit limit" })).toBeInTheDocument();
-  });
+      selectTab("Info");
+      expect(screen.getByText("$3.00 of $10.00 limit")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit limit" })).toBeInTheDocument();
+    }
+  );
 
   it("uses linked, keyboard-accessible tabs with one visible panel", async () => {
     const user = userEvent.setup();

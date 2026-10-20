@@ -255,7 +255,7 @@ describe("push event schemas", () => {
 });
 
 describe("warning event schema", () => {
-  it("accepts runtime boot warnings", () => {
+  it("accepts runtime boot warnings without a messageId", () => {
     const result = sandboxEventSchema.safeParse({
       type: "warning",
       scope: "assembly",
@@ -267,6 +267,19 @@ describe("warning event schema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("preserves messageId on provider warnings", () => {
+    const event = {
+      type: "warning",
+      scope: "provider",
+      message: "Provider usage accounting is unavailable",
+      messageId: "msg-original",
+      sandboxId: "sb-1",
+      timestamp: 1,
+    };
+
+    expect(sandboxEventSchema.parse(event)).toEqual(event);
   });
 
   it("accepts control-plane budget warnings", () => {
