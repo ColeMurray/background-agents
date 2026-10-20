@@ -149,7 +149,7 @@ The external-action authority now holds to the rule that reading a session is no
 | Repository editing and diffs | Ready behind preview acknowledgement | Lazy overlay, durable diff outbox, generation fence                                         |
 | Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, durable parent record, observed attestation               |
 | Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes                     |
-| External publication         | Ready behind its own gate            | Four credential-closed providers, a per-call credential source, and the generic suite       |
+| External publication         | Ready behind its own gate            | Four credential-closed providers, a per-call credential source, the generic suite, a tool   |
 | MCP read                     | Boundary ready, transport open       | Grants, reviewed catalog, gateway, broker authority, keyring, egress, RESTRICT merge        |
 | Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts and confirmed provenance  |
 | Browser                      | Boundary ready, transport open       | Session gateway, host allowlist, activity on the timeline, the tool gated on the session    |
