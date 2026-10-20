@@ -161,17 +161,7 @@ describe("final graceful shutdown lifecycle integration", () => {
           const write = new Promise<never>((_resolve, reject) => {
             rejectAccess = reject;
           });
-          if (kind === "restore") {
-            const persist = vi.mocked(f.storage.updateSandboxAccess).getMockImplementation()!;
-            vi.mocked(f.storage.updateSandboxAccess).mockImplementation(
-              async (artifact, url, secret) => {
-                if (artifact === "ttyd") return write;
-                await persist(artifact, url, secret);
-              }
-            );
-          } else {
-            vi.mocked(f.storage.completeProviderResume).mockReturnValueOnce(write);
-          }
+          vi.mocked(f.storage.commitProviderAccess).mockReturnValueOnce(write);
         } else {
           const broadcast = vi.mocked(f.broadcaster.broadcast).getMockImplementation()!;
           vi.mocked(f.broadcaster.broadcast).mockImplementation((message) => {
@@ -187,13 +177,7 @@ describe("final graceful shutdown lifecycle integration", () => {
         try {
           if (failure === "access") {
             await vi.waitFor(() => {
-              if (kind === "restore")
-                expect(f.storage.updateSandboxAccess).toHaveBeenCalledWith(
-                  "ttyd",
-                  result.ttydUrl,
-                  expect.any(String)
-                );
-              else expect(f.storage.completeProviderResume).toHaveBeenCalledOnce();
+              expect(f.storage.commitProviderAccess).toHaveBeenCalledOnce();
             });
             expect(f.manager.isSpawning()).toBe(true);
             expect(sandbox.status).toBe(status);
@@ -284,7 +268,7 @@ describe("final graceful shutdown lifecycle integration", () => {
       await expect(f.manager.spawnSandbox()).resolves.toBeUndefined();
 
       expect(f.provider.resumeSandbox).toHaveBeenCalledOnce();
-      expect(f.storage.completeProviderResume).not.toHaveBeenCalled();
+      expect(f.storage.commitProviderAccess).not.toHaveBeenCalled();
       expect(recordProviderStartup).not.toHaveBeenCalled();
       expect(holdFailedRecovery).toHaveBeenCalledExactlyOnceWith("secret read failed", {
         sandboxId: f.storage.getSandbox()!.modal_sandbox_id,
