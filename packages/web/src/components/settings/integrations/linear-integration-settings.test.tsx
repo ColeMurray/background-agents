@@ -675,6 +675,7 @@ describe("LinearIntegrationSettings harness", () => {
     await user.click(model);
     await user.click(await screen.findByRole("option", { name: "Use system default" }));
     await user.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    await waitFor(() => expect(vi.mocked(browserApiFetch).mock.calls.length).toBeGreaterThan(0));
     const globalBody = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
     expect(globalBody.settings.defaults).not.toHaveProperty("harness");
     expect(globalBody.settings.defaults).not.toHaveProperty("model");
@@ -688,6 +689,7 @@ describe("LinearIntegrationSettings harness", () => {
     ]);
     fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
     await user.click(within(row).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(vi.mocked(browserApiFetch).mock.calls.length).toBeGreaterThan(1));
     const repoBody = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[1][1]?.body));
     expect(repoBody.settings).toMatchObject({ harness: "opencode" });
     expect(repoBody.settings).not.toHaveProperty("model");

@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
@@ -173,14 +173,18 @@ describe("automation cron submission", () => {
         }}
       />
     );
-    expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-1");
-    expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-1" });
+    await waitFor(() => {
+      expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-1");
+      expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-1" });
+    });
     openRepositoryPicker();
     fireEvent.click(screen.getByRole("button", { name: "Select Multiple" }));
     fireEvent.click(screen.getByRole("checkbox", { name: /Draft environment/ }));
     await chooseTeam(user, "Design");
-    expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-2");
-    expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-2" });
+    await waitFor(() => {
+      expect(scopeMocks.repos).toHaveBeenLastCalledWith(true, "team-2");
+      expect(scopeMocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: "team-2" });
+    });
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ teamId: "team-2", repositories: [], environmentIds: [] })
