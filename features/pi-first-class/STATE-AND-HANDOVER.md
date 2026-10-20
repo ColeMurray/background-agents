@@ -300,8 +300,11 @@ The boundary exists; the transport does not.
 
 **Still open in Slice 9:** the transport. Cloudflare's Agents `Browser` needs a `BROWSER` binding
 and a `LOADER` worker-loader binding in the Worker that hosts the Pi Durable Object, plus the
-`guardrails` allowlist and the session scope. The Worker's bindings and the Terraform that stages
-them are the remaining work, followed by a live canary.
+`guardrails` allowlist and the session scope. The browser tool runs model-written code in a Worker
+Loader sandbox, so that Worker must export the `CodemodeRuntime` class, exactly as the separate Code
+Mode sandbox Worker does. The Worker's bindings, the Terraform that stages them, and a human-facing
+Live View route are the remaining work, followed by a live canary. The MCP elicitation receipt and
+its UI belong to the MCP transport and stay open with it.
 
 ## What is still open, in order
 
