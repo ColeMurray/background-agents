@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "sandbox:images": "python3 packages/sandbox-images/cli.py",
+    "sandbox:cleanup-base-snapshots": "npm run --silent build:base-snapshot-cleanup && node dist/cleanup-base-snapshots.mjs",
     "lint": "eslint .",
     "lint:complexity": "node scripts/lint-complexity.mjs",
     "lint:sql-portability": "node scripts/lint-sql-portability.mjs",
@@ -23,6 +24,7 @@
     "test:user-merge-cli": "node --experimental-transform-types --test scripts/merge-split-users.test.ts",
     "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",
     "test:terraform-workflow-contract": "node --test scripts/terraform-workflow-contract.test.mjs scripts/terraform-plan-comment.test.mjs",
+    "test:base-snapshot-retention": "npm run --silent build:base-snapshot-cleanup && esbuild scripts/cleanup-base-snapshots.test.mjs --bundle --platform=node --format=esm --packages=external --outfile=dist/cleanup-base-snapshots.test.mjs && node --test dist/cleanup-base-snapshots.test.mjs",
     "test:node-version-workflow-contract": "node --test scripts/node-version-workflow-contract.test.mjs",
     "test:readme-translations": "node --test scripts/readme-translations.test.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
@@ -32,11 +34,14 @@
     "knip": "knip",
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "rbac:bootstrap-owner": "node --experimental-transform-types scripts/bootstrap-workspace-owner.ts",
-    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
+    "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky",
+    "build:base-snapshot-cleanup": "npm run --silent build -w @open-inspect/shared && tsc --noEmit -p scripts/tsconfig.base-snapshot-cleanup.json && esbuild scripts/cleanup-base-snapshots.mjs --bundle --platform=node --format=esm --packages=external --outfile=dist/cleanup-base-snapshots.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
+    "@opencomputer/sdk": "^0.9.1",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-react": "^7.37.4",

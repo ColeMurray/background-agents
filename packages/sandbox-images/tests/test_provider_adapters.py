@@ -177,6 +177,72 @@ def test_daytona_image_uses_packed_bundle_plan(monkeypatch, tmp_path):
     image.env.assert_called_once_with({"PACKED_PLAN": "true", "SANDBOX_VERSION": "test-runtime"})
 
 
+def test_daytona_hash_builds_leave_previous_base_snapshots_for_explicit_retention(
+    monkeypatch, build_mocks
+):
+    """Exercise the real builder: source changes leave provider artifacts behind."""
+    snapshots = {}
+    client = Mock()
+
+    def get_snapshot(name):
+        if name not in snapshots:
+            raise FileNotFoundError(name)
+        return snapshots[name]
+
+    client.snapshot.get.side_effect = get_snapshot
+    client.create.return_value.process.exec.return_value = SimpleNamespace(exit_code=0)
+    monkeypatch.setitem(
+        sys.modules,
+        "daytona",
+        SimpleNamespace(
+            Daytona=Mock(return_value=client),
+            DaytonaConfig=Mock(),
+            CreateSandboxFromSnapshotParams=Mock(),
+            DaytonaNotFoundError=FileNotFoundError,
+        ),
+    )
+    package = ModuleType("retention_daytona")
+    package.__path__ = []
+    monkeypatch.setitem(sys.modules, "retention_daytona", package)
+    monkeypatch.setitem(
+        sys.modules,
+        "retention_daytona.config",
+        SimpleNamespace(
+            load_config=lambda: SimpleNamespace(
+                repo_root=ROOT,
+                base_snapshot="openinspect-daytona",
+                api_key="test",
+                api_url="test",
+                target="test",
+                base_snapshot_memory_gib=2,
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "retention_daytona.toolchain",
+        SimpleNamespace(
+            create_base_snapshot=lambda _client, _bundle, name, _memory: snapshots.update(
+                {name: object()}
+            )
+        ),
+    )
+    main = runpy.run_path(
+        str(ROOT / "packages/daytona-infra/src/bootstrap.py"),
+        run_name="retention_daytona.bootstrap",
+    )["main"]
+    for source_hash in range(8):
+        bundle.pack_bundle.return_value.directory.mkdir(exist_ok=True)
+        monkeypatch.setenv(
+            "OPENINSPECT_IMAGE_CANDIDATE", f"openinspect-daytona-m2-{source_hash:016x}"
+        )
+        main()
+
+    assert len(snapshots) == 8
+    assert build_mocks.call_count == 8
+    client.snapshot.delete.assert_not_called()
+
+
 def test_daytona_snapshot_uses_configured_memory(monkeypatch, tmp_path):
     image = Mock()
     for method in ("add_local_dir", "run_commands", "env", "workdir"):
