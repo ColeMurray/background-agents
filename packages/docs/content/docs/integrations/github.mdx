@@ -171,7 +171,7 @@ A review or PR comment is queued only when all of the following hold:
 - The feedback kind is enabled: a submitted review (with **Submitted reviews**) or a plain PR comment (with **Plain human PR comments**).
 - The author is allowed. A human author needs write permission on the pull request. A bot author is accepted only for reviews: the app's own reviews when OpenInspect reviews (labelled **Open Inspect reviews** in the form) are on, and third-party bots listed exactly in **Exact third-party review bots**. Bot-authored top-level comments are never eligible.
 - A human PR comment that `@mentions` the bot is not an Autofix input; it goes through the fresh-session mention flow instead.
-- A review is in the Commented or Changes requested state and has content. Approvals and empty feedback are skipped.
+- A review is in the Commented or Changes requested state and has content, or it is an approval that starts at least one new inline comment thread. Approvals with only a summary or only thread replies are skipped, as is empty feedback.
 
 ### Settings
 
@@ -228,7 +228,7 @@ Feedback that is not queued is recorded with a reason. The ones you are most lik
 | `own_review_replies`                               | An OpenInspect review with no body whose comments are all thread replies |
 | `unsupported_author_type`                          | The author is neither a user nor a bot                                   |
 | `explicit_mention`                                 | A human comment that mentions the bot (handled by the mention flow)      |
-| `review_state_not_actionable`                      | An approval or another non-actionable review state                       |
+| `review_state_not_actionable`                      | An approval with no new inline thread, or a pending or dismissed review  |
 | `empty_feedback`                                   | Nothing to act on                                                        |
 | `attempt_limit`                                    | The PR reached its 24-hour attempt cap                                   |
 | `session_closed`, `budget_exhausted`, `queue_full` | The owning session cannot accept more prompts                            |

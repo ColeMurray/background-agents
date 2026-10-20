@@ -2,6 +2,13 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 19, 2026
+
+**Autofix acts on approvals with inline comments.** An approved pull request review that starts at
+least one inline comment thread now resumes the PR's owning session, so suggestions attached to an
+approval get addressed. Approvals with only a summary or only thread replies are still skipped. If
+you allowlist third-party review bots, expect more Autofix runs.
+
 ## October 8, 2026
 
 **Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
