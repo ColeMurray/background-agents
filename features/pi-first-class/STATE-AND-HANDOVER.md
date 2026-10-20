@@ -98,6 +98,8 @@ its own authorization.
 | `ae507189` | A blocked Pi task says why it cannot run                                                           | 5,388 unit                                                      |
 | `8c53d6b8` | The browser transport: a bounded, untrusted, session-authorized page read                          | 5,405 unit, 113 Terraform                                       |
 | `d368bd3f` | The browser binding in Terraform, and a read-only browser mode that means something                | 5,405 unit, 113 Terraform, 13 workflow                          |
+| `e0553b99` | The browser binding read from the worker's own bindings                                            | 5,405 unit                                                      |
+| `c47b8baf` | One browser activity per page, not two                                                             | 5,406 unit, 2,474 workerd, 2,578 web, 1,314 shared              |
 
 ## Slice 7A — what landed
 
