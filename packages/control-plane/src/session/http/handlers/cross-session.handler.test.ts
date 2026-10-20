@@ -156,6 +156,62 @@ function outboundRequest(body: unknown = request, operationId = "message-1") {
 }
 
 describe("CrossSessionHandler", () => {
+  it("answers the early gate when this turn may reach for another session", async () => {
+    const h = harness();
+
+    const response = await h.handler.authorize(outboundRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ allowed: true });
+    // The early gate never delivers anything.
+    expect(h.deliver).not.toHaveBeenCalled();
+  });
+
+  it("refuses the early gate when the session capability is off", async () => {
+    const h = harness({ sessionCapability: "off" });
+
+    const response = await h.handler.authorize(outboundRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      allowed: false,
+      code: "cross_session_messaging_disabled",
+    });
+  });
+
+  it("refuses the early gate when the live deployment mode denies it", async () => {
+    const h = harness({ liveMode: "off" });
+
+    const response = await h.handler.authorize(outboundRequest());
+
+    expect(response.status).toBe(403);
+  });
+
+  it("refuses the early gate for a turn that does not belong to this session", async () => {
+    const h = harness();
+    h.bridge.operationBelongsToSession = () => false;
+
+    const response = await h.handler.authorize(outboundRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      allowed: false,
+      code: "cross_session_turn_not_in_session",
+    });
+  });
+
+  it("refuses the early gate for a turn with no workspace actor", async () => {
+    const h = harness({ actorId: null });
+
+    const response = await h.handler.authorize(outboundRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      allowed: false,
+      code: "cross_session_actor_missing",
+    });
+  });
+
   it("delivers a message to a target the actor may collaborate in", async () => {
     const h = harness();
 
