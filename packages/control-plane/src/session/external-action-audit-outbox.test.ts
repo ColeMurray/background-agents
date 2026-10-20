@@ -51,10 +51,11 @@ it("retries a durable human-decision audit projection until D1 acknowledges it",
   expect(project).toHaveBeenCalledTimes(2);
   expect(project.mock.calls[0][0]).toMatchObject({
     requestId: "request-1",
-    actorUserId: "user-1",
+    actor: { kind: "user", userId: "user-1" },
     action: "external_action.approved",
     actionId: "action-1",
     beforeState: "awaiting_approval",
     afterState: "approved",
+    occurredAt: 1_000,
   });
 });

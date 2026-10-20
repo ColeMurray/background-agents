@@ -35,7 +35,7 @@ export function useSessionExternalActions(sessionId: string, enabled: boolean) {
   );
   const mutate = query.mutate;
   const decide = useCallback(
-    async (actionId: string, decision: "approve" | "deny", reason?: string) => {
+    async (actionId: string, decision: "approve" | "deny" | "cancel", reason?: string) => {
       const response = await browserApiFetch(
         `/api/sessions/${sessionId}/external-actions/${encodeURIComponent(actionId)}/decision`,
         {

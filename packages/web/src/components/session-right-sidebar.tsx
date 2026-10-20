@@ -46,6 +46,7 @@ import type { SessionDiffRefresh } from "@/hooks/use-session-diffs";
 import { SessionVisibilityControl } from "./session-visibility-control";
 import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
+import { ExternalActionsSection } from "./sidebar/external-actions-section";
 import { PiAgentsSection } from "./sidebar/pi-agents-section";
 import { ExecutionsSection } from "./sidebar/executions-section";
 
@@ -155,6 +156,12 @@ export function SessionRightSidebarContent({
     sessionState?.harness === "pi" &&
     deploymentCapabilities.data?.pi.enabled === true &&
     deploymentCapabilities.data.pi.bindingReachable === true;
+  // External effects are a Pi capability. The surface only appears when the
+  // deployment still exposes it, so a disabled capability never looks like an
+  // empty approval queue.
+  const externalActionsAvailable =
+    sessionState?.harness === "pi" &&
+    deploymentCapabilities.data?.pi.modes.externalActions !== "off";
   const hasRepository = Boolean(
     sessionState?.repositories?.length ||
     (sessionState?.repoOwner && sessionState.repoName) ||
@@ -474,6 +481,7 @@ export function SessionRightSidebarContent({
         {piControlsAvailable && (
           <PiAgentsSection sessionId={sessionId} capabilities={capabilities} />
         )}
+        {externalActionsAvailable && <ExternalActionsSection sessionId={sessionId} enabled />}
         {sessionState?.harness === "pi" && deploymentCapabilities.data && !piControlsAvailable && (
           <p className="text-xs text-muted-foreground">Pi agent controls are unavailable.</p>
         )}

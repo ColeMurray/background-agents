@@ -318,6 +318,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const nextExternalActionDeadline = () => {
     const deadlines = [
       externalActionGateway.nextReconciliationAt(),
+      externalActionGateway.nextExpiryAt(),
       externalActionAuditOutbox.nextDeadline(),
     ].filter((deadline): deadline is number => deadline !== null);
     return deadlines.length > 0 ? Math.min(...deadlines) : null;
@@ -847,9 +848,16 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     externalActions: {
       recoverDue: () =>
-        externalActionGateway
-          .reconcileDue((action) =>
-            externalActionDefinitions.executorFor(action.provider, action.action)
+        Promise.resolve()
+          .then(() => {
+            // An approval nobody acted on must not stay actionable after its
+            // deadline, even if the session never wakes up for anything else.
+            externalActionGateway.expireDue(getPublicSessionId());
+          })
+          .then(() =>
+            externalActionGateway.reconcileDue((action) =>
+              externalActionDefinitions.executorFor(action.provider, action.action)
+            )
           )
           .then(() => externalActionAuditOutbox.flush(projectExternalActionAudit)),
       nextDeadline: nextExternalActionDeadline,
@@ -966,6 +974,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       // deployment deny cannot strand already-approved work or audit recovery.
       enabled: true,
       gateway: externalActionGateway,
+      // The live deployment mode is read per request, so an emergency can
+      // deny new external effects without uninstalling the gateway.
+      liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.externalActions,
       // Provider executors are deliberately absent from the foundation. A
       // provider must pass the generic fault-injection suite before registration.
       definitions: externalActionDefinitions,

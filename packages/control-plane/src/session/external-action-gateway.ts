@@ -12,6 +12,16 @@ import type { SqlStorage, TransactionSync } from "./sql-storage";
 const EXECUTION_LEASE_MS = 30_000;
 const RECONCILIATION_POLL_MS = 5_000;
 const MAX_RECONCILIATION_BACKOFF_MS = 60_000;
+/** Audit actor for a decision the system made on its own. */
+const EXTERNAL_ACTION_EXPIRY_SERVICE = "external-action-expiry";
+/**
+ * How long a pending approval stays actionable.
+ *
+ * A publication request nobody acted on must not remain publishable a day
+ * later, after the conversation has moved on. The window is bounded by the
+ * gateway so every provider shares the same expiry rule.
+ */
+export const DEFAULT_EXTERNAL_ACTION_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface PendingRow {
   id: string;
@@ -27,6 +37,7 @@ interface PendingRow {
   approved_at: number | null;
   created_at: number;
   updated_at: number;
+  expires_at: number | null;
 }
 
 interface PendingCursor {
@@ -89,6 +100,14 @@ interface ApprovalInput {
   requestId?: string;
 }
 
+interface PrepareOptions {
+  /**
+   * Absolute time at which a pending approval stops being actionable.
+   * Null means the approval does not expire on its own.
+   */
+  expiresAt?: number | null;
+}
+
 interface GatewayOptions {
   now?: () => number;
   generateId?: () => string;
@@ -124,6 +143,7 @@ interface ExternalActionRow {
   revision: number;
   created_at: number;
   updated_at: number;
+  expires_at: number | null;
 }
 
 interface HistoryRow {
@@ -156,6 +176,7 @@ interface Transition {
   error?: string | null;
   leaseToken?: string | null;
   leaseExpiresAt?: number | null;
+  continuationConsumedAt?: number | null;
   reconciliationAttempts?: number;
   reconcileAfter?: number | null;
 }
@@ -180,7 +201,8 @@ export class ExternalActionGateway {
     sessionId: string,
     operationId: string,
     request: ExternalActionPrepareRequest,
-    approval?: ApprovalInput
+    approval?: ApprovalInput,
+    options: PrepareOptions = {}
   ): Promise<ExternalAction> {
     const fingerprint = await actionFingerprint(sessionId, operationId, request);
     const effectFingerprint = await externalEffectFingerprint(request);
@@ -201,23 +223,29 @@ export class ExternalActionGateway {
         }
         return toAction(raced.action);
       }
-      const reusable = this.reusableAction(effectFingerprint);
+      const reusable = this.reusableAction(sessionId, effectFingerprint);
       if (reusable) {
-        this.sql.exec(
-          `UPDATE external_actions SET continuation_consumed_at = ?, updated_at = ?
-           WHERE id = ? AND state = 'approved' AND continuation_consumed_at IS NULL`,
-          now,
-          now,
-          reusable.id
-        );
+        // The one-shot continuation is only consumed by an approval that is
+        // about to run. A pending, running, or indeterminate effect is joined
+        // as-is so one effect never becomes two provider writes.
+        if (reusable.state === "approved" && reusable.continuation_consumed_at === null) {
+          this.sql.exec(
+            `UPDATE external_actions SET continuation_consumed_at = ?, updated_at = ?
+             WHERE id = ? AND state = 'approved' AND continuation_consumed_at IS NULL`,
+            now,
+            now,
+            reusable.id
+          );
+        }
         this.insertBinding(reusable.id, operationId, request, fingerprint, now);
         return this.requireAction(reusable.id);
       }
       this.sql.exec(
         `INSERT INTO external_actions (
           id, session_id, operation_id, tool_call_id, idempotency_key, provider, action, summary,
-          target_json, arguments_json, fingerprint, effect_fingerprint, state, revision, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_approval', 1, ?, ?)`,
+          target_json, arguments_json, fingerprint, effect_fingerprint, state, revision, created_at, updated_at,
+          expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_approval', 1, ?, ?, ?)`,
         id,
         sessionId,
         operationId,
@@ -231,7 +259,8 @@ export class ExternalActionGateway {
         fingerprint,
         effectFingerprint,
         now,
-        now
+        now,
+        options.expiresAt ?? null
       );
       this.insertBinding(id, operationId, request, fingerprint, now);
       this.insertHistory(id, 1, {
@@ -267,11 +296,107 @@ export class ExternalActionGateway {
       this.enqueueAudit(
         after,
         requestId ?? `external-action:${id}:denied`,
-        actorId,
+        { kind: "user", userId: actorId },
         "external_action.denied",
         current.state
       );
       return after;
+    });
+  }
+
+  /**
+   * Cancel an effect that has not produced its provider effect yet.
+   *
+   * Cancellation is distinct from denial: it is the safe response to an
+   * effect that is no longer wanted, including one that was already
+   * approved but has not been dispatched. An effect that is already
+   * executing or indeterminate cannot be cancelled, because the provider may
+   * already have applied it; that case must be reconciled instead.
+   */
+  cancel(id: string, actorId: string, reason: string, requestId?: string): ExternalAction {
+    return this.transaction(() => {
+      const current = this.requireAction(id);
+      if (current.state === "cancelled") return current;
+      if (current.state !== "awaiting_approval" && current.state !== "approved") {
+        throw new Error(`External action cannot be cancelled from ${current.state}`);
+      }
+      const after = this.transition(id, current.revision, {
+        state: "cancelled",
+        event: "cancelled",
+        actorKind: "user",
+        actorId,
+        reason,
+        error: reason,
+      });
+      this.enqueueAudit(
+        after,
+        requestId ?? `external-action:${id}:cancelled`,
+        { kind: "user", userId: actorId },
+        "external_action.cancelled",
+        current.state
+      );
+      return after;
+    });
+  }
+
+  /**
+   * The next time a pending approval expires.
+   *
+   * The alarm schedules against this so an approval nobody acted on is
+   * cancelled on time instead of waiting for an unrelated wake-up.
+   */
+  nextExpiryAt(): number | null {
+    const row = this.sql
+      .exec(
+        `SELECT MIN(expires_at) AS deadline FROM external_actions
+         WHERE state IN ('awaiting_approval', 'approved') AND expires_at IS NOT NULL`
+      )
+      .toArray()[0] as { deadline: number | null } | undefined;
+    return row?.deadline ?? null;
+  }
+
+  /**
+   * Expire pending approvals whose deadline has passed.
+   *
+   * An approval that nobody acted on must not stay actionable forever: a
+   * later approver could otherwise publish an effect the session has moved
+   * on from. Expiry is a cancellation, so it lands in the same terminal state
+   * and produces the same audit trail.
+   */
+  expireDue(sessionId: string): ExternalAction[] {
+    const now = this.now();
+    return this.transaction(() => {
+      const rows = this.sql
+        .exec(
+          `SELECT id FROM external_actions
+           WHERE session_id = ?
+             AND state IN ('awaiting_approval', 'approved')
+             AND expires_at IS NOT NULL AND expires_at <= ?
+           ORDER BY expires_at, id`,
+          sessionId,
+          now
+        )
+        .toArray() as unknown as Array<{ id: string }>;
+      const expired: ExternalAction[] = [];
+      for (const row of rows) {
+        const current = this.requireAction(row.id);
+        const after = this.transition(row.id, current.revision, {
+          state: "cancelled",
+          event: "cancelled",
+          actorKind: "system",
+          reason: "The approval request expired before it was decided",
+          error: "The approval request expired before it was decided",
+        });
+        this.enqueueAudit(
+          after,
+          `external-action:${row.id}:expired`,
+          { kind: "service", service: EXTERNAL_ACTION_EXPIRY_SERVICE },
+          "external_action.cancelled",
+          current.state
+        );
+        expired.push(after);
+      }
+      return expired;
     });
   }
 
@@ -315,7 +440,7 @@ export class ExternalActionGateway {
       .exec(
         `SELECT id, provider, action, summary, state, target_json, arguments_json,
                 approval_source, approval_actor_id, approval_grant_id, approved_at,
-                created_at, updated_at
+                created_at, updated_at, expires_at
          FROM external_actions
          WHERE session_id = ?
            AND state IN ('awaiting_approval', 'approved', 'executing', 'indeterminate')
@@ -351,6 +476,7 @@ export class ExternalActionGateway {
               },
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        expiresAt: row.expires_at ?? null,
       })),
       nextCursor:
         rows.length > limit && last
@@ -492,6 +618,10 @@ export class ExternalActionGateway {
         });
       }
       if (result.kind === "not_admitted") {
+        // The provider definitively refused the effect, so nothing happened.
+        // The effect returns to `approved` and its one-shot continuation is
+        // re-armed: the approval that authorized it is still valid, and a
+        // later identical attempt must be able to use it again.
         return this.transition(id, latest.revision, {
           state: "approved",
           event: "reconciliation_not_admitted",
@@ -499,6 +629,7 @@ export class ExternalActionGateway {
           error: null,
           leaseToken: null,
           leaseExpiresAt: null,
+          continuationConsumedAt: null,
           reconciliationAttempts: 0,
           reconcileAfter: null,
         });
@@ -579,6 +710,18 @@ export class ExternalActionGateway {
     if (current.state !== "awaiting_approval") {
       throw new Error(`External action cannot be approved from ${current.state}`);
     }
+    // Provenance must be unambiguous before anything is written. A human
+    // approval that carries a grant, or an automation approval that carries
+    // none, would make the ledger unable to say who authorized the effect.
+    if (approval.source === "human" && approval.grantId !== null) {
+      throw new Error("A human external action approval cannot carry an automation grant");
+    }
+    if (approval.source === "automation_grant" && !approval.grantId) {
+      throw new Error("An automation external action approval must name its grant");
+    }
+    if (current.expiresAt !== null && current.expiresAt <= this.now()) {
+      throw new Error("External action approval request has expired");
+    }
     const now = this.now();
     this.sql.exec(
       `UPDATE external_actions SET approval_source = ?, approval_actor_id = ?, approval_grant_id = ?,
@@ -600,7 +743,7 @@ export class ExternalActionGateway {
       this.enqueueAudit(
         after,
         approval.requestId ?? `external-action:${id}:approved`,
-        approval.actorId,
+        { kind: "user", userId: approval.actorId },
         "external_action.approved",
         current.state
       );
@@ -672,10 +815,14 @@ export class ExternalActionGateway {
         : transition.reconciliationAttempts;
     const reconcileAfter =
       transition.reconcileAfter === undefined ? row.reconcile_after : transition.reconcileAfter;
+    const continuationConsumedAt =
+      transition.continuationConsumedAt === undefined
+        ? row.continuation_consumed_at
+        : transition.continuationConsumedAt;
     const result = this.sql.exec(
       `UPDATE external_actions SET state = ?, provider_reference = ?, public_result_json = ?, error = ?,
        lease_token = ?, lease_expires_at = ?, reconciliation_attempts = ?, reconcile_after = ?,
-       revision = ?, updated_at = ?
+       continuation_consumed_at = ?, revision = ?, updated_at = ?
        WHERE id = ? AND revision = ?`,
       transition.state,
       providerReference,
@@ -685,6 +832,7 @@ export class ExternalActionGateway {
       leaseExpiresAt,
       reconciliationAttempts,
       reconcileAfter,
+      continuationConsumedAt,
       nextRevision,
       now,
       id,
@@ -730,16 +878,42 @@ export class ExternalActionGateway {
     return binding ? { binding, action: this.requireRow(binding.action_id) } : null;
   }
 
-  private reusableAction(effectFingerprint: string): ExternalActionRow | null {
+  /**
+   * Find an existing effect this request may join.
+   *
+   * An identical effect that is still waiting for approval, already approved,
+   * running, or indeterminate is the same publication, so it must not become
+   * a second approval card or a second provider write. Only a terminal
+   * effect, or an approval whose one-shot continuation was already consumed,
+   * starts a new ledger entry.
+   *
+   * The search is scoped to one session: two sessions never share an effect,
+   * even when they describe the same publication.
+   */
+  private reusableAction(sessionId: string, effectFingerprint: string): ExternalActionRow | null {
     return (this.sql
       .exec(
         `SELECT * FROM external_actions
-         WHERE effect_fingerprint = ?
-           AND state = 'approved' AND continuation_consumed_at IS NULL
+         WHERE session_id = ?
+           AND effect_fingerprint = ?
+           AND state IN ('awaiting_approval', 'executing', 'indeterminate')
          ORDER BY created_at DESC, id DESC LIMIT 1`,
+        sessionId,
         effectFingerprint
       )
-      .toArray()[0] ?? null) as ExternalActionRow | null;
+      .toArray()[0] ??
+      this.sql
+        .exec(
+          `SELECT * FROM external_actions
+           WHERE session_id = ?
+             AND effect_fingerprint = ?
+             AND state = 'approved' AND continuation_consumed_at IS NULL
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+          sessionId,
+          effectFingerprint
+        )
+        .toArray()[0] ??
+      null) as ExternalActionRow | null;
   }
 
   private insertBinding(
@@ -765,27 +939,32 @@ export class ExternalActionGateway {
   private enqueueAudit(
     action: ExternalAction,
     requestId: string,
-    actorUserId: string,
-    auditAction: "external_action.approved" | "external_action.denied",
+    actor: { kind: "user"; userId: string } | { kind: "service"; service: string },
+    auditAction:
+      "external_action.approved" | "external_action.denied" | "external_action.cancelled",
     beforeState: ExternalAction["state"]
   ): void {
     this.sql.exec(
       `INSERT INTO external_action_audit_outbox
-       (id, action_id, revision, request_id, actor_user_id, action, session_id,
-        before_state, after_state, next_attempt_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (id, action_id, revision, request_id, actor_user_id, actor_kind, action, session_id,
+        before_state, after_state, next_attempt_at, created_at, occurred_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`,
       `external-action-audit:${action.id}:${action.revision}:${auditAction}`,
       action.id,
       action.revision,
       requestId,
-      actorUserId,
+      actor.kind === "user" ? actor.userId : actor.service,
+      actor.kind,
       auditAction,
       action.sessionId,
       beforeState,
       action.state,
       this.now(),
-      this.now()
+      this.now(),
+      // The audit event records when the decision happened, not when the
+      // projection later managed to flush it.
+      action.updatedAt
     );
   }
 
@@ -845,6 +1024,7 @@ function toAction(row: ExternalActionRow): ExternalAction {
     revision: row.revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    expiresAt: row.expires_at ?? null,
   };
 }
 

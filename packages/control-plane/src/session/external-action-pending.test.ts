@@ -37,6 +37,7 @@ describe("ExternalActionGateway pending list", () => {
       toolCallId: "call-2",
       idempotencyKey: "key-2",
       summary: "Second comment",
+      arguments: { body: "goodbye" },
     });
 
     const page = gateway.listPending("session-1");
@@ -65,7 +66,6 @@ describe("ExternalActionGateway pending list", () => {
     expect(gateway.listPending("session-1").actions).toHaveLength(1);
     expect(gateway.listPending("session-3").actions).toHaveLength(0);
   });
-
   it("drops a decided effect from the pending list", async () => {
     const action = await gateway.prepare("session-1", "operation-1", request);
     gateway.deny(action.id, "user-1", "not now");
@@ -79,6 +79,7 @@ describe("ExternalActionGateway pending list", () => {
         ...request,
         toolCallId: `call-${index}`,
         idempotencyKey: `key-${index}`,
+        arguments: { body: `body-${index}` },
       });
       now += 1;
     }

@@ -15,15 +15,78 @@ import type { PiCredentialService } from "../../pi-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
 import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
+import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
 import type { ExternalActionGateway } from "../../external-action-gateway";
+import { DEFAULT_EXTERNAL_ACTION_APPROVAL_TTL_MS } from "../../external-action-gateway";
 import { z } from "zod";
 import { piRuntimeControlSchema } from "../../../pi/runtime-contract";
 import type { ExternalActionDefinitionRegistry } from "../../external-action-definitions";
 
 const externalActionIdSchema = z.strictObject({ actionId: z.string().min(1) });
+
+/**
+ * A bounded public error for an external action route.
+ *
+ * The internal reason stays internal: an approver learns what happened and
+ * whether to retry, never an internal provider string, a repository name, or
+ * a credential-shaped fragment.
+ */
+function externalActionFailure(error: unknown): Response {
+  const reason = error instanceof Error ? error.message : String(error);
+  if (reason.includes("not found")) {
+    return externalActionError(404, "external_action_not_found", "External action not found");
+  }
+  if (reason.includes("expired")) {
+    return externalActionError(
+      409,
+      "external_action_expired",
+      "The approval request for this external action has expired"
+    );
+  }
+  if (reason.includes("cannot be approved") || reason.includes("cannot be denied")) {
+    return externalActionError(
+      409,
+      "external_action_not_decidable",
+      "This external action can no longer be decided in that way"
+    );
+  }
+  if (reason.includes("cannot be cancelled")) {
+    return externalActionError(
+      409,
+      "external_action_not_cancellable",
+      "This external action can no longer be cancelled"
+    );
+  }
+  if (reason.includes("grant")) {
+    return externalActionError(
+      409,
+      "external_action_invalid_approval",
+      "The approval for this external action is not authorized"
+    );
+  }
+  if (reason.includes("idempotency key")) {
+    return externalActionError(
+      409,
+      "external_action_conflict",
+      "This external action conflicts with an earlier request"
+    );
+  }
+  return externalActionError(
+    409,
+    "external_action_failed",
+    "The external action could not be completed"
+  );
+}
+
+function externalActionError(status: number, code: string, message: string): Response {
+  return Response.json(
+    { error: message, code },
+    { status, headers: { "Cache-Control": "no-store" } }
+  );
+}
 const externalActionDecisionSchema = z.strictObject({
   actionId: z.string().min(1),
-  decision: z.enum(["approve", "deny"]),
+  decision: z.enum(["approve", "deny", "cancel"]),
   reason: z.string().min(1).max(1_000).optional(),
 });
 const PI_AGENT_CONTROL_ACTIONS = new Set([
@@ -45,11 +108,22 @@ interface ExternalActionBridge {
     | "execute"
     | "approve"
     | "deny"
+    | "cancel"
+    | "expireDue"
     | "isBoundToOperation"
     | "listPending"
     | "nextReconciliationAt"
   >;
   definitions: ExternalActionDefinitionRegistry;
+  /**
+   * Live deployment mode for new external effects.
+   *
+   * The mode is read on every request, so an emergency can deny new effects
+   * without uninstalling the gateway. Status, audit recovery,
+   * reconciliation, denial, and cancellation stay available so an emergency
+   * never strands already-admitted work.
+   */
+  liveMode?(): FeatureCapabilityMode;
   resolveAutomationApproval?(
     provider: string,
     action: string
@@ -293,6 +367,19 @@ export class PiBridgeHandler {
       if (!definition) {
         return Response.json({ error: "External action provider is unavailable" }, { status: 503 });
       }
+      // A new external effect is only admitted while the live deployment
+      // mode allows mutations. The gateway itself stays reachable so an
+      // emergency cannot strand already-admitted work or audit recovery.
+      const liveMode = this.options.externalActions!.liveMode?.();
+      if (liveMode !== undefined && liveMode !== "enabled") {
+        return Response.json(
+          {
+            error: "External actions are disabled for new effects by deployment policy",
+            code: "external_actions_disabled",
+          },
+          { status: 403 }
+        );
+      }
       const providerRequest = definition.requestSchema.safeParse({
         target: parsed.data.target,
         arguments: parsed.data.arguments,
@@ -304,26 +391,27 @@ export class PiBridgeHandler {
         parsed.data.provider,
         parsed.data.action
       );
+      const expiresAt = Date.now() + DEFAULT_EXTERNAL_ACTION_APPROVAL_TTL_MS;
       const action = approval
         ? await this.options.externalActions!.gateway.prepare(
             this.options.getSessionId(),
             operationId,
             { ...parsed.data, ...providerRequest.data },
-            { ...approval, grantId: approval.grantId }
+            { ...approval, grantId: approval.grantId },
+            { expiresAt }
           )
         : await this.options.externalActions!.gateway.prepare(
             this.options.getSessionId(),
             operationId,
-            { ...parsed.data, ...providerRequest.data }
+            { ...parsed.data, ...providerRequest.data },
+            undefined,
+            { expiresAt }
           );
       return Response.json(this.options.externalActions!.gateway.status(action.id), {
         headers: { "Cache-Control": "no-store" },
       });
     } catch (error) {
-      return Response.json(
-        { error: error instanceof Error ? error.message : "External action preparation failed" },
-        { status: 409 }
-      );
+      return externalActionFailure(error);
     }
   }
 
@@ -459,12 +547,32 @@ export class PiBridgeHandler {
         return Response.json({ error: "External action not found" }, { status: 404 });
       }
       if (parsed.data.decision === "approve") {
+        // Approving is a new authorization to write outside the session, so
+        // it follows the same live gate as preparation. Denying and
+        // cancelling stay available so an emergency can always stop work.
+        const liveMode = this.options.externalActions.liveMode?.();
+        if (liveMode !== undefined && liveMode !== "enabled") {
+          return Response.json(
+            {
+              error: "External action approvals are disabled by deployment policy",
+              code: "external_actions_disabled",
+            },
+            { status: 403 }
+          );
+        }
         this.options.externalActions.gateway.approve(parsed.data.actionId, {
           source: "human",
           actorId,
           grantId: null,
           requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
         });
+      } else if (parsed.data.decision === "cancel") {
+        this.options.externalActions.gateway.cancel(
+          parsed.data.actionId,
+          actorId,
+          parsed.data.reason ?? "Cancelled by approver",
+          request.headers.get("X-Request-ID") ?? crypto.randomUUID()
+        );
       } else {
         this.options.externalActions.gateway.deny(
           parsed.data.actionId,
@@ -483,10 +591,7 @@ export class PiBridgeHandler {
         headers: { "Cache-Control": "no-store" },
       });
     } catch (error) {
-      return Response.json(
-        { error: error instanceof Error ? error.message : "External action decision failed" },
-        { status: 409 }
-      );
+      return externalActionFailure(error);
     }
   }
 

@@ -21,7 +21,27 @@ export const externalActionApprovalSchema = z
     grantId: z.string().min(1).nullable(),
     approvedAt: z.number().int().nonnegative(),
   })
-  .strict();
+  .strict()
+  .superRefine((approval, context) => {
+    // Provenance must be unambiguous. A human approval never carries a grant,
+    // and an automation approval always names the grant that authorized it.
+    // A mismatched pair would let a grant outlive its revocation or let a
+    // human decision look like an automation one in the audit trail.
+    if (approval.source === "human" && approval.grantId !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["grantId"],
+        message: "a human approval cannot carry an automation grant",
+      });
+    }
+    if (approval.source === "automation_grant" && approval.grantId === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["grantId"],
+        message: "an automation approval must name the grant that authorized it",
+      });
+    }
+  });
 
 /**
  * Credential-free action description crossing from PiSessionDO to SessionDO.
@@ -108,6 +128,8 @@ export const externalActionSchema = z
     revision: z.number().int().positive(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
+    /** When the pending approval expires. Null means the approval does not expire. */
+    expiresAt: z.number().int().nonnegative().nullable(),
   })
   .strict();
 
@@ -155,6 +177,7 @@ export const externalActionPendingSchema = z
     approval: externalActionApprovalSchema.nullable(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().nonnegative().nullable(),
   })
   .strict();
 

@@ -28,13 +28,17 @@ const action = {
   revision: 1,
   createdAt: 1,
   updatedAt: 1,
+  expiresAt: null,
 };
 
 function status(state: typeof action.state | "approved" | "succeeded" | "indeterminate") {
   return { action: { ...action, state }, history: [] } as ExternalActionStatusResponse;
 }
 
-function hookHarness(initial: ExternalActionStatusResponse) {
+function hookHarness(
+  initial: ExternalActionStatusResponse,
+  admission?: () => Promise<{ allowed: boolean; reason?: string } | undefined>
+) {
   const memos = new Map<string, unknown>();
   let current = initial;
   const client = {
@@ -51,6 +55,7 @@ function hookHarness(initial: ExternalActionStatusResponse) {
   ]);
   const delegate = createExternalActionPolicyDelegate({
     client,
+    authorizeNewEffect: admission,
     externalActions: {
       publish_comment: (call) => ({
         toolCallId: call.id,
@@ -144,6 +149,39 @@ describe("external action policy extension", () => {
     await expect(
       h.handlers.beforeTool(call as never, h.api as never, {} as never)
     ).resolves.toBeUndefined();
+    expect(h.client.prepare).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a new effect when the live deployment policy denies it", async () => {
+    const h = hookHarness(status("awaiting_approval"), async () => ({
+      allowed: false,
+      reason: "External actions are disabled for new effects by deployment policy",
+    }));
+    const call = { id: "call-denied", name: "publish_comment", arguments: { body: "hello" } };
+
+    await expect(
+      h.handlers.beforeTool(call as never, h.api as never, {} as never)
+    ).resolves.toEqual({
+      block: "External actions are disabled for new effects by deployment policy",
+    });
+    // Nothing was prepared, so a denied deployment leaves no effect behind.
+    expect(h.client.prepare).not.toHaveBeenCalled();
+  });
+
+  it("keeps an already prepared effect reachable when the live policy denies new effects", async () => {
+    let allowed = true;
+    const h = hookHarness(status("awaiting_approval"), async () =>
+      allowed ? { allowed: true } : { allowed: false, reason: "denied" }
+    );
+    const call = { id: "call-1", name: "publish_comment", arguments: { body: "hello" } };
+    await h.handlers.beforeTool(call as never, h.api as never, {} as never);
+    h.setStatus(status("approved"));
+    allowed = false;
+
+    await expect(
+      h.handlers.beforeTool(call as never, h.api as never, {} as never)
+    ).resolves.toBeUndefined();
+    expect(h.client.status).toHaveBeenCalledWith("action-1", undefined);
     expect(h.client.prepare).toHaveBeenCalledOnce();
   });
 

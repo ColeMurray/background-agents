@@ -12,6 +12,7 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
+import { AutomationExternalActionGrants } from "@/components/automations/automation-external-action-grants";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon, PencilIcon } from "@/components/ui/icons";
@@ -312,6 +313,9 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
               </div>
             </dl>
           </div>
+
+          {/* Unattended publishing grants */}
+          <AutomationExternalActionGrants automationId={automation.id} canManage={canManage} />
 
           {/* Run history */}
           <div>

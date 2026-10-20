@@ -165,6 +165,7 @@ function externalActionHarness(
     };
     executor?: { execute: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> };
     definition?: boolean;
+    liveMode?: () => "off" | "read_only" | "enabled";
     resolveAutomationApproval?: (
       provider: string,
       action: string
@@ -189,6 +190,9 @@ function externalActionHarness(
     execute: vi.fn(),
     approve: vi.fn(() => undefined),
     deny: vi.fn(() => undefined),
+    cancel: vi.fn(() => undefined),
+    expireDue: vi.fn(() => []),
+    listPending: vi.fn(() => ({ actions: [], nextCursor: null })),
     isBoundToOperation: vi.fn(() => true),
     nextReconciliationAt: vi.fn(() => null),
   };
@@ -233,6 +237,7 @@ function externalActionHarness(
       enabled,
       gateway: gateway as never,
       definitions,
+      liveMode: options.liveMode,
       resolveAutomationApproval: options.resolveAutomationApproval,
       flushAudit,
       nextDeadline: () => null,
@@ -445,7 +450,13 @@ describe("PiBridgeHandler external actions", () => {
 
     expect(prepared.status).toBe(200);
     expect(read.status).toBe(200);
-    expect(h.gateway.prepare).toHaveBeenCalledWith("session-1", "message-1", actionRequest);
+    expect(h.gateway.prepare).toHaveBeenCalledWith(
+      "session-1",
+      "message-1",
+      actionRequest,
+      undefined,
+      { expiresAt: expect.any(Number) }
+    );
     expect(h.gateway.status).toHaveBeenCalledWith("action-1");
   });
 
@@ -514,5 +525,100 @@ describe("PiBridgeHandler external actions", () => {
       requestId: "request-1",
     });
     expect(h.flushAudit).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a prepared effect without needing an approval", async () => {
+    const h = externalActionHarness(true);
+    const decision = await h.handler.externalActionDecision(
+      new Request("http://session/internal/external-action/decision", {
+        method: "POST",
+        headers: {
+          "X-External-Action-Actor-ID": "user-1",
+          "X-Request-ID": "request-1",
+        },
+        body: JSON.stringify({ actionId: "action-1", decision: "cancel", reason: "Superseded" }),
+      })
+    );
+
+    expect(decision.status).toBe(200);
+    expect(h.gateway.cancel).toHaveBeenCalledWith("action-1", "user-1", "Superseded", "request-1");
+    expect(h.gateway.approve).not.toHaveBeenCalled();
+  });
+
+  it("refuses a new effect while the live deployment mode denies it", async () => {
+    const h = externalActionHarness(true, { liveMode: () => "read_only" });
+    const response = await h.handler.externalActionPrepare(
+      new Request("http://session/internal/pi-external-action/prepare", {
+        method: "POST",
+        headers: { "X-Pi-Operation-ID": "message-1" },
+        body: JSON.stringify(actionRequest),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "external_actions_disabled" });
+    expect(h.gateway.prepare).not.toHaveBeenCalled();
+  });
+
+  it("refuses an approval while the live deployment mode denies it", async () => {
+    const h = externalActionHarness(true, { liveMode: () => "off" });
+    const response = await h.handler.externalActionDecision(
+      new Request("http://session/internal/external-action/decision", {
+        method: "POST",
+        headers: {
+          "X-External-Action-Actor-ID": "user-1",
+          "X-Request-ID": "request-1",
+        },
+        body: JSON.stringify({ actionId: "action-1", decision: "approve" }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(h.gateway.approve).not.toHaveBeenCalled();
+  });
+
+  it("still lets an approver deny or cancel while the live mode denies new effects", async () => {
+    const h = externalActionHarness(true, { liveMode: () => "off" });
+    const denied = await h.handler.externalActionDecision(
+      new Request("http://session/internal/external-action/decision", {
+        method: "POST",
+        headers: {
+          "X-External-Action-Actor-ID": "user-1",
+          "X-Request-ID": "request-1",
+        },
+        body: JSON.stringify({ actionId: "action-1", decision: "deny" }),
+      })
+    );
+
+    expect(denied.status).toBe(200);
+    expect(h.gateway.deny).toHaveBeenCalled();
+    expect(
+      h.handler.humanExternalActionStatus(
+        new Request("http://session/internal/external-action/status?actionId=action-1")
+      ).status
+    ).toBe(200);
+  });
+
+  it("never returns an internal failure reason to the approver", async () => {
+    const h = externalActionHarness(true);
+    h.gateway.approve.mockImplementationOnce(() => {
+      throw new Error("provider rejected POST https://api.github.com/repos/acme/private/secret");
+    });
+    const response = await h.handler.externalActionDecision(
+      new Request("http://session/internal/external-action/decision", {
+        method: "POST",
+        headers: {
+          "X-External-Action-Actor-ID": "user-1",
+          "X-Request-ID": "request-1",
+        },
+        body: JSON.stringify({ actionId: "action-1", decision: "approve" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body).toMatchObject({ code: "external_action_failed" });
+    expect(JSON.stringify(body)).not.toContain("acme");
+    expect(JSON.stringify(body)).not.toContain("api.github.com");
   });
 });

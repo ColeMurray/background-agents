@@ -88,15 +88,50 @@ export class AutomationExternalActionGrantStore {
     return row ? toGrant(row) : null;
   }
 
-  async revoke(id: string, revokedAt: number, reason: string): Promise<boolean> {
-    const result = await this.db
+  /** Every grant the automation holds, revoked ones included, oldest first. */
+  async listByAutomation(automationId: string): Promise<AutomationExternalActionGrant[]> {
+    const rows = await this.db
       .prepare(
-        `UPDATE automation_external_action_grants
-         SET revoked_at = ?, revoked_reason = ?
-         WHERE id = ? AND revoked_at IS NULL`
+        `SELECT grant_row.id, grant_row.automation_id, grant_row.executor_user_id,
+                grant_row.provider, grant_row.action, grant_row.created_by, grant_row.created_at
+         FROM automation_external_action_grants grant_row
+         WHERE grant_row.automation_id = ?
+         ORDER BY grant_row.created_at, grant_row.id`
       )
-      .bind(revokedAt, reason, id)
-      .run();
+      .bind(automationId)
+      .all<GrantRow>();
+    return rows.results.map((row) => toGrant(row));
+  }
+
+  /**
+   * Revoke one grant.
+   *
+   * The automation id is part of the statement, so a caller can never revoke
+   * a grant that belongs to another automation.
+   */
+  async revoke(
+    id: string,
+    revokedAt: number,
+    reason: string,
+    automationId?: string
+  ): Promise<boolean> {
+    const result = automationId
+      ? await this.db
+          .prepare(
+            `UPDATE automation_external_action_grants
+             SET revoked_at = ?, revoked_reason = ?
+             WHERE id = ? AND revoked_at IS NULL AND automation_id = ?`
+          )
+          .bind(revokedAt, reason, id, automationId)
+          .run()
+      : await this.db
+          .prepare(
+            `UPDATE automation_external_action_grants
+             SET revoked_at = ?, revoked_reason = ?
+             WHERE id = ? AND revoked_at IS NULL`
+          )
+          .bind(revokedAt, reason, id)
+          .run();
     return result.meta.changes === 1;
   }
 }

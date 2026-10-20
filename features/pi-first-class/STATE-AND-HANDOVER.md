@@ -65,21 +65,65 @@ its own authorization.
 
 ### Go-live integration branch `feat/pi-go-live-integration-v2`
 
-| Commit     | What it does                                                                              | Evidence                           |
-| ---------- | ----------------------------------------------------------------------------------------- | ---------------------------------- |
-| `d484e480` | Latency milestones and characterization of existing flows                                 | —                                  |
-| `bf565b16` | Server-authoritative capabilities, lazy first token, lazy repository pinning and Computer | 5,115 unit, 2,459 workerd          |
-| `d1cf7645` | Personal web Pi diagnostics and credential sentinel scan                                  | 54 web                             |
-| `d888b169` | Durable Slack ingress receipts in D1                                                      | 163 focused                        |
-| `0f554777` | Slack Queue/DLQ, durable enqueue before ACK, fast-path claim                              | 12 focused                         |
-| `d93170c5` | Exactly-once Slack session, thread mapping, prompt, and callback repair                   | 647 Slack                          |
-| `d5fb92f7` | Pi-native control authority in SessionDO                                                  | 5,126 unit, 2,470 workerd          |
-| `efca49ae` | Slack ingress flag wired into both Terraform jobs                                         | 33 workflow contracts              |
-| `a1e4bd95` | Accessible Pi agent controls and bounded same-session agent tools                         | 2,540 web                          |
-| `a4a7aaa9` | SessionDO stays the canonical multiplayer authority                                       | 335 GitHub, 317 Linear             |
-| `72fc8d8e` | Production Code Mode safety, exact artifact, observed attestation                         | 10 two-Worker, 101 Terraform       |
-| `722e41fe` | Generation-78 execution isolation boundary                                                | 565 Modal, 78 image, 1,668 runtime |
-| `77fc7be2` | Authorized Pi execution tools, provider canary blocked by default                         | 5,185 unit                         |
+| Commit     | What it does                                                                              | Evidence                             |
+| ---------- | ----------------------------------------------------------------------------------------- | ------------------------------------ |
+| `d484e480` | Latency milestones and characterization of existing flows                                 | —                                    |
+| `bf565b16` | Server-authoritative capabilities, lazy first token, lazy repository pinning and Computer | 5,115 unit, 2,459 workerd            |
+| `d1cf7645` | Personal web Pi diagnostics and credential sentinel scan                                  | 54 web                               |
+| `d888b169` | Durable Slack ingress receipts in D1                                                      | 163 focused                          |
+| `0f554777` | Slack Queue/DLQ, durable enqueue before ACK, fast-path claim                              | 12 focused                           |
+| `d93170c5` | Exactly-once Slack session, thread mapping, prompt, and callback repair                   | 647 Slack                            |
+| `d5fb92f7` | Pi-native control authority in SessionDO                                                  | 5,126 unit, 2,470 workerd            |
+| `efca49ae` | Slack ingress flag wired into both Terraform jobs                                         | 33 workflow contracts                |
+| `a1e4bd95` | Accessible Pi agent controls and bounded same-session agent tools                         | 2,540 web                            |
+| `a4a7aaa9` | SessionDO stays the canonical multiplayer authority                                       | 335 GitHub, 317 Linear               |
+| `72fc8d8e` | Production Code Mode safety, exact artifact, observed attestation                         | 10 two-Worker, 101 Terraform         |
+| `722e41fe` | Generation-78 execution isolation boundary                                                | 565 Modal, 78 image, 1,668 runtime   |
+| `77fc7be2` | Authorized Pi execution tools, provider canary blocked by default                         | 5,185 unit                           |
+| `514db750` | Pi hibernation telemetry, external-action authority, pending-action list                  | 5,226 unit, 2,472 workerd, 2,554 web |
+
+## Slice 7A — what landed
+
+The external-action authority now holds to the rule that reading a session is not action authority.
+
+- The decision route requires `collaborate` session authority plus `external_actions.approve`. A
+  private break-glass reader and a workspace administrator without current owning-team membership
+  are both refused. The route-admission sentinel now expects the stronger session-layer denial.
+- `GET /sessions/:id/external-actions` lists pending effects with an opaque cursor, oldest first,
+  scoped to one session. An approver never needs an out-of-band action id.
+- One effect is one ledger entry. An identical effect that is still pending, running, or
+  indeterminate joins the existing entry instead of raising a second approval card or a second
+  provider write. The search is scoped to one session, so two sessions never share an effect.
+- A definitive `not_admitted` re-arms the one-shot continuation, because the approval that
+  authorized the effect is still valid.
+- Approval provenance is unambiguous: a human approval carries no grant, and an automation approval
+  names the grant that authorized it.
+- Pending approvals expire after a bounded window and are cancelled by the alarm. Cancellation is a
+  separate decision from denial, and it cannot cancel an effect the provider may already have
+  applied.
+- The audit event records the decision time, not the flush time. A system expiry is attributed to a
+  service principal, never to a user.
+- A live deployment deny blocks a new prepare and a new approval. Status, audit recovery,
+  reconciliation, denial, and cancellation stay available, and an already-prepared effect keeps its
+  memo, so an emergency never strands admitted work.
+
+### Files that matter for 7A
+
+| File                                                                    | Role                                                        |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `packages/control-plane/src/routes/session-external-actions.ts`         | Public routes: pending list, status, decision               |
+| `packages/control-plane/src/session/external-action-gateway.ts`         | The approval and exactly-once dispatch state machine        |
+| `packages/control-plane/src/session/http/handlers/pi-bridge.handler.ts` | SessionDO internal routes and the live gate                 |
+| `packages/control-plane/src/session/components.ts`                      | SessionDO wiring: live mode, expiry alarm, audit flush      |
+| `packages/control-plane/src/session/schema.ts`                          | SessionDO migration 66                                      |
+| `packages/shared/src/types/external-actions.ts`                         | Shared contracts, including approval provenance             |
+| `packages/web/src/hooks/use-session-external-actions.ts`                | Browser hook; the browser never decides what it may approve |
+
+### Migrations added
+
+| Store      | Version | Feature         | Purpose                                              |
+| ---------- | ------- | --------------- | ---------------------------------------------------- |
+| session_do | 66      | externalActions | approval expiry, cancellation, audit occurrence time |
 
 ## Capability status
 
@@ -111,29 +155,47 @@ Upstream `main` is ahead of the published release. See `PI-UPSTREAM-PARITY.md`.
 
 ## Remaining work, in order
 
-### Slice 7A — external action authority and gateway correctness
+### Slice 7A — external action authority and gateway correctness — DONE
 
-- `packages/control-plane/src/routes/session-external-actions.ts` — the decision route requires
-  `sessionRequirement("read")`; it must require `collaborate`. Read authority is not action
-  authority: a private break-glass reader and a workspace administrator without current owning-team
-  membership must both be refused.
-- Add a cursor-bounded pending-action list route plus its SessionDO internal route, so an approver
-  does not need an out-of-band action id.
-- Gateway gaps: coalesce identical nonterminal effects, rearm a one-shot continuation only after a
-  definitive `not_admitted`, add approval expiry and cancellation, enforce source and grant
-  provenance, bound public errors, and record occurrence time for every transition.
-- Live emergency deny for new prepares and executions while status, reconciliation, audit recovery,
-  and revocation stay available.
+Everything listed below landed. The remaining item is _bounded public errors_: the public error
+bodies still echo a gateway message. Tighten them so a public error never repeats an internal
+provider string.
 
-### Slice 7B — approval and grant surfaces
+### Slice 7B — approval and grant surfaces — DONE
 
-Pending-action list and decision UI in the existing session page; automation-grant list, create, and
-revoke API and UI.
+- The session sidebar shows the pending external effects with named approve, deny, and cancel
+  controls. The controls appear only for a user who holds `external_actions.approve`; the server
+  decides the rest.
+- The automation detail page manages unattended publication grants. A grant names one provider, one
+  action, and one automation, and always runs as that automation's own executor.
+- Grant administration requires the automation's own manage authority _and_
+  `external_actions.manage_grants`. A user who may edit the automation but holds no external-action
+  permission cannot widen what it publishes.
+- Revocation is scoped to the automation that owns the grant, so a caller can never revoke a grant
+  that belongs to another automation.
+- The browser never decides what it may approve or grant. It renders what the control plane returns
+  and reports what the server refuses.
 
 ### Slice 7C — provider adapters
 
-Reversible credential-closed GitHub, GitLab, Slack, and Linear comment/reply definitions, a generic
-fault-injection conformance suite, and canary scripts. No live calls.
+- Four credential-closed provider definitions: GitHub comment, GitLab comment, Slack thread reply,
+  and Linear comment. A definition names a request, an endpoint, and how the provider's answer is
+  read. It never names a credential; the executor closes over one.
+- Every publication carries a marker derived from the action id. A response that is lost is
+  reconciled by finding that marker, so a lost response never becomes a second publication.
+- A generic fault-injection conformance suite runs against every provider definition. It proves that
+  a refusal stays a refusal, an unknown stays unknown, a hung provider becomes an indeterminate
+  failure instead of a request that never ends, a malformed answer never leaks, and no credential
+  ever reaches a result, an error, or the agent.
+- `scripts/canary-pi-external-actions.sh` runs the suite and prints the deployment configuration a
+  live canary would need. It never calls a provider.
+- A provider is registered only when the deployment supplies its credential source, so the agent
+  never sees a publication it could not complete.
+
+**Still open in 7C:** the credential source for each provider. It must come from the encrypted D1
+provider-account store, and no provider may be registered until its credential path is in place and
+a live canary has published and reconciled one effect. Until then the registry stays empty and the
+feature stays off by default.
 
 ### Slice 8 — read-only MCP and OAuth
 

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
+  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
@@ -41,6 +42,10 @@ it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
     {
       id: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
       feature: "sandboxExecution",
+    },
+    {
+      id: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+      feature: "externalActions",
     },
   ]);
 });

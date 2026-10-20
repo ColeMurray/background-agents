@@ -8,7 +8,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
   const response = await controlPlaneUserFetch(
-    `/sessions/${encodeURIComponent(id)}/executions${request.nextUrl.search}`
+    `/sessions/${encodeURIComponent(id)}/executions${new URL(request.url).search}`
   );
   return NextResponse.json(await response.json(), {
     status: response.status,

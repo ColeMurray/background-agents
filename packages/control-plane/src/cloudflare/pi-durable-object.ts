@@ -279,6 +279,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               // Provider-specific tools are contributed to the external_actions
               // slot together with their canonical effect registrations.
               externalActions: {},
+              // The live deployment mode gates only a new prepare. An effect
+              // that is already prepared keeps its status and reconciliation
+              // reachable, so an emergency deny cannot strand admitted work.
+              authorizeNewEffect: async (signal) => {
+                const current = await currentCapabilities(signal);
+                return current.externalActions === "enabled"
+                  ? { allowed: true }
+                  : {
+                      allowed: false,
+                      reason: "External actions are disabled for new effects by deployment policy",
+                    };
+              },
             });
             return createPiToolPolicyExtension(
               effects,

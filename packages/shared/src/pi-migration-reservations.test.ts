@@ -7,6 +7,7 @@ import {
   PI_MIGRATION_RESERVATIONS,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
+  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
@@ -29,11 +30,12 @@ describe("Pi migration reservations", () => {
       PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
       PI_SESSION_DO_CONTROLS_MIGRATION_ID,
       PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+      PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
       PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
       PI_D1_MCP_MIGRATION_VERSION,
       PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
       PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
-    ]).toEqual([58, 59, 60, 61, 62, 63, 64, 65, 90, 91, 92, 95]);
+    ]).toEqual([58, 59, 60, 61, 62, 63, 64, 65, 66, 90, 91, 92, 95]);
     expect(PI_MIGRATION_RESERVATIONS).toEqual([
       {
         store: "session_do",
@@ -82,6 +84,12 @@ describe("Pi migration reservations", () => {
         version: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
         feature: "sandboxExecution",
         purpose: "sandbox execution authority, cancellation, and retention",
+      },
+      {
+        store: "session_do",
+        version: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+        feature: "externalActions",
+        purpose: "external action approval expiry, cancellation, and audit occurrence time",
       },
       {
         store: "d1",

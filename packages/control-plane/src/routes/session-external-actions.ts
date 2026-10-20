@@ -15,7 +15,7 @@ import {
 } from "./shared";
 
 const decisionSchema = z.strictObject({
-  decision: z.enum(["approve", "deny"]),
+  decision: z.enum(["approve", "deny", "cancel"]),
   reason: z.string().trim().min(1).max(1_000).optional(),
 });
 

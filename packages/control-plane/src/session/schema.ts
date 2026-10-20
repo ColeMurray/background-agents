@@ -130,13 +130,15 @@ CREATE TABLE IF NOT EXISTS external_action_audit_outbox (
   revision INTEGER NOT NULL,
   request_id TEXT NOT NULL,
   actor_user_id TEXT NOT NULL,
+  actor_kind TEXT NOT NULL DEFAULT 'user',
   action TEXT NOT NULL,
   session_id TEXT NOT NULL,
   before_state TEXT NOT NULL,
   after_state TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  occurred_at INTEGER
 );`;
 
 const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands (
@@ -441,6 +443,7 @@ import { createLogger } from "../logger";
 import {
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
@@ -1044,6 +1047,20 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         "ALTER TABLE sandbox_commands ADD COLUMN replay_gap INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE sandbox_commands ADD COLUMN late_completion_at INTEGER",
         "ALTER TABLE sandbox_commands ADD COLUMN metadata_expires_at INTEGER",
+      ]) {
+        runMigration(sql, statement);
+      }
+    },
+  },
+  {
+    id: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+    description: "Persist external action approval expiry and audit occurrence time",
+    feature: "externalActions",
+    run: (sql) => {
+      for (const statement of [
+        "ALTER TABLE external_actions ADD COLUMN expires_at INTEGER",
+        "ALTER TABLE external_action_audit_outbox ADD COLUMN occurred_at INTEGER",
+        "ALTER TABLE external_action_audit_outbox ADD COLUMN actor_kind TEXT NOT NULL DEFAULT 'user'",
       ]) {
         runMigration(sql, statement);
       }

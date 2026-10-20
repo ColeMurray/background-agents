@@ -23,6 +23,7 @@ const pending = {
   approval: null,
   createdAt: 1_700_000_000_000,
   updatedAt: 1_700_000_000_000,
+  expiresAt: 1_700_086_400_000,
 };
 
 function wrapper({ children }: { children: ReactNode }) {

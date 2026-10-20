@@ -97,6 +97,15 @@ vi.mock("@/components/automations/run-history", () => ({
   RunHistory: ({ hasMore, onLoadMore }: { hasMore: boolean; onLoadMore?: () => void }) =>
     hasMore ? <button onClick={onLoadMore}>Load more</button> : null,
 }));
+vi.mock("@/hooks/use-automation-external-action-grants", () => ({
+  useAutomationExternalActionGrants: () => ({
+    grants: [],
+    error: null,
+    isLoading: false,
+    create: vi.fn(),
+    revoke: vi.fn(),
+  }),
+}));
 
 const params = Promise.resolve({ id: "auto-1" });
 const page = () => (

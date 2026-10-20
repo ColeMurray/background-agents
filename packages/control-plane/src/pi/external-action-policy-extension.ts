@@ -35,6 +35,16 @@ interface ExternalActionPolicyOptions {
       (call: ToolCall) => ExternalActionPrepareRequest | Promise<ExternalActionPrepareRequest>
     >
   >;
+  /**
+   * Live deployment gate for a new external effect.
+   *
+   * Only a new prepare is gated. An effect that is already prepared keeps its
+   * status, its approval, and its reconciliation reachable, so an emergency
+   * deny never strands work that was already admitted.
+   */
+  authorizeNewEffect?(
+    signal?: AbortSignal
+  ): Promise<{ allowed: boolean; reason?: string } | undefined>;
 }
 
 export interface GatewayExternalActionToolDefinition<TParameters extends TSchema> {
@@ -114,6 +124,17 @@ export function createExternalActionPolicyDelegate(
       let memo = await api.memo<PolicyMemo>(memoName, context);
       let status: ExternalActionStatusResponse;
       if (!memo) {
+        // A new external effect needs live deployment authority. The check
+        // runs before the prepare, so a denied deployment never leaves a
+        // prepared effect behind.
+        const admission = await options.authorizeNewEffect?.(context.abortSignal);
+        if (admission && !admission.allowed) {
+          return {
+            block:
+              admission.reason ??
+              "External actions are disabled for new effects by deployment policy",
+          };
+        }
         status = await options.client.prepare(await describe(call), context.abortSignal);
         memo = await api.memo(
           memoName,

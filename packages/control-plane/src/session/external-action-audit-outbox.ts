@@ -9,12 +9,14 @@ interface AuditOutboxRow {
   revision: number;
   request_id: string;
   actor_user_id: string;
+  actor_kind: "user" | "service";
   action: ExternalActionAuditInput["action"];
   session_id: string;
   before_state: ExternalActionAuditInput["beforeState"];
   after_state: ExternalActionAuditInput["afterState"];
   attempts: number;
   next_attempt_at: number;
+  occurred_at: number | null;
 }
 
 export type ExternalActionAuditProjector = (
@@ -48,13 +50,19 @@ export class ExternalActionAuditOutbox {
       try {
         await project({
           requestId: row.request_id,
-          actorUserId: row.actor_user_id,
+          actor:
+            row.actor_kind === "service"
+              ? { kind: "service", service: row.actor_user_id }
+              : { kind: "user", userId: row.actor_user_id },
           action: row.action,
           actionId: row.action_id,
           sessionId: row.session_id,
           beforeState: row.before_state,
           afterState: row.after_state,
           revision: row.revision,
+          // The decision's own time, not the time the projection managed to
+          // flush. A delayed audit must still say when the decision happened.
+          occurredAt: row.occurred_at ?? row.next_attempt_at,
         });
         this.transaction(() => {
           this.sql.exec("DELETE FROM external_action_audit_outbox WHERE id = ?", row.id);
