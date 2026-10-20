@@ -301,12 +301,12 @@ environment variable still works until it is removed.
 
 ### The adversarial audit rounds
 
-Five rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`,
-`AUDIT-ROUND-4.md`, and `AUDIT-ROUND-5.md`. Round 3 is the deep audit of the cross-session and
-capability slices, and it found a defect that made the whole feature unusable: the target session
-compared the target against _its own_ id, so every delivery was refused. It is fixed, along with the
-source-side authority, the receipt confirmation, the idempotency state machine, the actor identity,
-and the depth and fan-out limits.
+Six rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`,
+`AUDIT-ROUND-4.md`, `AUDIT-ROUND-5.md`, and `AUDIT-ROUND-6.md`. Round 3 is the deep audit of the
+cross-session and capability slices, and it found a defect that made the whole feature unusable: the
+target session compared the target against _its own_ id, so every delivery was refused. It is fixed,
+along with the source-side authority, the receipt confirmation, the idempotency state machine, the
+actor identity, and the depth and fan-out limits.
 
 Round 4 audits the whole Pi surface — every tool, every route the agent calls on the owning session,
 every credential path, and every cross-session reach. Its blocking finding was that the
