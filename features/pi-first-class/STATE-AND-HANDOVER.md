@@ -273,16 +273,24 @@ open, in order" below for the exact remaining list.
 
 ## How to work in this repository
 
-- Branch: `feat/pi-go-live-integration-v2` in
-  `/Users/param/.local/share/opencode/worktree/0e6d72/pi-go-live-v2`. The main worktree holds the
-  integrated feature branch.
+- Both `feat/pi-first-class` and `feat/pi-go-live-integration-v2` are at the same commit, so the
+  integration worktree and the main worktree hold identical trees. Continue in
+  `/Users/param/.local/share/opencode/worktree/0e6d72/pi-go-live-v2` on
+  `feat/pi-go-live-integration-v2`, and fast-forward `feat/pi-first-class` to it once the lanes are
+  green. Nothing has been pushed and nothing has been deployed.
 - One implementation owner at a time. A capability slice commits once, focused.
 - Every slice ends with: shared build first, then focused tests, then the full affected lane, then
   typecheck, lint, format, SQL portability, and the Terraform workflow contracts.
 - The frozen route manifests (`hono-route-catalog-conformance.test.ts` and its snapshot) and the
   route admission matrix are updated whenever a route is added. Verify the new entry's authorization
-  by hand, then regenerate the snapshot.
+  by hand, then regenerate the snapshot. Regenerate with
+  `npx vitest run --config vitest.integration.config.ts -u` from `packages/control-plane`; npm does
+  not forward `-u` to vitest.
+- The full workerd lane catches what a unit lane cannot. Slice 6B shipped with four failing Pi
+  workerd tests and a stale route manifest, and both were found only by running it.
 - Python suites on macOS need a short `--basetemp`; a long pytest temp path breaks `AF_UNIX` socket
   binding and is not a product failure.
+- The web suite has a few load-sensitive tests that fail in a full run and pass in isolation. They
+  are not product failures; re-run the file before believing one.
 - Never push, never deploy, never apply Terraform. The user's own environment is the live canary
   target and the upstream pull requests stay on `ColeMurray/background-agents`.
