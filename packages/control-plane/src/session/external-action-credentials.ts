@@ -11,6 +11,13 @@ import type { ProviderFetch } from "./external-action-providers/executor";
  */
 export interface ExternalActionCredentialResolver {
   /**
+   * Whether the deployment holds a credential for one provider.
+   *
+   * It is a cheap check — it never reaches a provider and never mints a
+   * token — so it can be asked before an approval card is raised.
+   */
+  available(provider: string): Promise<boolean>;
+  /**
    * The credential for one provider.
    *
    * Returns null when the deployment holds no usable credential for it, which

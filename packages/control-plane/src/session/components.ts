@@ -199,6 +199,7 @@ import { CrossSessionHandler } from "./http/handlers/cross-session.handler";
 import { CrossSessionReceiptStore } from "../db/cross-session-receipts";
 import { evaluateCrossSessionSource, evaluateCrossSessionTarget } from "./cross-session-authority";
 import { ExternalActionGateway } from "./external-action-gateway";
+import { getGitHubAppConfig } from "../auth/github-app";
 import type { ExternalActionDefinitionRegistry } from "./external-action-definitions";
 import { buildExternalActionProviderRegistry } from "./external-action-providers/registry";
 import {
@@ -326,6 +327,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // definition in the registry has passed the generic fault-injection
   // conformance suite, and the credential is resolved per call.
   const externalActionCredentialResolver = {
+    available: async (provider: string) => {
+      // A cheap check. It never mints a token and never reaches a provider.
+      if (provider === "github") return getGitHubAppConfig(env) !== null;
+      if (provider === "gitlab") return Boolean(env.GITLAB_ACCESS_TOKEN?.trim());
+      if (provider === "slack") return Boolean(env.SLACK_BOT_TOKEN?.trim());
+      if (provider === "linear") return Boolean(env.LINEAR_API_KEY?.trim());
+      return false;
+    },
     resolve: async (provider: string) => {
       if (provider === "github" || provider === "gitlab") {
         const scoped = await resolveCredentialScope(getPublicSessionId());
@@ -1151,8 +1160,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       // Provider executors are deliberately absent from the foundation. A
       // provider must pass the generic fault-injection suite before registration.
       definitions: externalActionDefinitions,
-      credentialAvailable: async (provider) =>
-        (await externalActionCredentialResolver.resolve(provider)) !== null,
+      credentialAvailable: async (provider) => externalActionCredentialResolver.available(provider),
       scheduleReconciliation: (deadline) => alarmScheduler.schedule(deadline),
       flushAudit: () => externalActionAuditOutbox.flush(projectExternalActionAudit),
       nextDeadline: nextExternalActionDeadline,

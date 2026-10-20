@@ -8,6 +8,7 @@ function resolver(
   const calls: string[] = [];
   return {
     calls,
+    available: async (provider: string) => available.includes(provider),
     resolve: async (provider: string) => {
       calls.push(provider);
       return available.includes(provider) ? { headers: { authorization: "Bearer test" } } : null;
