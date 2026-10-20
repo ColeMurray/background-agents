@@ -103,3 +103,46 @@ run "external_actions_rejects_unknown_modes" {
 
   expect_failures = [var.pi_external_actions_mode]
 }
+
+run "browser_defaults_off" {
+  command = plan
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_BROWSER_MODE"] == "off"
+    error_message = "The browser must fail closed by default."
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_BROWSER_ALLOWED_DOMAINS"] == ""
+    error_message = "The browser must reach no host until an operator reviews one."
+  }
+}
+
+run "browser_reaches_the_worker" {
+  command = plan
+
+  variables {
+    pi_browser_mode             = "enabled"
+    pi_browser_allowed_domains = "example.com,*.docs.example.com"
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_BROWSER_MODE"] == "enabled"
+    error_message = "The browser gate must reach the worker."
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_BROWSER_ALLOWED_DOMAINS"] == "example.com,*.docs.example.com"
+    error_message = "The reviewed hosts must reach the worker."
+  }
+}
+
+run "browser_rejects_unknown_modes" {
+  command = plan
+
+  variables {
+    pi_browser_mode = "sometimes"
+  }
+
+  expect_failures = [var.pi_browser_mode]
+}

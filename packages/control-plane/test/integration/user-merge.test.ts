@@ -535,6 +535,31 @@ describe("mergeUsers", () => {
     expect(await getUserRow(LOSER)).not.toBeNull();
   });
 
+  it("refuses to merge away a user that holds personal MCP connections", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await env.DB.prepare(
+      `INSERT INTO mcp_servers (id, name, type, command, url, env, repo_scope, enabled, created_at, updated_at)
+       VALUES ('server-1', 'Docs', 'remote', '', 'https://mcp.example.com/mcp', '{}', NULL, 1, ?, ?)`
+    )
+      .bind(SEED_NOW_MS, SEED_NOW_MS)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO mcp_connections
+         (id, owner_user_id, server_id, server_revision, server_name, endpoint_url,
+          endpoint_host, catalog_snapshot_sha256, status, created_at, updated_at)
+       VALUES ('mcpconn_1', ?, 'server-1', 1, 'Docs', 'https://mcp.example.com/mcp',
+               'mcp.example.com', ?, 'foundation_staged', ?, ?)`
+    )
+      .bind(LOSER, "a".repeat(64), SEED_NOW_MS, SEED_NOW_MS)
+      .run();
+
+    await expect(mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER })).rejects.toThrow(
+      /personal MCP connections/
+    );
+    expect(await getUserRow(LOSER)).not.toBeNull();
+  });
+
   it("merges two suspended users even when their suspension timestamps differ", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });

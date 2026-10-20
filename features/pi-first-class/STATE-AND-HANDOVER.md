@@ -284,11 +284,24 @@ whole feature unusable: the target session compared the target against _its own_
 delivery was refused. It is fixed, along with the source-side authority, the receipt confirmation,
 the idempotency state machine, the actor identity, and the depth and fan-out limits.
 
-### Slice 9 — browser gateway and finish
+### Slice 9 — browser gateway
 
-Browser/Kitesurf as a lazy, default-off, session-scoped SessionDO gateway. Then accessibility,
-browser journeys, the ten-minute canary, and the last adversarial audit round. See "What is still
-open, in order" below for the exact remaining list.
+The boundary exists; the transport does not.
+
+- A `browser` capability, off by default, latched per session and checked against the live
+  deployment mode on every request.
+- The session's own gateway decides every browser request: the capability, the live mode, that the
+  turn belongs to this session, that it has a workspace actor, and that the page is on the host list
+  an operator reviewed. A wildcard never matches the bare domain, and an empty list allows nothing.
+- Every decision is recorded on the session's timeline, so a browser the agent drove is visible to
+  the collaborators of the session, with the actor.
+- The agent never receives a browser client and never receives a Live View URL. A Live View URL is a
+  bearer credential for a human, so it belongs on a human-facing route, not in a model context.
+
+**Still open in Slice 9:** the transport. Cloudflare's Agents `Browser` needs a `BROWSER` binding
+and a `LOADER` worker-loader binding in the Worker that hosts the Pi Durable Object, plus the
+`guardrails` allowlist and the session scope. The Worker's bindings and the Terraform that stages
+them are the remaining work, followed by a live canary.
 
 ## What is still open, in order
 
@@ -297,21 +310,16 @@ open, in order" below for the exact remaining list.
    encrypted D1 provider-account store. Until it exists, the registry stays empty and the feature
    stays off by default. A provider may only be registered after a live canary has published one
    effect and reconciled it by marker.
-2. **Read-only MCP and OAuth.** The D1 foundation and the dormant broker are in place. The remaining
-   work is the catalog and read projection, the owner-only non-delegable review, session pins,
-   identity-first lifecycle, an opaque callback with S256 enforcement, refresh, revoke, and
-   tombstone, a `RESTRICT` user merge, key rotation, DNS and redirect-safe egress, and stable read
-   tools declared before extension assembly. Mutations stay prohibited.
-3. **The browser gateway.** Browser/Kitesurf as a lazy, default-off, session-scoped SessionDO
-   gateway, after checking the current official Cloudflare API. It needs one browser context per
-   session, no implicit reuse of a human's cookies, explicit approval for login, uploads, and
-   downloads, domain and network policy, page content treated as untrusted prompt-injection data,
-   bounded screenshots and downloads, collaborator-visible activity, and cleanup on archive or
-   delete.
+2. **The MCP transport and the OAuth lifecycle.** The read gateway, the reviewed catalog, the
+   session grants, the broker authority, the rotatable keyring, the DNS and redirect-safe egress,
+   and the `RESTRICT` user merge are built. The live transport, the opaque callback with S256, the
+   refresh, revoke, and tombstone, and the identity-first lifecycle remain.
+3. **The browser transport.** The browser gateway is built and gated; the transport needs the
+   `BROWSER` and `LOADER` bindings in the Pi Durable Object's Worker, the Terraform that stages
+   them, the guardrails allowlist, the session scope, and a live canary.
 4. **The finish.** Accessibility review, the browser journeys, the ten-minute canary on the user's
-   own instance, and the two adversarial audit rounds. The two audit rounds over the new code are
-   written up in `AUDIT-ROUND-1.md` and `AUDIT-ROUND-2.md`; a third round over the remaining slices
-   is still owed.
+   own instance, and the fourth adversarial audit round. The first three audit rounds over the new
+   code are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, and `AUDIT-ROUND-3.md`.
 
 ## How to work in this repository
 

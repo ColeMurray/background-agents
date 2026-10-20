@@ -191,6 +191,7 @@ import { PiRepositoryTools } from "../pi/repository-tools";
 import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 import { McpSessionHandler } from "./http/handlers/mcp-session.handler";
+import { BrowserGateway } from "./http/handlers/browser-gateway.handler";
 import { McpSessionPinStore } from "../db/mcp-session-pins";
 import { McpConnectionStore } from "../db/mcp-connections";
 import { McpReadAuditStore } from "../db/mcp-read-audit";
@@ -760,6 +761,37 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messages: messageService,
     getSessionId: getPublicSessionId,
   });
+  const browserGateway = new BrowserGateway({
+    browser: {
+      liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.browser,
+      sessionCapability: () =>
+        sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.browser ?? "off",
+      allowedDomains: () =>
+        (env.PI_BROWSER_ALLOWED_DOMAINS ?? "")
+          .split(",")
+          .map((domain) => domain.trim())
+          .filter((domain) => domain.length > 0),
+      operationActor: (operationId) => messageRepository.getMessageHumanActor(operationId),
+      operationBelongsToSession: (operationId) =>
+        messageRepository.getMessageById(operationId) !== null,
+      recordActivity: (input) => {
+        eventRepository.createEvent({
+          id: `browser-activity:${input.operationId}:${Date.now()}`,
+          type: "browser_activity",
+          data: JSON.stringify({
+            url: input.url,
+            outcome: input.outcome,
+            reason: input.reason,
+            actorId: input.actorId,
+          }),
+          messageId: input.operationId,
+          createdAt: Date.now(),
+        });
+      },
+    },
+    getSessionId: getPublicSessionId,
+  });
+
   const budgetService = new SessionBudgetService(
     sessionCoreRepository,
     messageRepository,
@@ -1344,6 +1376,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
     crossSessionMessage: (request) => crossSessionHandler.outbound(request),
+    piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
     piMcpList: () => mcpSessionHandler.list(),
     piMcpRead: (request) => mcpSessionHandler.read(request),
     crossSessionInbound: (request) => crossSessionHandler.inbound(request),

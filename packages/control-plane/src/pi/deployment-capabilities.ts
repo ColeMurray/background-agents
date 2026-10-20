@@ -19,6 +19,7 @@ type PiDeploymentCapabilityConfig = Pick<
   | "PI_EXTERNAL_ACTIONS_MODE"
   | "PI_MCP_MODE"
   | "PI_CROSS_SESSION_MESSAGING_MODE"
+  | "PI_BROWSER_MODE"
 >;
 
 /** Resolve current deployment policy through the canonical shared normalizer. */
@@ -33,6 +34,7 @@ function resolvePiDeploymentCapabilities(config: PiDeploymentCapabilityConfig) {
     externalActions: config.PI_EXTERNAL_ACTIONS_MODE,
     mcp: config.PI_MCP_MODE,
     crossSessionMessaging: config.PI_CROSS_SESSION_MESSAGING_MODE,
+    browser: config.PI_BROWSER_MODE,
   });
 }
 

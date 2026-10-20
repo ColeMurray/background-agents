@@ -119,6 +119,7 @@ export const SessionInternalPaths = {
   piExternalActionStatus: "/internal/pi-external-action/status",
   piExternalActionExecute: "/internal/pi-external-action/execute",
   crossSessionMessage: "/internal/cross-session-message",
+  piBrowserAuthorize: "/internal/pi-browser/authorize",
   piMcpList: "/internal/pi-mcp/list",
   piMcpRead: "/internal/pi-mcp/read",
   crossSessionInbound: "/internal/cross-session-inbound",

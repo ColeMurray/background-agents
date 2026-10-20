@@ -197,6 +197,18 @@ const nonArtifactSandboxEventSchemas = [
     messageCostUsd: z.number().nonnegative().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
+    /**
+     * One browser request this session authorized or refused.
+     *
+     * The activity is visible to the collaborators of the session, so a
+     * browser the agent drove is never invisible.
+     */
+    type: z.literal("browser_activity"),
+    url: z.string().nullable(),
+    outcome: z.enum(["authorized", "refused"]),
+    reason: z.string().nullable(),
+  }),
+  messageSandboxEventBaseSchema.extend({
     type: z.literal("cross_session_message"),
     targetSessionId: z.string().min(1),
     receiptId: z.string().min(1),

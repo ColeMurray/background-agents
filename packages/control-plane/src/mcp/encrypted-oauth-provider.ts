@@ -1,16 +1,9 @@
 import { DurableObjectOAuthClientProvider } from "agents/mcp/do-oauth-client-provider";
 import type { SqlDatabase } from "../db/sql-database";
+import { createStaticMcpOAuthKeyring, type McpOAuthKeyring } from "./oauth-keyring";
 
 const AES_GCM = "AES-GCM";
 const AES_GCM_IV_BYTES = 12;
-
-function importEncryptionKey(keyBase64: string): Promise<CryptoKey> {
-  const keyData = Uint8Array.from(atob(keyBase64), (character) => character.charCodeAt(0));
-  return crypto.subtle.importKey("raw", keyData, { name: AES_GCM, length: 256 }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
-}
 
 function decodeCiphertext(value: string): Uint8Array {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
@@ -31,29 +24,37 @@ interface OAuthStorageRow {
  * connection DO's SQLite never receives these values.
  */
 export class D1McpOAuthStorage {
-  private readonly cryptoKey: Promise<CryptoKey>;
+  private readonly resolveKeyring: () => Promise<McpOAuthKeyring>;
 
   constructor(
     private readonly db: SqlDatabase,
-    encryptionKey: string,
+    keyring: McpOAuthKeyring | string | (() => Promise<McpOAuthKeyring>),
     private readonly connectionId: string
   ) {
     if (!/^mcpconn_[a-f0-9]{32}$/.test(connectionId)) {
       throw new Error("MCP OAuth storage requires a logical MCP connection id");
     }
-    this.cryptoKey = importEncryptionKey(encryptionKey);
+    this.resolveKeyring = async () =>
+      typeof keyring === "string"
+        ? createStaticMcpOAuthKeyring(keyring)
+        : typeof keyring === "function"
+          ? await keyring()
+          : keyring;
   }
 
-  private additionalData(storageKey: string): Uint8Array {
-    return new TextEncoder().encode(`open-inspect:mcp-oauth:v1:${this.connectionId}:${storageKey}`);
+  private additionalData(keyId: string, storageKey: string): Uint8Array {
+    return new TextEncoder().encode(
+      `open-inspect:mcp-oauth:v1:${keyId}:${this.connectionId}:${storageKey}`
+    );
   }
 
   private async encrypt(storageKey: string, value: unknown): Promise<string> {
+    const active = await (await this.resolveKeyring()).active();
     const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
     const plaintext = new TextEncoder().encode(JSON.stringify(value));
     const encrypted = await crypto.subtle.encrypt(
-      { name: AES_GCM, iv, additionalData: this.additionalData(storageKey) },
-      await this.cryptoKey,
+      { name: AES_GCM, iv, additionalData: this.additionalData(active.keyId, storageKey) },
+      active.key,
       plaintext
     );
     const envelope = new Uint8Array(iv.length + encrypted.byteLength);
@@ -62,16 +63,29 @@ export class D1McpOAuthStorage {
     return encodeCiphertext(envelope);
   }
 
+  /**
+   * Decrypt one value.
+   *
+   * The key that encrypted the value is tried first, and the retired keys are
+   * tried after it, so a rotation never strands existing material.
+   */
   private async decrypt<T>(storageKey: string, ciphertext: string): Promise<T> {
     const envelope = decodeCiphertext(ciphertext);
     const iv = envelope.slice(0, AES_GCM_IV_BYTES);
     const encrypted = envelope.slice(AES_GCM_IV_BYTES);
-    const plaintext = await crypto.subtle.decrypt(
-      { name: AES_GCM, iv, additionalData: this.additionalData(storageKey) },
-      await this.cryptoKey,
-      encrypted
-    );
-    return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+    for (const candidate of await (await this.resolveKeyring()).decryptable()) {
+      try {
+        const plaintext = await crypto.subtle.decrypt(
+          { name: AES_GCM, iv, additionalData: this.additionalData(candidate.keyId, storageKey) },
+          candidate.key,
+          encrypted
+        );
+        return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+      } catch {
+        // This key did not encrypt the value. Try the next one.
+      }
+    }
+    throw new Error("MCP OAuth material could not be decrypted with any known key");
   }
 
   async get<T>(key: string): Promise<T | undefined> {

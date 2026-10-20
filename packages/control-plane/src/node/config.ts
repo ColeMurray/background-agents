@@ -104,6 +104,8 @@ const ENV_CONFIG_KEYS = {
   PI_EXTERNAL_ACTIONS_MODE: true,
   PI_MCP_MODE: true,
   PI_CROSS_SESSION_MESSAGING_MODE: true,
+  PI_BROWSER_MODE: true,
+  PI_BROWSER_ALLOWED_DOMAINS: true,
   MCP_CONNECTIONS_ENABLED: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;

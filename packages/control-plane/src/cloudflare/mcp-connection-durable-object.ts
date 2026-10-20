@@ -6,6 +6,7 @@ import {
   D1McpOAuthStorage,
   EncryptedMcpOAuthClientProvider,
 } from "../mcp/encrypted-oauth-provider";
+import { resolveMcpOAuthKeyring } from "../mcp/oauth-keyring";
 import type { WorkerBindings } from "./platform";
 
 type McpConnectionBindings = Pick<WorkerBindings, "DB" | "MCP_OAUTH_ENCRYPTION_KEY">;
@@ -39,7 +40,9 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
         storage: new D1McpOAuthStorage(
           // eslint-disable-next-line no-restricted-syntax -- Durable Object composition root creates the encrypted D1 adapter
           this.env.DB,
-          requireMcpOAuthEncryptionKey(this.env),
+          // A rotated keyring in D1 wins, so a rotation needs no code change.
+          // eslint-disable-next-line no-restricted-syntax -- Durable Object composition root resolves the keyring
+          () => resolveMcpOAuthKeyring(this.env.DB, requireMcpOAuthEncryptionKey(this.env)),
           this.connectionId
         ),
         clientName: "open-inspect-mcp",

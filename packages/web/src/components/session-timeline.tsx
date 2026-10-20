@@ -704,6 +704,30 @@ function ExecutionCompleteEvent({ event }: EventRendererProps) {
   );
 }
 
+function BrowserActivityEvent({ event }: EventRendererProps) {
+  if (event.type !== "browser_activity") return null;
+  return (
+    <StatusRow
+      tone={event.outcome === "authorized" ? "success" : "warning"}
+      time={formatEventTime(event)}
+    >
+      Browser {event.outcome === "authorized" ? "opened" : "refused"}
+      {event.url ? ` ${event.url}` : ""}
+      {event.reason ? ` — ${event.reason}` : ""}
+    </StatusRow>
+  );
+}
+
+function CrossSessionMessageEvent({ event }: EventRendererProps) {
+  if (event.type !== "cross_session_message") return null;
+  return (
+    <StatusRow tone="success" time={formatEventTime(event)}>
+      Cross-session message {event.status} to session {event.targetSessionId}
+      {event.reason ? ` — ${event.reason}` : ""}
+    </StatusRow>
+  );
+}
+
 function ContextCompactedEvent({ event }: EventRendererProps) {
   if (event.type !== "context_compacted") return null;
 
@@ -730,6 +754,8 @@ const eventRenderers = {
   warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
   context_compacted: ContextCompactedEvent,
+  browser_activity: BrowserActivityEvent,
+  cross_session_message: CrossSessionMessageEvent,
 } satisfies Record<DirectTimelineEventType, (props: EventRendererProps) => ReactNode>;
 
 export const EventItem = memo(function EventItem({

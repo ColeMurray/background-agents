@@ -383,6 +383,20 @@ export async function mergeUsers(
     return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyCounts() };
   }
 
+  // A user that holds personal MCP connections may not be merged away. The
+  // connection carries the owner's OAuth identity and the session grants that
+  // were made with it, so silently deleting or repointing it would either lose
+  // the credential or hand it to another person.
+  const mcpConnections = await db
+    .prepare("SELECT COUNT(*) AS total FROM mcp_connections WHERE owner_user_id = ?")
+    .bind(loserId)
+    .first<{ total: number }>();
+  if ((mcpConnections?.total ?? 0) > 0) {
+    throw new UserMergeError(
+      "Revoke the user's personal MCP connections before merging the account"
+    );
+  }
+
   const survivorEmail = normalizeEmail(survivor.email);
   const loserEmail = normalizeEmail(loser?.email);
   const [survivorAssignment, loserAssignment] = await db.batch<{

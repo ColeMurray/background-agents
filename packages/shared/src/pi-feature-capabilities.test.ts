@@ -22,6 +22,7 @@ describe("Pi feature capability contracts", () => {
       "externalActions",
       "mcp",
       "crossSessionMessaging",
+      "browser",
     ]);
   });
 
@@ -34,6 +35,7 @@ describe("Pi feature capability contracts", () => {
       externalActions: "off",
       mcp: "off",
       crossSessionMessaging: "off",
+      browser: "off",
     } as const satisfies PiFeatureCapabilityMatrix;
 
     expectTypeOf(matrix).toMatchTypeOf<PiFeatureCapabilityMatrix>();
@@ -56,6 +58,7 @@ describe("Pi feature capability contracts", () => {
       externalActions: "off",
       mcp: "off",
       crossSessionMessaging: "off",
+      browser: "off",
     });
   });
 
@@ -71,9 +74,9 @@ describe("Pi feature capability contracts", () => {
   it("creates one validated versioned snapshot for durable per-session latching", () => {
     const snapshot = createPiFeatureCapabilitySnapshot({ scratchWorkspace: "read_only" });
 
-    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(3);
+    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(4);
     expect(snapshot).toEqual({
-      version: 3,
+      version: 4,
       capabilities: {
         scratchWorkspace: "read_only",
         repositoryEditing: "off",
@@ -82,6 +85,7 @@ describe("Pi feature capability contracts", () => {
         externalActions: "off",
         mcp: "off",
         crossSessionMessaging: "off",
+        browser: "off",
       },
     });
     expect(piFeatureCapabilitySnapshotSchema.parse(snapshot)).toEqual(snapshot);
@@ -101,7 +105,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(legacy)).toEqual({
-      version: 3,
+      version: 4,
       capabilities: {
         // The rename never changes what a session may do.
         scratchWorkspace: "enabled",
@@ -112,6 +116,7 @@ describe("Pi feature capability contracts", () => {
         mcp: "off",
         // A feature that did not exist cannot have been enabled.
         crossSessionMessaging: "off",
+        browser: "off",
       },
     });
   });
@@ -131,7 +136,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(renamed)).toEqual({
-      version: 3,
+      version: 4,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "off",
@@ -140,6 +145,7 @@ describe("Pi feature capability contracts", () => {
         externalActions: "off",
         mcp: "off",
         crossSessionMessaging: "enabled",
+        browser: "off",
       },
     });
   });
