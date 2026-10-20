@@ -100,6 +100,8 @@ its own authorization.
 | `d368bd3f` | The browser binding in Terraform, and a read-only browser mode that means something                | 5,405 unit, 113 Terraform, 13 workflow                          |
 | `e0553b99` | The browser binding read from the worker's own bindings                                            | 5,405 unit                                                      |
 | `c47b8baf` | One browser activity per page, not two                                                             | 5,406 unit, 2,474 workerd, 2,578 web, 1,314 shared              |
+| `b1f53734` | The restart, the budget, and the attribution findings of the sixth audit                           | 5,407 unit                                                      |
+| `3ddf7332` | Code Mode runs behind the owning session's authority                                               | 5,409 unit                                                      |
 
 ## Slice 7A — what landed
 
@@ -379,6 +381,14 @@ fixed or listed as still open above.
 | The execution endpoint trusts the approval revision in its body                                               | low      | fixed: the session records its own revision and gates new work     |
 | The MCP transport, its OAuth lifecycle, and its elicitation receipt do not exist                              | high     | open, listed above                                                 |
 | The browser transport and its Worker bindings do not exist                                                    | high     | fixed: a bounded transport behind the session gateway              |
+| A native control in flight broke the Durable Object's restart, so every later prompt failed                   | blocking | fixed: the event relay leaves a control submission alone           |
+| A follow-up's model spend was never charged, so the cost cap could be bypassed                                | high     | fixed: a follow-up is charged from the turn it was queued behind   |
+| The repository materialization read the whole repository with no turn behind it                               | medium   | fixed: it needs an active operation                                |
+| The session context's pin mode claimed diff baselines with no turn behind it                                  | medium   | fixed: the pin mode needs an active operation                      |
+| Code Mode was the only capability with no per-turn session authority                                          | medium   | fixed: a Code Mode run is authorized and recorded by the session   |
+| A busy conversation was reported as an unknown outcome and kept its operation active                          | medium   | fixed: a busy conversation is a refusal, not an unknown outcome    |
+| The MCP grant list was not tied to a turn                                                                     | low      | fixed: it names the turn, as the read does                         |
+| An event could be projected for an operation whose dispatch was ambiguous                                     | low      | fixed: an ambiguous dispatch takes no projections                  |
 | The external-action providers had no credential source                                                        | high     | fixed: a per-call credential from the deployment credential        |
 | The external-action delegate claimed every external mutation, so the cross-session tool was unreachable       | blocking | fixed, with an assembler invariant for an unowned mutation         |
 | The publication capability had no model-facing surface                                                        | medium   | fixed: a tool per provider the deployment holds a credential for   |
