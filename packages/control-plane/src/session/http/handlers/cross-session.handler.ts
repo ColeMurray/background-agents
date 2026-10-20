@@ -262,10 +262,18 @@ export class CrossSessionHandler {
 
     const enqueued = await this.options.messages.enqueuePrompt({
       content,
-      // The message is an agent's message that a human initiated. It is never
-      // presented as something the human typed in this session.
-      authorId: receipt.humanActorId,
+      // The message belongs to the agent, not to the human. The initiator is
+      // named in the provenance instead of being made a participant of this
+      // session: a collaborator list, a presence list, and the access rules of
+      // the target session must not change because a message arrived.
+      authorId: crossSessionAuthorId(receipt.sourceSessionId),
       source: "agent",
+      scmEnrichment: {
+        userId: null,
+        login: null,
+        name: `Agent (session ${receipt.sourceSessionId})`,
+        email: null,
+      },
       originContext: {
         kind: "cross_session",
         receiptId: receipt.receiptId,
@@ -293,6 +301,17 @@ export class CrossSessionHandler {
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The identity a message from another session is authored by.
+ *
+ * It is a machine identity, never the human who initiated the message: making
+ * that human a participant of the target session would change the target's
+ * participant list for a message that arrived from somewhere else.
+ */
+export function crossSessionAuthorId(sourceSessionId: string): string {
+  return `cross-session:${sourceSessionId}`;
 }
 
 export const crossSessionDeliveryEnvelopeSchema = z.unknown();

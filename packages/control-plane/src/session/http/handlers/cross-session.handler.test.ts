@@ -269,7 +269,8 @@ describe("CrossSessionHandler", () => {
     expect(h.enqueuePrompt).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "agent",
-        authorId: "user-1",
+        // The initiator is named in the provenance, not made a participant.
+        authorId: "cross-session:session-1",
         originContext: expect.objectContaining({
           kind: "cross_session",
           sourceSessionId: "session-1",

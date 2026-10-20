@@ -226,6 +226,9 @@ Pi session A → SessionDO A → D1 authority → durable receipt → SessionDO 
   session it came from, and the agent conversation and task. It is never presented as something the
   human typed in the target session. The timeline says "Agent message · from session <id> ·
   initiated by <user>".
+- The message is authored by a machine identity, `cross-session:<source session id>`, so the
+  initiator never becomes a participant of the target session. A participant row is display, not
+  access; the access rules read the collaborators, the owner, and the team.
 - The capability is a first-class feature gate, `crossSessionMessaging`, with a version 2 snapshot.
   A version 1 snapshot is read with the new feature closed, so an older session keeps working and
   the capability stays off.
