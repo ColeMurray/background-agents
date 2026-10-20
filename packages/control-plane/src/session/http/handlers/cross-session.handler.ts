@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   MAX_CROSS_SESSION_DEPTH,
+  MAX_CROSS_SESSION_FAN_OUT,
   crossSessionDeliverySchema,
   crossSessionMessageRequestSchema,
   type CrossSessionDeliveryResult,
@@ -114,11 +115,25 @@ export class CrossSessionHandler {
         reason: null,
       } satisfies CrossSessionDeliveryResult);
     }
+    // One turn may reach only so many other sessions. The count is what this
+    // turn already produced, so a retry of the same request does not consume
+    // another slot.
+    const produced = await bridge.receipts.countForOperation(sourceSessionId, operationId);
+    if (produced >= MAX_CROSS_SESSION_FAN_OUT) {
+      return Response.json(
+        {
+          error: "This turn already reached the maximum number of other sessions",
+          code: "cross_session_fan_out_exceeded",
+        },
+        { status: 409 }
+      );
+    }
 
     const receipt = existing ?? {
       id: `xsr_${crypto.randomUUID()}`,
       sourceSessionId,
       targetSessionId: parsed.data.targetSessionId,
+      operationId,
       humanActorId: actorId,
       agentConversationId: parsed.data.agentConversationId,
       sourceTaskId: parsed.data.sourceTaskId,

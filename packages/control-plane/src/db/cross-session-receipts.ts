@@ -17,6 +17,7 @@ export interface CrossSessionReceiptRecord {
   id: string;
   sourceSessionId: string;
   targetSessionId: string;
+  operationId: string;
   humanActorId: string;
   agentConversationId: string | null;
   sourceTaskId: string | null;
@@ -34,6 +35,7 @@ interface ReceiptRow {
   id: string;
   source_session_id: string;
   target_session_id: string;
+  operation_id: string;
   human_actor_id: string;
   agent_conversation_id: string | null;
   source_task_id: string | null;
@@ -63,7 +65,7 @@ export class CrossSessionReceiptStore {
   ): Promise<CrossSessionReceiptRecord | null> {
     const row = await this.db
       .prepare(
-        `SELECT id, source_session_id, target_session_id, human_actor_id, agent_conversation_id,
+        `SELECT id, source_session_id, target_session_id, operation_id, human_actor_id, agent_conversation_id,
                 source_task_id, depth, idempotency_key, content_sha256, status, target_message_id,
                 rejection_reason, created_at, updated_at
          FROM cross_session_receipts
@@ -78,16 +80,17 @@ export class CrossSessionReceiptStore {
     const result = await this.db
       .prepare(
         `INSERT INTO cross_session_receipts
-           (id, source_session_id, target_session_id, human_actor_id, agent_conversation_id,
-            source_task_id, depth, idempotency_key, content_sha256, status, target_message_id,
-            rejection_reason, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, source_session_id, target_session_id, operation_id, human_actor_id,
+            agent_conversation_id, source_task_id, depth, idempotency_key, content_sha256, status,
+            target_message_id, rejection_reason, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (source_session_id, idempotency_key) DO NOTHING`
       )
       .bind(
         receipt.id,
         receipt.sourceSessionId,
         receipt.targetSessionId,
+        receipt.operationId,
         receipt.humanActorId,
         receipt.agentConversationId,
         receipt.sourceTaskId,
@@ -102,6 +105,18 @@ export class CrossSessionReceiptStore {
       )
       .run();
     return result.meta.changes === 1;
+  }
+
+  /** How many messages one turn already produced in this session. */
+  async countForOperation(sourceSessionId: string, operationId: string): Promise<number> {
+    const row = await this.db
+      .prepare(
+        `SELECT COUNT(*) AS total FROM cross_session_receipts
+         WHERE source_session_id = ? AND operation_id = ?`
+      )
+      .bind(sourceSessionId, operationId)
+      .first<{ total: number }>();
+    return row?.total ?? 0;
   }
 
   async markDelivered(id: string, targetMessageId: string, now: number): Promise<boolean> {
@@ -134,6 +149,7 @@ function toRecord(row: ReceiptRow): CrossSessionReceiptRecord {
     id: row.id,
     sourceSessionId: row.source_session_id,
     targetSessionId: row.target_session_id,
+    operationId: row.operation_id,
     humanActorId: row.human_actor_id,
     agentConversationId: row.agent_conversation_id,
     sourceTaskId: row.source_task_id,

@@ -65,22 +65,25 @@ its own authorization.
 
 ### Go-live integration branch `feat/pi-go-live-integration-v2`
 
-| Commit     | What it does                                                                              | Evidence                             |
-| ---------- | ----------------------------------------------------------------------------------------- | ------------------------------------ |
-| `d484e480` | Latency milestones and characterization of existing flows                                 | —                                    |
-| `bf565b16` | Server-authoritative capabilities, lazy first token, lazy repository pinning and Computer | 5,115 unit, 2,459 workerd            |
-| `d1cf7645` | Personal web Pi diagnostics and credential sentinel scan                                  | 54 web                               |
-| `d888b169` | Durable Slack ingress receipts in D1                                                      | 163 focused                          |
-| `0f554777` | Slack Queue/DLQ, durable enqueue before ACK, fast-path claim                              | 12 focused                           |
-| `d93170c5` | Exactly-once Slack session, thread mapping, prompt, and callback repair                   | 647 Slack                            |
-| `d5fb92f7` | Pi-native control authority in SessionDO                                                  | 5,126 unit, 2,470 workerd            |
-| `efca49ae` | Slack ingress flag wired into both Terraform jobs                                         | 33 workflow contracts                |
-| `a1e4bd95` | Accessible Pi agent controls and bounded same-session agent tools                         | 2,540 web                            |
-| `a4a7aaa9` | SessionDO stays the canonical multiplayer authority                                       | 335 GitHub, 317 Linear               |
-| `72fc8d8e` | Production Code Mode safety, exact artifact, observed attestation                         | 10 two-Worker, 101 Terraform         |
-| `722e41fe` | Generation-78 execution isolation boundary                                                | 565 Modal, 78 image, 1,668 runtime   |
-| `77fc7be2` | Authorized Pi execution tools, provider canary blocked by default                         | 5,185 unit                           |
-| `514db750` | Pi hibernation telemetry, external-action authority, pending-action list                  | 5,226 unit, 2,472 workerd, 2,554 web |
+| Commit     | What it does                                                                                       | Evidence                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `d484e480` | Latency milestones and characterization of existing flows                                          | —                                                             |
+| `bf565b16` | Server-authoritative capabilities, lazy first token, lazy repository pinning and Computer          | 5,115 unit, 2,459 workerd                                     |
+| `d1cf7645` | Personal web Pi diagnostics and credential sentinel scan                                           | 54 web                                                        |
+| `d888b169` | Durable Slack ingress receipts in D1                                                               | 163 focused                                                   |
+| `0f554777` | Slack Queue/DLQ, durable enqueue before ACK, fast-path claim                                       | 12 focused                                                    |
+| `d93170c5` | Exactly-once Slack session, thread mapping, prompt, and callback repair                            | 647 Slack                                                     |
+| `d5fb92f7` | Pi-native control authority in SessionDO                                                           | 5,126 unit, 2,470 workerd                                     |
+| `efca49ae` | Slack ingress flag wired into both Terraform jobs                                                  | 33 workflow contracts                                         |
+| `a1e4bd95` | Accessible Pi agent controls and bounded same-session agent tools                                  | 2,540 web                                                     |
+| `a4a7aaa9` | SessionDO stays the canonical multiplayer authority                                                | 335 GitHub, 317 Linear                                        |
+| `72fc8d8e` | Production Code Mode safety, exact artifact, observed attestation                                  | 10 two-Worker, 101 Terraform                                  |
+| `722e41fe` | Generation-78 execution isolation boundary                                                         | 565 Modal, 78 image, 1,668 runtime                            |
+| `77fc7be2` | Authorized Pi execution tools, provider canary blocked by default                                  | 5,185 unit                                                    |
+| `514db750` | Pi hibernation telemetry, external-action authority, pending-action list                           | 5,226 unit, 2,472 workerd, 2,554 web                          |
+| `75be1a63` | External-action lifecycle hardening, grant administration, provider adapters and conformance suite | 5,289 unit, 2,472 workerd, 2,576 web, 49 provider conformance |
+| `1c9ec044` | `crossSessionMessaging` capability gate with a version 2 snapshot                                  | 1,308 shared, 5,303 unit                                      |
+| `37ef29e8` | Authorized cross-session messaging with durable receipts and provenance                            | 5,305 unit, 2,578 web, 98 Terraform                           |
 
 ## Slice 7A — what landed
 
@@ -127,19 +130,19 @@ The external-action authority now holds to the rule that reading a session is no
 
 ## Capability status
 
-| Capability                   | State                                | Why                                                                     |
-| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
-| Durable Pi chat and recovery | Ready                                | Pi Durable is the transcript and task authority                         |
-| Credential brokerage         | Ready                                | Memory-only short-lived access token; no API-key fallback               |
-| Repository analysis          | Ready                                | Commit-pinned, credential-free, provider-backed reads                   |
-| Cloudflare Computer VFS      | Ready behind preview acknowledgement | Lazy, least-authority facade, bounded quota                             |
-| Repository editing and diffs | Ready behind preview acknowledgement | Lazy overlay, durable diff outbox, generation fence                     |
-| Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, observed attestation                  |
-| Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes |
-| External publication         | Foundation only                      | No production provider definitions yet                                  |
-| MCP/OAuth                    | Dormant                              | Transport deliberately not installed                                    |
-| Cross-session messaging      | Not started                          | Requires a D1 receipt migration                                         |
-| Browser/Kitesurf             | Not started                          | Needs the current official API and a SessionDO browser gateway          |
+| Capability                   | State                                | Why                                                                                             |
+| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| Durable Pi chat and recovery | Ready                                | Pi Durable is the transcript and task authority                                                 |
+| Credential brokerage         | Ready                                | Memory-only short-lived access token; no API-key fallback                                       |
+| Repository analysis          | Ready                                | Commit-pinned, credential-free, provider-backed reads                                           |
+| Cloudflare Computer VFS      | Ready behind preview acknowledgement | Lazy, least-authority facade, bounded quota                                                     |
+| Repository editing and diffs | Ready behind preview acknowledgement | Lazy overlay, durable diff outbox, generation fence                                             |
+| Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, observed attestation                                          |
+| Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes                         |
+| External publication         | Definitions and conformance ready    | Four credential-closed providers pass the generic suite; the credential source is still missing |
+| MCP/OAuth                    | Dormant                              | Transport deliberately not installed                                                            |
+| Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts                               |
+| Browser/Kitesurf             | Not started                          | Needs the current official API and a SessionDO browser gateway                                  |
 
 ## Upstream Pi Durable parity
 
@@ -217,6 +220,8 @@ Pi session A → SessionDO A → D1 authority → durable receipt → SessionDO 
   target cannot confirm is refused rather than shown.
 - A durable receipt is written before the target is called. One request key produces one receipt, so
   a retry delivers the same message once, and a reused key with different content is refused.
+- One turn may reach only a bounded number of other sessions, and a message may only travel so many
+  hops. Both limits are counted from durable state, not from memory.
 - The target message is an agent message with typed provenance: the human who initiated it, the
   session it came from, and the agent conversation and task. It is never presented as something the
   human typed in the target session. The timeline says "Agent message · from session <id> ·
@@ -225,8 +230,7 @@ Pi session A → SessionDO A → D1 authority → durable receipt → SessionDO 
   A version 1 snapshot is read with the new feature closed, so an older session keeps working and
   the capability stays off.
 
-**Still open in Slice 9:** the fan-out and depth limits in the agent-facing tool, and the browser
-journey for it.
+**Still open in Slice 9:** the browser journey for it.
 
 ### Slice 8 — read-only MCP and OAuth
 

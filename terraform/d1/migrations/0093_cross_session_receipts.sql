@@ -9,6 +9,7 @@ CREATE TABLE cross_session_receipts (
   id                  TEXT PRIMARY KEY CHECK (id GLOB 'xsr_*'),
   source_session_id   TEXT NOT NULL,
   target_session_id   TEXT NOT NULL,
+  operation_id        TEXT NOT NULL,
   human_actor_id      TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   agent_conversation_id TEXT,
   source_task_id      TEXT,
@@ -27,5 +28,6 @@ CREATE TABLE cross_session_receipts (
 CREATE INDEX idx_cross_session_receipts_source
   ON cross_session_receipts(source_session_id, created_at DESC, id);
 
-CREATE INDEX idx_cross_session_receipts_target
-  ON cross_session_receipts(target_session_id, created_at DESC, id);
+-- The fan-out limit counts the messages one turn produced.
+CREATE INDEX idx_cross_session_receipts_operation
+  ON cross_session_receipts(source_session_id, operation_id, created_at DESC, id);

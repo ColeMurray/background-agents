@@ -10,6 +10,7 @@ function harness(
     decision?: CrossSessionTargetDecision;
     delivered?: boolean;
     depth?: number;
+    fanOut?: number;
   } = {}
 ) {
   const receipts = new Map<
@@ -18,6 +19,7 @@ function harness(
       id: string;
       sourceSessionId: string;
       targetSessionId: string;
+      operationId: string;
       humanActorId: string;
       agentConversationId: string | null;
       sourceTaskId: string | null;
@@ -49,6 +51,15 @@ function harness(
             return receipt;
         }
         return null;
+      },
+      countForOperation: async (sourceSessionId: string, operationId: string) => {
+        if (options.fanOut !== undefined) return options.fanOut;
+        let total = 0;
+        for (const receipt of receipts.values()) {
+          if (receipt.sourceSessionId === sourceSessionId && receipt.operationId === operationId)
+            total += 1;
+        }
+        return total;
       },
       create: async (receipt: typeof receipts extends Map<string, infer V> ? V : never) => {
         receipts.set(receipt.idempotencyKey, receipt);
@@ -213,6 +224,18 @@ describe("CrossSessionHandler", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
       code: "cross_session_depth_exceeded",
+    });
+    expect(h.deliver).not.toHaveBeenCalled();
+  });
+
+  it("refuses a turn that already reached the maximum number of other sessions", async () => {
+    const h = harness({ fanOut: 5 });
+
+    const response = await h.handler.outbound(outboundRequest());
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "cross_session_fan_out_exceeded",
     });
     expect(h.deliver).not.toHaveBeenCalled();
   });
