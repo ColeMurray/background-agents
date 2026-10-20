@@ -65,29 +65,33 @@ its own authorization.
 
 ### Go-live integration branch `feat/pi-go-live-integration-v2`
 
-| Commit     | What it does                                                                                       | Evidence                                                      |
-| ---------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `d484e480` | Latency milestones and characterization of existing flows                                          | —                                                             |
-| `bf565b16` | Server-authoritative capabilities, lazy first token, lazy repository pinning and Computer          | 5,115 unit, 2,459 workerd                                     |
-| `d1cf7645` | Personal web Pi diagnostics and credential sentinel scan                                           | 54 web                                                        |
-| `d888b169` | Durable Slack ingress receipts in D1                                                               | 163 focused                                                   |
-| `0f554777` | Slack Queue/DLQ, durable enqueue before ACK, fast-path claim                                       | 12 focused                                                    |
-| `d93170c5` | Exactly-once Slack session, thread mapping, prompt, and callback repair                            | 647 Slack                                                     |
-| `d5fb92f7` | Pi-native control authority in SessionDO                                                           | 5,126 unit, 2,470 workerd                                     |
-| `efca49ae` | Slack ingress flag wired into both Terraform jobs                                                  | 33 workflow contracts                                         |
-| `a1e4bd95` | Accessible Pi agent controls and bounded same-session agent tools                                  | 2,540 web                                                     |
-| `a4a7aaa9` | SessionDO stays the canonical multiplayer authority                                                | 335 GitHub, 317 Linear                                        |
-| `72fc8d8e` | Production Code Mode safety, exact artifact, observed attestation                                  | 10 two-Worker, 101 Terraform                                  |
-| `722e41fe` | Generation-78 execution isolation boundary                                                         | 565 Modal, 78 image, 1,668 runtime                            |
-| `77fc7be2` | Authorized Pi execution tools, provider canary blocked by default                                  | 5,185 unit                                                    |
-| `514db750` | Pi hibernation telemetry, external-action authority, pending-action list                           | 5,226 unit, 2,472 workerd, 2,554 web                          |
-| `75be1a63` | External-action lifecycle hardening, grant administration, provider adapters and conformance suite | 5,289 unit, 2,472 workerd, 2,576 web, 49 provider conformance |
-| `1c9ec044` | `crossSessionMessaging` capability gate with a version 2 snapshot                                  | 1,308 shared, 5,303 unit                                      |
-| `37ef29e8` | Authorized cross-session messaging with durable receipts and provenance                            | 5,305 unit, 2,578 web, 98 Terraform                           |
-| `0a8ed61b` | Read-only MCP gateway, session grants, reviewed catalog, and the cross-session authority fixes     | 5,338 unit, 2,473 workerd, 1,309 shared                       |
-| `d62cccc1` | Browser gateway, MCP OAuth keyring, DNS and redirect-safe egress, RESTRICT user merge              | 5,348 unit, 104 Terraform                                     |
-| `f641896b` | The browser tool gated on the owning session                                                       | 5,352 unit                                                    |
-| `83ce188a` | The web suite waits for its requests instead of assuming them                                      | 2,578 web                                                     |
+| Commit     | What it does                                                                                       | Evidence                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `d484e480` | Latency milestones and characterization of existing flows                                          | —                                                               |
+| `bf565b16` | Server-authoritative capabilities, lazy first token, lazy repository pinning and Computer          | 5,115 unit, 2,459 workerd                                       |
+| `d1cf7645` | Personal web Pi diagnostics and credential sentinel scan                                           | 54 web                                                          |
+| `d888b169` | Durable Slack ingress receipts in D1                                                               | 163 focused                                                     |
+| `0f554777` | Slack Queue/DLQ, durable enqueue before ACK, fast-path claim                                       | 12 focused                                                      |
+| `d93170c5` | Exactly-once Slack session, thread mapping, prompt, and callback repair                            | 647 Slack                                                       |
+| `d5fb92f7` | Pi-native control authority in SessionDO                                                           | 5,126 unit, 2,470 workerd                                       |
+| `efca49ae` | Slack ingress flag wired into both Terraform jobs                                                  | 33 workflow contracts                                           |
+| `a1e4bd95` | Accessible Pi agent controls and bounded same-session agent tools                                  | 2,540 web                                                       |
+| `a4a7aaa9` | SessionDO stays the canonical multiplayer authority                                                | 335 GitHub, 317 Linear                                          |
+| `72fc8d8e` | Production Code Mode safety, exact artifact, observed attestation                                  | 10 two-Worker, 101 Terraform                                    |
+| `722e41fe` | Generation-78 execution isolation boundary                                                         | 565 Modal, 78 image, 1,668 runtime                              |
+| `77fc7be2` | Authorized Pi execution tools, provider canary blocked by default                                  | 5,185 unit                                                      |
+| `514db750` | Pi hibernation telemetry, external-action authority, pending-action list                           | 5,226 unit, 2,472 workerd, 2,554 web                            |
+| `75be1a63` | External-action lifecycle hardening, grant administration, provider adapters and conformance suite | 5,289 unit, 2,472 workerd, 2,576 web, 49 provider conformance   |
+| `1c9ec044` | `crossSessionMessaging` capability gate with a version 2 snapshot                                  | 1,308 shared, 5,303 unit                                        |
+| `37ef29e8` | Authorized cross-session messaging with durable receipts and provenance                            | 5,305 unit, 2,578 web, 98 Terraform                             |
+| `0a8ed61b` | Read-only MCP gateway, session grants, reviewed catalog, and the cross-session authority fixes     | 5,338 unit, 2,473 workerd, 1,309 shared                         |
+| `d62cccc1` | Browser gateway, MCP OAuth keyring, DNS and redirect-safe egress, RESTRICT user merge              | 5,348 unit, 104 Terraform                                       |
+| `f641896b` | The browser tool gated on the owning session                                                       | 5,352 unit                                                      |
+| `83ce188a` | The web suite waits for its requests instead of assuming them                                      | 2,578 web                                                       |
+| `80adb08b` | The external-action credential source: a per-call credential from the deployment credential        | 5,354 unit, 2,473 workerd, 1,309 shared                         |
+| `389dcb8e` | The handover record for the closed credential source                                               | —                                                               |
+| `e5eebd5f` | A portable MCP session grant migration, with the invariant in the store                            | 14 SQL portability, 9 focused                                   |
+| `b2b79341` | The fourth audit round's repairs: the owning delegate, the publication tool, the credential guard  | 5,370 unit, 2,578 web, 1,314 shared, 108 Terraform, 13 workflow |
 
 ## Slice 7A — what landed
 
@@ -143,7 +147,7 @@ The external-action authority now holds to the rule that reading a session is no
 | Repository editing and diffs | Ready behind preview acknowledgement | Lazy overlay, durable diff outbox, generation fence                                         |
 | Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, durable parent record, observed attestation               |
 | Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes                     |
-| External publication         | Boundary ready, credential open      | Four credential-closed providers pass the generic suite; no credential source yet           |
+| External publication         | Ready behind its own gate            | Four credential-closed providers, a per-call credential source, and the generic suite       |
 | MCP read                     | Boundary ready, transport open       | Grants, reviewed catalog, gateway, broker authority, keyring, egress, RESTRICT merge        |
 | Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts and confirmed provenance  |
 | Browser                      | Boundary ready, transport open       | Session gateway, host allowlist, activity on the timeline, the tool gated on the session    |
@@ -199,10 +203,15 @@ asserts that no credential and no provider response reaches a result, an error, 
 - A provider is registered only when the deployment supplies its credential source, so the agent
   never sees a publication it could not complete.
 
-**Still open in 7C:** the credential source for each provider. It must come from the encrypted D1
-provider-account store, and no provider may be registered until its credential path is in place and
-a live canary has published and reconciled one effect. Until then the registry stays empty and the
-feature stays off by default.
+**The credential source is closed.** Each provider now closes over a credential the deployment
+already holds, minted per call: a scoped source-control installation token for GitHub and GitLab,
+the bot token for Slack, and the API key for Linear. The provider list comes from one deployment
+variable, and a provider without a credential is not registered, so the agent never sees a
+publication it could not complete. A publication that reaches the preparation path without a
+credential is refused before an approval card is raised.
+
+**Still open in 7C:** the live provider canaries. No provider may be switched on until a canary has
+published one effect and reconciled it by its marker. The feature stays off by default until then.
 
 ### Slice 9 — authorized cross-session messaging
 
@@ -282,11 +291,25 @@ environment variable still works until it is removed.
 
 ### The adversarial audit rounds
 
-Three rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, and `AUDIT-ROUND-3.md`. Round
-3 is the deep audit of the cross-session and capability slices, and it found a defect that made the
-whole feature unusable: the target session compared the target against _its own_ id, so every
-delivery was refused. It is fixed, along with the source-side authority, the receipt confirmation,
-the idempotency state machine, the actor identity, and the depth and fan-out limits.
+Four rounds are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`, and
+`AUDIT-ROUND-4.md`. Round 3 is the deep audit of the cross-session and capability slices, and it
+found a defect that made the whole feature unusable: the target session compared the target against
+_its own_ id, so every delivery was refused. It is fixed, along with the source-side authority, the
+receipt confirmation, the idempotency state machine, the actor identity, and the depth and fan-out
+limits.
+
+Round 4 audits the whole Pi surface — every tool, every route the agent calls on the owning session,
+every credential path, and every cross-session reach. Its blocking finding was that the
+external-action policy delegate claimed every external mutation, so the cross-session tool could
+never be reached: the whole capability was dead. It is fixed, and the assembler now refuses to
+install a runtime in which an external mutation has no owning delegate. Nine more findings are fixed
+with it: the browser gate asked a question with no answer, the MCP capability had no deployment
+switch, an MCP answer could carry a credential into the shared timeline, a provider error string
+reached the model, the MCP grant list had a broken contract and named the owner, a read-only MCP
+capability installed a tool that always failed, the execution endpoint trusted its body and had no
+gate, the publication capability had no model-facing surface, and the browser effect registration
+was an unconsumed trap. One finding, the live deny not covering the scratch reads, was reviewed and
+deliberately left as it is, and the reasoning is written down in the round.
 
 ### Slice 9 — browser gateway
 
@@ -320,8 +343,8 @@ its UI belong to the MCP transport and stay open with it.
    `BROWSER` and `LOADER` bindings in the Pi Durable Object's Worker, the Terraform that stages
    them, the guardrails allowlist, the session scope, and a live canary.
 3. **The finish.** Accessibility review, the browser journeys, the ten-minute canary on the user's
-   own instance, and the fourth adversarial audit round. The first three audit rounds over the new
-   code are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, and `AUDIT-ROUND-3.md`.
+   own instance, and the provider canaries. The four adversarial audit rounds over the new code are
+   written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, `AUDIT-ROUND-3.md`, and `AUDIT-ROUND-4.md`.
 
 ## The gaps the deep audit found
 
@@ -343,10 +366,19 @@ fixed or listed as still open above.
 | Code Mode's nested-call restriction lived only in memory and failed open after an eviction                    | medium   | fixed, the parent record is now durable                            |
 | The two Code Mode model tools were declared but could never be called                                         | low      | written down; the policy blocks them on purpose                    |
 | The native execution slice cannot run in any real deployment                                                  | low      | written down; it stays dormant until the isolation canary passes   |
-| The execution endpoint trusts the approval revision in its body                                               | low      | written down; the endpoint is not publicly reachable               |
+| The execution endpoint trusts the approval revision in its body                                               | low      | fixed: the session records its own revision and gates new work     |
 | The MCP transport, its OAuth lifecycle, and its elicitation receipt do not exist                              | high     | open, listed above                                                 |
 | The browser transport and its Worker bindings do not exist                                                    | high     | open, listed above                                                 |
-| The external-action providers have no credential source                                                       | high     | open, listed above                                                 |
+| The external-action providers had no credential source                                                        | high     | fixed: a per-call credential from the deployment credential        |
+| The external-action delegate claimed every external mutation, so the cross-session tool was unreachable       | blocking | fixed, with an assembler invariant for an unowned mutation         |
+| The publication capability had no model-facing surface                                                        | medium   | fixed: a tool per provider the deployment holds a credential for   |
+| An MCP answer could carry a credential into the shared timeline                                               | medium   | fixed: a shared credential guard and a redacted read output        |
+| A provider error string reached the model                                                                     | medium   | fixed: bounded public errors on both paths                         |
+| The MCP capability had no deployment switch                                                                   | medium   | fixed: the variable, the binding, and the workflow variable        |
+| The browser gate asked a question with no answer                                                              | medium   | fixed: the delegate sends the URL                                  |
+| The MCP grant list had a broken contract and named the owner                                                  | low      | fixed: the canonical pin shape, gated, no owner                    |
+| A read-only MCP capability installed a tool that always failed                                                | low      | fixed: the gateway refuses only when it is off                     |
+| The browser effect registration was declared and never consumed                                               | low      | written down as reserved; the invariant makes it a refused runtime |
 
 ## How to work in this repository
 
