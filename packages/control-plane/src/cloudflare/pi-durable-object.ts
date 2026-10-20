@@ -2,6 +2,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
 import {
+  PI_BROWSER_TOOL_EFFECT_REGISTRATIONS,
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
   normalizeTokenUsage,
@@ -28,6 +29,12 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import { DurableObject } from "cloudflare:workers";
+import {
+  BrowserRenderingTransport,
+  type BrowserRenderingBinding,
+} from "./browser-rendering-transport";
+import { createBrowserExtension } from "../pi/browser-extension";
+import type { PiBrowserAction } from "../pi/browser-transport";
 import { PiHarness } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
 import { SessionInternalPaths } from "../session/contracts";
@@ -229,6 +236,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private codeModeCoordinator: PiCodeModeExecutionCoordinator | undefined;
   private rawWorkspace: Workspace | undefined;
+  private readonly browserTransport = new BrowserRenderingTransport(
+    (this.env as { BROWSER?: BrowserRenderingBinding }).BROWSER
+  );
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
   private repositoryWorkspaceInitialization: Promise<PiRepositoryWorkspace> | undefined;
   private repositoryWorkspaceInitializer:
@@ -473,6 +483,19 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           }),
           effects: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
           ownedToolNames: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS.map((effect) => effect.name),
+        });
+      }
+      if (capabilities.browser === "enabled" && this.browserTransport.available()) {
+        extensions.push({
+          slot: "browser",
+          feature: "browser",
+          minimumCapability: "enabled",
+          extension: createBrowserExtension({
+            transport: this.browserTransport,
+            authorize: (request) => this.authorizeBrowserRequest(request),
+          }),
+          effects: PI_BROWSER_TOOL_EFFECT_REGISTRATIONS,
+          ownedToolNames: PI_BROWSER_TOOL_EFFECT_REGISTRATIONS.map((effect) => effect.name),
         });
       }
       if (capabilities.mcp !== "off") {
@@ -1881,6 +1904,42 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
    *
    * The session decides. The agent learns only whether it may proceed.
    */
+  /**
+   * Ask the owning session whether this browser request may happen.
+   *
+   * The session decides. The agent learns only whether it may proceed.
+   */
+  private async authorizeBrowserRequest(request: {
+    action: PiBrowserAction;
+    url: string;
+  }): Promise<{ allowed: boolean; reason?: string }> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) return { allowed: false, reason: "The session is not initialized" };
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piBrowserAuthorize}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
+          ...(operationId ? piTraceHeader(operationId) : {}),
+        },
+        body: JSON.stringify({ action: request.action, url: request.url }),
+      })
+    );
+    const body = (await response.json().catch(() => null)) as {
+      allowed?: boolean;
+      reason?: string;
+    } | null;
+    if (!response.ok || !body?.allowed) {
+      return {
+        allowed: false,
+        reason: body?.reason ?? "The browser is not available for this session",
+      };
+    }
+    return { allowed: true };
+  }
+
   private async authorizeBrowser(
     request: { url?: string },
     signal?: AbortSignal

@@ -72,6 +72,12 @@ module "control_plane_worker" {
     } : {}
   )
 
+  # The browser binding is opt-in. A deployment without it has no
+  # browser at all, and the browser capability stays unavailable.
+  browser_bindings = var.pi_browser_mode == "off" ? {} : {
+    BROWSER = {}
+  }
+
   service_bindings = merge(
     var.enable_slack_bot ? {
       SLACK_BOT = {

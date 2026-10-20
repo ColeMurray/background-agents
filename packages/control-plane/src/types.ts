@@ -140,6 +140,15 @@ export interface Platform {
   MCP_CONNECTION?: McpConnectionBrokerDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
+  /**
+   * The Workers Browser Rendering binding.
+   *
+   * Absent unless the deployment stages it, and the browser capability stays
+   * unavailable without it.
+   */
+  BROWSER?: {
+    fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  };
   /** Media artifacts: screenshots, uploads, session media. */
   MEDIA_BUCKET: ObjectStorage;
   /** The slack-bot service, when deployed. */

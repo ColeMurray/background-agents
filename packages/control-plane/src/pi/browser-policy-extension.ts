@@ -16,7 +16,10 @@ export interface BrowserAuthorizationDecision {
 }
 
 export interface BrowserAuthorizationClient {
-  authorize(request: { url?: string }, signal?: AbortSignal): Promise<BrowserAuthorizationDecision>;
+  authorize(
+    request: { action?: string; url?: string },
+    signal?: AbortSignal
+  ): Promise<BrowserAuthorizationDecision>;
 }
 
 export interface BrowserPolicyOptions {
@@ -39,6 +42,7 @@ export function createBrowserPolicyDelegate(options: BrowserPolicyOptions): PiTo
       try {
         decision = await options.client.authorize(
           {
+            action: typeof call.arguments.action === "string" ? call.arguments.action : undefined,
             url: typeof call.arguments.url === "string" ? call.arguments.url : undefined,
           },
           context.abortSignal

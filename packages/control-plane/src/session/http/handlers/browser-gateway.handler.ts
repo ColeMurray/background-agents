@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
+import { PI_BROWSER_ACTIONS, PI_BROWSER_SENSITIVE_ACTIONS } from "../../../pi/browser-transport";
 
 /**
  * The browser gateway inside the owning session.
@@ -38,6 +39,15 @@ export type BrowserAuthorization =
 export const browserRequestSchema = z
   .object({
     /**
+     * The browser work the agent wants.
+     *
+     * It is optional because the early gate asks whether the session may
+     * drive a browser at all, before any work is named. The sensitive
+     * actions are named so the gateway can refuse them by name instead of
+     * failing a parse.
+     */
+    action: z.enum([...PI_BROWSER_ACTIONS, ...PI_BROWSER_SENSITIVE_ACTIONS]).optional(),
+    /**
      * The URL the agent wants to reach.
      *
      * It is optional because the early gate asks whether the session may
@@ -61,7 +71,10 @@ export class BrowserGateway {
    * The order is the boundary: the session's own capability, the live
    * deployment mode, the turn's actor, and then the reviewed hosts.
    */
-  authorize(request: { url?: string }, operationId: string | null): BrowserAuthorization {
+  authorize(
+    request: { action?: string; url?: string },
+    operationId: string | null
+  ): BrowserAuthorization {
     const bridge = this.options.browser;
     if (bridge.sessionCapability() !== "enabled" || bridge.liveMode() !== "enabled") {
       return {
@@ -83,6 +96,26 @@ export class BrowserGateway {
         kind: "denied",
         code: "browser_actor_missing",
         reason: "The originating turn has no workspace actor",
+      };
+    }
+    if (
+      request.action &&
+      (PI_BROWSER_SENSITIVE_ACTIONS as readonly string[]).includes(request.action)
+    ) {
+      // Logging in, uploading, and downloading act on a site that belongs to
+      // someone else. They need a human decision, and this session has no
+      // approval path for them, so they are refused by name.
+      return {
+        kind: "denied",
+        code: "browser_action_needs_approval",
+        reason: "This browser action needs a human approval, which this session does not have",
+      };
+    }
+    if (request.action && !(PI_BROWSER_ACTIONS as readonly string[]).includes(request.action)) {
+      return {
+        kind: "denied",
+        code: "browser_action_not_allowed",
+        reason: "The browser may not do that",
       };
     }
     if (!request.url) {
@@ -121,7 +154,11 @@ export class BrowserGateway {
   }
 
   /** Record the decision so collaborators can see what the browser did. */
-  record(request: { url?: string }, operationId: string, decision: BrowserAuthorization): void {
+  record(
+    request: { action?: string; url?: string },
+    operationId: string,
+    decision: BrowserAuthorization
+  ): void {
     this.options.browser.recordActivity({
       operationId,
       actorId: decision.kind === "allowed" ? decision.actorId : "system",

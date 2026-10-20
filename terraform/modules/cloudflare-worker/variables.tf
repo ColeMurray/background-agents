@@ -86,6 +86,12 @@ variable "r2_buckets" {
   default = {}
 }
 
+variable "browser_bindings" {
+  description = "Browser Rendering bindings, by binding name. Empty leaves the worker without a browser."
+  type        = map(object({}))
+  default     = {}
+}
+
 variable "queue_bindings" {
   description = "Map of Queue producer bindings keyed by binding name"
   type = map(object({

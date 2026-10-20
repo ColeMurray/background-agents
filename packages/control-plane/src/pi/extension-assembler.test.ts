@@ -100,6 +100,7 @@ describe("assemblePiExtensions", () => {
       "external_actions",
       "mcp",
       "cross_session",
+      "browser",
     ]);
     expect(assembled.extensions.map(({ name }) => name)).toEqual([
       "open-inspect.tool-policy",

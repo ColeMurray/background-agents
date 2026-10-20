@@ -35,6 +35,12 @@ locals {
       name       = binding_name
       queue_name = binding.queue_name
     }],
+    # Browser Rendering bindings. They are opt-in: a worker without them has
+    # no browser, and the browser capability stays unavailable.
+    [for binding_name, binding in var.browser_bindings : {
+      type = "browser"
+      name = binding_name
+    }],
     # Plain text bindings (environment variables)
     [for binding_name, binding in var.plain_text_bindings : {
       type = "plain_text"

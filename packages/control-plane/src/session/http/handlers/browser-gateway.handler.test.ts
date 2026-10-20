@@ -33,6 +33,44 @@ describe("BrowserGateway", () => {
     });
   });
 
+  it("refuses an action that needs a human approval, by name", () => {
+    const h = harness();
+
+    for (const action of ["login", "upload", "download"]) {
+      const decision = h.gateway.authorize(
+        { action, url: "https://example.com/page" },
+        "operation-1"
+      );
+      expect(decision).toMatchObject({
+        kind: "denied",
+        code: "browser_action_needs_approval",
+      });
+    }
+  });
+
+  it("refuses an action the browser does not offer", () => {
+    const h = harness();
+
+    const decision = h.gateway.authorize(
+      { action: "evaluate", url: "https://example.com/page" },
+      "operation-1"
+    );
+
+    expect(decision).toMatchObject({ kind: "denied", code: "browser_action_not_allowed" });
+  });
+
+  it("authorizes a read and a screenshot", () => {
+    const h = harness();
+
+    for (const action of ["read", "screenshot"]) {
+      const decision = h.gateway.authorize(
+        { action, url: "https://example.com/page" },
+        "operation-1"
+      );
+      expect(decision).toMatchObject({ kind: "allowed" });
+    }
+  });
+
   it("refuses a page outside the reviewed hosts", () => {
     const h = harness();
 
