@@ -1,10 +1,9 @@
 locals {
-  name_suffix              = var.deployment_name
-  use_modal_backend        = contains(["modal", "modal-vm"], var.sandbox_provider)
-  use_daytona_backend      = var.sandbox_provider == "daytona"
-  use_vercel_backend       = var.sandbox_provider == "vercel"
-  use_opencomputer_backend = var.sandbox_provider == "opencomputer"
-  use_e2b_backend          = var.sandbox_provider == "e2b"
+  name_suffix         = var.deployment_name
+  use_modal_backend   = contains(["modal", "modal-vm"], var.sandbox_provider)
+  use_daytona_backend = var.sandbox_provider == "daytona"
+  use_vercel_backend  = var.sandbox_provider == "vercel"
+  use_e2b_backend     = var.sandbox_provider == "e2b"
 
   # A complete OAuth credential pair is the deployment's provider enablement
   # declaration. Runtime validation mirrors these plan-time invariants.
@@ -45,7 +44,7 @@ locals {
   # The bots derive their classifier's provider from the model id alone, so the
   # deployment binds exactly one provider credential to them. This is scoped to
   # the classifier — var.anthropic_api_key is still what Claude coding sessions
-  # and the opencomputer control-plane path use.
+  # use.
   #
   # Same regex source as MODEL_ID_PATTERNS in packages/shared/src/classification.ts.
   # Go and JavaScript regex engines still differ on \r, \v, and non-ASCII
@@ -87,10 +86,6 @@ locals {
   modal_llm_secret_values = {
     ANTHROPIC_API_KEY = trimspace(var.anthropic_api_key)
   }
-
-  # OpenComputer reads its sandbox credentials from the control plane rather than
-  # from a provider-side secret, so its bindings are set together.
-  opencomputer_enabled = trimspace(var.opencomputer_api_key) != "" && trimspace(var.opencomputer_api_url) != ""
 
   # Host the Cloudflare web Worker is served from: custom domain when configured,
   # otherwise its default workers.dev hostname.

@@ -165,7 +165,7 @@ describe("sandbox resource limit validation", () => {
     }
   );
 
-  it.each(["vercel", "daytona", "opencomputer", "e2b"] as const)(
+  it.each(["vercel", "daytona", "e2b"] as const)(
     "does not compare unused caps for %s",
     (provider) => {
       expect(
@@ -184,7 +184,6 @@ describe("sandbox provider settings capabilities", () => {
     { provider: "modal-vm", resources: true, resourceLimits: true, timeout: true },
     { provider: "daytona", resources: false, resourceLimits: false, timeout: false },
     { provider: "vercel", resources: true, resourceLimits: false, timeout: true },
-    { provider: "opencomputer", resources: false, resourceLimits: false, timeout: true },
     { provider: "e2b", resources: false, resourceLimits: false, timeout: true },
   ])("resolves canonical capabilities for $provider", ({ provider, ...capabilities }) => {
     expect(sandboxSettingCapabilities(provider)).toEqual(capabilities);
@@ -200,7 +199,7 @@ describe("sandbox provider settings capabilities", () => {
     expect(omitUnsupportedSandboxSettings(settings, provider)).toEqual(settings);
   });
 
-  it.each(["vercel", "daytona", "opencomputer", "e2b", "test-provider"])(
+  it.each(["vercel", "daytona", "e2b", "test-provider"])(
     "ignores resource caps for %s",
     (provider) => {
       expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(false);
@@ -216,12 +215,9 @@ describe("sandbox provider settings capabilities", () => {
     expect(supportsConfigurableSandboxResources(provider)).toBe(true);
   });
 
-  it.each(["daytona", "opencomputer", "e2b"])(
-    "does not expose resource overrides for %s",
-    (provider) => {
-      expect(supportsConfigurableSandboxResources(provider)).toBe(false);
-    }
-  );
+  it.each(["daytona", "e2b"])("does not expose resource overrides for %s", (provider) => {
+    expect(supportsConfigurableSandboxResources(provider)).toBe(false);
+  });
 
   it("does not expose session timeout overrides for Daytona", () => {
     expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);

@@ -4,7 +4,7 @@
  * An image build bakes a provider-opaque prebuilt artifact for a *scope* — an
  * environment (an ordered repository set) or, once the repo scope lands, a
  * single repository. The artifact is provider-opaque (Modal image id, Vercel
- * snapshot id, OpenComputer checkpoint id); code outside provider adapters
+ * snapshot id, E2B template id); code outside provider adapters
  * treats those ids as opaque. Drift is tracked per repository
  * (`repository_shas`) and spawn selection is gated by the runtime version
  * baked at build time.

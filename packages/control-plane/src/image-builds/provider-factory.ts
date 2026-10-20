@@ -9,7 +9,6 @@ import { DaytonaImageBuildResources } from "./daytona-build-resources";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildProvider } from "./model";
-import { OpenComputerImageBuildAdapter } from "./opencomputer-adapter";
 import type { ImageBuildAdapter } from "./types";
 import { VercelImageBuildAdapter } from "./vercel-adapter";
 
@@ -41,12 +40,6 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
         return new ModalImageBuildAdapter(createSandboxProviderFromEnv(this.env, provider));
       case "vercel":
         return new VercelImageBuildAdapter(createSandboxProviderFromEnv(this.env, "vercel"));
-      case "opencomputer":
-        return new OpenComputerImageBuildAdapter(
-          createSandboxProviderFromEnv(this.env, "opencomputer", {
-            requireOpenComputerTemplate: operation === "start",
-          })
-        );
       case "e2b":
         return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
       case "daytona":

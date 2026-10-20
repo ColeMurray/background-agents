@@ -26,9 +26,7 @@ export interface EnvConfig {
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
   MODAL_API_SECRET?: string; // Shared secret for authenticating with Modal endpoints
-  ANTHROPIC_API_KEY?: string; // Anthropic API key for Claude models
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
-  OPENCOMPUTER_API_KEY?: string; // OpenComputer REST API key (X-API-Key auth + HMAC derivation)
   VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
   // Pepper for image-build callback token hashes.
   IMAGE_CALLBACK_TOKEN_PEPPER?: string;
@@ -62,7 +60,7 @@ export interface EnvConfig {
   ALLOWED_GITHUB_ORGS?: string;
   UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "modal-vm", "daytona", "vercel", or "e2b"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -77,8 +75,6 @@ export interface EnvConfig {
   DAYTONA_TARGET?: string; // Optional Daytona target name
   DAYTONA_TOOLBOX_API_URL?: string; // Optional explicit Daytona toolbox proxy base URL
   DAYTONA_PREBUILDS_ENABLED?: string; // Admits new Daytona image builds and prebuilt selection
-  OPENCOMPUTER_API_URL?: string; // OpenComputer REST API base URL
-  OPENCOMPUTER_TEMPLATE?: string; // Declarative template containing sandbox runtime
   VERCEL_PROJECT_ID?: string; // Vercel project ID used for Sandbox API scope
   VERCEL_TEAM_ID?: string; // Optional Vercel team ID used for Sandbox API scope
   VERCEL_BASE_SNAPSHOT_ID?: string; // Optional prebuilt base snapshot with sandbox runtime

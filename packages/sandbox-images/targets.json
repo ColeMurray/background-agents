@@ -26,12 +26,5 @@
     "node": "24",
     "user": "root",
     "home": "/root"
-  },
-  "opencomputer": {
-    "os": "debian",
-    "base": "provider-default",
-    "node": "24",
-    "user": "sandbox",
-    "home": "/home/sandbox"
   }
 }
