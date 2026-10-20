@@ -13,6 +13,7 @@ export const PI_FEATURE_IDS = [
   "sandboxExecution",
   "externalActions",
   "mcp",
+  "crossSessionMessaging",
 ] as const;
 
 export type PiFeatureId = (typeof PI_FEATURE_IDS)[number];
@@ -26,7 +27,15 @@ export type PiFeatureCapabilityMatrix = FeatureCapabilityMatrix<PiFeatureId>;
 
 export type PiFeatureCapabilityInput = Partial<Readonly<Record<PiFeatureId, string | undefined>>>;
 
-export const PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION = 1 as const;
+export const PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION = 2 as const;
+
+/**
+ * The snapshot version written before cross-session messaging existed.
+ *
+ * A stored version 1 snapshot is read as version 2 with the new feature off,
+ * so an older session keeps working and the new capability stays closed.
+ */
+export const PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION = 1 as const;
 
 const featureCapabilityModeSchema = z.enum(FEATURE_CAPABILITY_MODES);
 
@@ -38,15 +47,50 @@ export const piFeatureCapabilityMatrixSchema = z
     sandboxExecution: featureCapabilityModeSchema,
     externalActions: featureCapabilityModeSchema,
     mcp: featureCapabilityModeSchema,
+    crossSessionMessaging: featureCapabilityModeSchema,
+  })
+  .strict();
+
+/** A snapshot as it was written before cross-session messaging existed. */
+const legacyPiFeatureCapabilityMatrixSchema = z
+  .object({
+    workspace: featureCapabilityModeSchema,
+    repositoryEditing: featureCapabilityModeSchema,
+    codeMode: featureCapabilityModeSchema,
+    sandboxExecution: featureCapabilityModeSchema,
+    externalActions: featureCapabilityModeSchema,
+    mcp: featureCapabilityModeSchema,
   })
   .strict();
 
 export const piFeatureCapabilitySnapshotSchema = z
-  .object({
-    version: z.literal(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION),
-    capabilities: piFeatureCapabilityMatrixSchema,
-  })
-  .strict();
+  .union([
+    z
+      .object({
+        version: z.literal(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION),
+        capabilities: piFeatureCapabilityMatrixSchema,
+      })
+      .strict(),
+    z
+      .object({
+        version: z.literal(PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION),
+        capabilities: legacyPiFeatureCapabilityMatrixSchema,
+      })
+      .strict(),
+  ])
+  .transform((snapshot) =>
+    snapshot.version === PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION
+      ? {
+          version:
+            PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION as typeof PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
+          capabilities: {
+            ...snapshot.capabilities,
+            // A feature that did not exist cannot have been enabled.
+            crossSessionMessaging: "off" as const,
+          },
+        }
+      : snapshot
+  );
 
 export type PiFeatureCapabilitySnapshot = Readonly<{
   version: typeof PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION;
@@ -64,6 +108,7 @@ export function resolvePiFeatureCapabilities(
     sandboxExecution: resolveFeatureCapability(input.sandboxExecution),
     externalActions: resolveFeatureCapability(input.externalActions),
     mcp: resolveFeatureCapability(input.mcp),
+    crossSessionMessaging: resolveFeatureCapability(input.crossSessionMessaging),
   };
 }
 

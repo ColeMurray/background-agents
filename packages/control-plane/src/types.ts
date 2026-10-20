@@ -110,6 +110,7 @@ export interface EnvConfig {
   PI_SANDBOX_EXECUTION_ATTESTATION?: string; // Generation/artifact provider canary evidence
   PI_EXTERNAL_ACTIONS_MODE?: string; // New-session admission only
   PI_MCP_MODE?: string; // New-session admission only
+  PI_CROSS_SESSION_MESSAGING_MODE?: string; // New-session admission only
   MCP_CONNECTIONS_ENABLED?: string; // "true" enables staging personal MCP OAuth connections
 
   // Logging

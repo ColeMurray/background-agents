@@ -102,6 +102,7 @@ const ENV_CONFIG_KEYS = {
   PI_SANDBOX_EXECUTION_ATTESTATION: true,
   PI_EXTERNAL_ACTIONS_MODE: true,
   PI_MCP_MODE: true,
+  PI_CROSS_SESSION_MESSAGING_MODE: true,
   MCP_CONNECTIONS_ENABLED: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;

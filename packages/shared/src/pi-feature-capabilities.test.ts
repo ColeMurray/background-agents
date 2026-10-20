@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   FEATURE_CAPABILITY_MODES,
+  PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION,
   PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
   PI_FEATURE_IDS,
   createPiFeatureCapabilitySnapshot,
@@ -19,6 +20,7 @@ describe("Pi feature capability contracts", () => {
       "sandboxExecution",
       "externalActions",
       "mcp",
+      "crossSessionMessaging",
     ]);
   });
 
@@ -30,6 +32,7 @@ describe("Pi feature capability contracts", () => {
       sandboxExecution: "off",
       externalActions: "off",
       mcp: "off",
+      crossSessionMessaging: "off",
     } as const satisfies PiFeatureCapabilityMatrix;
 
     expectTypeOf(matrix).toMatchTypeOf<PiFeatureCapabilityMatrix>();
@@ -51,6 +54,7 @@ describe("Pi feature capability contracts", () => {
       sandboxExecution: "off",
       externalActions: "off",
       mcp: "off",
+      crossSessionMessaging: "off",
     });
   });
 
@@ -64,9 +68,9 @@ describe("Pi feature capability contracts", () => {
   it("creates one validated versioned snapshot for durable per-session latching", () => {
     const snapshot = createPiFeatureCapabilitySnapshot({ workspace: "read_only" });
 
-    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(1);
+    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(2);
     expect(snapshot).toEqual({
-      version: 1,
+      version: 2,
       capabilities: {
         workspace: "read_only",
         repositoryEditing: "off",
@@ -74,8 +78,37 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
       },
     });
     expect(piFeatureCapabilitySnapshotSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it("reads an older snapshot with the newer feature closed", () => {
+    const legacy = {
+      version: PI_FEATURE_CAPABILITY_SNAPSHOT_LEGACY_VERSION,
+      capabilities: {
+        workspace: "enabled",
+        repositoryEditing: "enabled",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+      },
+    };
+
+    expect(piFeatureCapabilitySnapshotSchema.parse(legacy)).toEqual({
+      version: 2,
+      capabilities: {
+        workspace: "enabled",
+        repositoryEditing: "enabled",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+        // A feature that did not exist cannot have been enabled.
+        crossSessionMessaging: "off",
+      },
+    });
   });
 });

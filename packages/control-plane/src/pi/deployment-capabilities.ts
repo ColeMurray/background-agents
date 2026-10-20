@@ -17,6 +17,7 @@ type PiDeploymentCapabilityConfig = Pick<
   | "PI_SANDBOX_EXECUTION_MODE"
   | "PI_EXTERNAL_ACTIONS_MODE"
   | "PI_MCP_MODE"
+  | "PI_CROSS_SESSION_MESSAGING_MODE"
 >;
 
 /** Resolve current deployment policy through the canonical shared normalizer. */
@@ -28,6 +29,7 @@ function resolvePiDeploymentCapabilities(config: PiDeploymentCapabilityConfig) {
     sandboxExecution: config.PI_SANDBOX_EXECUTION_MODE,
     externalActions: config.PI_EXTERNAL_ACTIONS_MODE,
     mcp: config.PI_MCP_MODE,
+    crossSessionMessaging: config.PI_CROSS_SESSION_MESSAGING_MODE,
   });
 }
 

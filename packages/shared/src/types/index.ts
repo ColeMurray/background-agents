@@ -219,6 +219,21 @@ export type {
   ExternalActionPendingList,
 } from "./external-actions";
 export {
+  MAX_CROSS_SESSION_MESSAGE_CHARACTERS,
+  MAX_CROSS_SESSION_DEPTH,
+  MAX_CROSS_SESSION_FAN_OUT,
+  crossSessionMessageRequestSchema,
+  crossSessionReceiptSchema,
+  crossSessionDeliverySchema,
+  crossSessionDeliveryResultSchema,
+} from "./cross-session";
+export type {
+  CrossSessionMessageRequest,
+  CrossSessionReceipt,
+  CrossSessionDelivery,
+  CrossSessionDeliveryResult,
+} from "./cross-session";
+export {
   DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS,
   MAX_SANDBOX_COMMAND_TIMEOUT_MS,
   MAX_SANDBOX_COMMAND_ARGV_ITEMS,

@@ -8,6 +8,7 @@ import {
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+  PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
@@ -35,7 +36,8 @@ describe("Pi migration reservations", () => {
       PI_D1_MCP_MIGRATION_VERSION,
       PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
       PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
-    ]).toEqual([58, 59, 60, 61, 62, 63, 64, 65, 66, 90, 91, 92, 95]);
+      PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+    ]).toEqual([58, 59, 60, 61, 62, 63, 64, 65, 66, 90, 91, 92, 95, 93]);
     expect(PI_MIGRATION_RESERVATIONS).toEqual([
       {
         store: "session_do",
@@ -114,6 +116,12 @@ describe("Pi migration reservations", () => {
         version: PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
         feature: "slackIngress",
         purpose: "durable Slack thread mapping projection",
+      },
+      {
+        store: "d1",
+        version: PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+        feature: "crossSessionMessaging",
+        purpose: "durable cross-session message receipts",
       },
     ]);
     expect(() => validateMigrationReservations(PI_MIGRATION_RESERVATIONS)).not.toThrow();

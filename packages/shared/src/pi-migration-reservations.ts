@@ -15,9 +15,15 @@ export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_MIGRATION_VERSION = 91;
 export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
 export const PI_D1_SLACK_MAPPING_MIGRATION_VERSION = 95;
+export const PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION = 93;
 
 export type PiMigrationOwner =
-  PiFeatureId | "coreAuthority" | "piProjection" | "piControls" | "slackIngress";
+  | PiFeatureId
+  | "coreAuthority"
+  | "piProjection"
+  | "piControls"
+  | "slackIngress"
+  | "crossSessionMessaging";
 
 export interface MigrationReservation {
   readonly store: MigrationStore;
@@ -117,6 +123,12 @@ export const PI_MIGRATION_RESERVATIONS = [
     version: PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
     feature: "slackIngress",
     purpose: "durable Slack thread mapping projection",
+  },
+  {
+    store: "d1",
+    version: PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+    feature: "crossSessionMessaging",
+    purpose: "durable cross-session message receipts",
   },
 ] as const satisfies readonly MigrationReservation[];
 

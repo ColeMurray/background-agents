@@ -22,7 +22,7 @@ describe("readPiFeatureCapabilitySnapshot", () => {
 
     await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toBeUndefined();
     expect(PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT).toEqual({
-      version: 1,
+      version: 2,
       capabilities: {
         workspace: "off",
         repositoryEditing: "off",
@@ -30,11 +30,31 @@ describe("readPiFeatureCapabilitySnapshot", () => {
         sandboxExecution: "off",
         externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
       },
     });
   });
 
   it("returns the exact complete durable snapshot", async () => {
+    const original = {
+      version: 2,
+      capabilities: {
+        workspace: "read_only",
+        repositoryEditing: "off",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
+      },
+    };
+    const fake = storage(original);
+
+    await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toEqual(original);
+    expect(fake.values.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)).toBe(original);
+  });
+
+  it("reads an older snapshot with the newer feature closed", async () => {
     const original = {
       version: 1,
       capabilities: {
@@ -48,7 +68,19 @@ describe("readPiFeatureCapabilitySnapshot", () => {
     };
     const fake = storage(original);
 
-    await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toEqual(original);
+    await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toEqual({
+      version: 2,
+      capabilities: {
+        workspace: "read_only",
+        repositoryEditing: "off",
+        codeMode: "off",
+        sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
+      },
+    });
+    // The stored snapshot is left exactly as it was found.
     expect(fake.values.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)).toBe(original);
   });
 
