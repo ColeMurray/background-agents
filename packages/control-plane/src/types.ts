@@ -111,6 +111,8 @@ export interface EnvConfig {
   PI_SANDBOX_EXECUTION_MODE?: string; // Creation admission plus live deny for new execution calls
   PI_SANDBOX_EXECUTION_ATTESTATION?: string; // Generation/artifact provider canary evidence
   PI_EXTERNAL_ACTIONS_MODE?: string; // New-session admission only
+  PI_EXTERNAL_ACTION_PROVIDERS?: string; // Comma-separated providers this deployment may publish through
+  LINEAR_API_KEY?: string; // Optional Linear API key used for a comment-posting publication
   PI_MCP_MODE?: string; // New-session admission only
   PI_CROSS_SESSION_MESSAGING_MODE?: string; // New-session admission only
   PI_BROWSER_MODE?: string; // New-session admission only

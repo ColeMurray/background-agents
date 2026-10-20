@@ -816,6 +816,12 @@ variable "pi_cross_session_messaging_mode" {
   }
 }
 
+variable "pi_external_action_providers" {
+  description = "Comma-separated external publication providers: github, gitlab, slack, linear"
+  type        = string
+  default     = ""
+}
+
 variable "pi_browser_mode" {
   description = "Pi Durable browser capability: off, read_only, or enabled"
   type        = string

@@ -1,51 +1,39 @@
 import { ExternalActionDefinitionRegistry } from "../external-action-definitions";
+import type {
+  ExternalActionCredentialResolver,
+  ExternalActionProviderName,
+} from "../external-action-credentials";
 import { createProviderExecutor, type ProviderFetch } from "./executor";
 import { EXTERNAL_ACTION_PROVIDER_DEFINITIONS } from "./definitions";
 import type { ExternalActionProviderDefinition } from "./definition";
-import type { ExternalActionCredentialResolver } from "./executor";
-
-/** The providers this deployment may publish through. */
-export type ExternalActionProviderName = "github" | "gitlab" | "slack" | "linear";
-
-/** How one provider's credential is resolved for one session. */
-export interface ExternalActionProviderCredential extends ExternalActionCredentialResolver {
-  readonly provider: ExternalActionProviderName;
-}
 
 export interface ExternalActionProviderRegistryOptions {
-  /** The credential source for each provider the deployment enables. */
-  readonly credentials: readonly ExternalActionProviderCredential[];
+  /** The credential source. The credential is resolved per call. */
+  readonly credentials: ExternalActionCredentialResolver;
   readonly fetch: ProviderFetch;
   readonly timeoutMs: number;
   readonly userAgent: string;
+  /** The providers this deployment named. */
+  readonly enabledProviders: readonly ExternalActionProviderName[];
 }
 
 /**
  * Build the registry of providers this session may publish through.
  *
- * A provider is registered only when the deployment supplied its credential
- * source. A provider without a credential source is not registered at all,
- * so the agent never sees a publication it could never complete.
- *
- * Every definition that is registered has already passed the generic
- * fault-injection conformance suite; a definition that has not is refused
- * here rather than published.
+ * A provider is registered only when the deployment named it. The credential
+ * itself is resolved per call, so it is never captured in a long-lived
+ * closure, never outlives one request, and a credential that has expired is
+ * refused rather than used. Every definition in the registry has passed the
+ * generic fault-injection conformance suite.
  */
 export function buildExternalActionProviderRegistry(
-  options: ExternalActionProviderRegistryOptions,
-  definitions: readonly ExternalActionProviderDefinition[] = EXTERNAL_ACTION_PROVIDER_DEFINITIONS
+  options: ExternalActionProviderRegistryOptions
 ): ExternalActionDefinitionRegistry {
   const registry = new ExternalActionDefinitionRegistry();
-  for (const credential of options.credentials) {
-    const definition = definitions.find(
-      (candidate) =>
-        candidate.provider === credential.provider &&
-        candidate.action === providerAction(credential.provider)
-    );
+  for (const provider of options.enabledProviders) {
+    const definition = definitionFor(provider);
     if (!definition) {
-      throw new Error(
-        `No external action definition passed the conformance suite for ${credential.provider}`
-      );
+      throw new Error(`No external action definition passed the conformance suite for ${provider}`);
     }
     registry.register({
       provider: definition.provider,
@@ -54,7 +42,9 @@ export function buildExternalActionProviderRegistry(
       publicResultSchema: definition.publicResultSchema,
       executor: createProviderExecutor({
         definition,
-        credentials: credential,
+        credentials: {
+          resolve: async () => options.credentials.resolve(provider),
+        },
         fetch: options.fetch,
         timeoutMs: options.timeoutMs,
         userAgent: options.userAgent,
@@ -64,7 +54,11 @@ export function buildExternalActionProviderRegistry(
   return registry;
 }
 
-/** The one action each provider publishes. */
-function providerAction(provider: ExternalActionProviderName): string {
-  return provider === "slack" ? "reply" : "comment";
+/** The definition for one provider, if it has one. */
+function definitionFor(
+  provider: ExternalActionProviderName
+): ExternalActionProviderDefinition | undefined {
+  return EXTERNAL_ACTION_PROVIDER_DEFINITIONS.find(
+    (definition) => definition.provider === provider
+  );
 }

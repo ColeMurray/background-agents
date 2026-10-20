@@ -116,6 +116,13 @@ interface ExternalActionBridge {
   >;
   definitions: ExternalActionDefinitionRegistry;
   /**
+   * Whether the deployment holds a credential for one provider.
+   *
+   * A publication that could never complete must never reach an approval
+   * card, so the credential is checked before the action is prepared.
+   */
+  credentialAvailable?(provider: string): Promise<boolean>;
+  /**
    * Live deployment mode for new external effects.
    *
    * The mode is read on every request, so an emergency can deny new effects
@@ -378,6 +385,20 @@ export class PiBridgeHandler {
             code: "external_actions_disabled",
           },
           { status: 403 }
+        );
+      }
+      // A publication that could never complete must never reach an
+      // approval card, so the deployment credential is checked first.
+      const credentialAvailable = await this.options.externalActions!.credentialAvailable?.(
+        parsed.data.provider
+      );
+      if (credentialAvailable === false) {
+        return Response.json(
+          {
+            error: "This deployment holds no credential for the requested provider",
+            code: "external_action_provider_unavailable",
+          },
+          { status: 409 }
         );
       }
       const providerRequest = definition.requestSchema.safeParse({

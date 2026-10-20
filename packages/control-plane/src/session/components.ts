@@ -199,7 +199,14 @@ import { CrossSessionHandler } from "./http/handlers/cross-session.handler";
 import { CrossSessionReceiptStore } from "../db/cross-session-receipts";
 import { evaluateCrossSessionSource, evaluateCrossSessionTarget } from "./cross-session-authority";
 import { ExternalActionGateway } from "./external-action-gateway";
-import { ExternalActionDefinitionRegistry } from "./external-action-definitions";
+import type { ExternalActionDefinitionRegistry } from "./external-action-definitions";
+import { buildExternalActionProviderRegistry } from "./external-action-providers/registry";
+import {
+  EXTERNAL_ACTION_REQUEST_TIMEOUT_MS,
+  parseExternalActionProviders,
+  providerAuthorizationHeader,
+  providerFetch,
+} from "./external-action-credentials";
 import { AutomationExternalActionGrantStore } from "../db/automation-external-action-grants";
 import {
   ExternalActionAuditStore,
@@ -315,8 +322,41 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const sessionCoreRepository = new SessionCoreRepository(sql, transaction);
   const externalActionGateway = new ExternalActionGateway(sql, transaction);
   const externalActionAuditOutbox = new ExternalActionAuditOutbox(sql, transaction);
-  // Deliberately empty until one provider passes the generic fault-injection contract.
-  const externalActionDefinitions = new ExternalActionDefinitionRegistry();
+  // A provider is registered only when the deployment named it. Every
+  // definition in the registry has passed the generic fault-injection
+  // conformance suite, and the credential is resolved per call.
+  const externalActionCredentialResolver = {
+    resolve: async (provider: string) => {
+      if (provider === "github" || provider === "gitlab") {
+        const scoped = await resolveCredentialScope(getPublicSessionId());
+        const auth = await sourceControlProvider().generateCredentialHelperAuth(scoped);
+        return {
+          headers: {
+            ...providerAuthorizationHeader(provider as "github" | "gitlab", auth.password),
+            "user-agent": "open-inspect",
+          },
+        };
+      }
+      if (provider === "slack") {
+        const token = env.SLACK_BOT_TOKEN?.trim();
+        if (!token) return null;
+        return { headers: providerAuthorizationHeader("slack", token) };
+      }
+      if (provider === "linear") {
+        const token = env.LINEAR_API_KEY?.trim();
+        if (!token) return null;
+        return { headers: providerAuthorizationHeader("linear", token) };
+      }
+      return null;
+    },
+  };
+  const externalActionDefinitions = buildExternalActionProviderRegistry({
+    credentials: externalActionCredentialResolver,
+    fetch: providerFetch,
+    timeoutMs: EXTERNAL_ACTION_REQUEST_TIMEOUT_MS,
+    userAgent: "open-inspect",
+    enabledProviders: parseExternalActionProviders(env.PI_EXTERNAL_ACTION_PROVIDERS),
+  });
   const projectExternalActionAudit = async (input: Omit<ExternalActionAuditInput, "teamId">) => {
     const session = await sessionIndexStore.get(getPublicSessionId());
     await new ExternalActionAuditStore(db).write({
@@ -1109,6 +1149,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       // Provider executors are deliberately absent from the foundation. A
       // provider must pass the generic fault-injection suite before registration.
       definitions: externalActionDefinitions,
+      credentialAvailable: async (provider) =>
+        (await externalActionCredentialResolver.resolve(provider)) !== null,
       scheduleReconciliation: (deadline) => alarmScheduler.schedule(deadline),
       flushAudit: () => externalActionAuditOutbox.flush(projectExternalActionAudit),
       nextDeadline: nextExternalActionDeadline,
