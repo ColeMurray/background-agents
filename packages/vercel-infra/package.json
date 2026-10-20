@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.2"
   }
 }
