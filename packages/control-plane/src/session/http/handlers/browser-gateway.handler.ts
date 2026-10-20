@@ -155,12 +155,20 @@ export class BrowserGateway {
     return { kind: "allowed", actorId };
   }
 
-  /** Record the decision so collaborators can see what the browser did. */
+  /**
+   * Record the decision so collaborators can see what the browser did.
+   *
+   * Only a request that names the work is recorded. The early gate asks
+   * whether the session may drive a browser at all, and that is a policy
+   * fact, not browser activity: recording it would put two events on the
+   * timeline for one page.
+   */
   record(
     request: { action?: string; url?: string },
     operationId: string,
     decision: BrowserAuthorization
   ): void {
+    if (!request.action) return;
     this.options.browser.recordActivity({
       operationId,
       actorId: decision.kind === "allowed" ? decision.actorId : "system",

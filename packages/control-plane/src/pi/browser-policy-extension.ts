@@ -40,9 +40,11 @@ export function createBrowserPolicyDelegate(options: BrowserPolicyOptions): PiTo
       if (declaration.effect !== "external_mutation") return undefined;
       let decision: BrowserAuthorizationDecision;
       try {
+        // The early gate asks whether this turn may drive a browser at
+        // all, before any work is named. The work itself is authorized by
+        // the tool, once, and that is the call the timeline records.
         decision = await options.client.authorize(
           {
-            action: typeof call.arguments.action === "string" ? call.arguments.action : undefined,
             url: typeof call.arguments.url === "string" ? call.arguments.url : undefined,
           },
           context.abortSignal

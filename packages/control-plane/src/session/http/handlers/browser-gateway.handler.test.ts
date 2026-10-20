@@ -132,9 +132,9 @@ describe("BrowserGateway", () => {
     const h = harness();
 
     h.gateway.record(
-      { url: "https://example.com/docs" },
+      { action: "read", url: "https://example.com/docs" },
       "message-1",
-      h.gateway.authorize({ url: "https://example.com/docs" }, "message-1")
+      h.gateway.authorize({ action: "read", url: "https://example.com/docs" }, "message-1")
     );
 
     expect(h.recordActivity).toHaveBeenCalledWith({
@@ -144,6 +144,18 @@ describe("BrowserGateway", () => {
       outcome: "authorized",
       reason: null,
     });
+  });
+
+  it("does not record the early gate, which is a policy fact and not activity", () => {
+    const h = harness();
+
+    h.gateway.record(
+      { url: "https://example.com/docs" },
+      "message-1",
+      h.gateway.authorize({ url: "https://example.com/docs" }, "message-1")
+    );
+
+    expect(h.recordActivity).not.toHaveBeenCalled();
   });
 
   it("matches a wildcard only for its sub-domains", () => {
