@@ -312,19 +312,14 @@ its UI belong to the MCP transport and stay open with it.
 
 ## What is still open, in order
 
-1. **The external-action credential source.** The definitions, the conformance suite, and the canary
-   script exist; the credential that each provider closes over does not. It must come from the
-   encrypted D1 provider-account store. Until it exists, the registry stays empty and the feature
-   stays off by default. A provider may only be registered after a live canary has published one
-   effect and reconciled it by marker.
-2. **The MCP transport and the OAuth lifecycle.** The read gateway, the reviewed catalog, the
+1. **The MCP transport and the OAuth lifecycle.** The read gateway, the reviewed catalog, the
    session grants, the broker authority, the rotatable keyring, the DNS and redirect-safe egress,
    and the `RESTRICT` user merge are built. The live transport, the opaque callback with S256, the
    refresh, revoke, and tombstone, and the identity-first lifecycle remain.
-3. **The browser transport.** The browser gateway is built and gated; the transport needs the
+2. **The browser transport.** The browser gateway is built and gated; the transport needs the
    `BROWSER` and `LOADER` bindings in the Pi Durable Object's Worker, the Terraform that stages
    them, the guardrails allowlist, the session scope, and a live canary.
-4. **The finish.** Accessibility review, the browser journeys, the ten-minute canary on the user's
+3. **The finish.** Accessibility review, the browser journeys, the ten-minute canary on the user's
    own instance, and the fourth adversarial audit round. The first three audit rounds over the new
    code are written up in `AUDIT-ROUND-1.md`, `AUDIT-ROUND-2.md`, and `AUDIT-ROUND-3.md`.
 
