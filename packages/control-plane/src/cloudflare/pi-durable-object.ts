@@ -29,10 +29,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import { DurableObject } from "cloudflare:workers";
-import {
-  BrowserRenderingTransport,
-  type BrowserRenderingBinding,
-} from "./browser-rendering-transport";
+import { BrowserRenderingTransport } from "./browser-rendering-transport";
 import { createBrowserExtension } from "../pi/browser-extension";
 import type { PiBrowserAction } from "../pi/browser-transport";
 import { PiHarness } from "agents/harness/pi";
@@ -167,7 +164,7 @@ import { PiHarnessWakeController } from "../pi/pi-harness-wake";
 import { piTraceHeader, piTraceId } from "../pi/pi-trace";
 import { createLogger } from "../logger";
 
-type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
+type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX" | "BROWSER">;
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
@@ -236,9 +233,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private codeModeCoordinator: PiCodeModeExecutionCoordinator | undefined;
   private rawWorkspace: Workspace | undefined;
-  private readonly browserTransport = new BrowserRenderingTransport(
-    (this.env as { BROWSER?: BrowserRenderingBinding }).BROWSER
-  );
+  private readonly browserTransport = new BrowserRenderingTransport(this.env.BROWSER);
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
   private repositoryWorkspaceInitialization: Promise<PiRepositoryWorkspace> | undefined;
   private repositoryWorkspaceInitializer:

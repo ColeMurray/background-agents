@@ -30,6 +30,15 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   AUTOFIX_DLQ?: Queue<unknown>;
   DB: D1Database;
   MEDIA_BUCKET: R2Bucket;
+  /**
+   * The Workers Browser Rendering binding.
+   *
+   * It is read by the Pi Durable Object, which is the only component that
+   * drives a browser. Absent unless the deployment stages it.
+   */
+  BROWSER?: {
+    fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  };
 }
 
 /**
@@ -75,6 +84,9 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
 // of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
-  Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX">,
+  Exclude<
+    keyof WorkerBindings,
+    keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX" | "BROWSER"
+  >,
   keyof EnvConfig
 >;
