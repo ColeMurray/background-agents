@@ -38,6 +38,7 @@ import {
   RetryablePiProjectionError,
 } from "../pi/projection-retry-policy";
 import { translatePiEvents, type PiEventTranslationState } from "../pi/event-translator";
+import { piBlockedReason, sanitizePiInspection } from "../pi/inspection-sanitizer";
 import {
   toPiModel,
   toPiThinkingLevel,
@@ -796,7 +797,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       return {
         requestId: input.requestId,
         state: "completed",
-        result: sanitizeInspection(inspection),
+        result: sanitizePiInspection(inspection, operationIdForSubmission),
       };
     }
     if (input.action === "inspect_agents") {
@@ -1101,7 +1102,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               status: task.state.kind,
               phase: "phase" in task.record.state ? task.record.state.phase : undefined,
               // A blocked agent says why it cannot run.
-              ...(task.state.kind === "blocked" ? { blocked: blockedReason(task.state) } : {}),
+              ...(task.state.kind === "blocked" ? { blocked: piBlockedReason(task.state) } : {}),
               abortRequested: task.record.abortRequested,
             }));
           const queued = inspection.submissions.filter(
@@ -2568,59 +2569,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
 function isRetryableDiffPublicationStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
-}
-
-/**
- * Why a task cannot run here.
- *
- * The reason is a fixed vocabulary, so it never carries content. The detail
- * is bounded, because a failed migration may name a task definition.
- */
-function blockedReason(state: { readonly kind: string }): JsonValue {
-  if (state.kind !== "blocked") return null;
-  const blocked = state as {
-    readonly kind: "blocked";
-    readonly reason?: string;
-    readonly error?: unknown;
-  };
-  const detail = typeof blocked.error === "string" ? blocked.error.slice(0, 200) : null;
-  return {
-    reason: blocked.reason ?? "unknown",
-    ...(detail ? { detail } : {}),
-  };
-}
-
-function sanitizeInspection(
-  inspection: Awaited<ReturnType<Awaited<ReturnType<PiSessionDO["harness"]["pi"]>>["inspect"]>>
-): JsonValue {
-  return {
-    scheduling: inspection.scheduling,
-    tasks: inspection.tasks.slice(0, 64).map(({ record, state }) => ({
-      id: record.id,
-      kind: record.kind,
-      conversationId: record.conversationId,
-      state: {
-        kind: state.kind,
-        ...("phase" in record.state ? { phase: record.state.phase } : {}),
-        // A blocked task says why it cannot run. The reason is a fixed
-        // vocabulary; the detail behind it is bounded and content-free.
-        ...(state.kind === "blocked" ? { blocked: blockedReason(state) } : {}),
-      },
-    })),
-    submissions: inspection.submissions.slice(-200).map((submission) => ({
-      id: submission.id,
-      conversationId: submission.conversationId,
-      requestId: operationIdForSubmission(submission.requestId),
-      type: submission.type,
-      status: submission.status,
-      ...("entry" in submission && submission.entry !== undefined
-        ? { entry: submission.entry }
-        : {}),
-      ...("answer" in submission && submission.answer !== undefined
-        ? { answer: submission.answer }
-        : {}),
-    })),
-  } as unknown as JsonValue;
 }
 
 function lastAgentMessage(
