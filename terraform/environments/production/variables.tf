@@ -816,6 +816,17 @@ variable "pi_cross_session_messaging_mode" {
   }
 }
 
+variable "pi_external_actions_mode" {
+  description = "Pi Durable external publication capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_external_actions_mode)
+    error_message = "pi_external_actions_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
 variable "pi_sandbox_execution_mode" {
   description = "Pi sandbox execution capability for new sessions: off, read_only, or enabled"
   type        = string

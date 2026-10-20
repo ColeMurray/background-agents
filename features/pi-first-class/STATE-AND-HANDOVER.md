@@ -160,9 +160,9 @@ Upstream `main` is ahead of the published release. See `PI-UPSTREAM-PARITY.md`.
 
 ### Slice 7A — external action authority and gateway correctness — DONE
 
-Everything listed below landed. The remaining item is _bounded public errors_: the public error
-bodies still echo a gateway message. Tighten them so a public error never repeats an internal
-provider string.
+Everything landed, including the bounded public errors: a public failure is now a stable code and a
+generic message, so an internal provider string never reaches the browser. The conformance suite
+asserts that no credential and no provider response reaches a result, an error, or the agent.
 
 ### Slice 7B — approval and grant surfaces — DONE
 
@@ -245,7 +245,31 @@ Mutations stay prohibited.
 ### Slice 9 — browser gateway and finish
 
 Browser/Kitesurf as a lazy, default-off, session-scoped SessionDO gateway. Then accessibility,
-browser journeys, the ten-minute canary, and two adversarial audit rounds.
+browser journeys, the ten-minute canary, and the last adversarial audit round. See "What is still
+open, in order" below for the exact remaining list.
+
+## What is still open, in order
+
+1. **The external-action credential source.** The definitions, the conformance suite, and the canary
+   script exist; the credential that each provider closes over does not. It must come from the
+   encrypted D1 provider-account store. Until it exists, the registry stays empty and the feature
+   stays off by default. A provider may only be registered after a live canary has published one
+   effect and reconciled it by marker.
+2. **Read-only MCP and OAuth.** The D1 foundation and the dormant broker are in place. The remaining
+   work is the catalog and read projection, the owner-only non-delegable review, session pins,
+   identity-first lifecycle, an opaque callback with S256 enforcement, refresh, revoke, and
+   tombstone, a `RESTRICT` user merge, key rotation, DNS and redirect-safe egress, and stable read
+   tools declared before extension assembly. Mutations stay prohibited.
+3. **The browser gateway.** Browser/Kitesurf as a lazy, default-off, session-scoped SessionDO
+   gateway, after checking the current official Cloudflare API. It needs one browser context per
+   session, no implicit reuse of a human's cookies, explicit approval for login, uploads, and
+   downloads, domain and network policy, page content treated as untrusted prompt-injection data,
+   bounded screenshots and downloads, collaborator-visible activity, and cleanup on archive or
+   delete.
+4. **The finish.** Accessibility review, the browser journeys, the ten-minute canary on the user's
+   own instance, and the two adversarial audit rounds. The two audit rounds over the new code are
+   written up in `AUDIT-ROUND-1.md` and `AUDIT-ROUND-2.md`; a third round over the remaining slices
+   is still owed.
 
 ## How to work in this repository
 

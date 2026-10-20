@@ -1461,6 +1461,8 @@ Secrets for credentials:
 | `PI_CODEMODE_PAID_CANARY_VERIFIED`        | Keep `false` until migration, WASM, and CPU checks pass on a disposable paid account            |
 | `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`    | Exact version ID produced by the latest protected Wrangler deployment                           |
 | `PI_CODEMODE_PAID_CANARY_VERSION`         | Exact deployed version ID covered by the recorded paid canary                                   |
+| `PI_EXTERNAL_ACTIONS_MODE`                | Pi external publication gate: `off` (default), `read_only`, or `enabled`                        |
+| `PI_CROSS_SESSION_MESSAGING_MODE`         | Pi cross-session messaging gate: `off` (default) or `enabled`                                   |
 | `ENABLE_SERVICE_BINDINGS`                 | Optional Terraform CI flag for service-binding phase 1 (defaults to `true`)                     |
 | `ENABLE_GITHUB_BOT`                       | `true` to deploy GitHub bot worker (or empty to skip)                                           |
 | `GH_WEBHOOK_SECRET`                       | GitHub webhook secret (required if GitHub bot enabled)                                          |

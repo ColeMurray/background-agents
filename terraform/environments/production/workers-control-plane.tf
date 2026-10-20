@@ -110,6 +110,7 @@ module "control_plane_worker" {
       PI_SANDBOX_EXECUTION_ATTESTATION = { value = var.pi_sandbox_execution_attestation }
       PI_CODE_MODE                  = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
       PI_CROSS_SESSION_MESSAGING_MODE = { value = var.pi_cross_session_messaging_mode }
+      PI_EXTERNAL_ACTIONS_MODE        = { value = var.pi_external_actions_mode }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }

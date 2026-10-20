@@ -71,3 +71,35 @@ run "cross_session_messaging_rejects_unknown_modes" {
 
   expect_failures = [var.pi_cross_session_messaging_mode]
 }
+
+run "external_actions_default_off" {
+  command = plan
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_EXTERNAL_ACTIONS_MODE"] == "off"
+    error_message = "External publication must fail closed by default."
+  }
+}
+
+run "external_actions_reaches_the_worker" {
+  command = plan
+
+  variables {
+    pi_external_actions_mode = "enabled"
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["PI_EXTERNAL_ACTIONS_MODE"] == "enabled"
+    error_message = "The external publication gate must reach the worker."
+  }
+}
+
+run "external_actions_rejects_unknown_modes" {
+  command = plan
+
+  variables {
+    pi_external_actions_mode = "sometimes"
+  }
+
+  expect_failures = [var.pi_external_actions_mode]
+}
