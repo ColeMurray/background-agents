@@ -34,11 +34,10 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`,
-`sandbox_provider = "e2b"`, or `sandbox_provider = "daytona"`. The artifact is stored per provider
-as a Modal image, Vercel snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot. With
-`modal-vm`, the artifact is a Modal image built on the VM backend. Images built under `modal` are
-not used by `modal-vm` sessions.
+`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "e2b"`, or
+`sandbox_provider = "daytona"`. The artifact is stored per provider as a Modal image, Vercel
+snapshot, or E2B/Daytona snapshot. With `modal-vm`, the artifact is a Modal image built on the VM
+backend. Images built under `modal` are not used by `modal-vm` sessions.
 
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
@@ -172,7 +171,7 @@ flowchart TD
     state -->|failure: failed| cleanup[Terminate provider session]
     lease -->|no| retry[Retry after the active lease]
     retry --> lease
-    lease -->|yes| artifact[Snapshot or checkpoint provider session]
+    lease -->|yes| artifact[Snapshot provider session]
 
     artifact --> fence[Fence provider artifact id in build store]
     fence --> ready[Mark image ready or superseded]
@@ -210,13 +209,13 @@ workspace environment build has no team layer, even when a team session later la
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
-snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
+snapshot, or E2B/Daytona snapshot.
 
 The configured build timeout covers clone and setup execution. Build sandboxes receive an additional
-ten minutes for callback delivery and snapshot/checkpoint finalization. Because Vercel limits
-sandbox lifetime to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve
-is never lost; Modal, OpenComputer, E2B and Daytona continue to honor the configured execution
-timeout up to the shared one-hour limit.
+ten minutes for callback delivery and snapshot finalization. Because Vercel limits sandbox lifetime
+to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve is never lost;
+Modal, E2B and Daytona continue to honor the configured execution timeout up to the shared one-hour
+limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been

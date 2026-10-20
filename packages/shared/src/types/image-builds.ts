@@ -17,7 +17,6 @@ export const IMAGE_BUILD_PROVIDER_IDS = [
   "modal",
   "modal-vm",
   "vercel",
-  "opencomputer",
   "e2b",
   "daytona",
 ] as const satisfies readonly SandboxProviderName[];

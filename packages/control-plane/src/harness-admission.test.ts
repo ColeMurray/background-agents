@@ -155,7 +155,7 @@ describe("Codex admission", () => {
   it.each(["modal", "modal-vm", " MODAL-VM "])("admits qualified %s", (SANDBOX_PROVIDER) => {
     expect(getHarnessAdmissionError({ ...enabled, SANDBOX_PROVIDER }, "codex")).toBeNull();
   });
-  it.each(["daytona", "e2b", "vercel", "opencomputer", "docker"])(
+  it.each(["daytona", "e2b", "vercel", "docker"])(
     "rejects unqualified provider %s",
     (SANDBOX_PROVIDER) => {
       expect(getHarnessAdmissionError({ ...enabled, SANDBOX_PROVIDER }, "codex")?.code).toBe(

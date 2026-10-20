@@ -114,19 +114,18 @@ App 安装范围限定了工作区能够访问的仓库。沙箱 git 凭据仅�
 
 ## 软件包
 
-| 软件包                                            | 说明                                 |
-| ------------------------------------------------- | ------------------------------------ |
-| [control-plane](packages/control-plane)           | Cloudflare Workers + Durable Objects |
-| [web](packages/web)                               | Next.js 网页客户端                   |
-| [sandbox-runtime](packages/sandbox-runtime)       | 沙箱内共享的智能体运行时             |
-| [modal-infra](packages/modal-infra)               | Modal 沙箱基础设施                   |
-| [daytona-infra](packages/daytona-infra)           | Daytona 快照基础设施                 |
-| [e2b-infra](packages/e2b-infra)                   | E2B 沙箱模板基础设施                 |
-| [opencomputer-infra](packages/opencomputer-infra) | OpenComputer 模板基础设施            |
-| [slack-bot](packages/slack-bot)                   | Slack 集成（从消息创建会话）         |
-| [github-bot](packages/github-bot)                 | GitHub 集成（自动审查、@提及）       |
-| [linear-bot](packages/linear-bot)                 | Linear 集成（议题 → 编程会话）       |
-| [shared](packages/shared)                         | 共享类型与工具函数                   |
+| 软件包                                      | 说明                                 |
+| ------------------------------------------- | ------------------------------------ |
+| [control-plane](packages/control-plane)     | Cloudflare Workers + Durable Objects |
+| [web](packages/web)                         | Next.js 网页客户端                   |
+| [sandbox-runtime](packages/sandbox-runtime) | 沙箱内共享的智能体运行时             |
+| [modal-infra](packages/modal-infra)         | Modal 沙箱基础设施                   |
+| [daytona-infra](packages/daytona-infra)     | Daytona 快照基础设施                 |
+| [e2b-infra](packages/e2b-infra)             | E2B 沙箱模板基础设施                 |
+| [slack-bot](packages/slack-bot)             | Slack 集成（从消息创建会话）         |
+| [github-bot](packages/github-bot)           | GitHub 集成（自动审查、@提及）       |
+| [linear-bot](packages/linear-bot)           | Linear 集成（议题 → 编程会话）       |
+| [shared](packages/shared)                   | 共享类型与工具函数                   |
 
 ## 入门
 
@@ -292,7 +291,6 @@ MIT
 - [Modal](https://modal.com)：云沙箱基础设施
 - [Daytona](https://www.daytona.io)：云端开发沙箱
 - [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox)：云沙箱基础设施
-- [OpenComputer](https://www.opencomputer.dev)：云沙箱基础设施
 - [E2B](https://e2b.dev)：云沙箱基础设施
 - [Cloudflare Workers](https://workers.cloudflare.com)：边缘计算
 - [OpenCode](https://opencode.ai)：编程智能体运行时（内置执行框架）

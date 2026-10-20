@@ -488,8 +488,8 @@ export class SandboxRepository {
    * nothing authoritative is on the row yet.
    *
    * A fresh spawn clears the column, so its report lands. A restore seeds the
-   * snapshot's version first, so a report is ignored: OpenComputer and Vercel
-   * export the *current* SANDBOX_VERSION into every sandbox they start,
+   * snapshot's version first, so a report is ignored: Vercel exports the *current*
+   * SANDBOX_VERSION into every sandbox it starts,
    * including ones forked from an old checkpoint, and trusting that would hand
    * a stale filesystem a clean bill of health.
    */

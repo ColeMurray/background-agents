@@ -221,14 +221,12 @@ Open-Inspect supports these sandbox backends:
 - **Daytona**: persistent stop/start sandboxes via direct REST API calls
 - **Vercel Sandboxes**: filesystem snapshot restore and prebuilt-image builds via the Vercel Sandbox
   API
-- **OpenComputer**: template-based sandboxes with checkpoint-backed prebuilt-image builds via the
-  OpenComputer REST API
 - **E2B**: template-based sandboxes with persistent pause/resume via direct E2B REST API calls
 
-Prebuilt-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can
-be restored on those same providers for session resumes; Daytona and E2B use persistent sandboxes
-instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity or stale
-heartbeat, then resumes that same sandbox later.
+Prebuilt-image builds are supported on Modal, Vercel, E2B, and Daytona (opt-in). Saved filesystem
+state can be restored on Modal and Vercel for session resumes; Daytona and E2B use persistent
+sandboxes instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity
+or stale heartbeat, then resumes that same sandbox later.
 
 ### Clients
 
@@ -337,7 +335,7 @@ When restoring from a previous snapshot:
 ```
 
 1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
-   snapshot or checkpoint
+   snapshot
 2. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
 3. **Quick sync**: Fetches the session's branch from origin. The restored checkout is left as it is,
    so the snapshot's commit and any uncommitted work survive the restore
@@ -636,7 +634,7 @@ indicator.
 
 ### How Snapshots Solve This
 
-Provider snapshots and checkpoints let us capture a sandbox's state after setup:
+Provider snapshots let us capture a sandbox's state after setup:
 
 ```
 First session:  Clone ─▶ Install/Build ─▶ Start Runtime ─▶ [Snapshot] ─▶ Work
@@ -652,9 +650,7 @@ active provider supports saved filesystem state.
 For Vercel, Terraform builds a base-runtime snapshot from the local checkout and wires a
 deterministic snapshot name into `VERCEL_BASE_SNAPSHOT_NAME`. Fresh Vercel sandboxes resolve that
 name to the newest created snapshot instead of cloning and installing the sandbox runtime on every
-session. OpenComputer uses a managed template plus checkpoints for the same prebuilt-image
-lifecycle. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
-[OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
+session. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for provider-specific details.
 
 ### Image Prebuilding
 
@@ -755,8 +751,8 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 
 > **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
 > deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide key
-> into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
-> precedence over it, and the other providers read only the secret store.
+> into Modal session sandboxes; a global secret of the same name takes precedence over it, and the
+> other providers read only the secret store.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
 > require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go

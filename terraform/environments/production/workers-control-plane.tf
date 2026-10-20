@@ -133,15 +133,6 @@ module "control_plane_worker" {
       DAYTONA_BASE_SNAPSHOT     = { value = module.daytona_infra[0].snapshot_name }
       DAYTONA_PREBUILDS_ENABLED = { value = tostring(var.daytona_prebuilds_enabled) }
     } : {},
-    trimspace(var.opencomputer_api_url) != "" ? {
-      OPENCOMPUTER_API_URL = { value = var.opencomputer_api_url }
-    } : {},
-    local.use_opencomputer_backend || trimspace(var.opencomputer_template) != "" ? {
-      # Active deployments use the managed template when no manual pin exists.
-      OPENCOMPUTER_TEMPLATE = {
-        value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name
-      }
-    } : {},
     trimspace(var.vercel_sandbox_project_id) != "" ? {
       VERCEL_PROJECT_ID             = { value = var.vercel_sandbox_project_id }
       VERCEL_RUNTIME                = { value = var.vercel_sandbox_runtime }
@@ -200,15 +191,6 @@ module "control_plane_worker" {
     trimspace(var.daytona_api_key) != "" ? {
       DAYTONA_API_KEY = { value = var.daytona_api_key }
     } : {},
-    local.opencomputer_enabled ? {
-      OPENCOMPUTER_API_KEY = { value = var.opencomputer_api_key }
-    } : {},
-    # OpenComputer sandboxes take the deployment-wide Anthropic key from the
-    # control plane. It is optional, and an unset one must not shadow the key a
-    # repository supplies through the secret store.
-    local.opencomputer_enabled && trimspace(var.anthropic_api_key) != "" ? {
-      ANTHROPIC_API_KEY = { value = var.anthropic_api_key }
-    } : {},
     var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? {
       VERCEL_TOKEN = { value = var.vercel_sandbox_token }
     } : {},
@@ -249,7 +231,6 @@ module "control_plane_worker" {
     module.daytona_infra,
     module.e2b_infra,
     module.vercel_sandbox_infra,
-    module.opencomputer_infra,
     module.modal_app,
   ]
 }

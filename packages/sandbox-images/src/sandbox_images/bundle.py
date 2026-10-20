@@ -16,7 +16,7 @@ from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_en
 from .locks import update_locks
 
 DOCKER_PACKAGES = ("engine", "cli", "containerd", "buildx", "compose")
-PROVIDERS = ("modal", "daytona", "e2b", "vercel", "opencomputer")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -43,7 +43,6 @@ INFRA_MODULES = {
     "daytona": "daytona-infra",
     "e2b": "e2b-infra",
     "vercel": "vercel-sandbox-infra",
-    "opencomputer": "opencomputer-infra",
 }
 
 
@@ -158,10 +157,9 @@ def plan_image(root: Path, provider: str) -> ImagePlan:
         Path(f"packages/{provider}-infra"),
         Path(f"terraform/modules/{INFRA_MODULES[provider]}"),
     )
-    if provider in ("vercel", "opencomputer"):
-        paths += (Path("package-lock.json"),)
     if provider == "vercel":
         paths += (
+            Path("package-lock.json"),
             Path("packages/control-plane/src"),
             Path("packages/shared/src"),
             Path("packages/control-plane/scripts/build-vercel-base-snapshot.ts"),

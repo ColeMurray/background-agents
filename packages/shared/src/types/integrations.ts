@@ -309,14 +309,7 @@ export const sandboxSettingsSchema = z.strictObject({
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
 /** Every supported sandbox backend. Keep provider policy exhaustive over this union. */
-export const SANDBOX_PROVIDER_NAMES = [
-  "modal",
-  "modal-vm",
-  "daytona",
-  "vercel",
-  "opencomputer",
-  "e2b",
-] as const;
+export const SANDBOX_PROVIDER_NAMES = ["modal", "modal-vm", "daytona", "vercel", "e2b"] as const;
 
 export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
 
@@ -330,7 +323,6 @@ const SANDBOX_SETTING_CAPABILITIES = {
   "modal-vm": { ...DEFAULT_SANDBOX_SETTING_CAPABILITIES, resourceLimits: true },
   daytona: { resources: false, resourceLimits: false, timeout: false },
   vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  opencomputer: { resources: false, resourceLimits: false, timeout: true },
   e2b: { resources: false, resourceLimits: false, timeout: true },
 } satisfies Record<
   SandboxProviderName,

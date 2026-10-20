@@ -922,7 +922,7 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value?.phase).toBe("saved");
   });
 
-  it("prefers an independent checkpoint for OpenComputer without a hard expiry", async () => {
+  it("prefers an independent snapshot for a persistent-resume provider without a hard expiry", async () => {
     const takeSnapshot = vi.fn(async () => ({
       success: true,
       imageId: "checkpoint-1",
@@ -931,7 +931,7 @@ describe("SandboxShutdownCoordinator", () => {
     const stopSandbox = vi.fn(async () => ({ success: true }));
     const f = fixture(
       provider({
-        name: "opencomputer",
+        name: "e2b",
         capabilities: {
           supportsSandboxTimeout: true,
           supportsSnapshots: true,

@@ -344,7 +344,7 @@ variable "linear_bot_default_model" {
 # =============================================================================
 
 variable "anthropic_api_key" {
-  description = "Deployment-wide Anthropic API key injected into Modal session sandboxes and OpenComputer sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Also serves the Slack and Linear bot classifiers when classification_anthropic_api_key is blank. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider."
+  description = "Deployment-wide Anthropic API key injected into Modal session sandboxes. Daytona, E2B and Vercel read model keys only from the scoped secret store, as do Modal image builds. Also serves the Slack and Linear bot classifiers when classification_anthropic_api_key is blank. Optional: leave blank to supply model credentials as scoped secrets, which override this value on every provider."
   type        = string
   sensitive   = true
   default     = ""
@@ -571,35 +571,6 @@ variable "daytona_prebuilds_enabled" {
   default     = false
 }
 
-variable "opencomputer_api_url" {
-  description = "Base URL for the OpenComputer REST API (e.g. https://api.opencomputer.dev)"
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_api_url)) > 0
-    error_message = "opencomputer_api_url must be set when sandbox_provider = 'opencomputer'."
-  }
-}
-
-variable "opencomputer_api_key" {
-  description = "API key for OpenComputer REST API (X-API-Key auth)"
-  type        = string
-  sensitive   = true
-  default     = ""
-
-  validation {
-    condition     = var.sandbox_provider != "opencomputer" || length(trimspace(var.opencomputer_api_key)) > 0
-    error_message = "opencomputer_api_key must be set when sandbox_provider = 'opencomputer'."
-  }
-}
-
-variable "opencomputer_template" {
-  description = "Optional manual OpenComputer template/snapshot name to pin. When empty, Terraform builds and manages the base snapshot from the runtime source (like the Vercel and Modal base images)."
-  type        = string
-  default     = ""
-}
-
 variable "vercel_sandbox_token" {
   description = "Vercel API token for the Vercel Sandbox API"
   type        = string
@@ -726,13 +697,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', or 'e2b'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
+    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "e2b"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', or 'e2b'."
   }
 }
 

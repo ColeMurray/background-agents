@@ -1,7 +1,7 @@
 """Shared constants for sandbox modules."""
 
-# Provider-selected directory for standalone runtime commands. OpenComputer uses
-# the sandbox user's bin directory; providers with writable images use /usr/local/bin.
+# Provider-selected directory for standalone runtime commands. Prebuilt sandbox
+# images use the sandbox user's bin directory; otherwise /usr/local/bin is used.
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
 
 # Trusted launch signal: the provider sets it to "true" only for a sandbox it

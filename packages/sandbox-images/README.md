@@ -1,8 +1,8 @@
 # Sandbox images
 
-One build-only package owns platform dependencies for Modal, Daytona, E2B, Vercel, and OpenComputer.
-Provider adapters own native creation, uploads, snapshots, restores, provider overlays, and cleanup.
-The control plane does not consume build hashes or dependency inventories.
+One build-only package owns platform dependencies for Modal, Daytona, E2B, and Vercel. Provider
+adapters own native creation, uploads, snapshots, restores, provider overlays, and cleanup. The
+control plane does not consume build hashes or dependency inventories.
 
 ## Update dependencies
 
@@ -31,13 +31,12 @@ project virtualenv. Existing images retain their legacy launch environment.
 Install workspace dependencies with `npm ci` for Node adapters. Native operations require provider
 credentials and create billable temporary sandboxes; they do not deploy the control plane.
 
-| Provider     | Configuration                                                               |
-| ------------ | --------------------------------------------------------------------------- |
-| Modal        | Modal CLI credentials and intended environment                              |
-| Daytona      | DAYTONA_API_KEY, DAYTONA_BASE_SNAPSHOT name prefix; optional API URL/target |
-| E2B          | E2B_API_KEY, E2B_TEMPLATE_ID name prefix; optional API URL/CPU/memory       |
-| Vercel       | VERCEL_TOKEN, VERCEL_PROJECT_ID; optional team/API URL                      |
-| OpenComputer | OPENCOMPUTER_API_KEY; optional API URL/template prefix                      |
+| Provider | Configuration                                                               |
+| -------- | --------------------------------------------------------------------------- |
+| Modal    | Modal CLI credentials and intended environment                              |
+| Daytona  | DAYTONA_API_KEY, DAYTONA_BASE_SNAPSHOT name prefix; optional API URL/target |
+| E2B      | E2B_API_KEY, E2B_TEMPLATE_ID name prefix; optional API URL/CPU/memory       |
+| Vercel   | VERCEL_TOKEN, VERCEL_PROJECT_ID; optional team/API URL                      |
 
 ```bash
 npm run sandbox:images -- build --provider e2b --output /tmp/e2b-image.json
@@ -62,7 +61,7 @@ Terraform uses the shared build-input hash for change detection and the existing
 for artifact selection. Modal passes the verified native image ID to function deployment; other
 providers use verified template/snapshot references. E2B and Daytona now build distinct names before
 switching their existing Worker bindings. The configured E2B/Daytona base names act as prefixes.
-Vercel/OpenComputer retain their existing manual-reference overrides.
+Vercel retains its existing manual-reference override.
 
 For manual deployment, use the returned reference in the provider's existing configuration; do not
 assume building alone redirects sessions. Roll back using a previous known-good configuration and

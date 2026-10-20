@@ -7,8 +7,8 @@ earlier proposal for recipe/inventory identities, a release registry, promotion/
 and release-aware prepared-image refresh.
 
 The problem is duplicated tool versions, dependency resolution, installation scripts, and service
-checks across Modal, Daytona, E2B, Vercel, and OpenComputer. Updating one dependency should involve
-one manifest/lock change and a consistent build workflow.
+checks across Modal, Daytona, E2B, and Vercel. Updating one dependency should involve one
+manifest/lock change and a consistent build workflow.
 
 ## Architecture
 
@@ -72,10 +72,10 @@ outputs under `.cache/sandbox-images`; remove them only when no native build is 
 
 The common installer does not hide native SDK differences. Adapters retain their actual transport
 and lifecycle behavior, including Modal eager image construction, E2B template build/spawn, Daytona
-snapshot creation, Vercel upload/snapshot, and OpenComputer image construction.
+snapshot creation, and Vercel upload/snapshot.
 
-Provider-specific CA/proxy configuration remains in the OpenComputer adapter. Vercel uses its Amazon
-Linux/node24 substrate. Runtime user and path differences belong to the image being built.
+Vercel uses its Amazon Linux/node24 substrate. Runtime user and path differences belong to the image
+being built.
 
 Names supplied by Terraform are deterministic. A retry may restore and verify an existing named
 artifact using the artifact’s baked service checks; it must not overwrite an existing artifact.
@@ -118,7 +118,7 @@ unchanged.
 Terraform continues to own deployment:
 
 - Modal eagerly builds/verifies the sandbox image, then deploys functions using its native image ID.
-- Vercel and OpenComputer retain managed snapshot names and existing manual-reference overrides.
+- Vercel retains managed snapshot names and existing manual-reference overrides.
 - Daytona and E2B derive new names from the source hash (E2B also includes CPU/memory settings).
   Their existing Worker bindings switch only after the new artifact is verified.
 
