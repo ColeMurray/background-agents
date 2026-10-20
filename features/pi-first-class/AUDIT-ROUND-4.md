@@ -95,6 +95,14 @@ rather than its content: `read`, `mcp_read`, and `repository_read` outputs are r
 shared timeline, exactly as `write` and `edit` already were. The model still receives the full
 result.
 
+The refusal happens at the gateway, not only at the agent. The session re-checks the bounded answer
+before it returns it, so a credential never leaves the session at all: it is refused with a stable
+code, and the refusal is audited with its own reason.
+
+The refusal happens at the gateway, not only at the agent. The session re-checks the bounded answer
+before it returns it, so a credential never leaves the session at all: it is refused with a stable
+code, and the refusal is audited with its own reason.
+
 ### F5 — the provider's own error text reached the model (medium)
 
 The repository-tool path and the MCP-read path forwarded `error.message` verbatim. A provider string
@@ -178,6 +186,12 @@ per call:
 The provider list comes from one deployment variable, and an unknown name is refused rather than
 ignored, so a typo never silently narrows what a deployment may publish. A provider without a
 credential is not registered, so the agent never sees a publication it could not complete.
+
+The check for a credential is cheap: it reads the deployment's configuration and never mints a token
+and never reaches a provider. Only the publication itself mints a credential, once, for one call.
+
+The check for a credential is cheap: it reads the deployment's configuration and never mints a token
+and never reaches a provider. Only the publication itself mints a credential, once, for one call.
 
 ## What the new invariant is, in one sentence
 

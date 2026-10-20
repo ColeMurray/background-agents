@@ -92,6 +92,8 @@ its own authorization.
 | `389dcb8e` | The handover record for the closed credential source                                               | —                                                               |
 | `e5eebd5f` | A portable MCP session grant migration, with the invariant in the store                            | 14 SQL portability, 9 focused                                   |
 | `b2b79341` | The fourth audit round's repairs: the owning delegate, the publication tool, the credential guard  | 5,370 unit, 2,578 web, 1,314 shared, 108 Terraform, 13 workflow |
+| `b2891bf5` | The MCP gateway refuses a credential-shaped answer before it leaves the session                    | 5,371 unit                                                      |
+| `47775993` | The credential availability check stays cheap and off the provider path                            | 5,377 unit                                                      |
 
 ## Slice 7A — what landed
 
