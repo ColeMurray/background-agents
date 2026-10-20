@@ -118,6 +118,8 @@ export const SessionInternalPaths = {
   piExternalActionPrepare: "/internal/pi-external-action/prepare",
   piExternalActionStatus: "/internal/pi-external-action/status",
   piExternalActionExecute: "/internal/pi-external-action/execute",
+  crossSessionMessage: "/internal/cross-session-message",
+  crossSessionInbound: "/internal/cross-session-inbound",
   externalActionStatus: "/internal/external-action/status",
   externalActionPending: "/internal/external-action/pending",
   externalActionDecision: "/internal/external-action/decision",

@@ -79,3 +79,25 @@ export const crossSessionDeliveryResultSchema = z
   .strict();
 
 export type CrossSessionDeliveryResult = z.infer<typeof crossSessionDeliveryResultSchema>;
+
+/**
+ * The provenance a target session shows for a message from another session.
+ *
+ * It names the session the message came from and the human whose authority
+ * carried it, so the timeline can say "Agent message from Session A,
+ * initiated by User X" instead of implying the human typed it here.
+ */
+export const crossSessionOriginSchema = z
+  .object({
+    kind: z.literal("cross_session"),
+    receiptId: z.string().min(1),
+    sourceSessionId: z.string().min(1),
+    humanActorId: z.string().min(1),
+    agentConversationId: z.string().nullable().optional(),
+    sourceTaskId: z.string().nullable().optional(),
+    /** How many session-to-session hops this message has already made. */
+    depth: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type CrossSessionOrigin = z.infer<typeof crossSessionOriginSchema>;

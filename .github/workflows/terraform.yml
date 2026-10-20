@@ -267,6 +267,7 @@ jobs:
           TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
           TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
           TF_VAR_pi_workspace_mode: "${{ vars.PI_WORKSPACE_MODE || 'off' }}"
+          TF_VAR_pi_cross_session_messaging_mode: "${{ vars.PI_CROSS_SESSION_MESSAGING_MODE || 'off' }}"
           TF_VAR_pi_computer_preview_acknowledged: "${{ vars.PI_COMPUTER_PREVIEW_ACKNOWLEDGED || 'false' }}"
           TF_VAR_pi_codemode_mode: "${{ vars.PI_CODEMODE_MODE || 'off' }}"
           TF_VAR_pi_codemode_sandbox_deployment_verified: "${{ vars.PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED || 'false' }}"
@@ -604,6 +605,7 @@ jobs:
           TF_VAR_r2_media_location: "${{ vars.R2_MEDIA_LOCATION || secrets.R2_MEDIA_LOCATION || 'ENAM' }}"
           TF_VAR_r2_media_bucket_name: ${{ vars.R2_MEDIA_BUCKET_NAME || secrets.R2_MEDIA_BUCKET_NAME }}
           TF_VAR_pi_workspace_mode: "${{ vars.PI_WORKSPACE_MODE || 'off' }}"
+          TF_VAR_pi_cross_session_messaging_mode: "${{ vars.PI_CROSS_SESSION_MESSAGING_MODE || 'off' }}"
           TF_VAR_pi_computer_preview_acknowledged: "${{ vars.PI_COMPUTER_PREVIEW_ACKNOWLEDGED || 'false' }}"
           TF_VAR_pi_codemode_mode: "${{ vars.PI_CODEMODE_MODE || 'off' }}"
           TF_VAR_pi_codemode_sandbox_deployment_verified: "${{ vars.PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED || 'false' }}"

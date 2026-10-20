@@ -20,6 +20,8 @@ export interface EnqueuePromptCoreData {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
   clientRequestId?: string;
+  /** Typed provenance for a message that came from somewhere else. */
+  originContext?: Record<string, unknown>;
 }
 
 export interface EnqueuedPrompt {

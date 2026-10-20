@@ -533,6 +533,15 @@ function UserMessageEvent({
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
+      {event.crossSessionOrigin && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-2 text-xs">
+          <span className="font-medium text-accent">Agent message</span>
+          <span className="text-muted-foreground">
+            from session {event.crossSessionOrigin.sourceSessionId} · initiated by{" "}
+            {event.crossSessionOrigin.humanActorId}
+          </span>
+        </div>
+      )}
       {event.origin && (
         <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-2 text-xs">
           <span className="font-medium text-accent">Resumed by PR feedback</span>

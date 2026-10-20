@@ -167,6 +167,7 @@ import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusProjectionStore } from "../db/session-status-projection-store";
 import { SessionStatusService } from "./session-status-service";
 import { createSessionRuntimeClientForTrace } from "./runtime-client";
+import { SessionInternalPaths } from "./contracts";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
@@ -189,6 +190,9 @@ import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
 import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
+import { CrossSessionHandler } from "./http/handlers/cross-session.handler";
+import { CrossSessionReceiptStore } from "../db/cross-session-receipts";
+import { evaluateCrossSessionTarget } from "./cross-session-authority";
 import { ExternalActionGateway } from "./external-action-gateway";
 import { ExternalActionDefinitionRegistry } from "./external-action-definitions";
 import { AutomationExternalActionGrantStore } from "../db/automation-external-action-grants";
@@ -663,6 +667,37 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
+  const crossSessionHandler = new CrossSessionHandler({
+    crossSession: {
+      liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.crossSessionMessaging,
+      sessionCapability: () =>
+        sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities
+          .crossSessionMessaging ?? "off",
+      receipts: new CrossSessionReceiptStore(db),
+      authorizeTarget: (actorId, targetSessionId) =>
+        evaluateCrossSessionTarget(
+          db,
+          parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT),
+          actorId,
+          targetSessionId,
+          { sourceSessionId: getPublicSessionId() }
+        ),
+      deliver: (targetSessionId, delivery) =>
+        createSessionRuntimeClientForTrace(env, durableObjectId).fetch(
+          targetSessionId,
+          SessionInternalPaths.crossSessionInbound,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(delivery),
+          }
+        ),
+      operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
+      operationDepth: (operationId) => messageRepository.getMessageCrossSessionDepth(operationId),
+    },
+    messages: messageService,
+    getSessionId: getPublicSessionId,
+  });
   const budgetService = new SessionBudgetService(
     sessionCoreRepository,
     messageRepository,
@@ -1246,6 +1281,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piExternalActionPrepare: (request) => piBridgeHandler.externalActionPrepare(request),
     piExternalActionStatus: (request) => piBridgeHandler.externalActionStatus(request),
     piExternalActionExecute: (request) => piBridgeHandler.externalActionExecute(request),
+    crossSessionMessage: (request) => crossSessionHandler.outbound(request),
+    crossSessionInbound: (request) => crossSessionHandler.inbound(request),
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),
     externalActionPending: (request) => piBridgeHandler.externalActionPending(request),
     externalActionDecision: (request) => piBridgeHandler.externalActionDecision(request),

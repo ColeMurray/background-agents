@@ -805,6 +805,17 @@ variable "pi_computer_preview_acknowledged" {
   default     = false
 }
 
+variable "pi_cross_session_messaging_mode" {
+  description = "Pi Durable cross-session messaging capability: off or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "enabled"], var.pi_cross_session_messaging_mode)
+    error_message = "pi_cross_session_messaging_mode must be 'off' or 'enabled'."
+  }
+}
+
 variable "pi_sandbox_execution_mode" {
   description = "Pi sandbox execution capability for new sessions: off, read_only, or enabled"
   type        = string

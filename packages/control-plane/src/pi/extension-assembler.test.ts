@@ -99,6 +99,7 @@ describe("assemblePiExtensions", () => {
       "sandbox_execution",
       "external_actions",
       "mcp",
+      "cross_session",
     ]);
     expect(assembled.extensions.map(({ name }) => name)).toEqual([
       "open-inspect.tool-policy",

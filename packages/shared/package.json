@@ -182,6 +182,10 @@
       "import": "./dist/types/external-actions.js",
       "types": "./dist/types/external-actions.d.ts"
     },
+    "./types/cross-session": {
+      "import": "./dist/types/cross-session.js",
+      "types": "./dist/types/cross-session.d.ts"
+    },
     "./types/session-activity": {
       "import": "./dist/types/session-activity.js",
       "types": "./dist/types/session-activity.d.ts"

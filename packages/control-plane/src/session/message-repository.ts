@@ -11,6 +11,7 @@ import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
+import { crossSessionOriginSchema } from "@open-inspect/shared/types/cross-session";
 import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -155,6 +156,46 @@ export class MessageRepository {
       kind: ["web", "extension"].includes(row.data.source) ? "user" : "service",
       id: row.data.user_id,
     };
+  }
+
+  /**
+   * How many session-to-session hops the message behind one operation made.
+   *
+   * A message that arrived from another session carries its depth. A message
+   * that started here has none, so it has travelled no hops at all.
+   */
+  getMessageCrossSessionDepth(messageId: string): number {
+    const raw = this.sql
+      .exec("SELECT origin_context FROM messages WHERE id = ?", messageId)
+      .toArray()[0];
+    const originContext = (raw as { origin_context?: string | null } | undefined)?.origin_context;
+    if (!originContext) return 0;
+    try {
+      const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
+      return parsed.success ? parsed.data.depth : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * The workspace account behind one message.
+   *
+   * A message that arrived from Slack or GitHub is authored by a participant
+   * whose identity is namespaced (`slack:U123`). The canonical account is the
+   * workspace user that identity maps to, and that is the account whose
+   * authority may act on another session.
+   */
+  getMessageCanonicalActor(messageId: string): string | null {
+    const raw = this.sql
+      .exec(
+        `SELECT COALESCE(p.canonical_user_id, p.user_id) AS actor_id FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+      .toArray()[0];
+    const actorId = (raw as { actor_id?: string | null } | undefined)?.actor_id ?? null;
+    return typeof actorId === "string" && actorId.length > 0 ? actorId : null;
   }
 
   getMessageAwaitingStopConfirmation(): { id: string; deadline: number } | null {

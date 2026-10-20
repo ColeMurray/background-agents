@@ -187,7 +187,7 @@ describe("PiSessionDO", () => {
       "SELECT pi_feature_capability_snapshot FROM session"
     );
     expect(JSON.parse(rows[0]!.pi_feature_capability_snapshot)).toEqual({
-      version: 1,
+      version: 2,
       capabilities: {
         workspace: "enabled",
         repositoryEditing: "enabled",
@@ -197,6 +197,7 @@ describe("PiSessionDO", () => {
         sandboxExecution: "off",
         externalActions: "enabled",
         mcp: "off",
+        crossSessionMessaging: "off",
       },
     });
   });
@@ -1016,7 +1017,7 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 1,
+      version: 2,
       capabilities: {
         workspace: "enabled",
         repositoryEditing: "enabled",
@@ -1026,6 +1027,7 @@ describe("PiSessionDO", () => {
         sandboxExecution: "off",
         externalActions: "enabled",
         mcp: "off",
+        crossSessionMessaging: "off",
       },
     });
   });
@@ -1592,7 +1594,7 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 1,
+      version: 2,
       capabilities: {
         workspace: "enabled",
         repositoryEditing: "enabled",
@@ -1602,6 +1604,7 @@ describe("PiSessionDO", () => {
         sandboxExecution: "off",
         externalActions: "enabled",
         mcp: "off",
+        crossSessionMessaging: "off",
       },
     });
     await expect(

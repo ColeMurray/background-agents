@@ -933,3 +933,32 @@ describe("timeline virtualization", () => {
     );
   });
 });
+
+describe("cross-session message provenance", () => {
+  it("says which session the agent message came from and who initiated it", () => {
+    const events: SandboxEvent[] = [
+      {
+        ...event(),
+        crossSessionOrigin: {
+          kind: "cross_session",
+          receiptId: "xsr_1",
+          sourceSessionId: "session-a",
+          humanActorId: "user-1",
+          depth: 1,
+        },
+      },
+    ];
+
+    render(<SessionTimeline {...baseTimelineProps} events={events} />);
+
+    expect(screen.getByText("Agent message")).toBeInTheDocument();
+    expect(screen.getByText(/from session session-a/)).toBeInTheDocument();
+    expect(screen.getByText(/initiated by user-1/)).toBeInTheDocument();
+  });
+
+  it("shows an ordinary message without any provenance line", () => {
+    render(<SessionTimeline {...baseTimelineProps} events={[event()]} />);
+
+    expect(screen.queryByText("Agent message")).not.toBeInTheDocument();
+  });
+});

@@ -4,6 +4,7 @@ import { harnessIdSchema } from "../harnesses";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
+import { crossSessionOriginSchema } from "./cross-session";
 import { sandboxExecutionEventSchemas } from "./sandbox-execution";
 import { sandboxRuntimeModeSchema } from "./sandbox-execution";
 
@@ -284,6 +285,8 @@ const nonArtifactSandboxEventSchemas = [
     // events table and every broadcast. attachmentId lets clients stream attachments.
     attachments: resolvedSessionAttachmentsSchema.optional(),
     origin: githubAutofixOriginSchema.optional(),
+    // The provenance of a message that another session handed to this one.
+    crossSessionOrigin: crossSessionOriginSchema.optional(),
     piControl: z
       .object({
         action: z.enum([

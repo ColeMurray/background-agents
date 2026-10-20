@@ -25,6 +25,7 @@ export const PI_EXTENSION_SLOTS = [
   "sandbox_execution",
   "external_actions",
   "mcp",
+  "cross_session",
 ] as const;
 
 export type PiExtensionSlot = (typeof PI_EXTENSION_SLOTS)[number];

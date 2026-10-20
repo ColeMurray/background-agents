@@ -96,6 +96,8 @@ import { PiRepositoryWorkspace } from "../pi/repository-workspace";
 import { z } from "zod";
 import {
   externalActionStatusResponseSchema,
+  crossSessionDeliveryResultSchema,
+  type CrossSessionDeliveryResult,
   type ExternalActionPrepareRequest,
 } from "@open-inspect/shared";
 import { createExternalActionPolicyDelegate } from "../pi/external-action-policy-extension";
@@ -105,6 +107,10 @@ import {
   type SandboxExecutionToolRequest,
   type SandboxExecutionToolResponse,
 } from "../pi/sandbox-execution-extension";
+import {
+  createCrossSessionExtension,
+  CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
+} from "../pi/cross-session-extension";
 import { PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS } from "@open-inspect/shared";
 import {
   PiCodeModeExecutionCoordinator,
@@ -419,6 +425,19 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             invoke: (request, signal) => this.invokeSandboxExecution(request, signal),
           }),
           effects: PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
+        });
+      }
+      if (capabilities.crossSessionMessaging === "enabled") {
+        extensions.push({
+          slot: "cross_session",
+          feature: "crossSessionMessaging",
+          minimumCapability: "enabled",
+          extension: createCrossSessionExtension({
+            client: {
+              send: (request, signal) => this.sendCrossSessionMessage(request, signal),
+            },
+          }),
+          effects: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS,
         });
       }
       const assembly = assemblePiExtensions(extensions, capabilities);
@@ -1586,6 +1605,49 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return z.json().parse(body);
+  }
+
+  /**
+   * Ask the owning session to hand one message to another session.
+   *
+   * The owning session owns the authority. The agent never reaches another
+   * session directly, and it never names the user it speaks for.
+   */
+  private async sendCrossSessionMessage(
+    request: {
+      targetSessionId: string;
+      content: string;
+      idempotencyKey: string;
+      agentConversationId: string | null;
+      sourceTaskId: string | null;
+    },
+    signal?: AbortSignal
+  ): Promise<CrossSessionDeliveryResult> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) throw new Error("Pi Durable session is not initialized");
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.crossSessionMessage}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+          ...piTraceHeader(operationId),
+        },
+        body: JSON.stringify(request),
+        signal,
+      })
+    );
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const reason =
+        typeof (body as { error?: unknown } | null)?.error === "string"
+          ? (body as { error: string }).error
+          : "The cross-session message was refused";
+      return { receiptId: "", status: "rejected", messageId: null, reason };
+    }
+    return crossSessionDeliveryResultSchema.parse(body);
   }
 
   private async invokeSandboxExecution(

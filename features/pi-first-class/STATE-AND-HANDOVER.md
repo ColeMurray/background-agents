@@ -197,6 +197,37 @@ provider-account store, and no provider may be registered until its credential p
 a live canary has published and reconciled one effect. Until then the registry stays empty and the
 feature stays off by default.
 
+### Slice 9 — authorized cross-session messaging
+
+The path is the one the design requires, with no direct Pi-to-Pi hop:
+
+```text
+Pi session A → SessionDO A → D1 authority → durable receipt → SessionDO B → target queue
+```
+
+- The source session owns the decision. It checks its own latched capability, the live deployment
+  mode, that the originating turn has a human actor, and that the actor may collaborate in the
+  target. It never calls another Pi session directly.
+- The target authority is read from D1 at the moment of the call, never from a cache, so a suspended
+  user, a removed collaborator, or a lost team membership takes effect immediately. The rules are
+  the canonical session rules: the actor needs the same `collaborate` authority on the target that
+  they would need to post in it. An administrator who may break-glass _read_ a private session may
+  not send into it.
+- The target revalidates the same authority for itself before it enqueues anything. A receipt the
+  target cannot confirm is refused rather than shown.
+- A durable receipt is written before the target is called. One request key produces one receipt, so
+  a retry delivers the same message once, and a reused key with different content is refused.
+- The target message is an agent message with typed provenance: the human who initiated it, the
+  session it came from, and the agent conversation and task. It is never presented as something the
+  human typed in the target session. The timeline says "Agent message · from session <id> ·
+  initiated by <user>".
+- The capability is a first-class feature gate, `crossSessionMessaging`, with a version 2 snapshot.
+  A version 1 snapshot is read with the new feature closed, so an older session keeps working and
+  the capability stays off.
+
+**Still open in Slice 9:** the fan-out and depth limits in the agent-facing tool, and the browser
+journey for it.
+
 ### Slice 8 — read-only MCP and OAuth
 
 D1 catalog and read projection, owner-only non-delegable review, session pins, identity-first
@@ -204,12 +235,10 @@ Lifecycle, opaque callback, S256 enforcement, refresh/revoke/tombstone, RESTRICT
 rotation, DNS and redirect-safe egress, and stable read tools declared before extension assembly.
 Mutations stay prohibited.
 
-### Slice 9 — authorized cross-session messaging, browser gateway, and finish
+### Slice 9 — browser gateway and finish
 
-D1 receipts; source SessionDO to D1 authority to target SessionDO to target queue, with provenance
-and no direct Pi-to-Pi call. Browser/Kitesurf as a lazy, default-off, session-scoped SessionDO
-gateway. Then accessibility, browser journeys, the ten-minute canary, and two adversarial audit
-rounds.
+Browser/Kitesurf as a lazy, default-off, session-scoped SessionDO gateway. Then accessibility,
+browser journeys, the ten-minute canary, and two adversarial audit rounds.
 
 ## How to work in this repository
 
