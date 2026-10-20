@@ -49,6 +49,21 @@ describe("LoginPage", () => {
     expect(screen.getByRole("button", { name: "Sign in with Google" })).toBeInTheDocument();
   });
 
+  it.each([
+    ["access_denied", "github", "Your account is not authorized"],
+    ["provider_rejected", "github", "Email addresses: Read-only"],
+    ["provider_unavailable", "github", "Please try again in a moment"],
+    ["admission_unavailable", "google", "Please try again in a moment"],
+    ["provider_rejected", "google", "An error occurred during sign in"],
+    ["sensitive-unexpected-error", "github", "An error occurred during sign in"],
+  ])("explains %s from %s and keeps sign-in available", async (error, provider, message) => {
+    render(await LoginPage({ searchParams: Promise.resolve({ error, provider }) }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
+    expect(screen.queryByText(/sensitive-unexpected-error/)).not.toBeInTheDocument();
+  });
+
   it("redirects an authenticated user before querying providers", async () => {
     mocks.getServerAuthSession.mockResolvedValue({
       user: { id: "user-1", name: "Ada" },

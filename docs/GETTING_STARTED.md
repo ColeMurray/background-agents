@@ -1613,6 +1613,14 @@ URL to match your web app URL:
   `https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/auth/callback/github`
 - **Cloudflare with a custom domain**: `https://{your-custom-domain}/api/auth/callback/github`
 
+### GitHub sign-in returns to the login page with an email permission error
+
+GitHub refused the `/user/emails` request, and the control plane logs
+`auth.github_email_lookup_failed` with `status: 403`. Every GitHub sign-in reads verified emails, so
+the GitHub App needs the **Account permissions > Email addresses: Read-only** permission even when
+admission uses only `allowed_users` or `allowed_github_orgs`. Add the permission, save, and sign in
+again; GitHub asks the user to approve the added permission.
+
 ### Modal deployment fails
 
 ```bash
