@@ -1,9 +1,9 @@
 locals {
-  name_suffix              = var.deployment_name
-  use_modal_backend        = contains(["modal", "modal-vm"], var.sandbox_provider)
-  use_daytona_backend      = var.sandbox_provider == "daytona"
-  use_vercel_backend       = var.sandbox_provider == "vercel"
-  use_e2b_backend          = var.sandbox_provider == "e2b"
+  name_suffix         = var.deployment_name
+  use_modal_backend   = contains(["modal", "modal-vm"], var.sandbox_provider)
+  use_daytona_backend = var.sandbox_provider == "daytona"
+  use_vercel_backend  = var.sandbox_provider == "vercel"
+  use_e2b_backend     = var.sandbox_provider == "e2b"
 
   # A complete OAuth credential pair is the deployment's provider enablement
   # declaration. Runtime validation mirrors these plan-time invariants.
