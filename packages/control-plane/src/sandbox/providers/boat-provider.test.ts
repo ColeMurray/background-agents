@@ -453,6 +453,20 @@ describe("BoatSandboxProvider", () => {
       });
     });
 
+    it("spawns fresh when the sandbox vanishes while it is being made private", async () => {
+      const client = mockClient({
+        getSandbox: vi.fn(async () => boatSandbox({ state: "archived", visibility: "shared" })),
+        unshareSandbox: vi.fn(async () => {
+          throw new BoatNotFoundError("gone", "sandbox_not_found");
+        }),
+      });
+      await expect(createProvider(client).resumeSandbox(resumeConfig)).resolves.toMatchObject({
+        success: false,
+        shouldSpawnFresh: true,
+      });
+      expect(client.resumeSandbox).not.toHaveBeenCalled();
+    });
+
     it("makes a shared organization sandbox private before resuming it", async () => {
       const client = mockClient({
         getSandbox: vi

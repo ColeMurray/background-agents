@@ -454,15 +454,39 @@ def test_boat_builder_makes_an_organization_sandbox_private(monkeypatch):
 
 
 def test_boat_builder_fails_when_a_sandbox_stays_shared(monkeypatch):
-    _namespace, api, _transport = boat_api(
+    _namespace, api, transport = boat_api(
         monkeypatch,
         [
             {"sandbox": {"id": "bx_00000003", "state": "provisioning", "visibility": "shared"}},
             {"sandbox": {"id": "bx_00000003", "state": "provisioning", "visibility": "shared"}},
+            {"ok": True},
         ],
     )
     with pytest.raises(RuntimeError, match="stayed shared"):
         api.create_sandbox("build", {"type": "small"})
+
+    # The sandbox Boat created would otherwise bill until its TTL.
+    assert transport.calls[-1] == (
+        "DELETE",
+        "/sandboxes/bx_00000003",
+        None,
+        {"X-Ascii-Confirm-Delete": "bx_00000003"},
+    )
+
+
+def test_boat_builder_deletes_a_sandbox_it_could_not_unshare(monkeypatch):
+    namespace, api, transport = boat_api(
+        monkeypatch,
+        [{"sandbox": {"id": "bx_00000004", "state": "provisioning", "visibility": "shared"}}],
+    )
+    transport.answers.append(namespace["BoatApiError"](500, "internal_error", "unshare failed"))
+    transport.answers.append({"ok": True})
+    with pytest.raises(namespace["BoatApiError"]) as raised:
+        api.create_sandbox("verify", {"from": "snap"})
+
+    assert raised.value.status == 500
+    assert [call[0] for call in transport.calls] == ["POST", "POST", "DELETE"]
+    assert transport.calls[-1][1] == "/sandboxes/bx_00000004"
 
 
 def test_boat_builder_refuses_redirects_and_plain_http():

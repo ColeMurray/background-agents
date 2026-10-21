@@ -180,7 +180,19 @@ class BoatApi:
                 )
                 time.sleep(CREATE_RETRY_DELAY_SECONDS * attempt)
         sandbox = response["sandbox"]
-        return self.ensure_private(sandbox)
+        try:
+            return self.ensure_private(sandbox)
+        except Exception:
+            # The sandbox exists and nothing will use it: do not leave it
+            # running, and billing, until its TTL.
+            try:
+                self.delete_sandbox(sandbox["id"])
+            except Exception as cleanup_error:
+                print(
+                    f"Boat sandbox {sandbox['id']} could not be deleted: {cleanup_error}",
+                    flush=True,
+                )
+            raise
 
     def ensure_private(self, sandbox: dict[str, Any]) -> dict[str, Any]:
         """An organization-billed sandbox starts shared; nobody else may touch the image."""

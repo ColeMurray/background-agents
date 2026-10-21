@@ -428,12 +428,12 @@ export class BoatSandboxProvider implements SandboxProvider {
       if (sandbox.dataExpiredAt) {
         return spawnFresh("Boat deleted the stopped sandbox's snapshot data (14-day retention)");
       }
-      await this.ensurePrivate(sandbox);
 
       // Boat can remove the sandbox at any point from here on (a resume that
       // finds no machine ends in `cancelled`, which answers 404 once); every
       // such disappearance takes the fresh-spawn path, as the first 404 does.
       try {
+        await this.ensurePrivate(sandbox);
         if (BOAT_LIVE_STATES.has(sandbox.state)) {
           // Already on a machine (a stale heartbeat, or a stop that never
           // happened): give it a fresh deadline and make sure the runtime runs.
