@@ -226,17 +226,21 @@ The call belongs to the session, and the session already holds the resolver:
 - It must not create a personal connection for a shared server, and it must not let a personal grant
   widen what the shared lane exposes.
 
-### What is left to build for the shared lane
+### What the shared lane does now
 
-1. The session-side shared-server resolution: the core's resolver, plus the server's reviewed
-   read-only catalog, exposed through the session's MCP roster so the model is offered only reviewed
-   reads.
-2. The session-owned call: the SDK client over the shared headers, bounded, audited,
-   credential-free.
-3. The Pi read tool's target: a shared server alongside a personal connection, with the same
-   reviewed gate and the same bounds.
-4. The live canary against a real MCP server, with a repo-scoped server and a session without that
-   repo, to prove the scope rule holds.
+- The session resolves the shared servers with the core's own resolver and the session's own
+  repositories, so the scope is exactly the sandbox's.
+- Only the server's reviewed read-only tools are listed, and only those are callable. A mutation is
+  unrepresentable.
+- The call belongs to the session: the MCP SDK's client over the deployment's own headers, closed
+  over for one call, with the provider's error never leaving the session.
+- The result is bounded and refused when it carries a credential-shaped key, exactly as the personal
+  lane's result is.
+- The Pi read tool names either a personal connection or a shared server, and the session's MCP
+  roster lists both, so the model is offered only what it may read.
+
+**What is left for the shared lane:** the live canary against a real MCP server, with a repo-scoped
+server and a session without that repo, to prove the scope rule holds.
 
 ## Upstream Pi Durable parity
 
