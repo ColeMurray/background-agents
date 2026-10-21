@@ -176,6 +176,43 @@ install with `--legacy-peer-deps`, add the `@modelcontextprotocol/sdk@1.32.1` pe
 bundle check (`src/worker-build.test.ts`) is the one that catches a resolution mistake like this
 one, and it failed loudly on the attempt — which is the point of having it.
 
+## The canonical policies the Agents SDK's example states
+
+The Agents SDK's Pi harness example (the Cloudflare `agents` repository's
+`examples/next/harnesses/pi`) is the reference for how the pieces fit. Three of its statements are
+normative for Open-Inspect, and all three are now followed.
+
+### The workspace tools' replay policy
+
+The example states it plainly: **"It marks read, ls, find, grep, write and delete replay-safe. edit
+and exec are not: after an eviction the model gets an interrupted result rather than a second
+run."**
+
+Open-Inspect had marked all three mutations unsafe. It now follows the SDK's policy: `write` and
+`delete` are replay-safe, `edit` is not. The reasoning holds end to end here, because a replayed
+write writes the same bytes and a replayed delete removes an absent file, and the diff publication
+_replaces_ the session's bundle under the publication-generation fence, so the session's diff is
+exactly as it was. The practical effect is better: an interrupted whole-file write is retried
+cleanly instead of surfacing an interruption to the model.
+
+### The tools are the Computer SDK's own
+
+The example builds the model's tools from `createPiTools` in `@cloudflare/computer/tools/pi-ai` and
+turns each declaration into a Pi `ToolRegistration`. Open-Inspect does the same: the Computer
+workspace's declarations are adapted into Pi tools, with an explicit allowlist so an upstream
+release cannot widen the model's capabilities by returning another declaration, and with the
+`prepareArguments` validation and the sequential execution mode for mutations.
+
+### The pieces Open-Inspect deliberately does not take
+
+| The example's                        | Why Open-Inspect does not                                                                                                                                                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exec` in the workspace              | The Computer VFS has no shell, no Git, no network, and no execution backend, by the product's rule. The execution path is Code Mode, in its own sandbox worker.                                                                 |
+| Git in the workspace                 | The same rule. The repository arrives as the session's pinned, read-only overlay, published through the SessionDiff.                                                                                                            |
+| `PiSessionSockets`                   | The SDK supplies a socket per pi session. Open-Inspect's timeline, presence, typing, and read state are the SessionDO's, so the Pi Durable Object's events are relayed into the session rather than into a socket of their own. |
+| `createAI` (Workers AI / AI Gateway) | A model provider, and Open-Inspect's model routing is its own product surface. The Pi sessions use the Codex broker, which is what keeps the token out of Pi's storage.                                                         |
+| `defaults` per session               | `PiHarness.defaults` applies to new sessions only, and `session.setModel` changes one. Open-Inspect latches the model per operation from the message, which is the same rule with a different authority.                        |
+
 ## The single upgrade point
 
 When a release ships `onWake`, `wake()`, and `HarnessOptions.telemetry`:

@@ -26,12 +26,26 @@ import { validateWorkspaceToolInput } from "./workspace-input-limits";
 const READ_ONLY_TOOL_NAMES = ["read", "ls", "find", "grep"] as const;
 const MUTATION_TOOL_NAMES = ["write", "edit", "delete"] as const;
 const readOnlyToolNames = new Set<string>(READ_ONLY_TOOL_NAMES);
+
+/**
+ * Whether repeating a mutation is harmless.
+ *
+ * This follows the Computer SDK's own policy, which the Cloudflare Agents
+ * example states: a whole-file write and a delete are replay-safe, because
+ * writing the same bytes and deleting an absent file change nothing, while an
+ * edit is not, because a second run would look for text the first run already
+ * replaced. The diff publication replaces the bundle with the same content and
+ * is fenced by the publication generation, so a repeated mutation leaves the
+ * session's diff exactly as it was.
+ */
+const REPLAY_SAFE_MUTATION_TOOL_NAMES = new Set<string>(["write", "delete"]);
+
 export const COMPUTER_WORKSPACE_MUTATION_EFFECTS = MUTATION_TOOL_NAMES.map(
   (name): ToolEffectRegistration => ({
     name,
     effect: "local_mutation",
     callers: ["model", "tools"],
-    replay: "unsafe",
+    replay: REPLAY_SAFE_MUTATION_TOOL_NAMES.has(name) ? "safe" : "unsafe",
   })
 );
 const mutationEffects = new Map(

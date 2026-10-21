@@ -163,7 +163,7 @@ describe("createComputerWorkspaceCapability", () => {
     expect(text).toEqual(expect.stringContaining("immutable pinned repository"));
   });
 
-  it("exposes write, edit, and delete as unsafe sequential tools in writable mode", () => {
+  it("exposes the mutation tools with the Computer SDK's own replay policy", () => {
     arrangeComputerTools();
 
     const extension = createExtension("enabled");
@@ -183,9 +183,11 @@ describe("createComputerWorkspaceCapability", () => {
       ["ls", "safe", undefined],
       ["find", "safe", undefined],
       ["grep", "safe", undefined],
-      ["write", "unsafe", "sequential"],
+      // A whole-file write and a delete are harmless to repeat; an edit is
+      // not, because a second run would look for text the first run replaced.
+      ["write", "safe", "sequential"],
       ["edit", "unsafe", "sequential"],
-      ["delete", "unsafe", "sequential"],
+      ["delete", "safe", "sequential"],
     ]);
   });
 
@@ -203,9 +205,9 @@ describe("createComputerWorkspaceCapability", () => {
       { name: "ls", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
       { name: "find", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
       { name: "grep", effect: "local_read", callers: ["model", "tools"], replay: "safe" },
-      { name: "write", effect: "local_mutation", callers: ["model", "tools"], replay: "unsafe" },
+      { name: "write", effect: "local_mutation", callers: ["model", "tools"], replay: "safe" },
       { name: "edit", effect: "local_mutation", callers: ["model", "tools"], replay: "unsafe" },
-      { name: "delete", effect: "local_mutation", callers: ["model", "tools"], replay: "unsafe" },
+      { name: "delete", effect: "local_mutation", callers: ["model", "tools"], replay: "safe" },
     ]);
   });
 
