@@ -14,6 +14,9 @@ import type { MessageRepository } from "../../message-repository";
 import type { PiCredentialService } from "../../pi-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
+import type { SessionAttachmentRepository } from "../../session-attachment-repository";
+import type { ObjectStorage } from "../../../storage/object-storage";
+import { sessionAttachmentIdSchema } from "@open-inspect/shared/types/session-attachments";
 import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
 import { externalActionToolName } from "@open-inspect/shared/types/external-actions";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
@@ -100,6 +103,8 @@ const PI_AGENT_CONTROL_ACTIONS = new Set([
   "cancel_agent",
 ]);
 
+const piAttachmentRequestSchema = z.object({ attachmentId: sessionAttachmentIdSchema }).strict();
+
 interface ExternalActionBridge {
   enabled: boolean;
   gateway: Pick<
@@ -163,6 +168,10 @@ interface PiBridgeHandlerOptions {
   agentControls: { handle(request: Request): Promise<Response> };
   credentials: Pick<PiCredentialService, "getOpenAIAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
+  /** The session's attachment records, including the claim a turn holds. */
+  attachments: Pick<SessionAttachmentRepository, "getClaimedByMessage">;
+  /** The session's media bucket, where the image bytes live. */
+  media: ObjectStorage;
   repositories: Pick<
     PiRepositoryTools,
     "pin" | "restore" | "list" | "read" | "prepareMaterialization" | "materializeBatch"
@@ -659,6 +668,42 @@ export class PiBridgeHandler {
     } catch (error) {
       return externalActionFailure(error);
     }
+  }
+
+  /**
+   * The bytes of one image this turn claimed.
+   *
+   * The Pi Durable Object is the harness of a Pi turn, so it fetches an image
+   * the way a sandbox harness does — through the session that owns it. The
+   * session decides: the attachment must be one this turn claimed, and the
+   * bytes come from the session's own media bucket. The answer carries the
+   * image and nothing else.
+   */
+  async attachment(request: Request): Promise<Response> {
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    if (!operationId || !this.activeOperation(request)) {
+      return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+    }
+    const parsed = piAttachmentRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid attachment request" }, { status: 400 });
+    }
+    const row = this.options.attachments.getClaimedByMessage(operationId, parsed.data.attachmentId);
+    if (!row) {
+      return Response.json({ error: "Attachment not found" }, { status: 404 });
+    }
+    const object = await this.options.media.get(row.object_key);
+    if (!object) {
+      return Response.json({ error: "Attachment not found" }, { status: 404 });
+    }
+    const bytes = new Uint8Array(await new Response(object.body).arrayBuffer());
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": row.mime_type,
+        "Content-Length": String(bytes.byteLength),
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
   /**

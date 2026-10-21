@@ -66,6 +66,13 @@ describe("Pi external action approval integration", () => {
       agentControls: { handle: vi.fn() },
       credentials: { getOpenAIAccess: vi.fn() },
       skills: { getSandboxInstallation: vi.fn(async () => null) },
+      attachments: { getClaimedByMessage: vi.fn(() => null) },
+      media: {
+        get: vi.fn(async () => null),
+        put: vi.fn(),
+        delete: vi.fn(),
+        head: vi.fn(async () => null),
+      },
       repositories: {
         pin: vi.fn(async () => []),
         restore: vi.fn(() => []),

@@ -1274,6 +1274,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     agentControls: { handle: (request) => piControlHandler.handle(request) },
     credentials: piCredentialService,
     skills: new SessionSkillStore(db),
+    attachments: attachmentRepository,
+    media: env.MEDIA_BUCKET,
     repositories: piRepositoryTools,
     diffs: diffService,
     externalActions: {
@@ -1563,6 +1565,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     crossSessionAuthorize: (request) => crossSessionHandler.authorize(request),
     piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
     piCodeModeAuthorize: (request) => piBridgeHandler.codeModeAuthorize(request),
+    piAttachment: (request) => piBridgeHandler.attachment(request),
     piMcpList: (request) => mcpSessionHandler.list(request),
     mcpPinGrant: (request) => mcpSessionHandler.grantPin(request),
     piMcpRead: (request) => mcpSessionHandler.read(request),

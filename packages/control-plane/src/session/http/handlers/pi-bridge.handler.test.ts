@@ -11,6 +11,16 @@ function harness(
     activeControl?: boolean;
     processingMessageId?: string;
     spawnSource?: "user" | "automation";
+    claimedAttachment?: {
+      id: string;
+      mime_type: string;
+      size_bytes: number;
+      object_key: string;
+      message_id: string | null;
+      cleanup_claimed_at: number | null;
+      created_at: number;
+    };
+    attachmentBytes?: Uint8Array;
   } = {}
 ) {
   const fullSha = "a".repeat(40);
@@ -87,6 +97,35 @@ function harness(
       })),
     },
     skills: { getSandboxInstallation: vi.fn(async () => null) },
+    attachments: {
+      getClaimedByMessage: vi.fn((messageId: string, attachmentId: string) => {
+        const row = options.claimedAttachment;
+        if (!row || row.id !== attachmentId || row.message_id !== messageId) return null;
+        return row;
+      }),
+    },
+    media: {
+      get: vi.fn(async (key: string) => {
+        if (!options.claimedAttachment || options.claimedAttachment.object_key !== key) {
+          return null;
+        }
+        const bytes = options.attachmentBytes ?? new Uint8Array([1, 2, 3]);
+        return {
+          size: bytes.byteLength,
+          httpEtag: "etag",
+          writeHttpMetadata: () => {},
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes);
+              controller.close();
+            },
+          }),
+        };
+      }),
+      put: vi.fn(),
+      delete: vi.fn(),
+      head: vi.fn(async () => null),
+    },
     repositories: {
       pin,
       restore,
@@ -132,6 +171,68 @@ it("refuses a Code Mode run with no turn behind it", async () => {
     new Request("http://session/internal/pi-codemode/authorize", {
       method: "POST",
       body: JSON.stringify({}),
+    })
+  );
+
+  expect(response.status).toBe(409);
+});
+
+const CLAIMED_ATTACHMENT = {
+  id: "upload-1",
+  mime_type: "image/png",
+  size_bytes: 3,
+  object_key: "sessions/session-1/attachments/upload-1",
+  message_id: "message-1",
+  cleanup_claimed_at: null,
+  created_at: 1,
+};
+
+it("serves the bytes of an image the turn claimed", async () => {
+  const { handler } = harness({
+    processingMessageId: "message-1",
+    claimedAttachment: CLAIMED_ATTACHMENT,
+  });
+
+  const response = await handler.attachment(
+    new Request("http://session/internal/pi-attachment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+      body: JSON.stringify({ attachmentId: "upload-1" }),
+    })
+  );
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Content-Type")).toBe("image/png");
+  await expect(response.arrayBuffer()).resolves.toEqual(
+    new Uint8Array([1, 2, 3]).buffer as ArrayBuffer
+  );
+});
+
+it("refuses an image the turn did not claim", async () => {
+  const { handler } = harness({
+    processingMessageId: "message-1",
+    claimedAttachment: { ...CLAIMED_ATTACHMENT, message_id: "message-2" },
+  });
+
+  const response = await handler.attachment(
+    new Request("http://session/internal/pi-attachment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+      body: JSON.stringify({ attachmentId: "upload-1" }),
+    })
+  );
+
+  expect(response.status).toBe(404);
+});
+
+it("refuses an image request with no turn behind it", async () => {
+  const { handler } = harness({ claimedAttachment: CLAIMED_ATTACHMENT });
+
+  const response = await handler.attachment(
+    new Request("http://session/internal/pi-attachment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attachmentId: "upload-1" }),
     })
   );
 
@@ -262,6 +363,13 @@ function externalActionHarness(
     agentControls: { handle: vi.fn() },
     credentials: { getOpenAIAccess: vi.fn() },
     skills: { getSandboxInstallation: vi.fn(async () => null) },
+    attachments: { getClaimedByMessage: vi.fn(() => null) },
+    media: {
+      get: vi.fn(async () => null),
+      put: vi.fn(),
+      delete: vi.fn(),
+      head: vi.fn(async () => null),
+    },
     repositories: {
       pin: vi.fn(async () => []),
       restore: vi.fn(() => []),

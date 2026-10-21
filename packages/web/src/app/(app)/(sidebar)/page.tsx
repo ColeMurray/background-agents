@@ -15,6 +15,7 @@ import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
+import { PI_ATTACHMENT_MAX_TURN_BYTES } from "@open-inspect/shared/types/session-attachments";
 import {
   getSubscriptionProviderForModel,
   type ModelCategory,
@@ -174,11 +175,7 @@ export default function Home() {
 
   const launchContextReady = canCreateSession && teamCreationReady && preferences.providerReady;
   const warmRequest: WarmDraftSessionRequest | null =
-    launchContextReady &&
-    session &&
-    preferences.ready &&
-    targetRequestFields &&
-    !(harness === "pi" && sessionAttachments.attachments.length > 0)
+    launchContextReady && session && preferences.ready && targetRequestFields
       ? {
           ...targetRequestFields,
           harness,
@@ -214,6 +211,15 @@ export default function Home() {
     harness === "pi" && !providerAccounts.loading && !preferences.providerReady
       ? "Pi Durable requires an active connected OpenAI account"
       : null;
+  // A Pi turn keeps its images in one runtime record, so the images of one
+  // turn have to fit in it. The session refuses a turn that does not, and the
+  // composer says so before the upload.
+  const piAttachmentError =
+    harness === "pi" &&
+    sessionAttachments.attachments.reduce((sum, item) => sum + item.file.size, 0) >
+      PI_ATTACHMENT_MAX_TURN_BYTES
+      ? `The attached images are too large for one Pi Durable turn (limit ${PI_ATTACHMENT_MAX_TURN_BYTES / (1024 * 1024)} MB)`
+      : null;
   const launch = useFirstPromptLaunch(
     {
       prompt,
@@ -227,15 +233,14 @@ export default function Home() {
         models.loading,
       validationError:
         piProviderError ??
-        (harness === "pi" && hasAttachments
-          ? "Pi Durable does not support attachments yet"
-          : preferences.modelAvailability.status === "unavailable"
-            ? preferences.modelAvailability.message
-            : !isLaunchable
-              ? sessionTarget?.kind === "repos"
-                ? "Select at least one repository"
-                : "Please select a repository or environment"
-              : null),
+        piAttachmentError ??
+        (preferences.modelAvailability.status === "unavailable"
+          ? preferences.modelAvailability.message
+          : !isLaunchable
+            ? sessionTarget?.kind === "repos"
+              ? "Select at least one repository"
+              : "Please select a repository or environment"
+            : null),
     },
     {
       sessions: warmSession,
@@ -262,7 +267,7 @@ export default function Home() {
     sessionAttachments.isUploading ||
     !launchContextReady ||
     !isLaunchable ||
-    (harness === "pi" && hasAttachments);
+    piAttachmentError !== null;
 
   return (
     <HomeContent

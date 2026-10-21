@@ -1,6 +1,7 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type { JsonValue } from "@earendil-works/chord";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -13,6 +14,14 @@ export interface PiRuntimePrompt {
   reasoningEffort?: string | null;
   /** Refuse admission when the pinned server catalog cannot price this model. */
   requirePricing?: boolean;
+  /**
+   * The turn's images, as metadata only.
+   *
+   * The bytes stay in the session's media bucket: the Pi Durable Object asks
+   * the session that owns the turn for them, the way a sandbox harness asks
+   * for them over the bounded media route.
+   */
+  attachments?: ResolvedSessionAttachment[];
 }
 
 export interface PiRuntimeReceipt {

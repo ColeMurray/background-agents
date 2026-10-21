@@ -10,6 +10,7 @@ import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
+import { PI_ATTACHMENT_MAX_TURN_BYTES } from "@open-inspect/shared/types/session-attachments";
 import type {
   GitHubAutofixOrigin,
   GitHubAutofixSessionCommand,
@@ -65,7 +66,9 @@ import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
   resolveSessionAttachments,
+  type ResolvedSessionAttachments,
 } from "./session-attachment-resolver";
+import { piModelAcceptsImages } from "../pi/model-image-support";
 import type {
   EnqueuedPrompt,
   EnqueuePromptCoreData,
@@ -776,14 +779,15 @@ export class SessionMessageQueue {
     const reasoningEffort =
       validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log, "pi") ??
       undefined;
+    const attachments = parseStoredSessionAttachments(message.attachments, () =>
+      this.log.error("prompt.invalid_stored_attachments")
+    );
     const userMessageEvent = this.createUserMessageEvent(
       author,
       message.content,
       message.id,
       now,
-      parseStoredSessionAttachments(message.attachments, () =>
-        this.log.error("prompt.invalid_stored_attachments")
-      ),
+      attachments,
       message.origin_context
     );
     if (!this.mayDispatch()) return;
@@ -842,6 +846,9 @@ export class SessionMessageQueue {
           model: resolvedModel,
           reasoningEffort,
           requirePricing: session.max_cost_usd !== null,
+          // Metadata only: the Pi Durable Object fetches the bytes from the
+          // session that owns them, the way a sandbox harness does.
+          ...(attachments ? { attachments } : {}),
         });
       } catch (error) {
         submissionError = error;
@@ -1329,9 +1336,6 @@ export class SessionMessageQueue {
     if (raced) return raced;
     this.assertBudgetAvailable();
     this.assertQueueCapacity(queueDepthBefore);
-    if (harness === "pi" && data.attachments?.length) {
-      throw new HarnessModelIncompatibleError("Pi Durable does not support attachments yet.");
-    }
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
       this.attachmentRepository
@@ -1367,6 +1371,9 @@ export class SessionMessageQueue {
         )
     );
     if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
+    if (harness === "pi" && attachments && attachments.length > 0) {
+      this.assertPiTurnCanCarryAttachments(effectiveModelForEffort, resolvedAttachments);
+    }
     const messageReasoningEffort = validateReasoningEffort(
       effectiveModelForEffort,
       data.reasoningEffort,
@@ -1440,6 +1447,31 @@ export class SessionMessageQueue {
   private assertBudgetAvailable(): void {
     if (this.repository.getSession()?.budget_exhausted === 1) {
       throw new BudgetExhaustedError();
+    }
+  }
+
+  /**
+   * Whether a Pi turn can carry the images it was given.
+   *
+   * The Pi runtime keeps a turn's user message as one Durable Object SQLite
+   * row, and a SQLite row caps at 2 MB, so the turn's images must fit in it
+   * beside the prompt text. A model that takes text only would drop the
+   * image, so the turn is refused by name rather than run without it.
+   */
+  private assertPiTurnCanCarryAttachments(
+    model: string,
+    resolved: ResolvedSessionAttachments | undefined
+  ): void {
+    if (!resolved) return;
+    if (resolved.totalBytes > PI_ATTACHMENT_MAX_TURN_BYTES) {
+      throw new SessionAttachmentError(
+        `The attached images are too large for one Pi Durable turn (limit ${PI_ATTACHMENT_MAX_TURN_BYTES / (1024 * 1024)} MB)`
+      );
+    }
+    if (!piModelAcceptsImages(model)) {
+      throw new HarnessModelIncompatibleError(
+        "The selected model does not accept image attachments."
+      );
     }
   }
 
