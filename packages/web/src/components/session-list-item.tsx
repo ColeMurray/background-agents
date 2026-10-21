@@ -30,7 +30,7 @@ export function SessionListItem({
   environmentName,
   isActive,
   isMobile,
-  unreadDescendantCount = 0,
+  hasUnreadDescendants = false,
   onArchive,
   onSessionSelect,
   onMarkLatestMessageRead,
@@ -40,8 +40,8 @@ export function SessionListItem({
   environmentName?: string;
   isActive: boolean;
   isMobile: boolean;
-  /** Unread sessions nested under this one in the list. */
-  unreadDescendantCount?: number;
+  /** Whether any session nested under this one in the list is unread. */
+  hasUnreadDescendants?: boolean;
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
@@ -52,8 +52,7 @@ export function SessionListItem({
   const canRead = session.capabilities?.canRead === true;
   const canMarkRead = canRead && session.readState.unread;
   // Only offered when it reaches beyond what "Mark as read" covers.
-  const canMarkHierarchyRead =
-    canRead && onMarkHierarchyRead !== undefined && unreadDescendantCount > 0;
+  const canMarkHierarchyRead = canRead && onMarkHierarchyRead !== undefined && hasUnreadDescendants;
   const hasUnread = session.readState.unread || canMarkHierarchyRead;
   const hasActions = canManageLifecycle || canMarkRead || canMarkHierarchyRead;
   const timestamp = session.updatedAt || session.createdAt;

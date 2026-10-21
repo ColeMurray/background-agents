@@ -116,7 +116,7 @@ it("offers mark-all-as-read on a parent whose descendants are unread", async () 
       session={session()}
       isActive={false}
       isMobile={false}
-      unreadDescendantCount={2}
+      hasUnreadDescendants
       onArchive={vi.fn()}
       onMarkLatestMessageRead={vi.fn()}
       onMarkHierarchyRead={onMarkHierarchyRead}
@@ -139,7 +139,7 @@ it("omits mark-all-as-read when no descendant is unread", async () => {
       session={session(true)}
       isActive={false}
       isMobile={false}
-      unreadDescendantCount={0}
+      hasUnreadDescendants={false}
       onArchive={vi.fn()}
       onMarkLatestMessageRead={vi.fn()}
       onMarkHierarchyRead={vi.fn()}

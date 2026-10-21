@@ -667,12 +667,33 @@ describe("useSidebarSessions", () => {
     expect(result.current.finished.map(({ id }) => id)).toEqual(["attention", "tail-unread"]);
   });
 
-  it("marks one hierarchy read under the active filters", async () => {
+  it("marks one hierarchy read and keeps unrelated retained pages", async () => {
     teamContext.activeTeamId = "team_alpha";
-    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ markedCount: 3 }));
-    const fetcher = vi.fn(async () => snapshot({ needs_attention: page(["parent"]) }));
+    let markedRead = false;
+    vi.mocked(browserApiFetch).mockImplementation(async () => {
+      markedRead = true;
+      return Response.json({ markedCount: 2 });
+    });
+    const parent = unreadItem("parent");
+    const hierarchy: SessionInboxItem = {
+      ...parent,
+      descendantSessions: [{ ...unreadItem("child").rootSession, parentSessionId: "parent" }],
+    };
+    const fetcher = vi.fn(async (key: string) => {
+      if (key.includes("category=finished")) return page(["finished-tail"]);
+      return snapshot({
+        needs_attention: markedRead
+          ? page([])
+          : { items: [hierarchy], hasMore: false, nextCursor: null },
+        in_progress: page(markedRead ? ["parent", "running"] : ["running"]),
+        finished: page(["finished"], "finished-next"),
+      });
+    });
     const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
     await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.finished.loadMore());
+    await waitFor(() => expect(result.current.finished).toHaveLength(2));
+    expect(result.current.unreadDescendantRootIds).toEqual(new Set(["parent"]));
 
     await act(async () => {
       await result.current.handleMarkHierarchyRead("parent");
@@ -683,6 +704,12 @@ describe("useSidebarSessions", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ teamIds: ["team_alpha"], mine: false, rootSessionId: "parent" }),
     });
+    expect(result.current.needsAttention).toEqual([]);
+    expect(result.current.unreadDescendantRootIds).toEqual(new Set());
+    await waitFor(() =>
+      expect(result.current.inProgress.map(({ id }) => id)).toEqual(["parent", "running"])
+    );
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
   });
 
   it("reconciles read state on retained pages when a session is marked read", async () => {

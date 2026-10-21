@@ -4,26 +4,11 @@ import { Fragment } from "react";
 import { SessionListItem, ChildSessionListItem } from "@/components/session-list-item";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
-/** Unread sessions anywhere in the tree rendered below the root. */
-function countUnreadDescendants(rootId: string, childrenMap: Map<string, SessionItem[]>): number {
-  let count = 0;
-  const visitedIds = new Set([rootId]);
-  const pendingIds = [rootId];
-  for (let parentId = pendingIds.pop(); parentId; parentId = pendingIds.pop()) {
-    for (const child of childrenMap.get(parentId) ?? []) {
-      if (visitedIds.has(child.id)) continue;
-      visitedIds.add(child.id);
-      pendingIds.push(child.id);
-      if (child.readState.unread) count += 1;
-    }
-  }
-  return count;
-}
-
 export function SessionWithChildren({
   session,
   environmentName,
   childrenMap,
+  hasUnreadDescendants,
   currentSessionId,
   isMobile,
   onArchive,
@@ -34,6 +19,7 @@ export function SessionWithChildren({
   session: SessionItem;
   environmentName?: string;
   childrenMap: Map<string, SessionItem[]>;
+  hasUnreadDescendants: boolean;
   currentSessionId: string | null;
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
@@ -48,7 +34,7 @@ export function SessionWithChildren({
         environmentName={environmentName}
         isActive={session.id === currentSessionId}
         isMobile={isMobile}
-        unreadDescendantCount={countUnreadDescendants(session.id, childrenMap)}
+        hasUnreadDescendants={hasUnreadDescendants}
         onArchive={onArchive}
         onSessionSelect={onSessionSelect}
         onMarkLatestMessageRead={onMarkLatestMessageRead}

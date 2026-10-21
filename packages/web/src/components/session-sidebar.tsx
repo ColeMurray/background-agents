@@ -123,6 +123,7 @@ export function SessionSidebar({
     inProgress,
     finished,
     childrenMap,
+    unreadDescendantRootIds,
     loading,
     sessionsError,
     refreshSnapshot,
@@ -249,6 +250,7 @@ export function SessionSidebar({
                       : undefined
                   }
                   childrenMap={childrenMap}
+                  hasUnreadDescendants={unreadDescendantRootIds.has(session.id)}
                   currentSessionId={currentSessionId}
                   isMobile={isMobile}
                   onArchive={handleArchivedSession}

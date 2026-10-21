@@ -28,6 +28,7 @@ import {
 } from "@/lib/session-inbox-api";
 import {
   markLatestMessageRead,
+  markSessionInboxHierarchyRead,
   markSessionInboxRead,
   reconcileSessionReadState,
   subscribeSessionInboxMarkedRead,
@@ -412,10 +413,16 @@ export function useSidebarSessions() {
   // Every session open acknowledges its terminal message, read or not, so
   // this runs far more often than read state actually changes. Retained pages
   // are updated in place; only a hierarchy leaving attention restarts a chain.
-  const reconcileSidebarReadState = useCallback(
-    ({ sessionId, outcome, readState }: SessionReadStateReconciledDetail) => {
+  // Updates arrive as one batch per hierarchy, so a hierarchy read in one
+  // action is judged fully read once, after every update applies.
+  const reconcileSidebarReadStates = useCallback(
+    (details: readonly SessionReadStateReconciledDetail[]) => {
       const applyReadState = (item: SessionInboxItem) =>
-        applySessionInboxItemReadState(item, sessionId, readState);
+        details.reduce(
+          (current, { sessionId, readState }) =>
+            applySessionInboxItemReadState(current, sessionId, readState),
+          item
+        );
       updateAttentionRetained((item) => {
         const updated = applyReadState(item);
         return isSessionInboxItemFullyRead(updated) ? null : updated;
@@ -426,14 +433,16 @@ export function useSidebarSessions() {
       // The destination chain was paged without the arriving hierarchy, so a
       // rank between its head and retained tail would never render. Restart
       // that one chain from the head.
-      const attentionItem = attentionItems.find(
-        (item) =>
-          item.rootSession.id === sessionId ||
-          item.descendantSessions.some((session) => session.id === sessionId)
+      const attentionItem = attentionItems.find((item) =>
+        details.some(
+          ({ sessionId }) =>
+            item.rootSession.id === sessionId ||
+            item.descendantSessions.some((session) => session.id === sessionId)
+        )
       );
       if (
         attentionItem &&
-        !readState.unread &&
+        details.every(({ readState }) => !readState.unread) &&
         isSessionInboxItemFullyRead(applyReadState(attentionItem))
       ) {
         if (sessionInboxDestinationCategory(attentionItem) === "in_progress") {
@@ -446,10 +455,18 @@ export function useSidebarSessions() {
       return Promise.all([
         mutateCache<SessionInboxSnapshot | SessionInboxPage>(
           isSessionInboxKey,
-          (current) => applySessionInboxReadStateUpdate(current, sessionId, readState),
+          (current) =>
+            details.reduce(
+              (data, { sessionId, readState }) =>
+                applySessionInboxReadStateUpdate(data, sessionId, readState),
+              current
+            ),
           // `already_read` confirms the cached state; any other outcome may
           // carry a change the snapshot has not seen yet.
-          { populateCache: true, revalidate: outcome !== "already_read" }
+          {
+            populateCache: true,
+            revalidate: details.some(({ outcome }) => outcome !== "already_read"),
+          }
         ),
         // Cached cursor pages would restore pre-acknowledgement rows on remount.
         mutateCache<SessionInboxPage | undefined>(isSessionInboxPaginationKey, () => undefined, {
@@ -470,8 +487,10 @@ export function useSidebarSessions() {
   );
 
   useEffect(() => {
-    return subscribeSessionReadStateReconciliation(reconcileSidebarReadState);
-  }, [reconcileSidebarReadState]);
+    return subscribeSessionReadStateReconciliation((detail) =>
+      reconcileSidebarReadStates([detail])
+    );
+  }, [reconcileSidebarReadStates]);
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
@@ -522,12 +541,36 @@ export function useSidebarSessions() {
     [filters, mine]
   );
 
-  // Scoped by the same filters, so the server marks exactly the hierarchy this row lists.
+  // Scoped by the same filters, so the server marks exactly the hierarchy this
+  // row lists. Only that hierarchy is reconciled; unrelated loaded pages stay.
   const handleMarkHierarchyRead = useCallback(
     async (rootSessionId: string) => {
-      await markSessionInboxRead({ ...filters, mine, rootSessionId });
+      await markSessionInboxHierarchyRead({ ...filters, mine, rootSessionId });
+      const item = inboxItems.find(({ rootSession }) => rootSession.id === rootSessionId);
+      if (!item) return;
+      await reconcileSidebarReadStates(
+        [item.rootSession, ...item.descendantSessions]
+          .filter(({ readState }) => readState.unread)
+          .map(({ id, readState }) => ({
+            sessionId: id,
+            outcome: "marked_read",
+            readState: { ...readState, unread: false },
+          }))
+      );
     },
-    [filters, mine]
+    [filters, inboxItems, mine, reconcileSidebarReadStates]
+  );
+
+  const unreadDescendantRootIds = useMemo(
+    () =>
+      new Set(
+        inboxItems
+          .filter(({ descendantSessions }) =>
+            descendantSessions.some(({ readState }) => readState.unread)
+          )
+          .map(({ rootSession }) => rootSession.id)
+      ),
+    [inboxItems]
   );
 
   return {
@@ -536,6 +579,7 @@ export function useSidebarSessions() {
     inProgress: inProgressItems.map((item) => item.rootSession),
     finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
+    unreadDescendantRootIds,
     loading: sessionCreatorFilter === null || loadingTeams || isLoading,
     sessionsError:
       teamsError ?? snapshotError ?? categoryResults.find((result) => result.error)?.error,
