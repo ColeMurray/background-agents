@@ -119,6 +119,63 @@ surface the product does not have. They are decisions, not gaps.
 | `contextRetentionMs`               | A memory optimization. The Durable Object's own eviction, and the `agents` wake job, already decide when memory is released.                                                                            |
 | `control.handoff` from a tool      | Open-Inspect's handoff is a session lifecycle action with its own audit, reached through the control route, not a tool result. The upstream `handoff` control is a Pi-internal detail.                  |
 
+## The Cloudflare Agents SDK's Pi harness, and the one upgrade it implies
+
+Cloudflare announced the `PiHarness` beta in the Agents SDK on 2026-10-02
+(`https://developers.cloudflare.com/changelog/post/2026-10-02-pi-harness/`). The architecture it
+describes is the one Open-Inspect already runs:
+
+- **Pi Durable provides the harness; the Lifecycle keeps it running in the Durable Object.** That is
+  exactly `PiSessionDO`: `Lifecycle.install(this).use(this.harness)` on a plain `DurableObject`,
+  with the harness's factory opening `Harness.open` over the object's own storage.
+- **Extensions are Pi Durable's own.** `PiHarness` does not wrap them, so every Pi Durable extension
+  feature works. Open-Inspect's tool-policy extension, its effect registry, and its per-slot
+  contributions are all plain Pi extensions installed on the registry before `Harness.open`.
+- **The SDK's skills extension is the one Open-Inspect uses.**
+  `packages/control-plane/src/pi/managed-skills-extension.ts` installs `skills(sources)` from
+  `agents/harness/pi` over Open-Inspect's _pinned_ session manifest, so the catalog resolution, the
+  activation, the resources, and the prompt rendering are the SDK's, and only the _source_ is
+  Open-Inspect's authority.
+- **The Computer workspace and the browser** are the same primitives the SDK's example uses
+  (`@cloudflare/computer`'s `Workspace`).
+
+### The one place Open-Inspect lags: `agents` 0.28.1 against 0.29.0
+
+Open-Inspect pins `agents` at exactly `0.28.1`. The latest is `0.29.0`. Checked against both
+tarballs (2026-10-21):
+
+| Surface                                      | 0.28.1 (installed) | 0.29.0 (latest)        | Change for Open-Inspect               |
+| -------------------------------------------- | ------------------ | ---------------------- | ------------------------------------- |
+| `agents/harness/pi` exports                  | —                  | adds `InputEntry` only | none                                  |
+| `agents/mcp/client` exports                  | —                  | **identical**          | none                                  |
+| Lifecycle `install`/`use`/`start`/`fetch`    | —                  | **identical**          | none                                  |
+| The pi harness's tool result field           | legacy `content`   | `output`               | the adapter below becomes unnecessary |
+| `@earendil-works/pi-ai` / `pi-durable` peers | `^1.0.0`           | `~1.3.0`               | aligns with Open-Inspect's 1.3.0 pin  |
+
+So the upgrade is **API-identical for everything Open-Inspect uses**, and it would let Open-Inspect
+**delete its own compatibility shim**: `adaptLegacyToolOutput` in `managed-skills-extension.ts`
+exists only because Agents 0.28.1 was compiled against a Pi Durable that returned `content` instead
+of `output`.
+
+**It is deliberately not done in this change.** Two reasons, both of them the repository's own
+rules:
+
+1. **The pin rule.** "The installed version is exact-pinned. An upgrade is its own reviewed change
+   with its own canary, not a side effect of another feature." The upgrade belongs in its own
+   change, with its own canary.
+2. **It changes the shipped worker's dependency graph.** Agents 0.29.0 imports
+   `@modelcontextprotocol/sdk/types.js` (the v1 layout) while Open-Inspect ships
+   `@modelcontextprotocol/client@2.3.1` (the v2 layout). The upgrade therefore needs the
+   `@modelcontextprotocol/sdk@1.32.1` peer installed alongside it, and the worker bundle's
+   resolution changes with it. In this checkout npm's resolver also fails on the peer change
+   ("Cannot read properties of null (reading 'edgesOut')") unless it runs with `--legacy-peer-deps`.
+
+**The upgrade, when it is taken, is one line plus its verification:** bump `agents` to `0.29.0`,
+install with `--legacy-peer-deps`, add the `@modelcontextprotocol/sdk@1.32.1` peer, delete
+`adaptLegacyToolOutput` and the rename guard, and run the full lanes plus the worker build. The
+bundle check (`src/worker-build.test.ts`) is the one that catches a resolution mistake like this
+one, and it failed loudly on the attempt — which is the point of having it.
+
 ## The single upgrade point
 
 When a release ships `onWake`, `wake()`, and `HarnessOptions.telemetry`:
