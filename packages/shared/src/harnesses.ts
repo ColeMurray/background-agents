@@ -26,7 +26,7 @@ import type {
   SessionProviderAuthMode,
 } from "./types/provider-accounts";
 
-export const HARNESS_IDS = ["opencode", "claude", "codex"] as const;
+export const HARNESS_IDS = ["opencode", "claude", "codex", "pi"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 export const DEFAULT_HARNESS: HarnessId = "opencode";
 export const harnessIdSchema = z.enum(HARNESS_IDS);
@@ -72,15 +72,42 @@ export const HARNESS_CATALOG = {
     providerAuth: { openai: ["api_key", "provider_account"] },
     resume: "session_id",
   },
+  pi: {
+    label: "Pi Durable",
+    selectionPolicy: "strict",
+    modelFamilies: ["openai"],
+    providerAuth: { openai: ["provider_account"] },
+    resume: "session_id",
+  },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;
 
 export function isValidHarness(value: unknown): value is HarnessId {
   return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
 }
 
+/** Harnesses a deployment may advertise before server-side admission. */
+export function availableHarnessIds(piDurableEnabled: string | undefined): HarnessId[] {
+  const piEnabled = ["1", "true"].includes(piDurableEnabled?.trim().toLowerCase() ?? "");
+  return HARNESS_IDS.filter((harness) => harness !== "pi" || piEnabled);
+}
+
 /** Resolve a harness from an optional wire value; absent means the built-in harness. */
 export function getValidHarnessOrDefault(value: string | null | undefined): HarnessId {
   return isValidHarness(value) ? value : DEFAULT_HARNESS;
+}
+
+/**
+ * Resolve a harness that was **stored**.
+ *
+ * A stored value that this binary does not know is a session this deployment
+ * cannot run: it was written by a newer binary, or the deployment was rolled
+ * back. It must fail closed, and it must not become the built-in harness.
+ *
+ * `null` means "this session's harness is not one this binary knows".
+ */
+export function getStoredHarnessOrRefuse(value: string | null | undefined): HarnessId | null {
+  if (value === null || value === undefined || value === "") return DEFAULT_HARNESS;
+  return isValidHarness(value) ? value : null;
 }
 
 export function getHarnessCapabilities(harness: HarnessId): HarnessCapabilities {
@@ -129,7 +156,7 @@ export function selectHarnessProviderSelections(
 
 /** Whether the harness can run a model (by its catalog provider prefix). */
 export function harnessSupportsModel(harness: HarnessId, model: string): boolean {
-  if (harness === "codex") return getCodexReasoningConfig(model) !== undefined;
+  if (harness === "codex" || harness === "pi") return getCodexReasoningConfig(model) !== undefined;
   const families = getHarnessCapabilities(harness).modelFamilies;
   if (families === "any") return true;
   const { provider } = extractProviderAndModel(model);
@@ -252,7 +279,9 @@ export function checkHarnessCompatibility(
 }
 
 export function getHarnessReasoningConfig(harness: HarnessId, model: string) {
-  return harness === "codex" ? getCodexReasoningConfig(model) : getReasoningConfig(model);
+  return harness === "codex" || harness === "pi"
+    ? getCodexReasoningConfig(model)
+    : getReasoningConfig(model);
 }
 
 export function isValidHarnessReasoningEffort(
