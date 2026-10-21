@@ -489,6 +489,29 @@ def test_retried_error_warns_and_fatal_error_feeds_terminal_failure():
     ]
 
 
+def test_pending_fatal_error_is_reported_once_without_turn_completion():
+    state = _turn()
+    assert state.fail_pending() == []
+    state.accept(
+        _notice(
+            "error",
+            threadId="thread",
+            turnId="turn",
+            willRetry=False,
+            error={"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+        )
+    )
+    assert state.fail_pending() == [
+        {
+            "type": "error",
+            "error": "OpenAI usage limit reached; retry after it resets.",
+            "messageId": "m",
+        }
+    ]
+    assert state.fail_pending() == []
+    assert state.status is None
+
+
 def test_error_notifications_are_correlated_to_this_turn():
     state = _turn()
     for thread_id, turn_id in [("other", "turn"), ("thread", "other")]:

@@ -462,6 +462,8 @@ class CodexHarness:
                     "Codex could not prepare the turn within its runtime budget",
                     message_cost_usd=0,
                 )
+            if stopped and (pending := await self._pending_failure(state, emit)):
+                return pending
             return TurnOutcome.failed(
                 "Codex transport failed; retry to resume the conversation"
                 if stopped
@@ -501,6 +503,8 @@ class CodexHarness:
             self._usage_baseline_known = False
             if self.session_id:
                 self._persist()
+            if stopped and (pending := await self._pending_failure(state, emit)):
+                return pending
             return TurnOutcome.failed(
                 f"Codex produced no output for {timeout_seconds:.0f}s."
                 if stopped
@@ -520,6 +524,16 @@ class CodexHarness:
             self._turn_id = None
             for path in paths:
                 path.unlink(missing_ok=True)
+
+    async def _pending_failure(
+        self, state: CodexTurnEvents | None, emit: EventSink
+    ) -> TurnOutcome | None:
+        """The fatal native error a turn recorded before ending without ``turn/completed``."""
+        if state is None:
+            return None
+        for event in state.fail_pending():
+            await emit(event)
+        return TurnOutcome.failed(state.error, message_cost_usd=0) if state.error else None
 
     async def _next_notification(self) -> dict[str, Any]:
         """Next frame, bounded by the inactivity budget while no host tool call is running."""

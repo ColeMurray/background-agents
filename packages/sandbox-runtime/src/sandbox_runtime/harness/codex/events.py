@@ -372,6 +372,10 @@ class CodexTurnEvents:
         self.tokens = None
         return [self.finish()]
 
+    def fail_pending(self) -> list[dict[str, Any]]:
+        """Report a recorded non-retried native error when ``turn/completed`` never arrives."""
+        return self._failed(self._fatal_error) if self._fatal_error is not None else []
+
     def _failed(self, error: Any) -> list[dict[str, Any]]:
         if self.error is not None:
             return []
