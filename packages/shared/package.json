@@ -178,6 +178,10 @@
       "import": "./dist/types/session-inbox.js",
       "types": "./dist/types/session-inbox.d.ts"
     },
+    "./types/mcp-read": {
+      "import": "./dist/types/mcp-read.js",
+      "types": "./dist/types/mcp-read.d.ts"
+    },
     "./types/session-activity": {
       "import": "./dist/types/session-activity.js",
       "types": "./dist/types/session-activity.d.ts"
@@ -237,6 +241,26 @@
     "./child-status-tool": {
       "import": "./dist/child-status-tool.js",
       "types": "./dist/child-status-tool.d.ts"
+    },
+    "./pi-tool-effects": {
+      "import": "./dist/pi-tool-effects.js",
+      "types": "./dist/pi-tool-effects.d.ts"
+    },
+    "./pi-feature-capabilities": {
+      "import": "./dist/pi-feature-capabilities.js",
+      "types": "./dist/pi-feature-capabilities.d.ts"
+    },
+    "./migration-reservations": {
+      "import": "./dist/migration-reservations.js",
+      "types": "./dist/migration-reservations.d.ts"
+    },
+    "./capability-modes": {
+      "import": "./dist/capability-modes.js",
+      "types": "./dist/capability-modes.d.ts"
+    },
+    "./tool-effects": {
+      "import": "./dist/tool-effects.js",
+      "types": "./dist/tool-effects.d.ts"
     }
   },
   "scripts": {

@@ -15,6 +15,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/pi-codemode-sandbox/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/sandbox-runtime/**"
@@ -54,6 +55,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/pi-codemode-sandbox/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/sandbox-runtime/**"
@@ -139,6 +141,9 @@ jobs:
 
       - name: Test Terraform workflow contract
         run: npm run test:terraform-workflow-contract
+
+      - name: Test the published trace-export schema against the code
+        run: npm run test:trace-export-schema
 
       - name: Test Node version workflow contract
         run: npm run test:node-version-workflow-contract
@@ -256,6 +261,21 @@ jobs:
       # test-cp-integration; a session repository or migration has to pass both.
       - name: Run control-plane unit tests
         run: npm test -w @open-inspect/control-plane
+
+      - name: Build isolated Pi Code Mode Worker and QuickJS WASM
+        run: npm run build -w @open-inspect/pi-codemode-sandbox
+
+      - name: Run Pi Code Mode sandbox infrastructure contracts
+        run: npm test -w @open-inspect/pi-codemode-sandbox
+
+      - name: Run execution isolation artifact and provider contracts
+        run: npm run test:execution-isolation-contract
+
+      # Separate from test-cp-integration so each --shard invocation remains
+      # exactly one half of the established suite instead of recursively
+      # launching this unsharded auxiliary-Worker lane.
+      - name: Run Pi Code Mode two-Worker integration tests
+        run: npm run test:integration:codemode -w @open-inspect/control-plane
 
   test-cp-integration:
     name: Test (control-plane integration ${{ matrix.shard }})

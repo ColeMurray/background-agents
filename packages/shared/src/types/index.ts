@@ -6,6 +6,25 @@
  */
 
 export {
+  mcpToolReviewInputSchema,
+  mcpServerReviewInputSchema,
+  mcpServerReviewViewSchema,
+  mcpReadRequestSchema,
+  mcpReadResultSchema,
+  mcpSharedServerSchema,
+  mcpSharedServerListSchema,
+  MAX_MCP_READ_RESULT_BYTES,
+} from "./mcp-read";
+export type {
+  McpServerReviewInput,
+  McpServerReviewView,
+  McpReadRequest,
+  McpReadResult,
+  McpSharedServer,
+  McpSharedServerList,
+} from "./mcp-read";
+
+export {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
@@ -55,6 +74,7 @@ export {
   repositoryPairInputSchema,
   repositoryInputSchema,
   repositoriesInputSchema,
+  positionedSessionRepositoriesInputSchema,
   sessionRepositoriesInputSchema,
   RepositoryPairValidationError,
   decodeRepositoryPathSegments,
@@ -64,6 +84,7 @@ export {
   validateRepositoryPathSegments,
   normalizeOptionalRepositoryPair,
 } from "./repositories";
+
 export type {
   RepositoryRef,
   SessionRepositoryState,
@@ -195,6 +216,27 @@ export {
 
 export { sandboxShutdownSchema } from "./sandbox-shutdown";
 export type { SandboxShutdownState } from "./sandbox-shutdown";
+export {
+  DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS,
+  MAX_SANDBOX_COMMAND_TIMEOUT_MS,
+  MAX_SANDBOX_COMMAND_ARGV_ITEMS,
+  MAX_SANDBOX_COMMAND_ARG_BYTES,
+  MAX_SANDBOX_COMMAND_OUTPUT_BYTES,
+  MAX_PERSISTED_SANDBOX_COMMAND_OUTPUT_BYTES,
+  MAX_PERSISTED_SANDBOX_OPERATION_OUTPUT_BYTES,
+  MAX_SANDBOX_COMMANDS_PER_OPERATION,
+  MAX_QUEUED_SANDBOX_COMMANDS_PER_SESSION,
+  sandboxRuntimeModeSchema,
+  sandboxCommandPurposeSchema,
+  sandboxExecutionCommandSchema,
+  sandboxExecutionEventSchema,
+} from "./sandbox-execution";
+export type {
+  SandboxRuntimeMode,
+  SandboxCommandPurpose,
+  SandboxExecutionCommand,
+  SandboxExecutionEvent,
+} from "./sandbox-execution";
 export { tokenUsageSchema } from "./sandbox-events";
 export type { TokenUsage } from "./sandbox-events";
 export { normalizeTokenUsage, stepUsageSchema } from "./usage";

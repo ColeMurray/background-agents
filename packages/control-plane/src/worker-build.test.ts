@@ -22,6 +22,11 @@ describe("control-plane worker build", () => {
       });
 
       const bundle = readFileSync(resolve(packageDirectory, "dist/index.js"), "utf8");
+      const packageJson = JSON.parse(
+        readFileSync(resolve(packageDirectory, "package.json"), "utf8")
+      ) as { dependencies: Record<string, string> };
+
+      expect(packageJson.dependencies["@earendil-works/pi-codemode"]).toBe("1.3.0");
 
       expect(bundle.includes('"node:async_hooks"')).toBe(true);
       expect(bundle.includes("AsyncLocalStoragePolyfill")).toBe(false);
@@ -35,6 +40,42 @@ describe("control-plane worker build", () => {
       const bundledSources = Object.keys(metafile.inputs);
       expect(bundledSources).toContain("src/cloudflare/durable-object.ts");
       expect(bundledSources.filter((input) => input.startsWith("src/node/"))).toEqual([]);
+      expect(bundledSources).toContain("../../node_modules/@cloudflare/computer/dist/index.js");
+      expect(bundledSources).toContain(
+        "../../node_modules/@cloudflare/computer/dist/tools/pi-ai.js"
+      );
+      expect(bundledSources).toContain(
+        "../../node_modules/@earendil-works/pi-codemode/dist/runtime/remote.js"
+      );
+      expect(
+        bundledSources.filter(
+          (input) =>
+            input.includes("@earendil-works/pi-codemode/dist/cloudflare") || input.endsWith(".wasm")
+        )
+      ).toEqual([]);
+      expect(bundle).not.toContain("quickjs.wasm");
+      expect(
+        bundledSources.filter(
+          (input) =>
+            input.includes("@cloudflare/computer") &&
+            (input.includes("/backends/") ||
+              input.endsWith("/dist/git.js") ||
+              input.includes("/modules/git"))
+        )
+      ).toEqual([]);
+      expect(bundledSources.filter((input) => input.includes("node_modules/just-bash/"))).toEqual(
+        []
+      );
+
+      const nodeMetafile = JSON.parse(
+        readFileSync(resolve(packageDirectory, "dist/node/meta.json"), "utf8")
+      ) as { inputs: Record<string, unknown> };
+      expect(
+        Object.keys(nodeMetafile.inputs).filter((input) => input.includes("@cloudflare/computer"))
+      ).toEqual([]);
+      expect(
+        Object.keys(nodeMetafile.inputs).filter((input) => input.includes("pi-codemode"))
+      ).toEqual([]);
     },
     WORKER_BUILD_TIMEOUT_MS
   );

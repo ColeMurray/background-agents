@@ -13,7 +13,7 @@
     // Re-root inherited settings that are relative to the extending config.
     "paths": { "@/*": ["../../src/*"] }
   },
-  "include": ["**/*.ts", "../../src/**/*.ts"],
+  "include": ["**/*.ts", "../codemode-integration/**/*.ts", "../../src/**/*.ts"],
   // The Node host's adapters (src/node/**) belong to tsconfig.node.json.
   "exclude": ["../../src/**/*.test.ts", "../../src/node/**/*.ts"]
 }
