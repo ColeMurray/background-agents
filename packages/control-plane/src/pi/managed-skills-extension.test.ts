@@ -13,7 +13,7 @@ vi.mock("agents/harness/pi", () => ({
         parameters: { type: "object" },
         replay: "safe",
         execute: async () => ({
-          content: [{ type: "text", text: "<skill_content>Use evidence.</skill_content>" }],
+          output: [{ type: "text", text: "<skill_content>Use evidence.</skill_content>" }],
         }),
       },
       {
@@ -23,8 +23,8 @@ vi.mock("agents/harness/pi", () => ({
         replay: "safe",
         execute: async (input: { path?: string }) =>
           input.path === "../secret"
-            ? { content: [{ type: "text", text: "not found" }], isError: true }
-            : { content: [{ type: "text", text: "Check tests." }] },
+            ? { output: [{ type: "text", text: "not found" }], isError: true }
+            : { output: [{ type: "text", text: "Check tests." }] },
       },
     ],
     sections: [],

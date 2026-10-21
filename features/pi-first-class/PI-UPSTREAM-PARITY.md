@@ -139,42 +139,47 @@ describes is the one Open-Inspect already runs:
 - **The Computer workspace and the browser** are the same primitives the SDK's example uses
   (`@cloudflare/computer`'s `Workspace`).
 
-### The one place Open-Inspect lags: `agents` 0.28.1 against 0.29.0
+### `agents` 0.29.0: the upgrade is taken
 
-Open-Inspect pins `agents` at exactly `0.28.1`. The latest is `0.29.0`. Checked against both
-tarballs (2026-10-21):
+Open-Inspect pinned `agents` at exactly `0.28.1`. The latest is `0.29.0`. Checked against both
+tarballs (2026-10-21), and the upgrade is now **taken** — its own change, with its own verification,
+exactly as the pin rule requires. The full audit is
+`features/pi-first-class/PI-AGENTS-UPGRADE-AUDIT.md`.
 
-| Surface                                      | 0.28.1 (installed) | 0.29.0 (latest)        | Change for Open-Inspect               |
-| -------------------------------------------- | ------------------ | ---------------------- | ------------------------------------- |
-| `agents/harness/pi` exports                  | —                  | adds `InputEntry` only | none                                  |
-| `agents/mcp/client` exports                  | —                  | **identical**          | none                                  |
-| Lifecycle `install`/`use`/`start`/`fetch`    | —                  | **identical**          | none                                  |
-| The pi harness's tool result field           | legacy `content`   | `output`               | the adapter below becomes unnecessary |
-| `@earendil-works/pi-ai` / `pi-durable` peers | `^1.0.0`           | `~1.3.0`               | aligns with Open-Inspect's 1.3.0 pin  |
+| Surface                                      | 0.28.1 (was)                 | 0.29.0 (installed)     | Change for Open-Inspect              |
+| -------------------------------------------- | ---------------------------- | ---------------------- | ------------------------------------ |
+| `agents/harness/pi` exports                  | —                            | adds `InputEntry` only | none                                 |
+| `agents/mcp/client` exports                  | —                            | **identical**          | none                                 |
+| Lifecycle `install`/`use`/`start`/`fetch`    | —                            | **identical**          | none                                 |
+| The pi harness's tool result field           | legacy `content`             | `output`               | the shim is gone                     |
+| `@earendil-works/pi-ai` / `pi-durable` peers | `^1.0.0`                     | `~1.3.0`               | aligns with Open-Inspect's 1.3.0 pin |
+| The MCP peers (`sdk` / `client` / `server`)  | `1.32.1` / `2.3.1` / `2.3.1` | **identical**          | none                                 |
 
-So the upgrade is **API-identical for everything Open-Inspect uses**, and it would let Open-Inspect
-**delete its own compatibility shim**: `adaptLegacyToolOutput` in `managed-skills-extension.ts`
-exists only because Agents 0.28.1 was compiled against a Pi Durable that returned `content` instead
-of `output`.
+The upgrade is **API-identical for everything Open-Inspect uses**, and it let Open-Inspect **delete
+its own compatibility shim**: `adaptLegacyToolOutput` in `managed-skills-extension.ts` existed only
+because Agents 0.28.1 was compiled against a Pi Durable that returned `content` instead of `output`.
+Both the shim and its rename guard are deleted, and the skills extension is now installed as the SDK
+defines it.
 
-**It is deliberately not done in this change.** Two reasons, both of them the repository's own
-rules:
+**Two earlier reasons for holding the upgrade back did not survive the audit**, and the record is
+corrected here:
 
-1. **The pin rule.** "The installed version is exact-pinned. An upgrade is its own reviewed change
-   with its own canary, not a side effect of another feature." The upgrade belongs in its own
-   change, with its own canary.
-2. **It changes the shipped worker's dependency graph.** Agents 0.29.0 imports
-   `@modelcontextprotocol/sdk/types.js` (the v1 layout) while Open-Inspect ships
-   `@modelcontextprotocol/client@2.3.1` (the v2 layout). The upgrade therefore needs the
-   `@modelcontextprotocol/sdk@1.32.1` peer installed alongside it, and the worker bundle's
-   resolution changes with it. In this checkout npm's resolver also fails on the peer change
-   ("Cannot read properties of null (reading 'edgesOut')") unless it runs with `--legacy-peer-deps`.
+1. **The MCP peer was never a change.** Both versions require exactly the same MCP peers
+   (`@modelcontextprotocol/sdk@1.32.1`, `@modelcontextprotocol/client@2.3.1`,
+   `@modelcontextprotocol/server@2.3.1`), and the tree already resolved them: 0.28.1's MCP client
+   imports `@modelcontextprotocol/sdk/types.js` as well. The worker's MCP resolution is
+   byte-identical before and after. **No peer is added by the upgrade.**
+2. **`--legacy-peer-deps` is not the answer, and it is harmful.** The resolver crash ("Cannot read
+   properties of null (reading 'edgesOut')") is an npm 10 defect, triggered by the two narrowed Pi
+   peer ranges — it reproduces with `agents` still at 0.28.1 when only those ranges are narrowed. On
+   the repository's own node version (24) `npm install` resolves the change with no flags, and
+   `npm ci` installs it cleanly. `npm install --legacy-peer-deps` produces a tree **without** the
+   auto-installed `@modelcontextprotocol/sdk` and `@modelcontextprotocol/server` peers, which the
+   worker bundle cannot resolve without — which is precisely what `src/worker-build.test.ts` exists
+   to catch.
 
-**The upgrade, when it is taken, is one line plus its verification:** bump `agents` to `0.29.0`,
-install with `--legacy-peer-deps`, add the `@modelcontextprotocol/sdk@1.32.1` peer, delete
-`adaptLegacyToolOutput` and the rename guard, and run the full lanes plus the worker build. The
-bundle check (`src/worker-build.test.ts`) is the one that catches a resolution mistake like this
-one, and it failed loudly on the attempt — which is the point of having it.
+The change itself is the pin bump, a twelve-line lockfile edit, the shim's deletion, and the lanes.
+The bundle check (`src/worker-build.test.ts`) passes.
 
 ## The canonical policies the Agents SDK's example states
 

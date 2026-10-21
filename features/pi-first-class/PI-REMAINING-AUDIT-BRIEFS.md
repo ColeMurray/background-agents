@@ -196,10 +196,19 @@ Already answered; this is a _change_, not a feature. The audit is short:
 
 1. `agents@0.29.0`'s pi harness returns `output` where `0.28.1` returns `content`; the pi-harness
    exports, the MCP-client exports, and the Lifecycle API are identical.
-2. The upgrade needs the `@modelcontextprotocol/sdk@1.32.1` peer beside the v2
-   `@modelcontextprotocol/client@2.3.1`, which changes the shipped worker bundle's resolution, and
-   npm needs `--legacy-peer-deps` for the peer change.
+2. The only peer change is the narrowing of `@earendil-works/pi-ai` and `pi-durable` from `^1.0.0`
+   to `~1.3.0`, which Open-Inspect's exact 1.3.0 pins already satisfy. The MCP peers
+   (`@modelcontextprotocol/sdk@1.32.1`, `client@2.3.1`, `server@2.3.1`) are **identical in both
+   versions** and already resolved, so **no peer is added** and the worker's MCP resolution does not
+   change. npm's resolver crash ("Cannot read properties of null (reading 'edgesOut')") is an npm 10
+   defect, not a peer conflict: it reproduces with `agents` still at 0.28.1 when only the two Pi
+   peer ranges are narrowed, and it does not occur on the repository's declared node version (24).
+   `--legacy-peer-deps` is **not** the fix and must not be used — it drops the auto-installed MCP
+   peers the worker bundle needs to resolve.
 3. It lets `adaptLegacyToolOutput` in `packages/control-plane/src/pi/managed-skills-extension.ts` be
-   deleted.
+   deleted, together with its rename guard `hasLegacyContent`.
 
 **Done when**: the bump is its own commit, the bundle check passes, and the shim is gone.
+
+**Done.** Taken in `feat/pi-agents-upgrade`; the audit, the evidence, and the UNVERIFIED list are in
+`features/pi-first-class/PI-AGENTS-UPGRADE-AUDIT.md`.
