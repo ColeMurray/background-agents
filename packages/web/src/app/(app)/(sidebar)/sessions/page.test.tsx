@@ -340,6 +340,10 @@ describe("SessionsPage", () => {
     expect(within(rows[0]).getByTestId("pr-state-merged")).toHaveAccessibleName("PR merged");
     expect(within(rows[1]).getByTestId("pr-state-open")).toHaveAccessibleName("3 PRs · 2 open");
     expect(within(rows[2]).queryByTestId(/^pr-state-/)).not.toBeInTheDocument();
+    // The state is announced as part of the row link, ahead of the title.
+    expect(rows[0]).toHaveAccessibleName(/^PR merged\s*Session merged/);
+    expect(rows[1]).toHaveAccessibleName(/^3 PRs · 2 open\s*Session mixed/);
+    expect(rows[2]).toHaveAccessibleName(/^Session no-prs/);
   });
 
   it("restores every control from a shared URL and keeps unknown selections visible", () => {
