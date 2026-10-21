@@ -2,6 +2,15 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 20, 2026
+
+**Boat sandbox provider.** [Boat](https://boat.dev) joins Modal, Daytona, Vercel, and E2B as a
+selectable sandbox provider (`sandbox_provider = "boat"`). Sessions run in full Ubuntu VMs deployed
+from a Terraform-built named snapshot; idle sessions are stopped (disk snapshotted, machine
+released) and resume on a new machine with their files intact. Sessions pick the smallest Boat
+machine size that fits their CPU and memory settings. Prebuilt images are not available on Boat. See
+[Boat Sandbox Provider](docs/BOAT_SANDBOX_PROVIDER.md).
+
 ## October 19, 2026
 
 **Autofix acts on approvals with inline comments.** An approved pull request review that starts at

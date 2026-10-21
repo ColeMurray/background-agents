@@ -69,11 +69,11 @@ repositories.
 
 Open-Inspect uses Terraform to automate deployment across multiple cloud providers:
 
-| Provider                                                   | Purpose                          | What Terraform Creates                                                        |
-| ---------------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------- |
-| **Cloudflare**                                             | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                          |
-| **Vercel** _or_ **Cloudflare Workers**                     | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)             |
-| **Modal**, **Daytona**, **Vercel Sandboxes**, _or_ **E2B** | Sandbox execution infrastructure | Modal app deployment, Daytona/Vercel API config, _or_ E2B template/API config |
+| Provider                                                             | Purpose                          | What Terraform Creates                                                                                  |
+| -------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Cloudflare**                                                       | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                    |
+| **Vercel** _or_ **Cloudflare Workers**                               | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                       |
+| **Modal**, **Daytona**, **Vercel Sandboxes**, **E2B**, _or_ **Boat** | Sandbox execution infrastructure | Modal app deployment, Daytona/Vercel API config, E2B template/API config, _or_ Boat snapshot/API config |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -108,6 +108,7 @@ the matching optional section:
 | [Daytona](https://app.daytona.io) _(optional)_          | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_     | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [E2B](https://e2b.dev) _(optional)_                     | Sandbox infrastructure when `sandbox_provider = "e2b"`          |
+| [Boat](https://boat.dev) _(optional)_                   | Sandbox infrastructure when `sandbox_provider = "boat"`         |
 | [Slack](https://api.slack.com/apps) _(optional)_        | Slack bot integration                                           |
 | [Linear](https://linear.app) _(optional)_               | Linear Agent integration                                        |
 | GitHub App Webhooks _(optional)_                        | GitHub bot (PR reviews)                                         |
@@ -219,7 +220,7 @@ Create an R2 API Token:
 
 > Only required when `sandbox_provider = "modal"` (the default, used by the core path) or
 > `"modal-vm"`. Select `modal-vm` for Docker-capable VMs; see [Modal VM setup](MODAL_DOCKER.md). To
-> use Daytona, Vercel Sandboxes, or E2B instead, skip this section and follow
+> use Daytona, Vercel Sandboxes, E2B, or Boat instead, skip this section and follow
 > [Alternative Sandbox Providers](#alternative-sandbox-providers-optional).
 
 1. Go to [Modal Settings](https://modal.com/settings)
@@ -447,7 +448,7 @@ modal_workspace             = "your-modal-workspace"
 modal_environment           = "your-modal-environment"
 modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digits, dashes; empty for https://workspace--... endpoints
 
-# Sandbox provider: "modal" (default), "modal-vm", "daytona", "vercel", or "e2b"
+# Sandbox provider: "modal" (default), "modal-vm", "daytona", "vercel", "e2b", or "boat"
 # sandbox_provider          = "modal"
 
 # Daytona (only required when sandbox_provider = "daytona")
@@ -467,6 +468,10 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # E2B (only required when sandbox_provider = "e2b")
 # e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
 # e2b_template_id           = "open-inspect-sandbox"
+
+# Boat (only required when sandbox_provider = "boat")
+# boat_api_key              = "boat_..."               # runtime REST API key (also auths the build)
+# boat_base_snapshot        = "open-inspect"           # prefix of the Terraform-managed named snapshot
 
 # GitHub App repository access (required in every deployment)
 github_app_id              = "123456"
@@ -812,7 +817,7 @@ reports service liveness, not Owner status.
 Your core deployment is complete. Everything below is optional; follow only the sections you need.
 
 - [Alternative Sandbox Providers](#alternative-sandbox-providers-optional): Daytona, Vercel
-  Sandboxes, or E2B instead of Modal
+  Sandboxes, E2B, or Boat instead of Modal
 - [Enable Google Login](#enable-google-login-optional)
 - [Slack Bot](#slack-bot-optional)
 - [Linear Agent](#linear-agent-optional)
@@ -830,7 +835,7 @@ Your core deployment is complete. Everything below is optional; follow only the 
 The core path uses Modal, the default `sandbox_provider`. To run sessions on another provider, set
 `sandbox_provider` in `terraform.tfvars` and follow the matching section below instead of the
 [Modal](#modal) credentials in Step 2. Terraform accepts `modal`, `modal-vm`, `daytona`, `vercel`,
-or `e2b`. The `modal-vm` backend uses the same Modal credentials; see
+`e2b`, or `boat`. The `modal-vm` backend uses the same Modal credentials; see
 [Modal VM backend](MODAL_DOCKER.md).
 
 ### Daytona
@@ -922,6 +927,38 @@ For the full runtime, lifecycle, and configuration model, see
 [E2B Sandbox Provider](E2B_SANDBOX_PROVIDER.md).
 
 > **Important**: the E2B provider has no fleet-wide key of its own. Add the key for the models you
+> plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets after
+> deploying. See [Secrets Management](SECRETS.md) for details.
+
+### Boat
+
+> Only required when `sandbox_provider = "boat"`.
+
+Boat needs a single credential — the **API key** (`boat_api_key`). The control plane uses it at
+runtime for the Boat REST API, and the `boat-infra` module uses it to build the base snapshot.
+Create it in the [Boat dashboard](https://boat.dev) under API keys.
+
+1. Set `sandbox_provider = "boat"` in `terraform.tfvars`.
+2. Set `boat_api_key` and `boat_base_snapshot` (a name prefix such as `open-inspect`).
+3. Terraform's `boat-infra` module builds the named snapshot automatically on `terraform apply`, and
+   builds a new one when `packages/boat-infra`, `packages/sandbox-images` or
+   `packages/sandbox-runtime` change. To build manually:
+   ```bash
+   cd packages/boat-infra
+   uv sync --frozen
+   BOAT_API_KEY=boat_… BOAT_BASE_SNAPSHOT=open-inspect uv run python build-template.py
+   ```
+
+The control plane calls the Boat REST API directly from Cloudflare Workers. Each session runs in a
+single Boat VM: idle sessions are **stopped** (the disk is snapshotted and the machine released),
+and the next prompt resumes the same sandbox on a new machine with its files intact. Boat keeps a
+stopped sandbox's disk for 14 days. Sessions pick the smallest Boat machine size that satisfies
+their CPU and memory settings, or `boat_sandbox_type` (default `default`) when they set none.
+
+For the full runtime, lifecycle, and configuration model, see
+[Boat Sandbox Provider](BOAT_SANDBOX_PROVIDER.md).
+
+> **Important**: the Boat provider has no fleet-wide key of its own. Add the key for the models you
 > plan to use — `ANTHROPIC_API_KEY` for Claude — as a **global secret** in Settings > Secrets after
 > deploying. See [Secrets Management](SECRETS.md) for details.
 
@@ -1326,6 +1363,12 @@ E2B_SANDBOX_TIMEOUT_SECONDS
 E2B_AUTO_PAUSE
 E2B_TEMPLATE_CPU
 E2B_TEMPLATE_MEMORY_MB
+
+# Boat
+BOAT_BASE_SNAPSHOT
+BOAT_API_URL
+BOAT_ORG
+BOAT_SANDBOX_TYPE
 ```
 
 These settings resolve as **non-empty variable → same-named secret → existing default**, where a
@@ -1366,7 +1409,7 @@ Secrets for credentials:
 | `MODAL_WORKSPACE`                  | Modal workspace name                                                                        |
 | `MODAL_ENVIRONMENT`                | Modal environment name (defaults to `main`)                                                 |
 | `MODAL_ENVIRONMENT_WEB_SUFFIX`     | Modal environment web suffix for endpoint URLs; lowercase letters, digits, dashes, or empty |
-| `SANDBOX_PROVIDER`                 | `modal` (default), [`modal-vm`](MODAL_DOCKER.md), `daytona`, `vercel`, or `e2b`             |
+| `SANDBOX_PROVIDER`                 | `modal` (default), [`modal-vm`](MODAL_DOCKER.md), `daytona`, `vercel`, `e2b`, or `boat`     |
 | `SANDBOX_INACTIVITY_TIMEOUT_MS`    | Idle milliseconds before a sandbox is snapshotted and stopped (defaults to `600000`)        |
 | `SANDBOX_BOOT_TIMEOUT_MS`          | Milliseconds a connected sandbox may keep booting before it fails (defaults to `1800000`)   |
 | `DAYTONA_API_URL`                  | Daytona API URL _(only if `sandbox_provider = "daytona"`)_                                  |
@@ -1384,6 +1427,7 @@ Secrets for credentials:
 | `VERCEL_SNAPSHOT_EXPIRATION_MS`    | Optional Vercel runtime snapshot expiration in milliseconds (`0` means no expiration)       |
 | `VERCEL_SANDBOX_API_BASE_URL`      | Optional advanced Vercel Sandbox API base URL override                                      |
 | `E2B_API_KEY`                      | E2B API key _(only if `sandbox_provider = "e2b"`)_                                          |
+| `BOAT_API_KEY`                     | Boat API key _(only if `sandbox_provider = "boat"`)_                                        |
 | `GH_OAUTH_CLIENT_ID`               | Optional GitHub sign-in client ID; set with `GH_OAUTH_CLIENT_SECRET`                        |
 | `GH_OAUTH_CLIENT_SECRET`           | Optional GitHub sign-in client secret; set with `GH_OAUTH_CLIENT_ID`                        |
 | `GOOGLE_CLIENT_ID`                 | Optional Google sign-in client ID; set with `GOOGLE_CLIENT_SECRET`                          |

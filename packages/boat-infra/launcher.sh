@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Open-Inspect runtime launcher for Boat sandboxes.
+#
+# Baked into the base snapshot at /home/user/openinspect/launcher.sh and
+# started by the control plane, detached, on every boot of a session sandbox:
+# the first boot after a create and every boot after a resume (a resumed
+# sandbox runs on a fresh machine, so nothing started by hand survives). It
+# runs as `user` with the session env Boat applies from the sandbox's
+# create-time env; nothing rides its command line.
+#
+# In order, it
+#   1. recreates what a Boat snapshot does not carry: the /workspace and /app
+#      links into the home directory (the image keeps their content under
+#      /home/user so it is saved), /tmp/opencode and the SCM credential cache;
+#   2. waits for the restored toolchain under /opt/openinspect, which a resumed
+#      machine copies in shortly after it reports ready;
+#   3. takes the single-instance lock, exiting EXIT_ALREADY_RUNNING when a
+#      runtime already holds it;
+#   4. decides the boot mode: the first boot writes a marker, every later boot
+#      finds it and exports RESTORED_FROM_SNAPSHOT=true, so the runtime keeps
+#      its checkout and skips setup.sh exactly as for a restored snapshot on
+#      any other provider;
+#   5. execs the runtime entrypoint with its output in the supervisor log.
+#
+# `--prepare-only` performs steps 1 and 2 and exits; the image build uses it to
+# verify a fresh deploy without starting (or marking) a session runtime.
+set -euo pipefail
+
+OI_USER_HOME=/home/user
+OI_INSTALL_HOME=$OI_USER_HOME/openinspect
+OI_STATE_DIR=$OI_USER_HOME/.openinspect
+OI_LOCK_FILE=$OI_STATE_DIR/runtime.lock
+OI_STARTED_MARKER=$OI_STATE_DIR/runtime-started
+OI_SUPERVISOR_LOG=$OI_STATE_DIR/supervisor.log
+OI_PYTHON=/opt/openinspect/python/bin/python
+OI_RUNTIME_ENVIRONMENT=/app/openinspect-runtime-environment.json
+OI_TOOLCHAIN_WAIT_SECONDS=${OI_TOOLCHAIN_WAIT_SECONDS:-120}
+EXIT_ALREADY_RUNNING=75
+
+log() { printf 'openinspect-launcher: %s\n' "$*" >&2; }
+
+# ensure_link <link> <target>: make <link> a symlink to <target>, replacing an
+# empty directory (the base image ships an empty /app). Anything else at
+# <link> is somebody's data and is left alone.
+ensure_link() {
+  local link="$1" target="$2"
+  mkdir -p "$target"
+  if [[ -L "$link" && "$(readlink "$link")" == "$target" ]]; then
+    return
+  fi
+  if [[ -e "$link" && ! -L "$link" ]]; then
+    if [[ -d "$link" && -z "$(ls -A "$link")" ]]; then
+      sudo rmdir "$link"
+    else
+      log "refusing to replace non-empty $link"
+      exit 1
+    fi
+  fi
+  sudo ln -sfn "$target" "$link"
+}
+
+prepare() {
+  mkdir -p "$OI_STATE_DIR" "$OI_USER_HOME/workspace" "$OI_INSTALL_HOME/app" \
+    "$OI_USER_HOME/.cache/openinspect/scm" /tmp/opencode
+  ensure_link /workspace "$OI_USER_HOME/workspace"
+  ensure_link /app "$OI_INSTALL_HOME/app"
+  local waited=0
+  until [[ -x "$OI_PYTHON" && -f "$OI_RUNTIME_ENVIRONMENT" ]]; do
+    if (( waited >= OI_TOOLCHAIN_WAIT_SECONDS )); then
+      log "runtime toolchain missing after ${OI_TOOLCHAIN_WAIT_SECONDS}s ($OI_PYTHON, $OI_RUNTIME_ENVIRONMENT)"
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+main() {
+  if [[ "${1:-}" == "--prepare-only" ]]; then
+    prepare
+    log "prepared"
+    exit 0
+  fi
+  if (( $# )); then
+    log "unknown argument: $1"
+    exit 2
+  fi
+  prepare
+  exec 9>"$OI_LOCK_FILE"
+  if ! flock -n 9; then
+    log "runtime already running"
+    exit "$EXIT_ALREADY_RUNNING"
+  fi
+  if [[ -e "$OI_STARTED_MARKER" ]]; then
+    export RESTORED_FROM_SNAPSHOT=true
+    log "earlier boot recorded; starting the runtime in restored mode"
+  else
+    : >"$OI_STARTED_MARKER"
+    log "first boot; starting the runtime fresh"
+  fi
+  if [[ -f "$OI_SUPERVISOR_LOG" ]]; then
+    mv -f "$OI_SUPERVISOR_LOG" "$OI_SUPERVISOR_LOG.1"
+  fi
+  cd /workspace
+  exec "$OI_PYTHON" -m sandbox_runtime.entrypoint >>"$OI_SUPERVISOR_LOG" 2>&1
+}
+
+main "$@"

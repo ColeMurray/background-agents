@@ -60,7 +60,7 @@ export interface EnvConfig {
   ALLOWED_GITHUB_ORGS?: string;
   UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
-  SANDBOX_PROVIDER?: string; // "modal" (default), "modal-vm", "daytona", "vercel", or "e2b"
+  SANDBOX_PROVIDER?: string; // "modal" (default), "modal-vm", "daytona", "vercel", "e2b", or "boat"
   MODAL_WORKSPACE?: string; // Modal workspace name
   MODAL_ENVIRONMENT?: string; // Modal environment name for dashboard URLs
   MODAL_ENVIRONMENT_WEB_SUFFIX?: string; // Modal environment web suffix for endpoint URLs
@@ -88,6 +88,12 @@ export interface EnvConfig {
   E2B_TEMPLATE_ID?: string; // Pre-built E2B template ID
   E2B_SANDBOX_TIMEOUT_SECONDS?: string; // Sandbox TTL in seconds; Hobby plans must set 3300
   E2B_AUTO_PAUSE?: string; // "true" (default) pauses on TTL expiry (resumable, auto-resumes) instead of killing
+
+  BOAT_API_KEY?: string; // Boat REST API key (Bearer auth + sandbox access password HMAC)
+  BOAT_API_URL?: string; // Boat REST API base URL (default https://boat.dev/api/v1)
+  BOAT_BASE_SNAPSHOT?: string; // Named Boat snapshot built by boat-infra; fresh sandboxes deploy from it
+  BOAT_ORG?: string; // Optional Boat organization wallet sandboxes are billed to
+  BOAT_SANDBOX_TYPE?: string; // Machine size when a session requests no resources: small, default (default), large, xlarge
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)

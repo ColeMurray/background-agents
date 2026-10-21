@@ -40,7 +40,7 @@ Yes. Each session has its own sandbox. Cost limits apply per session. See [Sessi
 
 ### Why did my session start from a snapshot?
 
-On Modal, a snapshot may be taken after a completed turn, even if execution failed. Modal, modal-vm, and Vercel can restore saved state after confirmed shutdown; Vercel and modal-vm skip per-turn snapshots. Daytona and E2B resume theirs in place. Saved work includes uncommitted changes. An incompatible or unknown-version old snapshot is held rather than restored or replaced with a fresh checkout. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+On Modal, a snapshot may be taken after a completed turn, even if execution failed. Modal, modal-vm, and Vercel can restore saved state after confirmed shutdown; Vercel and modal-vm skip per-turn snapshots. Daytona, E2B, and Boat resume theirs in place. Saved work includes uncommitted changes. An incompatible or unknown-version old snapshot is held rather than restored or replaced with a fresh checkout. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 ### Why is setup.sh not running?
 

@@ -681,6 +681,56 @@ variable "e2b_template_memory_mb" {
   default     = 4096
 }
 
+# -----------------------------------------------------------------------------
+# Boat (only required when sandbox_provider = "boat")
+# -----------------------------------------------------------------------------
+
+variable "boat_api_key" {
+  description = "Boat REST API key — runtime (control-plane → Boat API + sandbox access password HMAC) and snapshot build"
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "boat" || length(var.boat_api_key) > 0
+    error_message = "boat_api_key must be set when sandbox_provider = 'boat'."
+  }
+}
+
+variable "boat_api_url" {
+  description = "Boat REST API base URL"
+  type        = string
+  default     = "https://boat.dev/api/v1"
+}
+
+variable "boat_base_snapshot" {
+  description = "Prefix of the Boat named snapshot built by the boat-infra module and deployed for fresh sandboxes"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "boat" || can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.boat_base_snapshot))
+    error_message = "boat_base_snapshot must be 1-46 lowercase letters, digits or dashes when sandbox_provider = 'boat'."
+  }
+}
+
+variable "boat_org" {
+  description = "Optional Boat organization sandboxes and the named snapshot are billed to; empty uses the account's active wallet"
+  type        = string
+  default     = ""
+}
+
+variable "boat_sandbox_type" {
+  description = "Boat machine size for sessions that request no CPU or memory: 'small', 'default', 'large', or 'xlarge'. A request picks the smallest size that fits it."
+  type        = string
+  default     = "default"
+
+  validation {
+    condition     = contains(["small", "default", "large", "xlarge"], var.boat_sandbox_type)
+    error_message = "boat_sandbox_type must be 'small', 'default', 'large', or 'xlarge'."
+  }
+}
+
 variable "nextauth_secret" {
   description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string
@@ -697,13 +747,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', or 'e2b'"
+  description = "Sandbox backend for session execution: 'modal', 'modal-vm', 'daytona', 'vercel', 'e2b', or 'boat'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "e2b"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', or 'e2b'."
+    condition     = contains(["modal", "modal-vm", "daytona", "vercel", "e2b", "boat"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'modal-vm', 'daytona', 'vercel', 'e2b', or 'boat'."
   }
 }
 

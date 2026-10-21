@@ -1,6 +1,7 @@
 """Native retries verify retained artifacts without rebuilding or publishing failures."""
 
 import runpy
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -233,3 +234,161 @@ def test_daytona_config_loads_snapshot_memory(monkeypatch):
     load_config = runpy.run_path(str(ROOT / "packages/daytona-infra/src/config.py"))["load_config"]
 
     assert load_config().base_snapshot_memory_gib == 4
+
+
+class FakeBoatApi:
+    """Records the Boat calls an image build makes, in order."""
+
+    def __init__(self, *, retained: bool = False, verify_fails: bool = False) -> None:
+        self.retained = retained
+        self.verify_fails = verify_fails
+        self.calls: list[tuple] = []
+        self.created: list[tuple[str, dict]] = []
+
+    def get_named_snapshot(self, name):
+        self.calls.append(("get_named_snapshot", name))
+        return {"name": name, "status": "ready"} if self.retained else None
+
+    def wait_named_snapshot(self, name, timeout=0):
+        self.calls.append(("wait_named_snapshot", name))
+        return {"name": name, "status": "ready"}
+
+    def create_sandbox(self, body):
+        sandbox_id = f"bx_{len(self.created) + 1:08d}"
+        self.created.append((sandbox_id, body))
+        self.calls.append(("create_sandbox", sandbox_id, body))
+        return {"id": sandbox_id, "state": "provisioning"}
+
+    def wait_ready(self, sandbox_id, timeout=0):
+        self.calls.append(("wait_ready", sandbox_id))
+        return {"id": sandbox_id, "state": "ready"}
+
+    def write_file(self, sandbox_id, path, content):
+        self.calls.append(("write_file", sandbox_id, path, len(content)))
+
+    def run(self, sandbox_id, command, timeout_seconds):
+        self.calls.append(("run", sandbox_id, command))
+        return {"exitCode": 0, "stdout": "", "stderr": "", "timedOut": False}
+
+    def run_detached(self, sandbox_id, command, timeout):
+        self.calls.append(("run_detached", sandbox_id, command))
+        if self.verify_fails and command.endswith("smoke_test.py verify"):
+            raise RuntimeError("Command failed (exit 1)")
+
+    def stop_and_wait(self, sandbox_id, timeout=0):
+        self.calls.append(("stop_and_wait", sandbox_id))
+
+    def save_named_snapshot(self, sandbox_id, name, timeout=0):
+        self.calls.append(("save_named_snapshot", sandbox_id, name))
+        return {"name": name, "status": "ready"}
+
+    def delete_sandbox(self, sandbox_id):
+        self.calls.append(("delete_sandbox", sandbox_id))
+
+
+def load_boat_builder(monkeypatch, api: FakeBoatApi):
+    namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
+    # run_path hands back a copy of the module globals; the functions keep the original.
+    monkeypatch.setitem(
+        namespace["main"].__globals__, "BoatApi", lambda api_url, api_key, org=None: api
+    )
+    monkeypatch.setenv("BOAT_API_KEY", "boat_test")
+    monkeypatch.setenv("BOAT_BASE_SNAPSHOT", "prefix")
+    return namespace
+
+
+@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("retained", [False, True])
+def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed, retained):
+    api = FakeBoatApi(retained=retained, verify_fails=failed)
+    main = load_boat_builder(monkeypatch, api)["main"]
+    if failed:
+        with pytest.raises(RuntimeError, match="verification failed"):
+            main()
+        build_mocks.assert_not_called()
+    else:
+        main()
+        build_mocks.assert_called_once_with(EXPECTED_NAME)
+
+    names = [call[0] for call in api.calls]
+    builds = [body for _, body in api.created if "from" not in body]
+    verifies = [body for _, body in api.created if body.get("from") == EXPECTED_NAME]
+    assert len(builds) == (0 if retained else 1)
+    assert len(verifies) == 1
+    assert names.count("save_named_snapshot") == (0 if retained else 1)
+    # Every sandbox the build started is deleted, on success and on failure.
+    assert names.count("delete_sandbox") == len(api.created)
+    # A fresh deploy prepares the boot-time links before the image verification.
+    verify_id = next(sandbox_id for sandbox_id, body in api.created if "from" in body)
+    verify_calls = [call for call in api.calls if len(call) > 1 and call[1] == verify_id]
+    assert (
+        "run",
+        verify_id,
+        "bash /home/user/openinspect/launcher.sh --prepare-only",
+    ) in verify_calls
+    verification = next(call for call in verify_calls if call[0] == "run_detached")
+    assert verification[2].endswith("/app/verify/smoke_test.py verify")
+
+
+def test_boat_build_installs_the_bundle_under_the_home_directory(monkeypatch, build_mocks):
+    api = FakeBoatApi()
+    load_boat_builder(monkeypatch, api)["main"]()
+
+    build_id, build_body = api.created[0]
+    assert build_body["type"] == "default" and "from" not in build_body
+    uploads = [call for call in api.calls if call[0] == "write_file" and call[1] == build_id]
+    assert [call[2] for call in uploads] == [
+        "/home/user/openinspect-image.tar.gz",
+        "/home/user/openinspect-launcher.sh",
+    ]
+    assert all(call[3] > 0 for call in uploads)
+    commands = [
+        call[2] for call in api.calls if call[0] in {"run", "run_detached"} and call[1] == build_id
+    ]
+    prepare, install, cleanup = commands
+    assert "sudo ln -sfn /home/user/openinspect/app /app" in prepare
+    assert "sudo ln -sfn /home/user/workspace /workspace" in prepare
+    assert "/home/user/openinspect/launcher.sh" in prepare
+    assert install.endswith("packages/sandbox-images/install/install.sh")
+    assert install.startswith("sudo env APT_CONFIG=")
+    assert "rm -rf /home/user/.openinspect" in cleanup
+    order = [call[0] for call in api.calls if len(call) > 1 and call[1] == build_id]
+    assert (
+        order.index("stop_and_wait")
+        < order.index("save_named_snapshot")
+        < order.index("delete_sandbox")
+    )
+
+
+def test_boat_candidate_name_must_be_a_valid_named_snapshot(monkeypatch):
+    namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
+    monkeypatch.delenv("OPENINSPECT_IMAGE_CANDIDATE", raising=False)
+    with pytest.raises(RuntimeError, match="lowercase"):
+        namespace["candidate_name"]("Open_Inspect", "a" * 64)
+    monkeypatch.setenv("OPENINSPECT_IMAGE_CANDIDATE", "open-inspect-0123456789abcdef")
+    assert namespace["candidate_name"]("prefix", "a" * 64) == "open-inspect-0123456789abcdef"
+
+
+def test_boat_launcher_matches_the_control_plane_contract():
+    """The launcher, the build and the control plane pin the same paths and exit code."""
+    launcher = (ROOT / "packages/boat-infra/launcher.sh").read_text()
+    provider = (ROOT / "packages/control-plane/src/sandbox/providers/boat-provider.ts").read_text()
+    builder = (ROOT / "packages/boat-infra/build-template.py").read_text()
+    assert 'export const BOAT_LAUNCHER_PATH = "/home/user/openinspect/launcher.sh";' in provider
+    assert 'LAUNCHER_PATH = f"{INSTALL_HOME}/launcher.sh"' in builder
+    assert 'INSTALL_HOME = f"{USER_HOME}/openinspect"' in builder
+    assert "const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;" in provider
+    assert "EXIT_ALREADY_RUNNING=75" in launcher
+    assert (
+        'export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";' in provider
+    )
+    assert 'ensure_link /workspace "$OI_USER_HOME/workspace"' in launcher
+    assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
+    assert "flock -n 9" in launcher
+    assert "export RESTORED_FROM_SNAPSHOT=true" in launcher
+    assert 'exec "$OI_PYTHON" -m sandbox_runtime.entrypoint' in launcher
+    assert "--prepare-only" in launcher
+    assert (
+        subprocess.run(["bash", "-n", str(ROOT / "packages/boat-infra/launcher.sh")]).returncode
+        == 0
+    )

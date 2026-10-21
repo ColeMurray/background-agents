@@ -1,0 +1,249 @@
+# Boat Sandbox Provider
+
+Open-Inspect can use [Boat](https://boat.dev) as the sandbox provider for coding sessions. The
+control plane talks directly to the Boat REST API from Cloudflare Workers — there is no separate
+service to deploy for this provider; only the base snapshot is built (by Terraform, or manually).
+
+## When to Use It
+
+Use `sandbox_provider = "boat"` when you want sandbox sessions to run in Boat's full Ubuntu virtual
+machines (real `systemd`, Docker, passwordless `sudo`) while keeping the same Open-Inspect control
+plane, web app, GitHub OAuth, and Slack/GitHub integrations. Boat sandboxes support stop/resume: an
+idle session's disk is snapshotted and its machine released, and the next prompt brings the same
+sandbox back on a new machine with its files intact.
+
+## Required Configuration
+
+Set these values in `terraform/environments/production/terraform.tfvars`:
+
+```hcl
+sandbox_provider = "boat"
+
+boat_api_key       = "boat_..."      # from the Boat dashboard → API keys
+boat_base_snapshot = "open-inspect"  # prefix of the named snapshot to build/use
+
+# Optional
+# boat_api_url      = "https://boat.dev/api/v1" # REST API base URL
+# boat_org          = ""                        # organization wallet; empty = active wallet
+# boat_sandbox_type = "default"                 # machine size when a session requests no resources
+```
+
+For GitHub Actions-based deployment, configure the matching repository secrets and variables:
+
+```text
+SANDBOX_PROVIDER=boat
+BOAT_API_KEY
+BOAT_BASE_SNAPSHOT
+BOAT_API_URL      # optional
+BOAT_ORG          # optional
+BOAT_SANDBOX_TYPE # optional
+```
+
+The Boat provider also needs the normal Open-Inspect values such as Cloudflare, GitHub App, and web
+app configuration. See [GETTING_STARTED.md](./GETTING_STARTED.md) for the full deployment flow.
+
+`boat_base_snapshot` is a prefix: the build saves the snapshot as
+`<prefix>-<16 hex characters of the build-input hash>`, and Boat names allow 63 lowercase letters,
+digits and dashes in total, so keep the prefix to 46 characters or fewer.
+
+## Snapshot Build
+
+Boat sandboxes deploy from a **named snapshot** that contains:
+
+- the Open-Inspect sandbox runtime (`packages/sandbox-runtime`, reachable as `/app`)
+- OpenCode and the OpenCode plugin dependencies
+- Python 3.12 and Node 24 runtimes under `/opt/openinspect`
+- `code-server`, `ttyd`, `agent-browser`, and the browser/desktop tooling used by the agent runtime
+- GitHub CLI and a Git credential helper
+- the launcher (`/home/user/openinspect/launcher.sh`) the control plane starts on every boot
+
+The snapshot is built by `packages/boat-infra/build-template.py` from the shared image bundle
+([`packages/sandbox-images`](../packages/sandbox-images/README.md)): a build sandbox is created from
+Boat's stock Ubuntu image with none of your account's secrets, the bundle is installed in it, its
+disk is saved under the name, and a second sandbox deploys from that name to run the image
+verification. There are two supported paths.
+
+### Terraform-Managed Snapshot
+
+This is the recommended path for a normal deployment. When `sandbox_provider = "boat"`, the
+`terraform/modules/boat-infra` module hashes the runtime, the image package and the Boat builder,
+and builds a new snapshot (under a new name) on `terraform apply` when any of them change. The
+control plane is switched to the new name only after the build has verified it.
+
+```bash
+cd terraform/environments/production
+terraform init
+terraform apply
+```
+
+### Manual Snapshot
+
+Use this path to build or test a snapshot before wiring it into Terraform:
+
+```bash
+cd packages/boat-infra
+uv sync --frozen
+export BOAT_API_KEY=boat_…
+export BOAT_BASE_SNAPSHOT=open-inspect
+uv run python build-template.py
+```
+
+Optional: `BOAT_API_URL`, `BOAT_ORG`, and `BOAT_BUILD_SANDBOX_TYPE` (default `default`; the machine
+the image is installed on, which does not change the saved disk). The command prints
+`{"reference": "<snapshot name>"}`; set that name as `BOAT_BASE_SNAPSHOT` on the control plane. See
+[`packages/boat-infra/README.md`](../packages/boat-infra/README.md) for details.
+
+A build uses two sandbox starts and keeps one named snapshot. Boat includes ten named snapshots per
+account; superseded ones are not deleted automatically, so remove old names with
+`DELETE /named-snapshots/{name}` (or the Boat CLI) once no deployment references them.
+
+## Runtime Behavior
+
+The Boat provider creates fresh sandboxes from the named snapshot, delivering env and starting the
+runtime the same way Open-Inspect does on every other provider:
+
+1. the sandbox is created with `noEnv` (none of the Boat account's own secrets or logins) and the
+   per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, the sandbox auth token, user secrets —
+   which Boat applies to every process the sandbox starts
+2. the enabled service ports (code-server, terminal, noVNC) and the configured tunnel ports are
+   routed to `https://<subdomain>-<port>.on.boat.dev` URLs; tunnel URLs are written to
+   `/workspace/.tunnels.env` before the runtime starts
+3. the control plane starts the baked launcher, detached; it links `/workspace` and `/app` into the
+   home directory, waits for the restored toolchain, takes a single-instance lock, and execs the
+   supervisor (`python -m sandbox_runtime.entrypoint`) with its output in
+   `/home/user/.openinspect/supervisor.log`
+4. the supervisor clones or syncs the selected repositories, starts OpenCode and code-server, and
+   connects the Open-Inspect bridge back to the control plane; readiness is the bridge phoning home,
+   and the shared connecting timeout fails the session otherwise
+
+Machine size follows the session's sandbox settings: a `cpuCores`/`memoryMib` request selects the
+smallest Boat size that satisfies it (`small` 2 vCPU/4 GB, `default` 4/8, `large` 8/16, `xlarge`
+16/32; `xlarge` needs a Boat plan that offers it), and a session without a request uses
+`boat_sandbox_type`. The sandbox lifetime (`sandboxTimeoutMs`, default 2 hours) becomes Boat's
+auto-stop TTL, clamped to Boat's bounds of one second to thirty days.
+
+Prebuilt repository and environment images are not available on Boat: every session starts from the
+base snapshot and runs `.openinspect/setup.sh` on its first boot. The Codex harness is limited to
+Modal and is not available on Boat.
+
+### Ports
+
+Boat's own services hold ports 22, 6080, 8090, 8911 and 47984–48010 on every machine. A sandbox
+setting that puts a service or tunnel on one of them is rejected at spawn time, and because 6080 is
+noVNC's shared default, Boat sandboxes default the VNC port to **6081** instead.
+
+### Access URLs
+
+The three service ports carry their own authentication (code-server password, terminal token, VNC
+password) and the web app embeds the terminal in an iframe, where Boat's access cookie would be a
+blocked third-party cookie, so their routes are created as public hosted ports. User tunnel ports
+stay behind Boat's token: their URLs carry a `_token` query parameter that a browser exchanges for a
+cookie on the first visit. Treat a tunnel URL like a password.
+
+## Lifecycle: Stop and Resume
+
+Open-Inspect drives the lifecycle through the shared lifecycle manager, treating a Boat stop as a
+**resumable archive**:
+
+- Idle sessions are **stopped** after the shared inactivity timeout (default 10 minutes): Boat
+  snapshots the disk and releases the machine. The stop is confirmed only once Boat reports the
+  sandbox archived with a snapshot available.
+- Before the TTL lapses, the control plane drains the session and stops the sandbox itself; a
+  sandbox that reaches its TTL is archived by Boat the same way.
+- The next prompt **resumes** the archived sandbox on a new machine (or the same one within about
+  ten minutes of the stop) and starts the runtime again in restored mode, so the checkout is kept
+  and `setup.sh` does not run twice. The hosted URLs stay the same across a stop and resume.
+- Boat keeps a stopped sandbox's disk for **14 days**. After that, and when Boat has lost the
+  sandbox, the next prompt spawns a fresh sandbox instead.
+- Only sandboxes that fail before becoming usable, or are being replaced, are **deleted**.
+
+A stopped sandbox is not billed for machine time and does not count against Boat's concurrent
+sandbox limit. Each create and resume counts as one Boat start against your plan's start limits; a
+start refused with `429 rate_limited` fails the spawn transiently and is retried by the control
+plane's normal recovery.
+
+## Required Secrets
+
+Terraform passes these provider-level values to the control plane:
+
+- `BOAT_API_KEY` — used for the Boat REST API **and** the code-server/VNC password HMAC, and to
+  authenticate the snapshot build
+- `BOAT_BASE_SNAPSHOT`
+- `BOAT_API_URL`, `BOAT_ORG`, `BOAT_SANDBOX_TYPE` (optional)
+
+Model credentials are not among them: Boat sandboxes take every LLM API key from Open-Inspect's
+secrets settings, so add `ANTHROPIC_API_KEY` there for Claude models and the equivalent key for any
+other provider you use. The runtime also receives repository credentials from Open-Inspect for Git
+operations. See [SECRETS.md](./SECRETS.md).
+
+Secrets named like Boat's own variables (`ASCII_TOKEN`, `ASCII_API_URL`, `AGENT_ID`, `PRODUCT_MODE`,
+`ENVIRONMENT_ID`, `BOAT_ID`, `SERVICE_PREVIEW_TOKEN`, `BOAT_CLI_TOKEN`) cannot be delivered to a
+Boat sandbox and are dropped with a warning in the control-plane logs. Boat allows at most 100
+variables and 64 KB of per-sandbox env; a session that exceeds either fails to spawn with a message
+naming the limit.
+
+## Verify
+
+After `terraform apply`, verify:
+
+1. The control plane is healthy:
+
+   ```bash
+   curl https://open-inspect-control-plane-<deployment_name>.<workers-subdomain>.workers.dev/health
+   ```
+
+2. The Boat dashboard (or `GET /named-snapshots`) lists the Open-Inspect snapshot as `ready`.
+
+3. Starting a session in the web app creates a Boat sandbox and reaches `Connected`.
+
+4. Inside the session, ask a simple repo question such as:
+
+   ```text
+   tell me about this repository
+   ```
+
+If a session starts but never produces agent output, check the control-plane Worker logs for runtime
+startup, bridge connection, and OpenCode health events. Session sandboxes are created with Boat
+monitoring off, so Boat keeps no process output for them; the in-sandbox forensics file is
+`/home/user/.openinspect/supervisor.log` (reachable via the session's code-server terminal while the
+sandbox is alive, or through `boat exec`).
+
+## Common Issues
+
+### Snapshot Was Not Built
+
+When `sandbox_provider = "boat"`, Terraform builds the snapshot during `terraform apply`, keyed on a
+hash of the runtime, image package and builder sources. To force a rebuild, change a hashed source
+file. For a manual build, set `BOAT_BASE_SNAPSHOT` on the control plane to the exact name the build
+printed.
+
+### Spawns Fail With `rate_limited` or `limit_reached`
+
+Boat limits sandbox starts per minute, hour and day, and concurrent sandboxes, per plan. Stopped
+sandboxes do not count as concurrent. Raise the plan or pace session creation.
+
+### A Resumed Session Starts From a Fresh Checkout
+
+Boat deletes a stopped sandbox's disk after 14 days. The control plane then spawns a fresh sandbox
+for the next prompt; uncommitted work from before the stop is gone. Push or open a pull request
+before leaving a session idle for that long.
+
+### Missing Repository Access
+
+Repository access still comes from the configured GitHub App installation. If the dashboard shows no
+repositories or a sandbox cannot clone a repo, check the GitHub App installation permissions before
+debugging Boat.
+
+### LLM/API Key Problems
+
+Boat sandboxes get every model credential from Open-Inspect's secrets settings. If OpenCode reports
+a model or provider error, confirm the key for the selected model is saved at a scope the session
+inherits, and that the model is available for that account.
+
+## References
+
+- [Boat API v1](https://docs.boat.dev/api/v1)
+- [Boat snapshots: stop and resume](https://docs.boat.dev/snapshots/stop)
+- [Boat named snapshots](https://docs.boat.dev/snapshots/templates)
+- [Boat public URLs](https://docs.boat.dev/hosting)
+- [Boat limits and errors](https://docs.boat.dev/limits)

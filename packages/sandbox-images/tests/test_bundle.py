@@ -32,6 +32,17 @@ def test_runtime_user_global_pnpm_commands_are_on_path(provider):
     assert "VIRTUAL_ENV" not in environment
 
 
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_image_bin_directory_heads_the_launch_path(provider):
+    environment = plan_image(REPO_ROOT, provider)["runtimeEnv"]
+    assert environment["PATH"].split(":")[0] == "/opt/openinspect/bin"
+    tools = (REPO_ROOT / "packages/sandbox-images/install/tools.sh").read_text()
+    languages = (REPO_ROOT / "packages/sandbox-images/install/languages.sh").read_text()
+    for command in ("agent-browser", "code-server", "ttyd", "google-chrome", "codex"):
+        assert f"/opt/openinspect/bin/{command}" in tools
+    assert '"/opt/openinspect/bin/$command"' in languages
+
+
 def test_binary_checksum_and_minimum_tool_version_are_required():
     tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
     validate_toolchain(tools)
@@ -116,6 +127,21 @@ def test_vercel_transitive_build_inputs_are_covered(checkout, source):
     path = checkout / source
     path.write_text(path.read_text() + "\n")
     assert plan_image(checkout, "vercel")["buildHash"] != before
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "packages/boat-infra/launcher.sh",
+        "packages/boat-infra/build-template.py",
+        "terraform/modules/boat-infra/scripts/build-snapshot.sh",
+    ],
+)
+def test_boat_hash_covers_launcher_builder_and_deployment(checkout, source):
+    before = plan_image(checkout, "boat")["buildHash"]
+    path = checkout / source
+    path.write_text(path.read_text() + "\n")
+    assert plan_image(checkout, "boat")["buildHash"] != before
 
 
 def test_runtime_assets_are_packed_without_per_file_manifest(checkout, tmp_path):

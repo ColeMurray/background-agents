@@ -16,7 +16,7 @@ from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_en
 from .locks import update_locks
 
 DOCKER_PACKAGES = ("engine", "cli", "containerd", "buildx", "compose")
-PROVIDERS = ("modal", "daytona", "e2b", "vercel")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel", "boat")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -43,6 +43,7 @@ INFRA_MODULES = {
     "daytona": "daytona-infra",
     "e2b": "e2b-infra",
     "vercel": "vercel-sandbox-infra",
+    "boat": "boat-infra",
 }
 
 

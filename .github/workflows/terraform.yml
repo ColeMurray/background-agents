@@ -13,6 +13,7 @@ on:
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -32,6 +33,7 @@ on:
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -286,6 +288,11 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
           # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
@@ -563,6 +570,11 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
           # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
