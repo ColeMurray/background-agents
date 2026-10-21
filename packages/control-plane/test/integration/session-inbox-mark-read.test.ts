@@ -127,15 +127,17 @@ describe("mark session inbox read", () => {
     );
     await createUnread(store, session("other-root", { updatedAt: 1_000 }));
 
+    expect(await (await markRead({ rootSessionId: "child" })).json()).toEqual({
+      markedCount: 2,
+    });
+    expect(await readSessionIds()).toEqual(["child", "grandchild"]);
+    expect(await attentionRootIds()).toEqual(["parent", "other-root"]);
+
     expect(await (await markRead({ rootSessionId: "parent" })).json()).toEqual({
-      markedCount: 3,
+      markedCount: 1,
     });
     expect(await readSessionIds()).toEqual(["child", "grandchild", "parent"]);
     expect(await attentionRootIds()).toEqual(["other-root"]);
-
-    expect(await (await markRead({ rootSessionId: "child" })).json()).toEqual({
-      markedCount: 0,
-    });
   });
 
   it("marks a hierarchy rerooted by filters without its hidden ancestor", async () => {
