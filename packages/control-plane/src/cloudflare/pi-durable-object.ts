@@ -551,6 +551,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         {
           models: this.models,
           registry: this.registry,
+          // The Durable Object stays resident between turns, so nothing is
+          // kept in memory after a conversation goes idle: no rendered
+          // context, no loaded documents. A later turn reads them again from
+          // storage, under the authority it has then.
+          settings: {
+            contextRetentionMs: 0,
+            documentRetentionMs: 0,
+          },
         },
         context
       );

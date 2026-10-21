@@ -70,24 +70,21 @@ export const PI_TOOL_EFFECT_REGISTRATIONS = [
 ] as const satisfies readonly ToolEffectRegistration[];
 
 /** Declarations that must accompany Pi Durable's native Code Mode extension. */
+/**
+ * The Code Mode tool.
+ *
+ * The extension is created with `models: false`, so a script has no model
+ * catalog and no model-call tools: sending model-written context to the
+ * provider with the session's credential is exactly what a capability must
+ * never do. Those tools are therefore not part of Pi's surface at all, and
+ * are not declared here.
+ */
 export const PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS = [
   {
     name: "codemode",
     effect: "sandbox_execution",
     callers: ["model"],
     replay: "safe",
-  },
-  {
-    name: "pi.codemode.models.classify",
-    effect: "external_read",
-    callers: ["tools"],
-    replay: "unsafe",
-  },
-  {
-    name: "pi.codemode.models.generateImages",
-    effect: "external_read",
-    callers: ["tools"],
-    replay: "unsafe",
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 

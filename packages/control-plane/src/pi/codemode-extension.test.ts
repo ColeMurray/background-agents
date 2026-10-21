@@ -31,23 +31,28 @@ function call(name: string, parent?: { taskId: number; callId: string }): ToolHo
 }
 
 describe("createOpenInspectCodemodeExtension", () => {
-  it("matches the canonical Code Mode effect registrations", () => {
+  it("installs the Code Mode tool and no model surface at all", () => {
     const sandbox = { start: () => undefined, close: async () => {} } as never;
     const extension = createOpenInspectCodemodeExtension(sandbox, createPiCodeModePolicyState());
 
     expect(extension.name).toBe("codemode");
+    // The scripts get no model catalog and no model-call tools: those would
+    // send model-written context to the provider with the session's
+    // credential.
     expect(
       extension.tools?.map((tool) => [tool.name, tool.replay ?? "unsafe", tool.callers])
     ).toEqual(
-      PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS.map((effect) => [
-        effect.name,
-        effect.replay,
-        effect.callers,
-      ])
+      PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS.filter((effect) => effect.name === "codemode").map(
+        (effect) => [effect.name, effect.replay, effect.callers]
+      )
+    );
+    expect(extension.tools?.map((tool) => tool.name)).not.toContain("pi.codemode.models.classify");
+    expect(extension.tools?.map((tool) => tool.name)).not.toContain(
+      "pi.codemode.models.generateImages"
     );
   });
 
-  it("limits only active Code Mode nested calls to replay-safe reads", async () => {
+  it("limits Code Mode nested calls to replay-safe reads of their own run", async () => {
     const state = createPiCodeModePolicyState();
     await state.parents.set(1 as never, "parent");
     const delegate = createPiCodeModePolicyDelegate(state);
@@ -77,6 +82,9 @@ describe("createOpenInspectCodemodeExtension", () => {
         context
       )
     ).resolves.toEqual({ block: "Code Mode may call only replay-safe read tools" });
+    // A nested call whose parentage cannot be proven is refused. The
+    // rule that limits a script to replay-safe reads must not disappear when
+    // the durable parent record is missing or does not match.
     await expect(
       delegate.beforeTool?.(
         call("write", { taskId: 2, callId: "parent" }),
@@ -84,7 +92,7 @@ describe("createOpenInspectCodemodeExtension", () => {
         api,
         context
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ block: "Code Mode may call only tools of its own run" });
     await expect(
       delegate.beforeTool?.(
         call("write", { taskId: 1, callId: "different-call" }),
@@ -92,7 +100,7 @@ describe("createOpenInspectCodemodeExtension", () => {
         api,
         context
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ block: "Code Mode may call only tools of its own run" });
   });
 
   it("serializes the whole session in FIFO order", async () => {

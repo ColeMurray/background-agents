@@ -224,8 +224,14 @@ export function createPiCodeModePolicyDelegate(state: PiCodeModePolicyState): Pi
   return {
     beforeTool: async (call, declaration) => {
       if (!call.parent) return undefined;
+      // The parentage is *proven*, not assumed. A nested call whose parent
+      // record does not match is refused: the rule that limits a script to
+      // replay-safe reads must not disappear when the record is missing or
+      // stale.
       const parentCallId = await state.parents.get(call.parent.taskId);
-      if (parentCallId !== call.parent.callId) return undefined;
+      if (parentCallId !== call.parent.callId) {
+        return { block: "Code Mode may call only tools of its own run" };
+      }
       const read = declaration.effect === "local_read" || declaration.effect === "external_read";
       if (!read || declaration.replay !== "safe") {
         return { block: "Code Mode may call only replay-safe read tools" };
@@ -240,7 +246,11 @@ export function createOpenInspectCodemodeExtension(
   sandbox: CodemodeSandboxBase,
   policy: PiCodeModePolicyState
 ) {
-  const extension = createCodemodeExtension({ sandbox });
+  // The scripts get no model surface at all: no catalog globals, and no
+  // model-call tools. Those tools would send model-written context to the
+  // provider with the session's credential, which is exactly what a
+  // capability must never do.
+  const extension = createCodemodeExtension({ sandbox, models: false });
   return defineExtension({
     ...extension,
     tools: extension.tools?.map((tool) =>

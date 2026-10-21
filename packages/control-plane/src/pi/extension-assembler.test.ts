@@ -301,7 +301,7 @@ describe("assemblePiExtensions", () => {
     ).toThrow("Pi tool contributions require the composite policy extension");
   });
 
-  it("accepts Code Mode only with codemode and internal models declarations", () => {
+  it("accepts Code Mode with only the codemode tool", () => {
     const assembled = assemblePiExtensions(
       [
         policy(),
@@ -311,11 +311,7 @@ describe("assemblePiExtensions", () => {
           minimumCapability: "enabled",
           extension: defineExtension({
             name: "codemode",
-            tools: [
-              tool("codemode", { callers: ["model"], replay: "safe" }),
-              tool("pi.codemode.models.classify", { callers: ["tools"] }),
-              tool("pi.codemode.models.generateImages", { callers: ["tools"] }),
-            ],
+            tools: [tool("codemode", { callers: ["model"], replay: "safe" })],
           }),
           effects: PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
         },
@@ -323,7 +319,10 @@ describe("assemblePiExtensions", () => {
       capabilities
     );
 
-    expect([...assembled.effects]).toHaveLength(3);
+    // The model-call tools are not part of Pi's surface: a script has no
+    // model catalog and no way to send model-written context to the provider
+    // with the session's credential.
+    expect([...assembled.effects]).toHaveLength(1);
   });
 
   it("refuses an external mutation that no delegate owns", () => {
