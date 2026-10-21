@@ -164,6 +164,80 @@ The external-action authority now holds to the rule that reading a session is no
 | Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts and confirmed provenance  |
 | Browser                      | Ready behind its own gate            | Session gateway, host allowlist, activity on the timeline, and a bounded transport          |
 
+## The two MCP lanes, and the decision
+
+Open-Inspect's MCP is centralized, and that is the design, not a gap: the deployment owns the MCP
+servers, one shared credential serves them, the session's repositories scope them, and every trusted
+member of the tenant uses them. There is no per-user external-service credential anywhere in
+Open-Inspect, because Open-Inspect is single-tenant by design.
+
+Pi does not change that. Pi has two lanes, and neither invents an authority model.
+
+### Lane 1 — the shared lane (Open-Inspect's core, untouched)
+
+The deployment's own MCP servers, with the deployment's own credential, scoped by the session's
+repositories. This is exactly what the sandbox gets:
+`McpServerStore.getDecryptedForSession(repositories)`
+(`packages/control-plane/src/db/mcp-servers.ts:347`) is the single resolver, and the sandbox's
+launch context calls it with the session's repositories
+(`packages/control-plane/src/sandbox/lifecycle/launch-context.ts:216`). No actor, no per-user
+identity, and none is needed: every member of the tenant is trusted with the deployment's servers.
+
+**Decision: Pi uses this lane too.** Pi is a harness alongside OpenCode, Claude, and Codex, so it
+must reach the same servers the sandbox reaches, under the same credential, under the same scope.
+
+### Lane 2 — the personal lane (new, and only because MCP needs OAuth)
+
+A credential that belongs to one person. It exists because an OAuth-protected MCP server cannot be
+reached with a shared static credential, and because a personal token is a _person's_ secret, not
+the tenant's. The personal lane is strictly **narrower** than the shared lane: the owner's explicit
+grant, the session's own `collaborate` authority, and the server's repository scope must all hold.
+
+**The rule: a personal credential never widens the deployment's scope.** The scope that decides "may
+this session use this MCP server" is unchanged and shared by both lanes: the session's repositories
+against the server's `repo_scope`.
+
+### The seam the shared lane's call must use
+
+The shared lane's credential is a static header or env blob on the server row. It is _not_ an OAuth
+token, so the shared lane needs none of the personal lane's machinery: no `mcp_connections` row, no
+`mcp_oauth_storage`, no owner, no callback route, no per-user keyring.
+
+The call belongs to the session, and the session already holds the resolver:
+
+- The SessionDO already wires the core's resolver
+  (`packages/control-plane/src/session/components.ts:1646`:
+  `getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories)`).
+- The call uses the MCP SDK's own client, which is already a dependency
+  (`@modelcontextprotocol/client`): a `Client` over a `StreamableHTTPClientTransport` pointed at the
+  server's `url`, with the shared `headers`/`env` closed over. No `Lifecycle`, no persistence, and
+  no callback — none of them are needed for a static credential.
+- The reviewed-catalog gate is the same one the personal lane uses: the tool must be in the server's
+  reviewed read-only catalog for the server's current revision (`mcp_reviewed_tools`,
+  `effect = 'external_read'`). A mutation is unrepresentable.
+- The result is bounded and credential-free exactly as the personal lane's result is, and the read
+  is audited and lands on the session's timeline like every other capability activity.
+
+### What the shared lane must never do
+
+- It must not let the credential reach Pi, a tool result, an error, a log line, or the timeline.
+- It must not use a per-user credential for a shared server.
+- It must not widen `repo_scope`: the session's repositories decide, as they do for the sandbox.
+- It must not create a personal connection for a shared server, and it must not let a personal grant
+  widen what the shared lane exposes.
+
+### What is left to build for the shared lane
+
+1. The session-side shared-server resolution: the core's resolver, plus the server's reviewed
+   read-only catalog, exposed through the session's MCP roster so the model is offered only reviewed
+   reads.
+2. The session-owned call: the SDK client over the shared headers, bounded, audited,
+   credential-free.
+3. The Pi read tool's target: a shared server alongside a personal connection, with the same
+   reviewed gate and the same bounds.
+4. The live canary against a real MCP server, with a repo-scoped server and a session without that
+   repo, to prove the scope rule holds.
+
 ## Upstream Pi Durable parity
 
 Upstream `main` is ahead of the published release. See `PI-UPSTREAM-PARITY.md`.
