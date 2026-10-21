@@ -480,7 +480,7 @@ export class MemoryRecordStore {
           actor_user_id_snapshot, action, resource_type, resource_id, reason_code, operation_result,
           metadata_json)
         SELECT ${generateId()}, ${Date.now()}, ${actor.requestId},
-          ${actor.kind === "agent" ? "sandbox" : "user"}, ${actor.userId}, ${action}, 'memory', ${id},
+          ${actor.kind === "agent" ? "harness" : "user"}, ${actor.userId}, ${action}, 'memory', ${id},
           ${action}, 'applied',
           ${JSON.stringify({
             before: {},
