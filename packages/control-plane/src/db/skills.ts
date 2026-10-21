@@ -1,8 +1,8 @@
 import {
   skillImportProvenanceSchema,
-  skillImportSourceSchema,
   skillMetadataSchema,
   type CreateSkillInput,
+  type ImportedSkillIdentity,
   type ReplaceSkillContentAndAssignmentsInput,
   type SetSkillEnabledInput,
   type Skill,
@@ -16,9 +16,20 @@ import {
 } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
 import { buildValidatedSkillRevision } from "../skills/content-addressing";
-import { isUniqueConstraintError } from "./errors";
+import {
+  catalogInsert,
+  revisionInsert,
+  fileInserts,
+  assignmentInserts,
+  importSourceInsert,
+  importedSkillStatements,
+  type ImportedSkillCreateInput,
+} from "./skill-write-statements";
+import { isForeignKeyConstraintError, isUniqueConstraintError } from "./errors";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+
+export type { ImportedSkillCreateInput } from "./skill-write-statements";
 
 const RESERVED_SKILL_NAMES = new Set([
   "agent-browser",
@@ -192,20 +203,14 @@ export class SkillStore {
     const now = Date.now();
     try {
       await this.db.batch([
-        this.db
-          .prepare(
-            `INSERT INTO skills
-             (id, name, current_revision_id, enabled, deleted_at, created_by, updated_by, created_at, updated_at)
-             VALUES (?, ?, NULL, 1, NULL, ?, ?, ?, ?)`
-          )
-          .bind(id, input.name, actorUserId, actorUserId, now, now),
-        this.revisionInsert(revisionId, id, 1, input.content, revision, actorUserId, now),
-        ...this.fileInserts(revisionId, revision.files),
+        catalogInsert(this.db, id, input.name, actorUserId, now),
+        revisionInsert(this.db, revisionId, id, 1, input.content, revision, actorUserId, now),
+        ...fileInserts(this.db, revisionId, revision.files),
         this.db
           .prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
           .bind(revisionId, id),
-        ...this.assignmentInserts(id, input.assignments, actorUserId, now),
-        ...(source ? [this.importSourceInsert(revisionId, id, source, now)] : []),
+        ...assignmentInserts(this.db, id, input.assignments, actorUserId, now),
+        ...(source ? [importSourceInsert(this.db, revisionId, id, source, now)] : []),
         this.bumpGeneration(),
       ]);
     } catch (error) {
@@ -219,6 +224,71 @@ export class SkillStore {
       throw error;
     }
     return (await this.get(id))!;
+  }
+
+  /** Persist a reviewed collection import as one all-or-nothing catalog write. */
+  async createImportedSkills(
+    inputs: ImportedSkillCreateInput[],
+    assignments: SkillAssignmentInput[],
+    actorUserId: string
+  ): Promise<ImportedSkillIdentity[]> {
+    if (inputs.length === 0) {
+      throw new SkillValidationError("At least one imported skill is required");
+    }
+    const duplicateNames = new Set<string>();
+    const seenNames = new Set<string>();
+    for (const input of inputs) {
+      const name = input.name.toLowerCase();
+      if (seenNames.has(name)) duplicateNames.add(name);
+      seenNames.add(name);
+      if (RESERVED_SKILL_NAMES.has(name)) {
+        throw new SkillConflictError(`Skill name ${input.name} is reserved by the sandbox runtime`);
+      }
+    }
+    if (duplicateNames.size > 0) {
+      throw new SkillConflictError(
+        `Duplicate skill name in import: ${[...duplicateNames].sort().join(", ")}`
+      );
+    }
+
+    await this.validateAssignments(assignments);
+    const unavailableNames = await this.unavailableNames(inputs.map((input) => input.name));
+    const existingName = inputs.find((input) =>
+      unavailableNames.has(input.name.toLowerCase())
+    )?.name;
+    if (existingName) {
+      throw new SkillConflictError(`A skill with the name ${existingName} already exists`);
+    }
+
+    const revisions = await Promise.all(
+      inputs.map((input) => buildValidatedSkillRevision(input.name, input.content))
+    );
+    const now = Date.now();
+    const records = inputs.map((input, index) => ({
+      input,
+      revision: revisions[index],
+      id: `skill_${generateId()}`,
+      revisionId: `skillrev_${generateId()}`,
+    }));
+    const statements = importedSkillStatements(this.db, records, assignments, actorUserId, now);
+    statements.push(this.bumpGeneration());
+
+    try {
+      await this.db.batch(statements);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new SkillConflictError("One or more skill names already exist");
+      }
+      if (isForeignKeyConstraintError(error)) {
+        throw new SkillValidationError("One or more assigned environments no longer exist");
+      }
+      throw error;
+    }
+    return records.map((record) => ({
+      id: record.id,
+      name: record.input.name,
+      currentRevisionId: record.revisionId,
+    }));
   }
 
   async setEnabled(
@@ -276,7 +346,8 @@ export class SkillStore {
       const revisionId = `skillrev_${generateId()}`;
       resultingRevisionId = revisionId;
       statements.push(
-        this.revisionInsert(
+        revisionInsert(
+          this.db,
           revisionId,
           id,
           current.revisionNumber + 1,
@@ -286,7 +357,7 @@ export class SkillStore {
           now,
           expectedRevisionId
         ),
-        ...this.fileInserts(revisionId, revision.files)
+        ...fileInserts(this.db, revisionId, revision.files)
       );
       updateResultIndex = statements.length;
       statements.push(
@@ -307,7 +378,7 @@ export class SkillStore {
            )`
         )
         .bind(id, id, resultingRevisionId),
-      ...this.assignmentInserts(id, input.assignments, actorUserId, now, resultingRevisionId),
+      ...assignmentInserts(this.db, id, input.assignments, actorUserId, now, resultingRevisionId),
       this.bumpGeneration(id, resultingRevisionId)
     );
     let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
@@ -357,7 +428,8 @@ export class SkillStore {
     const now = Date.now();
     const revisionId = `skillrev_${generateId()}`;
     const statements: SqlStatement[] = [
-      this.revisionInsert(
+      revisionInsert(
+        this.db,
         revisionId,
         id,
         current.revision_number + 1,
@@ -367,7 +439,7 @@ export class SkillStore {
         now,
         expectedRevisionId
       ),
-      ...this.fileInserts(revisionId, revision.files),
+      ...fileInserts(this.db, revisionId, revision.files),
     ];
     const updateResultIndex = statements.length;
     statements.push(
@@ -377,7 +449,7 @@ export class SkillStore {
            WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
         )
         .bind(revisionId, actorUserId, now, id, expectedRevisionId),
-      this.importSourceInsert(revisionId, id, source, now),
+      importSourceInsert(this.db, revisionId, id, source, now),
       this.bumpGeneration(id, revisionId)
     );
     let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
@@ -415,12 +487,23 @@ export class SkillStore {
    * enforces: reserved names and names held by deleted skills stay taken.
    */
   async nameAvailable(name: string): Promise<boolean> {
-    if (RESERVED_SKILL_NAMES.has(name)) return false;
-    const existing = await this.db
-      .prepare("SELECT id FROM skills WHERE lower(name) = lower(?)")
-      .bind(name)
-      .first<{ id: string }>();
-    return existing === null;
+    return !(await this.unavailableNames([name])).has(name.toLowerCase());
+  }
+
+  /** Return requested canonical names held by the runtime or any catalog row, including deleted rows. */
+  async unavailableNames(names: readonly string[]): Promise<Set<string>> {
+    const normalized = [...new Set(names.map((name) => name.toLowerCase()))];
+    const unavailable = new Set(normalized.filter((name) => RESERVED_SKILL_NAMES.has(name)));
+    for (let start = 0; start < normalized.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = normalized.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const result = await this.db
+        .prepare(`SELECT lower(name) AS name FROM skills WHERE lower(name) IN (${placeholders})`)
+        .bind(...chunk)
+        .all<{ name: string }>();
+      for (const row of result.results ?? []) unavailable.add(row.name);
+    }
+    return unavailable;
   }
 
   /**
@@ -672,39 +755,6 @@ export class SkillStore {
       .first<CurrentSkillRevisionRow>();
   }
 
-  /** Record where a revision's content was imported from. */
-  private importSourceInsert(
-    revisionId: string,
-    skillId: string,
-    source: SkillImportSource,
-    now: number
-  ): SqlStatement {
-    const validatedSource = skillImportSourceSchema.parse(source);
-    return this.db
-      .prepare(
-        `INSERT INTO skill_import_sources
-          (revision_id, skill_id, provider, repo_owner, repo_name, requested_ref,
-           resolved_ref, commit_sha, subdirectory, source_sha256, imported_at)
-          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-          WHERE EXISTS (SELECT 1 FROM skill_revisions WHERE id = ? AND skill_id = ?)`
-      )
-      .bind(
-        revisionId,
-        skillId,
-        validatedSource.provider,
-        validatedSource.repoOwner,
-        validatedSource.repoName,
-        validatedSource.requestedRef,
-        validatedSource.resolvedRef,
-        validatedSource.commitSha,
-        validatedSource.subdirectory,
-        validatedSource.sourceSha256,
-        now,
-        revisionId,
-        skillId
-      );
-  }
-
   private async assignmentsForSkill(skillId: string): Promise<SkillAssignment[]> {
     return (await this.assignmentsForSkills([skillId])).get(skillId) ?? [];
   }
@@ -788,101 +838,6 @@ export class SkillStore {
     if (found !== environmentIds.length) {
       throw new SkillValidationError("One or more assigned environments do not exist");
     }
-  }
-
-  private revisionInsert(
-    revisionId: string,
-    skillId: string,
-    revisionNumber: number,
-    content: SkillContentInput,
-    revision: Awaited<ReturnType<typeof buildValidatedSkillRevision>>,
-    actorUserId: string,
-    now: number,
-    expectedCurrentRevisionId: string | null = null
-  ): SqlStatement {
-    return this.db
-      .prepare(
-        `INSERT INTO skill_revisions
-         (id, skill_id, revision_number, revision_sha256, description, body, license,
-          compatibility, metadata_json, total_bytes, created_by, created_at)
-          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-          WHERE ? IS NULL OR EXISTS (
-            SELECT 1 FROM skills
-            WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
-          )`
-      )
-      .bind(
-        revisionId,
-        skillId,
-        revisionNumber,
-        revision.revisionSha256,
-        content.description,
-        content.body,
-        content.license ?? null,
-        content.compatibility ?? null,
-        JSON.stringify(content.metadata),
-        revision.totalBytes,
-        actorUserId,
-        now,
-        expectedCurrentRevisionId,
-        skillId,
-        expectedCurrentRevisionId
-      );
-  }
-
-  private fileInserts(revisionId: string, files: SkillFile[]): SqlStatement[] {
-    return files.map((file) =>
-      this.db
-        .prepare(
-          `INSERT INTO skill_revision_files
-            (revision_id, path, content, content_sha256, size_bytes, executable)
-            SELECT ?, ?, ?, ?, ?, ?
-            WHERE EXISTS (SELECT 1 FROM skill_revisions WHERE id = ?)`
-        )
-        .bind(
-          revisionId,
-          file.path,
-          file.content,
-          file.sha256,
-          file.sizeBytes,
-          file.executable ? 1 : 0,
-          revisionId
-        )
-    );
-  }
-
-  private assignmentInserts(
-    skillId: string,
-    assignments: SkillAssignmentInput[],
-    actorUserId: string,
-    now: number,
-    requiredCurrentRevisionId?: string
-  ): SqlStatement[] {
-    return assignments.map((assignment) => {
-      const id = `skillassign_${generateId()}`;
-      return this.db
-        .prepare(
-          `INSERT INTO skill_assignments
-            (id, skill_id, scope_type, repo_owner, repo_name, environment_id, created_by, created_at)
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?
-            WHERE ? IS NULL OR EXISTS (
-              SELECT 1 FROM skills WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
-            )`
-        )
-        .bind(
-          id,
-          skillId,
-          assignment.type,
-          assignment.type === "repository" ? assignment.repository.repoOwner : null,
-          assignment.type === "repository" ? assignment.repository.repoName : null,
-          assignment.type === "environment" ? assignment.environmentId : null,
-          actorUserId,
-          now,
-          requiredCurrentRevisionId ?? null,
-          skillId,
-          requiredCurrentRevisionId ?? null
-        );
-    });
   }
 
   private bumpGeneration(skillId?: string, requiredCurrentRevisionId?: string): SqlStatement {

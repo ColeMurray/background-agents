@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import {
+  bulkSkillImportPreviewResponseSchema,
   skillImportPreviewResponseSchema,
   skillSchema,
   type SkillAssignmentInput,
@@ -87,6 +88,22 @@ const skillAssignmentWrites = [
   ["PUT", "/skills/skill-1", { content, assignments: [assignment] }, 200],
 ] as const;
 const skillImportRequests = [
+  ["/skills/import/bulk/preview", { source: importSource }],
+  [
+    "/skills/import/bulk",
+    {
+      source: importSource,
+      expectedCommitSha: confirmation.expectedCommitSha,
+      skills: [
+        {
+          subdirectory: null,
+          name: "deploy",
+          expectedSourceSha256: confirmation.expectedSourceSha256,
+          expectedRevisionSha256: confirmation.expectedRevisionSha256,
+        },
+      ],
+    },
+  ],
   ["/skills/import/preview", { source: importSource }],
   ["/skills/import", { source: importSource, ...confirmation }],
   ["/skills/skill-1/reimport/preview", {}],
@@ -168,6 +185,8 @@ beforeEach(() => {
   mocks.readBlob.mockResolvedValue(
     new TextEncoder().encode("---\nname: deploy\ndescription: Deploy a service\n---\n# Deploy\n")
   );
+  vi.spyOn(SkillStore.prototype, "createImportedSkills").mockResolvedValue([]);
+  vi.spyOn(SkillStore.prototype, "unavailableNames").mockResolvedValue(new Set());
   vi.spyOn(SkillStore.prototype, "create").mockResolvedValue(skill);
   vi.spyOn(SkillStore.prototype, "get").mockResolvedValue(skill);
   vi.spyOn(SkillStore.prototype, "replaceContentAndAssignments").mockResolvedValue(skill);
@@ -184,6 +203,7 @@ describe("skill repository-bearing writes", () => {
     "denies %s %s with another team's assignment before persistence",
     async (method, path, body) => {
       expect((await request(path, method, body)).status).toBe(403);
+      expect(SkillStore.prototype.createImportedSkills).not.toHaveBeenCalled();
       expect(SkillStore.prototype.create).not.toHaveBeenCalled();
       expect(SkillStore.prototype.replaceContentAndAssignments).not.toHaveBeenCalled();
       expect(mocks.checkRepositoryAccess).toHaveBeenCalledWith({ owner: "acme", name: "repo" });
@@ -197,6 +217,7 @@ describe("skill repository-bearing writes", () => {
       expect(mocks.resolveCommit).not.toHaveBeenCalled();
       expect(mocks.listTree).not.toHaveBeenCalled();
       expect(mocks.readBlob).not.toHaveBeenCalled();
+      expect(SkillStore.prototype.createImportedSkills).not.toHaveBeenCalled();
       expect(SkillStore.prototype.create).not.toHaveBeenCalled();
       expect(SkillStore.prototype.applyImportedRevision).not.toHaveBeenCalled();
     }
@@ -288,6 +309,7 @@ describe("skill repository-bearing writes", () => {
       expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).not.toHaveBeenCalled();
       expect(mocks.resolveCommit).not.toHaveBeenCalled();
       expect(mocks.readBlob).not.toHaveBeenCalled();
+      expect(SkillStore.prototype.createImportedSkills).not.toHaveBeenCalled();
       expect(SkillStore.prototype.create).not.toHaveBeenCalled();
       expect(SkillStore.prototype.applyImportedRevision).not.toHaveBeenCalled();
     }
@@ -353,6 +375,68 @@ describe("skill repository-bearing writes", () => {
     expect(SkillStore.prototype.create).not.toHaveBeenCalled();
   });
 
+  it("allows an owning-team member to preview and confirm a collection", async () => {
+    vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([
+      "team-1",
+    ]);
+    const preview = await request("/skills/import/bulk/preview", "POST", { source: importSource });
+    expect(preview.status).toBe(200);
+    const collection = bulkSkillImportPreviewResponseSchema.parse(await preview.json());
+    const response = await request("/skills/import/bulk", "POST", {
+      source: importSource,
+      expectedCommitSha: collection.skills[0].source.commitSha,
+      skills: collection.skills.map((member) => ({
+        name: member.name,
+        subdirectory: member.source.subdirectory,
+        expectedSourceSha256: member.source.sourceSha256,
+        expectedRevisionSha256: member.revisionSha256,
+      })),
+      assignments: [assignment],
+    });
+    expect(response.status).toBe(201);
+    expect(SkillStore.prototype.createImportedSkills).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          name: "deploy",
+          source: expect.objectContaining({ commitSha: "a".repeat(40) }),
+        }),
+      ],
+      [assignment],
+      "user-1"
+    );
+    expect(mocks.checkRepositoryAccess).toHaveBeenCalledTimes(3);
+  });
+
+  it("checks collection assignments independently of a granted source", async () => {
+    mocks.checkRepositoryAccess.mockImplementation(
+      async ({ owner, name }: { owner: string; name: string }) => ({
+        repoId: name === "source" ? 456 : 123,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      })
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockImplementation(
+      async (repoId) => (repoId === 456 ? ["team-1"] : ["other-team"])
+    );
+    const response = await request("/skills/import/bulk", "POST", {
+      source: { repository: { repoOwner: "acme", repoName: "source" } },
+      expectedCommitSha: confirmation.expectedCommitSha,
+      skills: [
+        {
+          subdirectory: null,
+          name: "deploy",
+          expectedSourceSha256: confirmation.expectedSourceSha256,
+          expectedRevisionSha256: confirmation.expectedRevisionSha256,
+        },
+      ],
+      assignments: [assignment],
+    });
+    expect(response.status).toBe(403);
+    expect(mocks.readBlob).not.toHaveBeenCalled();
+    expect(SkillStore.prototype.createImportedSkills).not.toHaveBeenCalled();
+  });
+
   it("allows an owning-team member to preview and confirm import and reimport", async () => {
     vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([
       "team-1",
@@ -400,6 +484,7 @@ describe.each(["off", "shadow", "on"] as const)(
         for (const [path, body] of skillImportRequests) {
           expect((await request(path, "POST", body, environment)).status).toBe(403);
         }
+        expect(SkillStore.prototype.createImportedSkills).not.toHaveBeenCalled();
         expect(SkillStore.prototype.create).not.toHaveBeenCalled();
         expect(SkillStore.prototype.replaceContentAndAssignments).not.toHaveBeenCalled();
         expect(SkillStore.prototype.applyImportedRevision).not.toHaveBeenCalled();

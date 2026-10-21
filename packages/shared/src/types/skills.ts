@@ -167,6 +167,14 @@ export const MAX_SKILL_IMPORT_REF_LENGTH = 255;
 export const MAX_SKILL_IMPORT_SUBDIRECTORY_BYTES = 240;
 /** Deepest repository subdirectory an import request may name. */
 export const MAX_SKILL_IMPORT_SUBDIRECTORY_DEPTH = 20;
+/** Maximum number of skills accepted from one repository collection import. */
+export const MAX_BULK_SKILL_IMPORT_SKILLS = 100;
+/** Maximum number of files across one repository collection import. */
+export const MAX_BULK_SKILL_IMPORT_FILES = 500;
+/** Maximum source bytes read across one repository collection import. */
+export const MAX_BULK_SKILL_IMPORT_BYTES = 8 * 1024 * 1024;
+/** Maximum shared assignments applied to every skill in a collection import. */
+export const MAX_BULK_SKILL_IMPORT_ASSIGNMENTS = 25;
 
 function isSafeRepositorySubdirectory(path: string): boolean {
   if (path.startsWith("/") || path.endsWith("/") || path.includes("\\")) return false;
@@ -187,7 +195,7 @@ const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, "must be a SHA-256 diges
 const commitShaSchema = z.string().regex(/^[0-9a-f]{7,64}$/, "must be a commit SHA");
 const skillImportRefValueSchema = wellFormedString.trim().min(1).max(MAX_SKILL_IMPORT_REF_LENGTH);
 const skillImportRefSchema = skillImportRefValueSchema.nullish();
-const skillImportSubdirectoryValueSchema = wellFormedString
+export const skillImportSubdirectoryValueSchema = wellFormedString
   .trim()
   .refine(isSafeRepositorySubdirectory, {
     message: "must be a safe relative POSIX path inside the repository",
@@ -355,6 +363,17 @@ export const skillImportPreviewResponseSchema = z.strictObject({
   nameAvailable: z.boolean(),
 });
 
+/** Preview every independent skill rooted below one repository prefix. */
+export const bulkSkillImportPreviewInputSchema = z.strictObject({
+  source: skillImportSourceInputSchema,
+});
+
+export const bulkSkillImportPreviewResponseSchema = z.strictObject({
+  skills: z.array(skillImportPreviewResponseSchema).min(1).max(MAX_BULK_SKILL_IMPORT_SKILLS),
+  totalFiles: z.number().int().positive().max(MAX_BULK_SKILL_IMPORT_FILES),
+  totalBytes: z.number().int().nonnegative().max(MAX_BULK_SKILL_IMPORT_BYTES),
+});
+
 /**
  * Confirming an import re-reads the source and refuses to save unless it still
  * matches what the preview showed, so nothing is stored unreviewed.
@@ -369,6 +388,51 @@ export const importSkillInputSchema = importConfirmationSchema.extend({
   source: skillImportSourceInputSchema,
   name: skillNameSchema.nullish(),
   assignments: z.array(skillAssignmentInputSchema).optional().default([]),
+});
+
+/** One reviewed member of a collection import, keyed by its discovered root. */
+export const bulkSkillImportConfirmationSchema = z.strictObject({
+  subdirectory: skillImportSubdirectoryValueSchema.nullable(),
+  name: skillNameSchema,
+  expectedSourceSha256: sha256Schema,
+  expectedRevisionSha256: sha256Schema,
+});
+
+export const bulkImportSkillsInputSchema = z.strictObject({
+  source: skillImportSourceInputSchema,
+  expectedCommitSha: commitShaSchema,
+  skills: z
+    .array(bulkSkillImportConfirmationSchema)
+    .min(1)
+    .max(MAX_BULK_SKILL_IMPORT_SKILLS)
+    .superRefine((skills, context) => {
+      const roots = new Set<string | null>();
+      for (const [index, skill] of skills.entries()) {
+        if (roots.has(skill.subdirectory)) {
+          context.addIssue({
+            code: "custom",
+            path: [index, "subdirectory"],
+            message: `duplicate skill root: ${skill.subdirectory ?? "repository root"}`,
+          });
+        }
+        roots.add(skill.subdirectory);
+      }
+    }),
+  assignments: z
+    .array(skillAssignmentInputSchema)
+    .max(MAX_BULK_SKILL_IMPORT_ASSIGNMENTS)
+    .optional()
+    .default([]),
+});
+
+export const importedSkillIdentitySchema = z.strictObject({
+  id: z.string(),
+  name: skillNameSchema,
+  currentRevisionId: z.string(),
+});
+
+export const bulkImportSkillsResponseSchema = z.strictObject({
+  skills: z.array(importedSkillIdentitySchema).min(1).max(MAX_BULK_SKILL_IMPORT_SKILLS),
 });
 
 /** Re-import reads the recorded repository and subdirectory; only the ref moves. */
@@ -526,5 +590,11 @@ export type SkillImportWarning = z.infer<typeof skillImportWarningSchema>;
 export type SkillImportPreviewInput = z.infer<typeof skillImportPreviewInputSchema>;
 export type SkillImportPreviewResponse = z.infer<typeof skillImportPreviewResponseSchema>;
 export type ImportSkillInput = z.infer<typeof importSkillInputSchema>;
+export type BulkSkillImportPreviewInput = z.infer<typeof bulkSkillImportPreviewInputSchema>;
+export type BulkSkillImportPreviewResponse = z.infer<typeof bulkSkillImportPreviewResponseSchema>;
+export type BulkSkillImportConfirmation = z.infer<typeof bulkSkillImportConfirmationSchema>;
+export type BulkImportSkillsInput = z.infer<typeof bulkImportSkillsInputSchema>;
+export type ImportedSkillIdentity = z.infer<typeof importedSkillIdentitySchema>;
+export type BulkImportSkillsResponse = z.infer<typeof bulkImportSkillsResponseSchema>;
 export type ReimportSkillPreviewInput = z.infer<typeof reimportSkillPreviewInputSchema>;
 export type ReimportSkillInput = z.infer<typeof reimportSkillInputSchema>;

@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  MAX_BULK_SKILL_IMPORT_BYTES,
+  MAX_BULK_SKILL_IMPORT_FILES,
+  MAX_BULK_SKILL_IMPORT_SKILLS,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
   skillImportSourceInputSchema,
 } from "@open-inspect/shared/types/skills";
 import type { GetRepositoryConfig, RepositoryReader, RepositoryTree } from "../source-control";
 import { SourceControlProviderError } from "../source-control";
-import { fetchSkillImport, SkillImportError } from "./git-import";
+import { fetchBulkSkillImport, fetchSkillImport, SkillImportError } from "./git-import";
 
 const COMMIT = "a".repeat(40);
 
@@ -32,6 +35,7 @@ function fakeProvider(
     normalizedIdentity?: { repoOwner: string; repoName: string };
     blobLimits?: number[];
     listedPaths?: (string | null | undefined)[];
+    calls?: { access: number; resolve: number; tree: number; blobs: number };
   } = {}
 ): RepositoryReader {
   const encoder = new TextEncoder();
@@ -60,22 +64,28 @@ function fakeProvider(
   }
   const importSurface: RepositoryReader = {
     name: "github",
-    checkRepositoryAccess: async (config: GetRepositoryConfig) =>
-      overrides.accessible === false
+    checkRepositoryAccess: async (config: GetRepositoryConfig) => {
+      if (overrides.calls) overrides.calls.access++;
+      return overrides.accessible === false
         ? null
         : {
             repoId: 1,
             repoOwner: overrides.normalizedIdentity?.repoOwner ?? config.owner,
             repoName: overrides.normalizedIdentity?.repoName ?? config.name,
             defaultBranch: overrides.defaultBranch ?? "main",
-          },
-    resolveCommit: async () =>
-      overrides.commit === null ? null : { sha: overrides.commit ?? COMMIT },
+          };
+    },
+    resolveCommit: async () => {
+      if (overrides.calls) overrides.calls.resolve++;
+      return overrides.commit === null ? null : { sha: overrides.commit ?? COMMIT };
+    },
     listTree: async ({ path }) => {
+      if (overrides.calls) overrides.calls.tree++;
       overrides.listedPaths?.push(path);
       return { entries, truncated: overrides.truncated ?? false };
     },
     readBlob: async ({ blobId, maxBytes }) => {
+      if (overrides.calls) overrides.calls.blobs++;
       overrides.blobLimits?.push(maxBytes);
       const bytes = blobs.get(blobId);
       if (!bytes) throw new Error(`missing blob ${blobId}`);
@@ -470,5 +480,224 @@ describe("fetchSkillImport", () => {
           `over the ${MAX_SKILL_FILE_BYTES}-byte per-file limit`
       )
     );
+  });
+});
+
+describe("fetchBulkSkillImport", () => {
+  it("maps a 64-skill collection deterministically from one resolved tree", async () => {
+    const calls = { access: 0, resolve: 0, tree: 0, blobs: 0 };
+    const files: Record<string, FakeFile> = {};
+    for (let index = 63; index >= 0; index--) {
+      const name = `skill-${index.toString().padStart(2, "0")}`;
+      const root = `catalog/${name}`;
+      files[`${root}/SKILL.md`] = {
+        content: `---\nname: ${name}\ndescription: Skill ${index}\n---\nbody\n`,
+      };
+      const supportingCount = index < 37 ? 3 : 2;
+      for (let file = supportingCount - 1; file >= 0; file--) {
+        files[`${root}/references/file-${file}.md`] = { content: "x".repeat(9_500) };
+      }
+    }
+    const expectedBytes = Object.values(files).reduce(
+      (total, file) =>
+        total +
+        (typeof file.content === "string"
+          ? new TextEncoder().encode(file.content).byteLength
+          : file.content.byteLength),
+      0
+    );
+
+    const result = await fetchBulkSkillImport(
+      fakeProvider(files, { calls }),
+      source({ subdirectory: "catalog", ref: "release" })
+    );
+
+    expect(result.skills).toHaveLength(64);
+    expect(result.totalFiles).toBe(229);
+    expect(result.totalBytes).toBe(expectedBytes);
+    expect(result.skills.map((skill) => skill.name)).toEqual(
+      Array.from({ length: 64 }, (_, index) => `skill-${index.toString().padStart(2, "0")}`)
+    );
+    expect(result.skills[0].source).toMatchObject({
+      requestedRef: "release",
+      resolvedRef: "release",
+      commitSha: COMMIT,
+      subdirectory: "catalog/skill-00",
+    });
+    expect(calls).toEqual({ access: 1, resolve: 1, tree: 1, blobs: 229 });
+  });
+
+  it("shares a bounded blob queue across independent skill roots", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [
+        `catalog/skill-${String(index).padStart(2, "0")}/SKILL.md`,
+        { content: `---\nname: skill-${index}\ndescription: Skill ${index}\n---\nbody\n` },
+      ]).reverse()
+    );
+    const provider = fakeProvider(files);
+    const readBlob = provider.readBlob.bind(provider);
+    let active = 0;
+    let peak = 0;
+    provider.readBlob = async (...args) => {
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return await readBlob(...args);
+      } finally {
+        active--;
+      }
+    };
+    const result = await fetchBulkSkillImport(provider, source({ subdirectory: "catalog" }));
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(6);
+    expect(result.skills.map((skill) => skill.name)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `skill-${index}`)
+    );
+  });
+
+  it("preserves per-skill name and frontmatter warnings", async () => {
+    const result = await fetchBulkSkillImport(
+      fakeProvider({
+        "catalog/derived-name/SKILL.md": {
+          content: "---\ndescription: Derived\nallowed-tools: read\n---\nbody\n",
+        },
+      }),
+      source({ subdirectory: "catalog" })
+    );
+
+    expect(result.skills[0].name).toBe("derived-name");
+    expect(result.skills[0].warnings.map((warning) => warning.code)).toEqual([
+      "unmapped-frontmatter",
+      "name-derived",
+    ]);
+  });
+
+  it.each([
+    ["an empty prefix", fakeProvider({}), /No skills found/, 404],
+    [
+      "a truncated tree",
+      fakeProvider({ "catalog/a/SKILL.md": { content: SKILL_MD } }, { truncated: true }),
+      /too large to list completely/,
+      400,
+    ],
+    [
+      "nested skill roots",
+      fakeProvider({
+        "catalog/parent/SKILL.md": { content: SKILL_MD },
+        "catalog/parent/child/SKILL.md": { content: SKILL_MD },
+      }),
+      /Nested skill roots are not supported/,
+      400,
+    ],
+  ])("rejects %s", async (_case, provider, message, status) => {
+    const error = await fetchBulkSkillImport(provider, source({ subdirectory: "catalog" })).catch(
+      (thrown: unknown) => thrown
+    );
+
+    expect(error).toBeInstanceOf(SkillImportError);
+    expect((error as SkillImportError).message).toMatch(message);
+    expect((error as SkillImportError).status).toBe(status);
+  });
+
+  it("rejects the aggregate skill limit before reading blobs", async () => {
+    const blobLimits: number[] = [];
+    const files = Object.fromEntries(
+      Array.from({ length: MAX_BULK_SKILL_IMPORT_SKILLS + 1 }, (_, index) => [
+        `catalog/skill-${index}/SKILL.md`,
+        { content: SKILL_MD },
+      ])
+    );
+
+    await expect(
+      fetchBulkSkillImport(fakeProvider(files, { blobLimits }), source({ subdirectory: "catalog" }))
+    ).rejects.toThrow(new RegExp(`${MAX_BULK_SKILL_IMPORT_SKILLS}-skill aggregate limit`));
+    expect(blobLimits).toEqual([]);
+  });
+
+  it.each([
+    ["unsafe", "catalog/../escape"],
+    ["deep", `catalog/${Array.from({ length: 20 }, (_, index) => `d${index}`).join("/")}`],
+    ["long", `catalog/${"x".repeat(241)}`],
+  ])("rejects a %s discovered skill root", async (_case, root) => {
+    const error = await fetchBulkSkillImport(
+      fakeProvider({ [`${root}/SKILL.md`]: { content: SKILL_MD } }),
+      source({ subdirectory: "catalog" })
+    ).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SkillImportError);
+    expect((error as SkillImportError).status).toBe(400);
+    expect((error as SkillImportError).message).toMatch(/not a safe relative POSIX path/);
+  });
+
+  it("rejects discovered roots that change when parsed before reading blobs", async () => {
+    const root = "catalog/deploy ";
+    const blobLimits: number[] = [];
+    const provider = fakeProvider({ [`${root}/SKILL.md`]: { content: SKILL_MD } }, { blobLimits });
+
+    await expect(
+      fetchBulkSkillImport(provider, source({ subdirectory: "catalog" }))
+    ).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("leading or trailing whitespace"),
+    });
+    expect(blobLimits).toEqual([]);
+  });
+
+  it("rejects the aggregate file limit before reading blobs", async () => {
+    const blobLimits: number[] = [];
+    const files: Record<string, FakeFile> = {};
+    for (let skill = 0; skill < 6; skill++) {
+      const root = `catalog/skill-${skill}`;
+      files[`${root}/SKILL.md`] = { content: SKILL_MD };
+      for (let file = 0; file < 83; file++) {
+        files[`${root}/references/${file}.md`] = { content: "x" };
+      }
+    }
+    expect(Object.keys(files).length).toBeGreaterThan(MAX_BULK_SKILL_IMPORT_FILES);
+
+    await expect(
+      fetchBulkSkillImport(fakeProvider(files, { blobLimits }), source({ subdirectory: "catalog" }))
+    ).rejects.toThrow(new RegExp(`${MAX_BULK_SKILL_IMPORT_FILES}-file aggregate limit`));
+    expect(blobLimits).toEqual([]);
+  });
+
+  it("rejects the aggregate byte limit before reading blobs", async () => {
+    const blobLimits: number[] = [];
+    const files: Record<string, FakeFile> = {};
+    for (let skill = 0; skill < 10; skill++) {
+      const root = `catalog/skill-${skill}`;
+      files[`${root}/SKILL.md`] = { content: SKILL_MD };
+      for (let file = 0; file < 4; file++) {
+        files[`${root}/references/${file}.md`] = { content: "x".repeat(220 * 1024) };
+      }
+    }
+
+    await expect(
+      fetchBulkSkillImport(fakeProvider(files, { blobLimits }), source({ subdirectory: "catalog" }))
+    ).rejects.toThrow(new RegExp(`${MAX_BULK_SKILL_IMPORT_BYTES}-byte aggregate limit`));
+    expect(blobLimits).toEqual([]);
+  });
+
+  it("enforces the aggregate byte limit when tree sizes are unavailable", async () => {
+    const calls = { access: 0, resolve: 0, tree: 0, blobs: 0 };
+    const files: Record<string, FakeFile> = {};
+    for (let skill = 0; skill < 10; skill++) {
+      const root = `catalog/skill-${skill}`;
+      files[`${root}/SKILL.md`] = {
+        content: `---\nname: skill-${skill}\ndescription: Skill\n---\nbody\n`,
+      };
+      for (let file = 0; file < 4; file++) {
+        files[`${root}/references/${file}.md`] = { content: "x".repeat(220 * 1024) };
+      }
+    }
+
+    await expect(
+      fetchBulkSkillImport(
+        fakeProvider(files, { calls, sizelessTree: true }),
+        source({ subdirectory: "catalog" })
+      )
+    ).rejects.toThrow(new RegExp(`${MAX_BULK_SKILL_IMPORT_BYTES}-byte aggregate limit`));
+    expect(calls.blobs).toBeGreaterThan(0);
   });
 });

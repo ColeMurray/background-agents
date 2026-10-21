@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import { SKILL_LIST_PAGE_SIZE, type SkillImportSource } from "@open-inspect/shared/types/skills";
+import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
 import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -210,6 +211,227 @@ describe("managed skill import provenance", () => {
     expect(await skills.nameAvailable("agent-browser")).toBe(false);
     expect(await skills.nameAvailable("free-name")).toBe(true);
   });
+
+  it("persists a reviewed collection atomically with shared assignments and provenance", async () => {
+    const store = new SkillStore(env.DB);
+    const imported = await store.createImportedSkills(
+      [
+        { name: "deploy-api", content, source },
+        {
+          name: "deploy-worker",
+          content: { ...content, description: "Imported worker deployment instructions" },
+          source: {
+            ...source,
+            subdirectory: "skills/deploy-worker",
+            sourceSha256: "c".repeat(64),
+          },
+        },
+      ],
+      [
+        { type: "global" },
+        {
+          type: "repository",
+          repository: { repoOwner: "Acme", repoName: "API", baseBranch: null },
+        },
+      ],
+      "user_1"
+    );
+
+    expect(imported.map((skill) => skill.name)).toEqual(["deploy-api", "deploy-worker"]);
+    const stored = await Promise.all(imported.map((skill) => store.get(skill.id)));
+    expect(stored.every((skill) => skill?.assignments.length === 2)).toBe(true);
+    expect(stored.map((skill) => skill?.source?.subdirectory)).toEqual([
+      "skills/deploy-service",
+      "skills/deploy-worker",
+    ]);
+    expect(stored.every((skill) => skill?.source?.revisionId === skill?.currentRevisionId)).toBe(
+      true
+    );
+    expect(await store.catalogGeneration()).toBeGreaterThan(0);
+  });
+
+  it("uses the same persisted content and provenance fields for single and bulk imports", async () => {
+    const store = new SkillStore(env.DB);
+    const richContent = {
+      ...content,
+      license: "MIT",
+      compatibility: "Requires a POSIX shell",
+      metadata: { team: "platform", note: "déploiement" },
+      files: [
+        ...content.files,
+        { path: "references/checklist.md", content: "Review ✓\n", executable: false },
+      ],
+    };
+    const pinnedSource: SkillImportSource = {
+      ...source,
+      provider: "gitlab",
+      repoOwner: "group/subgroup",
+      requestedRef: "release",
+      resolvedRef: "release",
+    };
+    const assignments = [
+      { type: "global" as const },
+      {
+        type: "repository" as const,
+        repository: { repoOwner: "group/subgroup", repoName: "app", baseBranch: null },
+      },
+    ];
+    const single = await store.create(
+      { name: "single-import", content: richContent, assignments },
+      "user_1",
+      pinnedSource
+    );
+    const [bulk] = await store.createImportedSkills(
+      [{ name: "bulk-import", content: richContent, source: pinnedSource }],
+      assignments,
+      "user_1"
+    );
+    for (const skill of [single, await store.get(bulk.id)]) {
+      expect(skill).toMatchObject({
+        description: richContent.description,
+        body: richContent.body,
+        license: richContent.license,
+        compatibility: richContent.compatibility,
+        metadata: richContent.metadata,
+        createdBy: "user_1",
+        updatedBy: "user_1",
+        revisionCreatedBy: "user_1",
+        revisionNumber: 1,
+        enabled: true,
+        source: pinnedSource,
+        assignments: expect.arrayContaining([
+          expect.objectContaining({ type: "global" }),
+          expect.objectContaining({
+            type: "repository",
+            repoOwner: "group/subgroup",
+            repoName: "app",
+          }),
+        ]),
+        files: expect.arrayContaining(
+          richContent.files.map((file) => expect.objectContaining(file))
+        ),
+      });
+      expect(skill?.source?.revisionId).toBe(skill?.currentRevisionId);
+    }
+  });
+
+  it("stores none of a collection when any selected name conflicts", async () => {
+    const store = new SkillStore(env.DB);
+    await importedSkill(store, "already-there");
+
+    await expect(
+      store.createImportedSkills(
+        [
+          { name: "would-be-created", content, source },
+          {
+            name: "already-there",
+            content,
+            source: { ...source, subdirectory: "skills/already-there" },
+          },
+        ],
+        [{ type: "global" }],
+        "user_1"
+      )
+    ).rejects.toThrow(SkillConflictError);
+
+    expect(await store.nameAvailable("would-be-created")).toBe(true);
+    expect((await store.list({ limit: SKILL_LIST_PAGE_SIZE, cursor: null })).skills).toHaveLength(
+      1
+    );
+  });
+
+  it("rolls back when a name is claimed after availability was checked", async () => {
+    const db: SqlDatabase = env.DB;
+    const store = new SkillStore(db);
+    const racingStore = new SkillStore({
+      prepare: (query) => db.prepare(query),
+      async batch<T>(statements: SqlStatement[]) {
+        await importedSkill(store, "race-taken");
+        return db.batch<T>(statements);
+      },
+    });
+    await expect(
+      racingStore.createImportedSkills(
+        [
+          { name: "would-be-created", content, source },
+          { name: "race-taken", content, source: { ...source, subdirectory: "skills/race-taken" } },
+        ],
+        [{ type: "global" }],
+        "user_1"
+      )
+    ).rejects.toThrow(SkillConflictError);
+    expect(await store.nameAvailable("would-be-created")).toBe(true);
+    expect(
+      (await store.list({ limit: SKILL_LIST_PAGE_SIZE, cursor: null })).skills.map(
+        (skill) => skill.name
+      )
+    ).toEqual(["race-taken"]);
+    for (const table of ["skill_revisions", "skill_assignments", "skill_import_sources"]) {
+      expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first()).toEqual({
+        count: 1,
+      });
+    }
+  });
+
+  it("rolls back the whole collection when a later write fails", async () => {
+    const store = new SkillStore(env.DB);
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_bulk_skill_write
+       BEFORE INSERT ON skill_import_sources WHEN NEW.subdirectory = 'skills/write-conflict'
+       BEGIN SELECT RAISE(ABORT, 'forced write conflict'); END;`
+    ).run();
+    try {
+      await expect(
+        store.createImportedSkills(
+          [
+            { name: "would-be-created", content, source },
+            {
+              name: "write-conflict",
+              content,
+              source: { ...source, subdirectory: "skills/write-conflict" },
+            },
+          ],
+          [{ type: "global" }],
+          "user_1"
+        )
+      ).rejects.toThrow(/forced write conflict/);
+    } finally {
+      await env.DB.prepare("DROP TRIGGER reject_bulk_skill_write").run();
+    }
+
+    expect((await store.list({ limit: SKILL_LIST_PAGE_SIZE, cursor: null })).skills).toEqual([]);
+    expect(await store.catalogGeneration()).toBe(0);
+    for (const table of [
+      "skills",
+      "skill_revisions",
+      "skill_revision_files",
+      "skill_assignments",
+      "skill_import_sources",
+    ]) {
+      expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first()).toEqual({
+        count: 0,
+      });
+    }
+  });
+
+  it("rejects duplicate and reserved collection names before storing any skill", async () => {
+    const store = new SkillStore(env.DB);
+    await expect(
+      store.createImportedSkills(
+        [
+          { name: "duplicate", content, source },
+          { name: "duplicate", content, source: { ...source, subdirectory: "skills/other" } },
+        ],
+        [],
+        "user_1"
+      )
+    ).rejects.toThrow(/Duplicate skill name/);
+    await expect(
+      store.createImportedSkills([{ name: "agent-browser", content, source }], [], "user_1")
+    ).rejects.toThrow(/reserved/);
+
+    expect((await store.list({ limit: SKILL_LIST_PAGE_SIZE, cursor: null })).skills).toEqual([]);
+  });
 });
 
 describe("managed skill import routes", () => {
@@ -218,6 +440,11 @@ describe("managed skill import routes", () => {
   it.each([
     ["/skills/import/preview", { source: { repository: { repoOwner: "acme" } } }],
     ["/skills/import", { source: { repository: { repoOwner: "acme", repoName: "skills" } } }],
+    ["/skills/import/bulk/preview", { source: { repository: { repoOwner: "acme" } } }],
+    [
+      "/skills/import/bulk",
+      { source: { repository: { repoOwner: "acme", repoName: "skills" } }, skills: [] },
+    ],
     [
       "/skills/import/preview",
       { source: { repository: { repoOwner: "acme", repoName: "skills" }, subdirectory: "../etc" } },

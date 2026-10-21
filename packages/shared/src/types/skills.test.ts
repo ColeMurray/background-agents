@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  bulkImportSkillsInputSchema,
+  bulkImportSkillsResponseSchema,
+  bulkSkillImportPreviewResponseSchema,
   createSkillInputSchema,
   importSkillInputSchema,
   listSkillsResponseSchema,
+  MAX_BULK_SKILL_IMPORT_BYTES,
+  MAX_BULK_SKILL_IMPORT_ASSIGNMENTS,
+  MAX_BULK_SKILL_IMPORT_FILES,
+  MAX_BULK_SKILL_IMPORT_SKILLS,
   sessionSkillSelectionSchema,
   skillContentInputSchema,
   skillImportSourceSchema,
@@ -158,6 +165,105 @@ describe("managed skill contracts", () => {
     );
     expect(
       skillImportSourceSchema.safeParse({ ...source, subdirectory: "../deploy" }).success
+    ).toBe(false);
+  });
+
+  it("bounds and pins bulk repository imports", () => {
+    expect(MAX_BULK_SKILL_IMPORT_SKILLS).toBeGreaterThanOrEqual(100);
+    expect(MAX_BULK_SKILL_IMPORT_FILES).toBeGreaterThanOrEqual(500);
+    expect(MAX_BULK_SKILL_IMPORT_BYTES).toBeGreaterThanOrEqual(8 * 1024 * 1024);
+
+    const confirmation = {
+      source: { repository: { repoOwner: "acme", repoName: "skills" }, subdirectory: "skills" },
+      expectedCommitSha: "a".repeat(40),
+      skills: [
+        {
+          subdirectory: "skills/deploy",
+          name: "deploy",
+          expectedSourceSha256: "b".repeat(64),
+          expectedRevisionSha256: "c".repeat(64),
+        },
+      ],
+    };
+
+    expect(bulkImportSkillsInputSchema.parse(confirmation).assignments).toEqual([]);
+    expect(
+      bulkImportSkillsInputSchema.safeParse({
+        ...confirmation,
+        skills: [...confirmation.skills, confirmation.skills[0]],
+      }).success
+    ).toBe(false);
+    expect(
+      bulkImportSkillsInputSchema.safeParse({
+        ...confirmation,
+        skills: Array.from({ length: MAX_BULK_SKILL_IMPORT_SKILLS + 1 }, (_, index) => ({
+          ...confirmation.skills[0],
+          subdirectory: `skills/skill-${index}`,
+          name: `skill-${index}`,
+        })),
+      }).success
+    ).toBe(false);
+    expect(
+      bulkImportSkillsInputSchema.safeParse({
+        ...confirmation,
+        assignments: Array.from({ length: MAX_BULK_SKILL_IMPORT_ASSIGNMENTS + 1 }, (_, index) => ({
+          type: "environment" as const,
+          environmentId: `env-${index}`,
+        })),
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects bulk previews whose aggregate counts exceed the contract", () => {
+    const preview = {
+      name: "deploy",
+      source: {
+        provider: "github",
+        repoOwner: "acme",
+        repoName: "skills",
+        requestedRef: null,
+        resolvedRef: "main",
+        commitSha: "a".repeat(40),
+        subdirectory: "skills/deploy",
+        sourceSha256: "b".repeat(64),
+      },
+      description: "Deploy",
+      body: "body",
+      license: null,
+      compatibility: null,
+      metadata: {},
+      revisionSha256: "c".repeat(64),
+      totalBytes: 10,
+      files: [{ path: "SKILL.md", content: "content", sizeBytes: 7, executable: false }],
+      warnings: [],
+      nameAvailable: true,
+    };
+    expect(
+      bulkSkillImportPreviewResponseSchema.safeParse({
+        skills: [],
+        totalFiles: 0,
+        totalBytes: 0,
+      }).success
+    ).toBe(false);
+    expect(
+      bulkSkillImportPreviewResponseSchema.safeParse({
+        skills: [preview],
+        totalFiles: MAX_BULK_SKILL_IMPORT_FILES + 1,
+        totalBytes: 0,
+      }).success
+    ).toBe(false);
+  });
+
+  it("strictly validates compact bulk import identities", () => {
+    const response = {
+      skills: [{ id: "skill-1", name: "deploy", currentRevisionId: "revision-1" }],
+    };
+
+    expect(bulkImportSkillsResponseSchema.parse(response)).toEqual(response);
+    expect(
+      bulkImportSkillsResponseSchema.safeParse({
+        skills: [{ ...response.skills[0], assignments: [] }],
+      }).success
     ).toBe(false);
   });
 });

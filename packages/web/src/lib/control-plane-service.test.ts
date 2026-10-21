@@ -42,6 +42,7 @@ describe("dispatchWebServiceRequest", () => {
       },
       body,
       traceId: "trace-1",
+      transportTimeoutMs: 120_000,
       transportOptions: {
         redirect: "manual",
         cache: "no-store",
@@ -56,6 +57,8 @@ describe("dispatchWebServiceRequest", () => {
       cache: "no-store",
       body: expect.objectContaining({ byteLength: body.byteLength }),
     });
+
+    expect(mocks.dispatchControlPlaneFetch).toHaveBeenCalledWith(url, init, {}, undefined, 120_000);
 
     const sentHeaders = new Headers(init?.headers);
     expect(sentHeaders.get("Authorization")).toBeNull();

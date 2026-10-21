@@ -9,11 +9,15 @@
  */
 
 import {
+  MAX_BULK_SKILL_IMPORT_BYTES,
+  MAX_BULK_SKILL_IMPORT_FILES,
+  MAX_BULK_SKILL_IMPORT_SKILLS,
   MAX_SKILL_FILES,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
   skillContentInputSchema,
   skillFileInputSchema,
+  skillImportSubdirectoryValueSchema,
   skillNameSchema,
   type SkillContentInput,
   type SkillFileInput,
@@ -69,6 +73,32 @@ export interface SkillImportResult {
   files: { path: string; content: string; sizeBytes: number; executable: boolean }[];
 }
 
+export interface BulkSkillImportResult {
+  skills: SkillImportResult[];
+  commitSha: string;
+  totalFiles: number;
+  totalBytes: number;
+}
+
+interface ResolvedImportRepository {
+  provider: RepositoryReader;
+  repository: { owner: string; name: string };
+  label: string;
+  source: SkillImportSourceInput;
+  access: NonNullable<Awaited<ReturnType<RepositoryReader["checkRepositoryAccess"]>>>;
+  requestedRef: string | null;
+  resolvedRef: string;
+  commitSha: string;
+  entries: RepositoryTreeEntry[];
+}
+
+interface SkillReadPlan {
+  subdirectory: string | null;
+  prefix: string;
+  location: string;
+  entries: RepositoryTreeEntry[];
+}
+
 interface FetchedSourceFile {
   /** Path relative to the imported subdirectory. */
   path: string;
@@ -113,56 +143,67 @@ function skillDirectoriesUnder(entries: RepositoryTreeEntry[], prefix: string): 
     : directories;
 }
 
-/** Read blobs with bounded concurrency, preserving input order. */
+/** One bounded queue owns all source reads and byte budgets for the operation. */
 async function readBlobs(
-  provider: RepositoryReader,
-  repository: { owner: string; name: string },
-  entries: RepositoryTreeEntry[],
-  prefix: string
-): Promise<FetchedSourceFile[]> {
-  const files = new Array<FetchedSourceFile>(entries.length);
+  resolved: ResolvedImportRepository,
+  plans: SkillReadPlan[],
+  maxTotalBytes: number
+): Promise<{ files: FetchedSourceFile[][]; totalBytes: number }> {
+  const { provider, repository, commitSha } = resolved;
+  const jobs = plans.flatMap((plan, planIndex) =>
+    plan.entries.map((entry, fileIndex) => ({ entry, planIndex, fileIndex }))
+  );
+  const files = plans.map((plan) => new Array<FetchedSourceFile>(plan.entries.length));
+  const skillBytes = plans.map(() => 0);
   let next = 0;
   let totalBytes = 0;
+  let stopped = false;
   async function worker(): Promise<void> {
-    for (let index = next++; index < entries.length; index = next++) {
-      const entry = entries[index];
-      const bytes = await provider.readBlob(
-        {
-          owner: repository.owner,
-          name: repository.name,
-          blobId: entry.blobId,
-          maxBytes: MAX_SKILL_FILE_BYTES,
-        },
-        { kind: "all" }
-      );
-      const path = entry.path.slice(prefix.length);
-      // The provider refuses an oversized blob before buffering when it can
-      // tell the size up front. GitLab's tree carries no sizes, so this is the
-      // check that actually holds for that provider.
-      if (bytes.byteLength > MAX_SKILL_FILE_BYTES) {
-        throw new SkillImportError(
-          `${path} is ${bytes.byteLength} bytes, over the ${MAX_SKILL_FILE_BYTES}-byte per-file limit`,
-          400
+    for (let index = next++; !stopped && index < jobs.length; index = next++) {
+      const { entry, planIndex, fileIndex } = jobs[index];
+      const plan = plans[planIndex];
+      const path = entry.path.slice(plan.prefix.length);
+      try {
+        const bytes = await provider.readBlob(
+          { ...repository, blobId: entry.blobId, maxBytes: MAX_SKILL_FILE_BYTES },
+          { kind: "all" }
         );
+        if (bytes.byteLength > MAX_SKILL_FILE_BYTES) {
+          throw new SkillImportError(
+            `${path} is ${bytes.byteLength} bytes, over the ${MAX_SKILL_FILE_BYTES}-byte per-file limit`,
+            400
+          );
+        }
+        skillBytes[planIndex] += bytes.byteLength;
+        if (skillBytes[planIndex] > MAX_SKILL_REVISION_BYTES) {
+          throw new SkillImportError(
+            `Imported content exceeds the ${MAX_SKILL_REVISION_BYTES}-byte skill limit`,
+            400
+          );
+        }
+        totalBytes += bytes.byteLength;
+        if (totalBytes > maxTotalBytes) {
+          throw new SkillImportError(
+            `Imported collection exceeds the ${maxTotalBytes}-byte aggregate limit`,
+            400
+          );
+        }
+        files[planIndex][fileIndex] = {
+          path,
+          content: decodeUtf8(bytes, path),
+          executable: entry.executable,
+        };
+      } catch (error) {
+        stopped = true;
+        if (error instanceof SkillImportError) throw error;
+        throw providerFailure(error, `Failed to read ${plan.location} at ${commitSha}`);
       }
-      totalBytes += bytes.byteLength;
-      if (totalBytes > MAX_SKILL_REVISION_BYTES) {
-        throw new SkillImportError(
-          `Imported content exceeds the ${MAX_SKILL_REVISION_BYTES}-byte skill limit`,
-          400
-        );
-      }
-      files[index] = {
-        path,
-        content: decodeUtf8(bytes, path),
-        executable: entry.executable,
-      };
     }
   }
   await Promise.all(
-    Array.from({ length: Math.min(BLOB_CONCURRENCY, entries.length) }, () => worker())
+    Array.from({ length: Math.min(BLOB_CONCURRENCY, jobs.length) }, () => worker())
   );
-  return files;
+  return { files, totalBytes };
 }
 
 /** Read one frontmatter entry as a bounded string, rejecting other shapes. */
@@ -297,19 +338,12 @@ export async function resolveSkillImportRepository(
   return access;
 }
 
-/**
- * Fetch, map, and validate one skill directory at a resolved commit.
- *
- * @param nameOverride - Canonical name to store under, overriding the source.
- * @param resolvedRepository - Reuse the SCM identity already authorized by the route.
- * @throws SkillImportError with the status the caller should return.
- */
-export async function fetchSkillImport(
+/** Resolve access, ref, and tree once, reusing an identity authorized by the route. */
+async function resolveImportRepository(
   provider: RepositoryReader,
   source: SkillImportSourceInput,
-  nameOverride?: string | null,
   resolvedRepository?: RepositoryAccessResult
-): Promise<SkillImportResult> {
+): Promise<ResolvedImportRepository> {
   const label = `${source.repository.repoOwner}/${source.repository.repoName}`;
   const access = resolvedRepository ?? (await resolveSkillImportRepository(provider, source));
   const repository = { owner: access.repoOwner, name: access.repoName };
@@ -345,14 +379,33 @@ export async function fetchSkillImport(
     );
   }
 
-  const prefix = directoryPrefix(source.subdirectory ?? null);
-  const location = source.subdirectory ? `${label}/${source.subdirectory}` : label;
-  const scoped = tree.entries.filter((entry) => entry.path.startsWith(prefix));
+  return {
+    provider,
+    repository,
+    label,
+    source,
+    access,
+    requestedRef,
+    resolvedRef,
+    commitSha: commit.sha,
+    entries: tree.entries,
+  };
+}
+
+/** Validate a root and plan its source files before making any blob requests. */
+function planSkillImport(
+  resolved: ResolvedImportRepository,
+  subdirectory: string | null
+): SkillReadPlan {
+  const { entries, label } = resolved;
+  const prefix = directoryPrefix(subdirectory);
+  const location = subdirectory ? `${label}/${subdirectory}` : label;
+  const scoped = entries.filter((entry) => entry.path.startsWith(prefix));
   const skillMarkdownEntry = scoped.find(
     (entry) => entry.path === `${prefix}SKILL.md` && entry.type === "file"
   );
   if (!skillMarkdownEntry) {
-    const candidates = skillDirectoriesUnder(tree.entries, prefix);
+    const candidates = skillDirectoriesUnder(entries, prefix);
     throw new SkillImportError(
       candidates.length > 0
         ? `No SKILL.md in ${location}. Skills found in: ${candidates.join(", ")}`
@@ -390,13 +443,18 @@ export async function fetchSkillImport(
     );
   }
 
-  let fetched: FetchedSourceFile[];
-  try {
-    fetched = await readBlobs(provider, repository, [skillMarkdownEntry, ...blobs], prefix);
-  } catch (error) {
-    if (error instanceof SkillImportError) throw error;
-    throw providerFailure(error, `Failed to read ${location} at ${commit.sha}`);
-  }
+  return { subdirectory, prefix, location, entries: [skillMarkdownEntry, ...blobs] };
+}
+
+/** Map fetched source files onto a managed revision without further repository reads. */
+async function mapFetchedSkillImport(
+  resolved: ResolvedImportRepository,
+  plan: SkillReadPlan,
+  fetched: FetchedSourceFile[],
+  nameOverride?: string | null
+): Promise<SkillImportResult> {
+  const { access, commitSha, provider, requestedRef, resolvedRef, source } = resolved;
+  const { subdirectory } = plan;
   const [markdownFile, ...supportingFiles] = fetched;
 
   const files: SkillFileInput[] = [];
@@ -416,7 +474,7 @@ export async function fetchSkillImport(
   const name = resolveName(
     nameOverride,
     mapped.frontmatterName,
-    source.subdirectory ?? null,
+    subdirectory,
     source.repository.repoName,
     warnings
   );
@@ -443,11 +501,105 @@ export async function fetchSkillImport(
       repoName: access.repoName,
       requestedRef,
       resolvedRef,
-      commitSha: commit.sha,
-      subdirectory: source.subdirectory ?? null,
+      commitSha,
+      subdirectory,
       sourceSha256: await hashImportedSourceTree(fetched),
     },
   };
+}
+
+/**
+ * Fetch, map, and validate one skill directory at a resolved commit.
+ *
+ * @param nameOverride - Canonical name to store under, overriding the source.
+ * @throws SkillImportError with the status the caller should return.
+ */
+export async function fetchSkillImport(
+  provider: RepositoryReader,
+  source: SkillImportSourceInput,
+  nameOverride?: string | null,
+  resolvedRepository?: RepositoryAccessResult
+): Promise<SkillImportResult> {
+  const resolved = await resolveImportRepository(provider, source, resolvedRepository);
+  const plan = planSkillImport(resolved, source.subdirectory ?? null);
+  const { files } = await readBlobs(resolved, [plan], MAX_SKILL_REVISION_BYTES);
+  return mapFetchedSkillImport(resolved, plan, files[0], nameOverride);
+}
+
+/** Discover and map every independent skill below one repository prefix. */
+export async function fetchBulkSkillImport(
+  provider: RepositoryReader,
+  source: SkillImportSourceInput,
+  resolvedRepository?: RepositoryAccessResult
+): Promise<BulkSkillImportResult> {
+  const resolved = await resolveImportRepository(provider, source, resolvedRepository);
+  const prefix = directoryPrefix(source.subdirectory ?? null);
+  const roots = resolved.entries
+    .filter(
+      (entry) =>
+        entry.type === "file" &&
+        entry.path.startsWith(prefix) &&
+        (entry.path === `${prefix}SKILL.md` || entry.path.endsWith("/SKILL.md"))
+    )
+    .map((entry) => entry.path.slice(0, -"SKILL.md".length).replace(/\/$/, ""))
+    .sort();
+
+  if (roots.length === 0) {
+    const location = source.subdirectory
+      ? `${resolved.label}/${source.subdirectory}`
+      : resolved.label;
+    throw new SkillImportError(`No skills found in ${location}`, 404);
+  }
+  if (roots.length > MAX_BULK_SKILL_IMPORT_SKILLS) {
+    throw new SkillImportError(
+      `Imported collection has ${roots.length} skills, over the ${MAX_BULK_SKILL_IMPORT_SKILLS}-skill aggregate limit`,
+      400
+    );
+  }
+  for (const root of roots) {
+    if (!root) continue;
+    const parsed = skillImportSubdirectoryValueSchema.safeParse(root);
+    if (!parsed.success || parsed.data !== root) {
+      throw new SkillImportError(
+        `Discovered skill root ${JSON.stringify(root)} is not a safe relative POSIX path inside the repository (no leading or trailing whitespace allowed)`,
+        400
+      );
+    }
+  }
+  for (let index = 1; index < roots.length; index++) {
+    const parent = roots.find(
+      (candidate, candidateIndex) =>
+        candidateIndex < index && (candidate === "" || roots[index].startsWith(`${candidate}/`))
+    );
+    if (parent !== undefined) {
+      throw new SkillImportError(
+        `Nested skill roots are not supported: ${parent || "repository root"} contains ${roots[index]}`,
+        400
+      );
+    }
+  }
+
+  const plans = roots.map((root) => planSkillImport(resolved, root || null));
+  const selectedFiles = plans.flatMap((plan) => plan.entries);
+  if (selectedFiles.length > MAX_BULK_SKILL_IMPORT_FILES) {
+    throw new SkillImportError(
+      `Imported collection has ${selectedFiles.length} files, over the ${MAX_BULK_SKILL_IMPORT_FILES}-file aggregate limit`,
+      400
+    );
+  }
+  const declaredBytes = selectedFiles.reduce((total, entry) => total + (entry.sizeBytes ?? 0), 0);
+  if (declaredBytes > MAX_BULK_SKILL_IMPORT_BYTES) {
+    throw new SkillImportError(
+      `Imported collection exceeds the ${MAX_BULK_SKILL_IMPORT_BYTES}-byte aggregate limit`,
+      400
+    );
+  }
+
+  const { files, totalBytes } = await readBlobs(resolved, plans, MAX_BULK_SKILL_IMPORT_BYTES);
+  const skills = await Promise.all(
+    plans.map((plan, index) => mapFetchedSkillImport(resolved, plan, files[index]))
+  );
+  return { skills, commitSha: resolved.commitSha, totalFiles: selectedFiles.length, totalBytes };
 }
 
 /** Present an upstream failure as an import failure without leaking retry semantics. */

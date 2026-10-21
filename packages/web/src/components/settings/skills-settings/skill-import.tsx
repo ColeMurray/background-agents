@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { SkillAssignmentInput } from "@open-inspect/shared/types/skills";
 import { importSkill, previewSkillImport } from "@/hooks/use-managed-skills";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
@@ -17,16 +16,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SkillAssignments } from "./skill-assignments";
+import { SkillCollectionImport } from "./skill-collection-import";
 import { SkillImportReview } from "./skill-import-review";
 import { useImportPreview } from "./use-import-preview";
 import {
+  INITIAL_IMPORT_ASSIGNMENTS as INITIAL_ASSIGNMENTS,
   assignmentKey,
   buildAssignments,
   errorMessage,
   previewedSourceConfirmation,
 } from "./utils";
 
-const INITIAL_ASSIGNMENTS: SkillAssignmentInput[] = [{ type: "global" }];
 const NO_REPOSITORY = "no-repository";
 
 /**
@@ -38,8 +38,66 @@ export function SkillImport({
   onImported,
   onCancel,
 }: {
-  onImported: (id: string) => void;
+  onImported: (id: string | null) => void;
   onCancel: () => void;
+}) {
+  const [mode, setMode] = useState<"single" | "collection">("single");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Import from repository</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Review repository skills before adding them to the shared catalog.
+          </p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          Close
+        </Button>
+      </div>
+
+      <div
+        className="grid grid-cols-2 gap-2 rounded bg-muted p-1"
+        role="group"
+        aria-label="Import mode"
+      >
+        <Button
+          type="button"
+          variant={mode === "single" ? "outline" : "ghost"}
+          aria-pressed={mode === "single"}
+          disabled={busy}
+          onClick={() => setMode("single")}
+        >
+          One skill
+        </Button>
+        <Button
+          type="button"
+          variant={mode === "collection" ? "outline" : "ghost"}
+          aria-pressed={mode === "collection"}
+          disabled={busy}
+          onClick={() => setMode("collection")}
+        >
+          Skill collection
+        </Button>
+      </div>
+
+      {mode === "single" ? (
+        <SingleSkillImport onImported={onImported} onBusyChange={setBusy} />
+      ) : (
+        <SkillCollectionImport onImported={onImported} onBusyChange={setBusy} />
+      )}
+    </div>
+  );
+}
+
+function SingleSkillImport({
+  onImported,
+  onBusyChange,
+}: {
+  onImported: (id: string) => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const { repos, loading: reposLoading, error: reposError } = useRepos();
   const {
@@ -52,6 +110,8 @@ export function SkillImport({
   const [subdirectory, setSubdirectory] = useState("");
   const [nameOverride, setNameOverride] = useState("");
   const [importing, setImporting] = useState(false);
+  const importActive = useRef(false);
+  const mounted = useRef(true);
   const [assignmentKeys, setAssignmentKeys] = useState(
     () => new Set(INITIAL_ASSIGNMENTS.map(assignmentKey))
   );
@@ -60,6 +120,14 @@ export function SkillImport({
   const assignmentsUnavailable = Boolean(
     reposLoading || environmentsLoading || reposError || environmentsError
   );
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      importActive.current = false;
+    };
+  }, []);
 
   function sourceInput() {
     if (!selectedRepo) throw new Error("Select a repository to import from");
@@ -75,11 +143,13 @@ export function SkillImport({
     loading: loadingPreview,
     run: loadPreview,
     invalidate: invalidatePreview,
-  } = useImportPreview(() =>
-    previewSkillImport({
-      source: sourceInput(),
-      name: nameOverride.trim() || null,
-    })
+  } = useImportPreview(
+    () =>
+      previewSkillImport({
+        source: sourceInput(),
+        name: nameOverride.trim() || null,
+      }),
+    onBusyChange
   );
 
   async function runPreview() {
@@ -90,8 +160,10 @@ export function SkillImport({
   }
 
   async function confirmImport() {
-    if (!preview) return;
+    if (!preview || loadingPreview || importActive.current) return;
+    importActive.current = true;
     setImporting(true);
+    onBusyChange(true);
     try {
       const skill = await importSkill({
         source: sourceInput(),
@@ -99,12 +171,18 @@ export function SkillImport({
         assignments: buildAssignments(assignmentKeys, repos, environments, INITIAL_ASSIGNMENTS),
         ...previewedSourceConfirmation(preview),
       });
+      if (!mounted.current) return;
       toast.success(`Imported ${skill.name}`);
       onImported(skill.id);
     } catch (error) {
+      if (!mounted.current) return;
       toast.error(errorMessage(error));
     } finally {
-      setImporting(false);
+      if (mounted.current) {
+        importActive.current = false;
+        setImporting(false);
+        onBusyChange(false);
+      }
     }
   }
 
@@ -116,19 +194,10 @@ export function SkillImport({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-base font-semibold text-foreground">Import skill from repository</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Read a <code className="font-mono">SKILL.md</code> directory from a connected
-            repository. Nothing is saved until you review the result.
-          </p>
-        </div>
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          Close
-        </Button>
-      </div>
-
+      <p className="text-sm text-muted-foreground">
+        Read a <code className="font-mono">SKILL.md</code> directory from a connected repository.
+        Nothing is saved until you review the result.
+      </p>
       <div className="space-y-4 rounded border border-border-muted p-4">
         <div>
           <Label htmlFor="import-repository">Repository</Label>
@@ -137,7 +206,7 @@ export function SkillImport({
             onValueChange={(value) =>
               editSource(() => setRepository(value === NO_REPOSITORY ? "" : value))
             }
-            disabled={reposLoading}
+            disabled={reposLoading || loadingPreview || importing}
           >
             <SelectTrigger id="import-repository" className="mt-1">
               <SelectValue />
@@ -163,6 +232,7 @@ export function SkillImport({
               value={ref}
               onChange={(event) => editSource(() => setRef(event.target.value))}
               placeholder={selectedRepo?.defaultBranch ?? "default branch"}
+              disabled={loadingPreview || importing}
               className="mt-1 font-mono"
             />
           </div>
@@ -173,6 +243,7 @@ export function SkillImport({
               value={subdirectory}
               onChange={(event) => editSource(() => setSubdirectory(event.target.value))}
               placeholder="skills/deploy-service"
+              disabled={loadingPreview || importing}
               className="mt-1 font-mono"
             />
           </div>
@@ -186,6 +257,7 @@ export function SkillImport({
               editSource(() => setNameOverride(event.target.value.toLowerCase()))
             }
             placeholder="Defaults to the name in SKILL.md"
+            disabled={loadingPreview || importing}
             className="mt-1 font-mono"
           />
           <p className="mt-1 text-xs text-muted-foreground">
@@ -234,7 +306,9 @@ export function SkillImport({
           <div className="flex flex-wrap justify-end gap-2">
             <Button
               onClick={confirmImport}
-              disabled={importing || assignmentsUnavailable || !preview.nameAvailable}
+              disabled={
+                loadingPreview || importing || assignmentsUnavailable || !preview.nameAvailable
+              }
             >
               {importing ? "Importing..." : `Import ${preview.name}`}
             </Button>
