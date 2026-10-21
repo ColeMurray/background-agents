@@ -76,13 +76,17 @@ export interface SandboxAttachment {
  *   for recovery, so pending prompts wait for the next spawn.
  * - `sandbox_terminated`: the generation is gone, so the queue is re-driven
  *   onto a replacement.
- * - An object result abandons the boot: the prompt it was for fails with
- *   `reason` and nothing re-drives it.
+ * - `heartbeat_lost`: the runtime stopped responding and a save still holds
+ *   its source, so no termination follows; the prompt it was running fails
+ *   with `reason`.
+ * - The other object results abandon a boot: the prompt it was for fails
+ *   with `reason` and nothing re-drives it.
  */
 export type SandboxAlarmResult =
   | "no_action"
   | "sandbox_failed"
   | "sandbox_terminated"
+  | { kind: "heartbeat_lost"; reason: string }
   | { kind: "boot_budget_exceeded"; reason: string }
   | { kind: "connect_timeout_unrecoverable"; reason: string };
 

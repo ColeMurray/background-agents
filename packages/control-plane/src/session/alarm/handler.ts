@@ -7,6 +7,10 @@ import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
 
+/** A prompt the lifecycle alarm interrupted; the watchdog names the cause when it has one. */
+const SANDBOX_INTERRUPTED_ERROR =
+  "Execution interrupted because the sandbox stopped or became unavailable.";
+
 export interface AlarmHandlerDeps {
   preserveBeforeWatchdogs?: (allowCaptureRetry: boolean) => Promise<"continue" | "hold_watchdogs">;
   repository: MessageRepository;
@@ -92,13 +96,22 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       // is the one that was waiting when the alarm fired.
       const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
+      const heartbeatLost =
+        typeof lifecycleResult === "object" && lifecycleResult.kind === "heartbeat_lost"
+          ? lifecycleResult
+          : null;
       if (lifecycleResult !== "no_action") {
-        await deps.messageQueue.failStuckProcessingMessage();
+        await deps.messageQueue.failStuckProcessingMessage(
+          heartbeatLost?.reason ?? SANDBOX_INTERRUPTED_ERROR
+        );
       }
+      // A lost heartbeat whose save holds the source fails the prompt but wakes
+      // nothing: the hold parks the queue until recovery, and a pending stop
+      // confirmation times out on its own.
       if (lifecycleResult === "sandbox_terminated") {
         await deps.executionStop.resumeAfterSandboxTermination();
       }
-      if (bootPrompt && typeof lifecycleResult === "object") {
+      if (bootPrompt && typeof lifecycleResult === "object" && !heartbeatLost) {
         // The boot was for that prompt; it fails with the same words the user
         // sees, and nothing re-drives it onto a fresh sandbox.
         await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);

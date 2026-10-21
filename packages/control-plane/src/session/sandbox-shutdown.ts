@@ -23,6 +23,7 @@ import type {
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { DEFAULT_HEARTBEAT_CONFIG, isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
+import { interruptionMessage } from "./interruption-messages";
 import { legacyShutdownRecord } from "./legacy-shutdown-record";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -51,18 +52,6 @@ const UNCONFIRMED_CHECKPOINT_ERROR =
   "Checkpoint provider outcome is unknown; destructive follow-up remains held.";
 const RELEASED_CHECKPOINT_WARNING =
   "An automatic save of this sandbox could not be confirmed. The sandbox is still running with your work and the session has resumed; the next save will include it.";
-
-/** User-facing text for a prompt interrupted by a shutdown; reasons are internal codes. */
-const INTERRUPTION_MESSAGES: Record<string, string> = {
-  heartbeat_timeout: "The sandbox stopped responding.",
-  prompt_dispatch_send_failed: "The sandbox stopped responding.",
-  stop_send_failed: "The sandbox stopped responding.",
-  stop_alarm_failed: "The sandbox stopped responding.",
-  stop_confirmation_timeout: "The sandbox stopped responding.",
-  fatal_runtime_error: "The sandbox runtime failed.",
-  inactivity_timeout: "The sandbox was stopped after a period of inactivity.",
-  sandbox_lifetime_expiring: "The sandbox reached its maximum lifetime.",
-};
 
 class ShutdownDeadlineError extends Error {}
 
@@ -998,12 +987,7 @@ export class SandboxShutdownCoordinator {
       this.deps.store.write(next);
       if (emergency) this.deps.sandbox.updateSandboxStatus("stale");
       return message
-        ? this.deps.failures.record(
-            message.id,
-            INTERRUPTION_MESSAGES[reason] ?? "The sandbox was stopped.",
-            now,
-            "processing"
-          )
+        ? this.deps.failures.record(message.id, interruptionMessage(reason), now, "processing")
         : null;
     });
     this.announce(next);
