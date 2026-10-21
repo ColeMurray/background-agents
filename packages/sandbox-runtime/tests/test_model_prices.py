@@ -1,4 +1,5 @@
 import json
+import math
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -6,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sandbox_runtime.model_prices import (
+    MAX_RATE_USD_PER_MILLION_TOKENS,
     ModelPrice,
     ModelPriceCatalog,
     Rates,
@@ -90,6 +92,8 @@ def test_cost_is_exact_decimal_arithmetic():
         {"input": float("inf"), "output": 1},
         {"input": float("nan"), "output": 1},
         {"input": 10**400, "output": 1},
+        # Finite, but a cost at this rate can overflow a float.
+        {"input": 1e308, "output": 1},
     ],
 )
 def test_entries_without_a_usable_base_price_are_unpriced(raw):
@@ -175,3 +179,11 @@ def test_catalog_too_deeply_nested_to_parse_is_unavailable_not_an_error(tmp_path
     catalog = ModelPriceCatalog(path, MagicMock())
     assert catalog.price("gpt-6-sol") is None
     assert not catalog.available
+
+
+def test_largest_accepted_rate_keeps_the_most_a_turn_can_report_finite():
+    rate = float(MAX_RATE_USD_PER_MILLION_TOKENS)
+    price = ModelPrice.parse({"input": rate, "output": rate})
+    most = 2**53 - 1
+    tokens = TokenBuckets(input=most, output=most, reasoning=most, cache_read=0, cache_write=0)
+    assert math.isfinite(float(price.cost(tokens, most)))

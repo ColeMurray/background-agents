@@ -25,6 +25,9 @@ DEFAULT_MODELS_URL = "https://models.opencode.ai"
 #: when no context tier matches. Hard-coded in OpenCode, not read from the catalog.
 OVER_200K_CONTEXT_TOKENS = 200_000
 TOKENS_PER_MILLION = Decimal(1_000_000)
+#: USD per million tokens; larger catalog values are malformed. Token counts are
+#: capped at 2**53, so any turn priced within this bound has a finite float cost.
+MAX_RATE_USD_PER_MILLION_TOKENS = Decimal("1e200")
 
 
 def _rate(value: Any) -> Decimal | None:
@@ -36,7 +39,8 @@ def _rate(value: Any) -> Decimal | None:
     except OverflowError:  # An integer too large for a float.
         return None
     # str() is the shortest round-trip form, the digits OpenCode's Decimal sees.
-    return Decimal(str(value))
+    rate = Decimal(str(value))
+    return rate if rate <= MAX_RATE_USD_PER_MILLION_TOKENS else None
 
 
 @dataclass(frozen=True)

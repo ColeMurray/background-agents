@@ -541,6 +541,11 @@ class CodexHarness:
                 "Some of this turn's Codex usage could not be separated from earlier work in "
                 "this conversation, so it is not included in the turn's cost."
             )
+        if not state.requests_separable:
+            return (
+                "Codex reported usage for several requests together, so this turn's cost is "
+                "an estimate."
+            )
         if not state.usage_valid:
             return (
                 "Codex reported inconsistent token usage, so this turn's cost covers only "

@@ -102,6 +102,8 @@ class CodexTurnEvents:
         # Without a trusted baseline, usage is attributed request by request.
         self._attributed = dict.fromkeys(TOKEN_FIELDS, 0)
         self.attribution_complete = True
+        # False once an update's total advanced by more than the request it reports.
+        self.requests_separable = True
         self.text: dict[str, list[str]] = {}
         self._text_length = 0
         self._text_truncated = False
@@ -129,7 +131,12 @@ class CodexTurnEvents:
     @property
     def cost_complete(self) -> bool:
         """Whether every request this turn reported could be priced."""
-        return self.price is not None and self.usage_valid and self.attribution_complete
+        return (
+            self.price is not None
+            and self.usage_valid
+            and self.attribution_complete
+            and self.requests_separable
+        )
 
     def finish(self) -> dict[str, Any]:
         return {
@@ -189,11 +196,16 @@ class CodexTurnEvents:
                 request = last
                 self._attributed = {k: self._attributed[k] + last[k] for k in TOKEN_FIELDS}
                 counts = self._attributed
+            elif last is not None and last != request:
+                # Usage for more than one request (or an inconsistent report)
+                # arrived together. Pricing the advance as one request selects the
+                # highest tier any of them could need, so a limit is never reached
+                # late, but the turn's cost is then an estimate.
+                self.requests_separable = False
             if self.price is not None:
                 # Each request is priced on its own: context-tier rates depend on
                 # that request's input size, not the turn's.
-                context = (last or request)["inputTokens"]
-                self._cost += self.price.cost(_buckets(request), context)
+                self._cost += self.price.cost(_buckets(request), request["inputTokens"])
             buckets = _buckets(counts)
             self.tokens = {
                 "input": buckets.input,

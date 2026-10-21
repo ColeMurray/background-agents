@@ -215,6 +215,18 @@ async def test_inconsistent_usage_keeps_the_cost_reported_before_it_and_warns(tm
     assert warning.startswith("Codex reported inconsistent token usage")
 
 
+async def test_usage_reported_for_several_requests_together_is_an_estimate(tmp_path):
+    harness = build(
+        tmp_path,
+        [usage("turn-1", tokens(3_000), tokens(1_000)), completed("turn-1")],
+    )
+    outcome, events = await run(harness)
+    assert outcome.message_cost_usd == 0.006
+    assert "cost" not in finishes(events)[-1]
+    [warning] = warnings(events)
+    assert warning.startswith("Codex reported usage for several requests together")
+
+
 async def test_transport_failure_reports_the_cost_observed_before_it(tmp_path):
     harness = build(
         tmp_path,

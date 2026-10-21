@@ -416,6 +416,18 @@ def test_request_without_last_usage_selects_its_rate_from_the_delta():
     assert usage(state, counts(272_001))["cost"] == 0.344002
 
 
+def test_usage_for_several_requests_in_one_update_is_an_estimate():
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE)
+    # The total advanced by 220k input, but the update reports a 10k request:
+    # the 210k request before it was never reported on its own.
+    projected = usage(state, counts(220_000), last=counts(10_000))
+    assert not state.requests_separable
+    assert "cost" not in projected
+    # Priced as one 220k request, at the over-200k rate, never at the 10k request's.
+    assert projected["messageCostUsd"] == 0.88
+    assert projected["tokens"]["input"] == 220_000
+
+
 def _turn():
     return CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
 
