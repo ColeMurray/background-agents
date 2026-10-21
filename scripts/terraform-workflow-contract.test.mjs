@@ -162,9 +162,20 @@ test("McpConnectionDO remains an explicitly staged binding", async () => {
   assert.match(
     broker,
     /private readonly mcp = new MCPClientManager/,
-    "the dormant manager must not be exposed over Durable Object RPC"
+    "the manager must not be exposed over Durable Object RPC"
   );
-  assert.doesNotMatch(broker, /Lifecycle\.install/);
+  // The transport is installed: the manager is a capability of the broker's
+  // lifecycle, which restores the persisted connection on a cold start and
+  // serves the server's OAuth callback. The binding stays disabled by
+  // default, so the broker is not deployed at all until an operator stages
+  // it and the canary passes.
+  assert.match(broker, /Lifecycle\.install\(this\)/);
+  assert.match(broker, /async handleCallback\(request: Request\)/);
+  assert.match(
+    broker,
+    /private readonly lifecycle = Lifecycle\.install\(this\)\.use\(this\.mcp\)/,
+    "the manager must be a capability of the lifecycle"
+  );
   assert.match(broker, /await this\.mcp\.closeAllConnections\(\)/);
   assert.match(broker, /DELETE FROM mcp_oauth_storage WHERE connection_id = \?/);
   assert.match(secrets, /random_bytes" "mcp_oauth_encryption_key"/);
