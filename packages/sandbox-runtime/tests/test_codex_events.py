@@ -334,6 +334,29 @@ def test_unattributable_first_request_leaves_later_requests_counted(last):
     assert projected["tokens"]["input"] == 20
 
 
+@pytest.mark.parametrize(
+    ("last", "exact"),
+    [(None, True), (counts(100), True), ({"inputTokens": True}, False), ("bad", False)],
+)
+def test_malformed_request_report_makes_the_cost_an_estimate(last, exact):
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    total = {"total": counts(100), **({"last": last} if last is not None else {})}
+    events = state.accept(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {"threadId": "thread", "turnId": "turn", "tokenUsage": total},
+        }
+    )
+    # Absent and matching reports price exactly; a supplied but malformed one
+    # cannot show the advance is a single request.
+    assert ("cost" in events[-1]) is exact
+    assert events[-1]["messageCostUsd"] == 0.0002
+    assert state.requests_separable is exact
+    assert any(event["type"] == "warning" for event in events) is not exact
+
+
 def test_replayed_report_is_a_no_op():
     state = CodexTurnEvents(
         "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()

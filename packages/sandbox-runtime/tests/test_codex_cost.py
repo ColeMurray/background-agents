@@ -224,7 +224,7 @@ async def test_usage_reported_for_several_requests_together_is_an_estimate(tmp_p
     assert outcome.message_cost_usd == 0.006
     assert "cost" not in finishes(events)[-1]
     [warning] = warnings(events)
-    assert warning.startswith("Codex reported usage for several requests together")
+    assert warning.startswith("Codex did not report this turn's usage one request at a time")
 
 
 async def test_transport_failure_reports_the_cost_observed_before_it(tmp_path):
@@ -265,7 +265,7 @@ async def test_recorded_native_failure_reports_the_cost_observed_before_it(tmp_p
     ("catalog", "last", "message"),
     [
         (None, tokens(1_000), "Model prices are unavailable in this sandbox"),
-        (CATALOG, tokens(400), "Codex reported usage for several requests together"),
+        (CATALOG, tokens(400), "Codex did not report this turn's usage one request at a time"),
     ],
 )
 async def test_accounting_warning_is_reported_when_observed_not_at_completion(

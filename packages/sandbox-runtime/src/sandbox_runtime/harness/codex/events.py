@@ -40,7 +40,8 @@ UNATTRIBUTED_USAGE_WARNING = (
     "conversation, so it is not included in the turn's cost."
 )
 COMBINED_USAGE_WARNING = (
-    "Codex reported usage for several requests together, so this turn's cost is an estimate."
+    "Codex did not report this turn's usage one request at a time, so this turn's cost is "
+    "an estimate."
 )
 INCONSISTENT_USAGE_WARNING = (
     "Codex reported inconsistent token usage, so this turn's cost covers only the usage "
@@ -495,7 +496,8 @@ class CodexTurnEvents:
             return self._invalid_usage()
         advance = {k: total[k] - self.total[k] for k in TOKEN_FIELDS}
         # Codex sends one update per model request; `last` is that request.
-        last = _token_counts(usage.get("last") if isinstance(usage, dict) else None)
+        reported_last = usage.get("last") if isinstance(usage, dict) else None
+        last = _token_counts(reported_last)
         increment: dict[str, int] | None = advance
         events: list[dict[str, Any]] = []
         if not any(advance.values()):
@@ -512,8 +514,9 @@ class CodexTurnEvents:
         elif _token_counts(advance) is None:
             # Valid cumulative totals can still yield an inconsistent request.
             return self._invalid_usage()
-        elif last is not None and last != advance:
-            # Several requests arrived together. Pricing them as one selects the
+        elif reported_last is not None and last != advance:
+            # Several requests arrived together, or the reported request is
+            # malformed (unlike an absent one). Pricing the advance as one selects the
             # highest tier any of them could need, so a limit is never reached
             # late, but the turn's cost is then an estimate.
             self.requests_separable = False
