@@ -1,14 +1,25 @@
 import { z } from "zod";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/pi-feature-capabilities";
-import { PI_BROWSER_ACTIONS, PI_BROWSER_SENSITIVE_ACTIONS } from "../../../pi/browser-transport";
+import {
+  isPiBrowserAction,
+  PI_BROWSER_ACTIONS,
+  PI_BROWSER_SENSITIVE_ACTIONS,
+  type PiBrowserOutcome,
+  type PiBrowserRequest,
+} from "../../../pi/browser-transport";
 
 /**
  * The browser gateway inside the owning session.
  *
  * The agent proposes browser work. The session authorizes it: the capability
- * must allow it, the deployment mode must allow it, and the pages it may
- * reach must be the ones an operator reviewed. Only then may anything drive
- * a browser, and only for the session that asked.
+ * must allow it, the deployment mode must allow it, and the page it names
+ * must be one an operator reviewed. Only then may anything drive a browser,
+ * and only for the session that asked.
+ *
+ * The session also holds the browser. The agent proposes; the owning session
+ * decides and carries the work out, so the request that was authorized is
+ * the request that runs, and the result comes back through the session that
+ * audits it.
  */
 export interface BrowserGatewayBridge {
   /** The live deployment mode for browser work. */
@@ -21,6 +32,15 @@ export interface BrowserGatewayBridge {
   operationActor(operationId: string): string | null;
   /** The operation must belong to this session. */
   operationBelongsToSession(operationId: string): boolean;
+  /** Whether this deployment stages a browser at all. */
+  browserAvailable(): boolean;
+  /**
+   * Run one browser request.
+   *
+   * The session owns the browser binding, so this is where a page is
+   * actually loaded. The provider's own failure never crosses this seam.
+   */
+  read(request: PiBrowserRequest): Promise<PiBrowserOutcome>;
   /** Record the browser activity so collaborators can see it. */
   recordActivity(input: {
     operationId: string;
@@ -57,6 +77,20 @@ export const browserRequestSchema = z
   })
   .strict();
 
+/**
+ * One browser request, with the work named.
+ *
+ * The action is required here, because a request that reaches a browser has
+ * to say what it wants. The sensitive actions are admitted by the schema so
+ * the gateway can refuse them by name instead of failing a parse.
+ */
+export const browserReadRequestSchema = z
+  .object({
+    action: z.enum([...PI_BROWSER_ACTIONS, ...PI_BROWSER_SENSITIVE_ACTIONS]),
+    url: z.string().min(1).max(4_096),
+  })
+  .strict();
+
 export interface BrowserGatewayOptions {
   browser: BrowserGatewayBridge;
   getSessionId: () => string;
@@ -83,6 +117,13 @@ export class BrowserGateway {
         kind: "denied",
         code: "browser_disabled",
         reason: "Browser work is disabled for this session",
+      };
+    }
+    if (!bridge.browserAvailable()) {
+      return {
+        kind: "denied",
+        code: "browser_unavailable",
+        reason: "The browser is not available in this deployment",
       };
     }
     if (!operationId || !bridge.operationBelongsToSession(operationId)) {
@@ -205,6 +246,66 @@ export class BrowserGateway {
         : { allowed: false, code: decision.code, reason: decision.reason },
       { headers: { "Cache-Control": "no-store" } }
     );
+  }
+
+  /**
+   * The internal route the Pi session calls to read a page.
+   *
+   * The session decides and then acts: it authorizes the request, records the
+   * decision on the timeline, and only then drives the browser. The agent
+   * receives the bounded page and nothing else — no browser client, no
+   * session handle, and no provider string.
+   */
+  async readRequest(request: Request): Promise<Response> {
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    const parsed = browserReadRequestSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return Response.json(
+        {
+          allowed: false,
+          code: "browser_request_invalid",
+          reason: "The browser request is invalid",
+        },
+        { status: 400 }
+      );
+    }
+    const action = parsed.data.action;
+    const url = parsed.data.url;
+    const decision = this.authorize({ action, url }, operationId);
+    if (operationId) this.record({ action, url }, operationId, decision);
+    if (decision.kind === "denied") {
+      return Response.json(
+        { allowed: false, code: decision.code, reason: decision.reason },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+    // The schema also admits the sensitive actions, so that the gateway can
+    // refuse them by name. An allowed action is therefore one the browser
+    // offers, and this narrowing says so without an assertion.
+    if (!isPiBrowserAction(action)) {
+      return Response.json(
+        {
+          allowed: false,
+          code: "browser_action_not_allowed",
+          reason: "The browser may not do that",
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+    try {
+      const outcome = await this.options.browser.read({ action, url });
+      return Response.json(
+        { allowed: true, outcome },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    } catch {
+      // The provider's own string stays inside the platform. The model only
+      // learns that the page did not load.
+      return Response.json(
+        { allowed: false, code: "browser_read_failed", reason: "The page could not be loaded" },
+        { status: 502, headers: { "Cache-Control": "no-store" } }
+      );
+    }
   }
 }
 

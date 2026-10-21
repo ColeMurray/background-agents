@@ -10,6 +10,7 @@ import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
 import type { PiRuntimeDispatch } from "./pi/runtime-contract";
 import type { McpConnectionBrokerDispatch } from "./mcp/broker-contract";
+import type { PiBrowserTransport } from "./pi/browser-transport";
 
 /**
  * The deployment's configuration: variables and secrets, every one a string,
@@ -151,6 +152,14 @@ export interface Platform {
   AUTOFIX_DLQ?: QueueMetricsSource;
   /** Durable background work supplied by every host. */
   JOBS: Jobs;
+  /**
+   * The session's browser, when the deployment stages one.
+   *
+   * It is a port, not a binding: the owning session holds it, the session's
+   * browser gateway authorizes every request and then drives it, and the
+   * agent never receives it.
+   */
+  BROWSER?: PiBrowserTransport;
 }
 
 /** What the application runs against: its configuration and the platform ports. */

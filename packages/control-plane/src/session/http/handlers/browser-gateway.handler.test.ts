@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BrowserGateway, hostMatches, type BrowserGatewayBridge } from "./browser-gateway.handler";
+import type { PiBrowserOutcome } from "../../../pi/browser-transport";
 
 function harness(
   options: {
@@ -8,19 +9,27 @@ function harness(
     allowedDomains?: string[];
     actorId?: string | null;
     belongsToSession?: boolean;
+    browserAvailable?: boolean;
+    readFails?: boolean;
   } = {}
 ) {
   const recordActivity = vi.fn();
+  const read = vi.fn(async (): Promise<PiBrowserOutcome> => {
+    if (options.readFails) throw new Error("browser-rendering internal detail");
+    return { action: "read", url: "https://example.com/docs", text: "the page", truncated: false };
+  });
   const bridge: BrowserGatewayBridge = {
     liveMode: () => options.liveMode ?? "enabled",
     sessionCapability: () => options.sessionCapability ?? "enabled",
     allowedDomains: () => options.allowedDomains ?? ["example.com", "*.docs.example.com"],
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
     operationBelongsToSession: () => options.belongsToSession ?? true,
+    browserAvailable: () => options.browserAvailable ?? true,
+    read,
     recordActivity,
   };
   const gateway = new BrowserGateway({ browser: bridge, getSessionId: () => "session-1" });
-  return { gateway, recordActivity };
+  return { gateway, recordActivity, read };
 }
 
 describe("BrowserGateway", () => {
@@ -163,5 +172,138 @@ describe("BrowserGateway", () => {
     expect(hostMatches("example.com", ["*.example.com"])).toBe(false);
     expect(hostMatches("example.com", ["example.com"])).toBe(true);
     expect(hostMatches("notexample.com", ["example.com"])).toBe(false);
+  });
+});
+
+describe("the browser read route", () => {
+  function readRequest(body: unknown, operationId = "operation-1"): Request {
+    return new Request("http://session/internal/pi-browser/read", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Pi-Operation-ID": operationId,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("authorizes, records, and carries out the request", async () => {
+    const h = harness();
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "read", url: "https://example.com/docs" })
+    );
+    const body = await response.json();
+
+    expect(body).toMatchObject({
+      allowed: true,
+      outcome: { action: "read", url: "https://example.com/docs", text: "the page" },
+    });
+    expect(h.read).toHaveBeenCalledWith({ action: "read", url: "https://example.com/docs" });
+    expect(h.recordActivity).toHaveBeenCalledWith({
+      operationId: "operation-1",
+      actorId: "user-1",
+      url: "https://example.com/docs",
+      outcome: "authorized",
+      reason: null,
+    });
+  });
+
+  it("never drives the browser for a page outside the reviewed hosts", async () => {
+    const h = harness();
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "read", url: "https://evil.example.net/" })
+    );
+
+    expect(await response.json()).toMatchObject({
+      allowed: false,
+      code: "browser_domain_not_allowed",
+    });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.recordActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "refused" }) as never
+    );
+  });
+
+  it("refuses a sensitive action by name and never drives the browser", async () => {
+    const h = harness();
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "login", url: "https://example.com/docs" })
+    );
+
+    expect(await response.json()).toMatchObject({
+      allowed: false,
+      code: "browser_action_needs_approval",
+    });
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request whose turn belongs to another session", async () => {
+    const h = harness({ belongsToSession: false });
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "read", url: "https://example.com/docs" })
+    );
+
+    expect(await response.json()).toMatchObject({
+      allowed: false,
+      code: "browser_turn_not_in_session",
+    });
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request with no workspace actor", async () => {
+    const h = harness({ actorId: null });
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "read", url: "https://example.com/docs" })
+    );
+
+    expect(await response.json()).toMatchObject({
+      allowed: false,
+      code: "browser_actor_missing",
+    });
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request that names no work", async () => {
+    const h = harness();
+
+    const response = await h.gateway.readRequest(readRequest({ url: "https://example.com/docs" }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      allowed: false,
+      code: "browser_request_invalid",
+    });
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the deployment stages no browser", async () => {
+    const h = harness({ browserAvailable: false });
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "read", url: "https://example.com/docs" })
+    );
+
+    expect(await response.json()).toMatchObject({ allowed: false, code: "browser_unavailable" });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.recordActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "refused" }) as never
+    );
+  });
+
+  it("keeps the platform's own failure inside the platform", async () => {
+    const h = harness({ readFails: true });
+
+    const response = await h.gateway.readRequest(
+      readRequest({ action: "read", url: "https://example.com/docs" })
+    );
+    const body = await response.json();
+
+    expect(body).toMatchObject({ allowed: false, reason: "The page could not be loaded" });
+    expect(JSON.stringify(body)).not.toContain("browser-rendering internal detail");
   });
 });

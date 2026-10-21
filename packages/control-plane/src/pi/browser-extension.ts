@@ -6,7 +6,7 @@ import {
   browserOutcomeToModelText,
   PI_BROWSER_ACTIONS,
   type PiBrowserAction,
-  type PiBrowserTransport,
+  type PiBrowserOutcome,
 } from "./browser-transport";
 import { BROWSER_TOOL_NAME } from "./browser-policy-extension";
 
@@ -15,16 +15,34 @@ import { BROWSER_TOOL_NAME } from "./browser-policy-extension";
  *
  * The tool carries a page and an action, and nothing else. It never carries
  * a browser client, a cookie, a credential, or a session handle: the owning
- * session decides whether the call may happen, and the transport does the
- * work.
+ * session decides whether the call may happen, carries it out, and returns
+ * the bounded page.
  */
+
+/** What the owning session answered to one browser request. */
+export interface BrowserReadAnswer {
+  /** Whether the session carried the request out. */
+  readonly allowed: boolean;
+  /** Why it did not, when it did not. */
+  readonly reason?: string;
+  /** The bounded page, when the session carried the request out. */
+  readonly outcome?: PiBrowserOutcome;
+}
+
 export interface BrowserToolOptions {
-  readonly transport: PiBrowserTransport;
-  /** Ask the owning session whether this call may happen. */
-  readonly authorize: (request: {
-    action: PiBrowserAction;
-    url: string;
-  }) => Promise<{ allowed: boolean; reason?: string }>;
+  /**
+   * Ask the owning session to read one page.
+   *
+   * The session authorizes the request, records it, and drives the browser
+   * itself, so the agent never holds a browser and never chooses one.
+   */
+  readonly read: (
+    request: {
+      action: PiBrowserAction;
+      url: string;
+    },
+    signal?: AbortSignal
+  ) => Promise<BrowserReadAnswer>;
 }
 
 export function createBrowserExtension(options: BrowserToolOptions) {
@@ -56,46 +74,37 @@ export function createBrowserExtension(options: BrowserToolOptions) {
         execute: async (args, _api, context) => {
           const action = args.action as PiBrowserAction;
           const url = args.url;
-          const decision = await options.authorize({ action, url });
-          if (!decision.allowed) {
+          const answer = await options.read({ action, url }, context.abortSignal);
+          if (!answer.allowed || !answer.outcome) {
             return {
               isError: true,
               output: [
                 {
                   type: "text" as const,
-                  text: decision.reason ?? "The browser is not available for this session",
+                  text: answer.reason ?? "The browser is not available for this session",
                 },
               ],
               details: { action, url } satisfies Record<string, JsonValue>,
             };
           }
-          try {
-            const outcome = await options.transport.run({ action, url }, context.abortSignal);
-            return {
-              isError: false,
-              output: [
-                { type: "text" as const, text: browserOutcomeToModelText(outcome) },
-                ...(outcome.screenshot
-                  ? [
-                      {
-                        type: "image" as const,
-                        data: outcome.screenshot.data,
-                        mimeType: outcome.screenshot.mimeType,
-                      },
-                    ]
-                  : []),
-              ],
-              structuredOutput: browserOutcomeDetails(outcome),
-              details: browserOutcomeDetails(outcome),
-            };
-          } catch {
-            // The provider's own string stays inside the platform.
-            return {
-              isError: true,
-              output: [{ type: "text" as const, text: "The page could not be loaded" }],
-              details: { action, url } satisfies Record<string, JsonValue>,
-            };
-          }
+          const outcome = answer.outcome;
+          return {
+            isError: false,
+            output: [
+              { type: "text" as const, text: browserOutcomeToModelText(outcome) },
+              ...(outcome.screenshot
+                ? [
+                    {
+                      type: "image" as const,
+                      data: outcome.screenshot.data,
+                      mimeType: outcome.screenshot.mimeType,
+                    },
+                  ]
+                : []),
+            ],
+            structuredOutput: browserOutcomeDetails(outcome),
+            details: browserOutcomeDetails(outcome),
+          };
         },
       }),
     ],
