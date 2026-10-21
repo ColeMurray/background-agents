@@ -315,8 +315,15 @@ docker compose up -d postgres redis
   rather than collected or shown. Image builds report neither, having no session to report to. See
   [How Open-Inspect Works](docs/HOW_IT_WORKS.md#fresh-start-no-snapshot)
 - Both hooks receive `OPENINSPECT_BOOT_MODE` (`build`, `fresh`, `repo_image`, `snapshot_restore`)
-- Git operations in hooks can authenticate to other private repos on the configured SCM host when
-  the shared installation has access
+- GitHub session credentials used by hooks are limited to the session's persisted repository set,
+  intersected with current owning-team grants for team-owned sessions. Private submodules,
+  Git-backed dependencies, and sibling clones must be included in that set; App installation access
+  alone does not expand it
+- GitHub image-build credentials cover only the build repositories, with owning-team grants applied
+  for team-owned environment builds. GitLab uses a deployment-wide PAT without per-session
+  narrowing. See
+  [Repository and Credential Boundaries](docs/AUTH.md#repository-and-credential-boundaries) for
+  details, including credential caching and grant revocation
 
 ## License
 
