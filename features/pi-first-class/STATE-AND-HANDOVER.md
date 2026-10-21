@@ -242,6 +242,59 @@ The call belongs to the session, and the session already holds the resolver:
 **What is left for the shared lane:** the live canary against a real MCP server, with a repo-scoped
 server and a session without that repo, to prove the scope rule holds.
 
+## The four spec features that are still absent, and the seam each one uses
+
+These are **absent, not untested**. Each refuses today rather than half-working, and each has a seam
+that reuses an existing Open-Inspect authority instead of inventing one.
+
+### 1. Pi memory tools — `memory_read`, `memory_write`, `memory_search`
+
+The authority already exists and is the same one the sandbox uses: `SessionMemoryService`
+(`packages/control-plane/src/memory/session-memory-service.ts`) with `renderedContext`, `read`,
+`write`, and `search`. It already enforces the memory partitions, the session's selection, the
+shared-memory access policy, the approval for shared writes, and the personal-memory opt-out. The
+shared contract already reserves the canonical tool names for Pi
+(`packages/shared/src/memory-tools.ts`: `harnessMemoryToolName("pi", …)` returns the canonical
+names, with the comment "its authorized memory extension remains future work").
+
+The seam: the session's own internal routes, exactly like the other Pi routes, calling the same
+`SessionMemoryService`. The Pi Durable Object is the session's runtime, the same identity the
+sandbox has, so it gets the same access policy. The three Pi tools then call those routes. Nothing
+about the memory model changes, and no memory store is added to Pi.
+
+### 2. MCP resources and prompts
+
+The MCP SDK's client already has `readResource` and the prompt getter, so the _call_ is easy. The
+gap is the **review**: `mcp_reviewed_tools` covers tools only, so a resource or a prompt has no
+reviewed, read-only projection to gate on. This needs a forward-only migration that records the
+reviewed resources and prompts for a server revision, the same way the tool review records its
+tools, and the review flow must classify them. Until that exists, a resource projection would be
+ungated, which the boundary does not allow.
+
+### 3. MCP elicitation
+
+The spec maps it to "SessionDO durable interaction receipt and UI". The `agents` SDK's client
+already surfaces elicitation requests through a handler (`MCPClientElicitationHandler`), so the
+mechanism exists; what is missing is the Open-Inspect half: a durable receipt in the session, a
+route the client answers through the session, and the UI. The receipt must be durable because the
+server waits for an answer that a human gives later.
+
+### 4. Pi attachments and images
+
+The Pi path refuses them today
+(`HarnessModelIncompatibleError("Pi Durable does not support attachments yet.")`). The seam is the
+existing attachment authority and the bounded media routes: the session already stores the
+attachment and serves it through the media bucket, so the Pi turn needs the attachment's media
+reference to reach the model as an image block. The bound is the existing one.
+
+### 5. The browser's session context
+
+The browser transport is one-shot: a fresh browser per request, so there is no cookie reuse, but
+also no continuity. The spec's "one browser context scoped to the Open-Inspect session" wants a
+persistent per-session context, which is the Cloudflare `agents` session-based browser (a `Browser`
+capability with `guardrails`, a session store, and a live view). That is a larger change than the
+one-shot transport, and it needs the browser's own canary.
+
 ## Upstream Pi Durable parity
 
 Upstream `main` is ahead of the published release. See `PI-UPSTREAM-PARITY.md`.
