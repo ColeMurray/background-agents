@@ -201,6 +201,7 @@ describe("NewAutomationPage template pre-fill", () => {
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
     fireEvent.submit(container.querySelector("form")!);
     await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/new-auto"));
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
     expect(JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body))).toMatchObject({
       teamId: "team-1",
       repositories: [{ repoOwner: "acme", repoName: "api", baseBranch: "main" }],

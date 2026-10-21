@@ -6,8 +6,9 @@ import type { DiffSelection } from "./session-diffs";
 
 type ReadySessionDiffRepository = Extract<SessionDiffRepository, { status: "ready" }>;
 
-// Checkouts live at /workspace/{repoName}, and repoName is unique per session.
 const WORKSPACE_PREFIX = "/workspace/";
+const POSITION_ROOT_PREFIX = "/workspace/repos/";
+const POSITION_SEGMENT = /^(?:0|[1-9]\d*)$/;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 // A trailing `:42` or `:42:7` line reference; the file still resolves, the line is ignored.
 const LINE_REFERENCE = /:\d+(?::\d+)?$/;
@@ -86,9 +87,9 @@ export type DiffFileLinkResolver = (href: string | undefined) => DiffSelection |
  * Build a resolver that maps hrefs from agent output onto changed files in one diff
  * manifest. The index is built once, so resolving each link is a few map lookups.
  *
- * `/workspace/<repoName>/<path>` resolves within that repository (repoName compared
- * case-insensitively). A relative path that exists in several repositories resolves to the
- * one with the lowest position, i.e. the primary repository.
+ * `/workspace/repos/<position>/<path>` is the canonical position-rooted Pi form and is checked
+ * first. Legacy `/workspace/<repoName>/<path>` remains supported for name-rooted sandboxes. A
+ * relative path that exists in several repositories resolves to the primary repository.
  */
 export function createDiffFileLinkResolver(manifest: SessionDiffManifest): DiffFileLinkResolver {
   const repositories = manifest.repositories
@@ -103,6 +104,19 @@ export function createDiffFileLinkResolver(manifest: SessionDiffManifest): DiffF
   return (href) => {
     if (!isRepositoryFileHref(href)) return null;
     for (const path of candidatePaths(href)) {
+      if (path.startsWith(POSITION_ROOT_PREFIX)) {
+        const rest = path.slice(POSITION_ROOT_PREFIX.length);
+        const slash = rest.indexOf("/");
+        if (slash <= 0) continue;
+        const positionText = rest.slice(0, slash);
+        if (!POSITION_SEGMENT.test(positionText)) continue;
+        const repository = repositories.find(
+          (candidate) => candidate.index.position === Number(positionText)
+        );
+        const selection = repository && lookup([repository.index], rest.slice(slash + 1));
+        if (selection) return selection;
+        continue;
+      }
       if (path.startsWith(WORKSPACE_PREFIX)) {
         const rest = path.slice(WORKSPACE_PREFIX.length);
         const slash = rest.indexOf("/");

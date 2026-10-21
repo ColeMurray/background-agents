@@ -519,6 +519,11 @@ function UserMessageEvent({
             <img src={avatar} alt={authorName} className="w-5 h-5 rounded-full" />
           )}
           <span className="text-xs text-accent">{authorName}</span>
+          {event.piControl && (
+            <span className="rounded-sm border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              Pi {formatPiControlAction(event.piControl.action)}
+            </span>
+          )}
         </div>
       }
       time={formatEventTime(event)}
@@ -528,6 +533,15 @@ function UserMessageEvent({
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
+      {event.provenance && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-2 text-xs">
+          <span className="font-medium text-accent">Agent message</span>
+          <span className="text-muted-foreground">
+            from session {event.provenance.sourceSessionId} · initiated by{" "}
+            {event.provenance.humanActorId}
+          </span>
+        </div>
+      )}
       {event.origin && (
         <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-2 text-xs">
           <span className="font-medium text-accent">Resumed by PR feedback</span>
@@ -578,6 +592,17 @@ function UserMessageEvent({
       )}
     </MessageFrame>
   );
+}
+
+function formatPiControlAction(action: NonNullable<UserMessageEventData["piControl"]>["action"]) {
+  switch (action) {
+    case "follow_up":
+      return "follow-up";
+    case "cancel_exact":
+      return "cancel";
+    default:
+      return action;
+  }
 }
 
 function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererProps) {
@@ -679,6 +704,30 @@ function ExecutionCompleteEvent({ event }: EventRendererProps) {
   );
 }
 
+function BrowserActivityEvent({ event }: EventRendererProps) {
+  if (event.type !== "browser_activity") return null;
+  return (
+    <StatusRow
+      tone={event.outcome === "authorized" ? "success" : "warning"}
+      time={formatEventTime(event)}
+    >
+      Browser {event.outcome === "authorized" ? "opened" : "refused"}
+      {event.url ? ` ${event.url}` : ""}
+      {event.reason ? ` — ${event.reason}` : ""}
+    </StatusRow>
+  );
+}
+
+function CrossSessionMessageEvent({ event }: EventRendererProps) {
+  if (event.type !== "cross_session_message") return null;
+  return (
+    <StatusRow tone="success" time={formatEventTime(event)}>
+      Cross-session message {event.status} to session {event.targetSessionId}
+      {event.reason ? ` — ${event.reason}` : ""}
+    </StatusRow>
+  );
+}
+
 function ContextCompactedEvent({ event }: EventRendererProps) {
   if (event.type !== "context_compacted") return null;
 
@@ -705,6 +754,8 @@ const eventRenderers = {
   warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
   context_compacted: ContextCompactedEvent,
+  browser_activity: BrowserActivityEvent,
+  cross_session_message: CrossSessionMessageEvent,
 } satisfies Record<DirectTimelineEventType, (props: EventRendererProps) => ReactNode>;
 
 export const EventItem = memo(function EventItem({

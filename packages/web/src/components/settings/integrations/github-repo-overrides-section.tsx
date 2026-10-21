@@ -390,6 +390,7 @@ function RepoOverrideRow({
         )}
 
         <HarnessSelect
+          supportsPi={false}
           value={harness}
           onChange={handleHarnessChange}
           inheritLabel="Use global harness"

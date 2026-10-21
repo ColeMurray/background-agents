@@ -26,6 +26,7 @@ import type {
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { DiffRefreshNotice } from "@/components/diff-refresh-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
 import { MemoriesSection } from "./sidebar/memories-section";
 import { BudgetSection } from "./sidebar/budget-section";
@@ -37,12 +38,16 @@ import {
   type SessionInspectorTab,
 } from "@/hooks/use-session-inspector-tab";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useDeploymentCapabilities } from "@/hooks/use-deployment-capabilities";
 import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 import type { SessionScopeControls } from "@/lib/session-scope";
+import type { SessionDiffRefresh } from "@/hooks/use-session-diffs";
 import { SessionVisibilityControl } from "./session-visibility-control";
 import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
+import { PiAgentsSection } from "./sidebar/pi-agents-section";
+import { ExecutionsSection } from "./sidebar/executions-section";
 
 interface SessionRightSidebarProps {
   isOpen?: boolean;
@@ -57,6 +62,7 @@ interface SessionRightSidebarProps {
   onOpenMedia: (artifactId: string) => void;
   diffState?: SessionDiffState | null;
   diffLoading?: boolean;
+  diffRefresh?: SessionDiffRefresh;
   selectedDiff?: DiffSelection | null;
   onOpenDiff?: (repository: SessionDiffRepository, file: SessionDiffFile) => void;
   capabilities: SessionCapabilities;
@@ -116,6 +122,7 @@ export function SessionRightSidebarContent({
   onOpenMedia,
   diffState,
   diffLoading,
+  diffRefresh,
   selectedDiff,
   onOpenDiff,
   canManageBudget = DEFAULT_CAN_MANAGE_BUDGET,
@@ -142,8 +149,16 @@ export function SessionRightSidebarContent({
     () => buildAuthenticatedUrl(sessionState?.ttydUrl, sessionState?.ttydToken),
     [sessionState?.ttydUrl, sessionState?.ttydToken]
   );
+  const isDurable = sessionState?.executionBackend === "durable";
+  const deploymentCapabilities = useDeploymentCapabilities();
+  const piControlsAvailable =
+    sessionState?.harness === "pi" &&
+    deploymentCapabilities.data?.pi.enabled === true &&
+    deploymentCapabilities.data.pi.bindingReachable === true;
   const hasRepository = Boolean(
-    sessionState?.repositories?.length || (sessionState?.repoOwner && sessionState.repoName)
+    sessionState?.repositories?.length ||
+    (sessionState?.repoOwner && sessionState.repoName) ||
+    diffState?.current?.repositories.length
   );
   const diffView = deriveSessionDiffView({
     hasRepository,
@@ -151,6 +166,13 @@ export function SessionRightSidebarContent({
     state: diffState ?? null,
     isLoading: diffLoading ?? false,
   });
+  const hasCapturedDiff = Boolean(diffState?.current);
+  const refreshingCapturedDiff = hasCapturedDiff && Boolean(diffRefresh?.isValidating);
+  const failedCapturedDiff =
+    hasCapturedDiff && Boolean(diffRefresh?.error) && !refreshingCapturedDiff;
+  // Session state does not expose Pi's repository-editing mode, so no capture must not
+  // be presented as a promise that a writable capability exists or will run later.
+  const piWithoutCapturedDiff = sessionState?.harness === "pi" && !hasCapturedDiff;
   const files = diffView.showManifest
     ? (diffState?.current?.repositories.flatMap((repository) => repository.files) ?? [])
     : [];
@@ -228,7 +250,7 @@ export function SessionRightSidebarContent({
         ))}
       </TabsList>
 
-      {/* Canonical durable checkout changes */}
+      {/* Canonical session changes */}
       <InspectorPanel value="changes" activeTab={activeTab}>
         <div className="mb-5">
           <h3 className="text-sm font-semibold">Files changed</h3>
@@ -257,31 +279,54 @@ export function SessionRightSidebarContent({
               No repository is attached to this session.
             </p>
           ) : null}
-          {sessionState && diffView.kind === "loading" && (
-            <p className="text-xs text-muted-foreground">Loading changes…</p>
+          {refreshingCapturedDiff && !diffRefresh?.error && (
+            <p className="text-xs text-muted-foreground">
+              Refreshing changes — showing the last captured revision.
+            </p>
           )}
-          {diffView.kind === "error" && (
+          {(failedCapturedDiff || (refreshingCapturedDiff && diffRefresh?.error)) &&
+            diffRefresh && (
+              <DiffRefreshNotice
+                message="Unable to refresh changes. Showing the last captured revision."
+                pendingMessage="Refreshing changes — showing the last captured revision."
+                isPending={refreshingCapturedDiff}
+                onRetry={diffRefresh.retry}
+              />
+            )}
+          {!refreshingCapturedDiff &&
+            !failedCapturedDiff &&
+            sessionState &&
+            diffView.kind === "loading" && (
+              <p className="text-xs text-muted-foreground">Loading changes…</p>
+            )}
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "error" && (
             <p className="text-xs text-destructive">Unable to load changes.</p>
           )}
-          {diffView.kind === "unavailable" && (
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "unavailable" && (
             <p className="text-xs text-muted-foreground">{diffView.message}</p>
           )}
-          {diffView.kind === "available_after_execution" && (
+          {!refreshingCapturedDiff &&
+            !failedCapturedDiff &&
+            diffView.kind === "available_after_execution" && (
+              <p className="text-xs text-muted-foreground">
+                {piWithoutCapturedDiff
+                  ? "No changes captured yet."
+                  : "Changes will be available after the first execution."}
+              </p>
+            )}
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "working" && (
             <p className="text-xs text-muted-foreground">
-              Changes will be available after the first execution.
+              {piWithoutCapturedDiff
+                ? "No changes captured yet."
+                : diffView.showManifest
+                  ? "Agent working — showing the previous changes."
+                  : "Changes will be available after this execution."}
             </p>
           )}
-          {diffView.kind === "working" && (
-            <p className="text-xs text-muted-foreground">
-              {diffView.showManifest
-                ? "Agent working — showing the previous changes."
-                : "Changes will be available after this execution."}
-            </p>
-          )}
-          {diffView.kind === "empty" && (
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "empty" && (
             <p className="text-xs text-muted-foreground">No file changes in the latest diff.</p>
           )}
-          {diffView.kind === "failed" && (
+          {!refreshingCapturedDiff && !failedCapturedDiff && diffView.kind === "failed" && (
             <DiffRetryNotice
               sessionId={sessionId}
               message={diffView.message ?? ""}
@@ -347,6 +392,32 @@ export function SessionRightSidebarContent({
               />
             )}
             <ManagedSkillsSection sessionId={sessionState.id} />
+            {sessionState.harness === "pi" && (
+              <DetailsSection title="Pi runtime diagnostics">
+                <dl className="space-y-2 text-xs">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted-foreground">Execution</dt>
+                    <dd>Instant · Durable Object</dd>
+                  </div>
+                  {Object.entries(sessionState.piFeatureCapabilities?.capabilities ?? {}).map(
+                    ([capability, mode]) => (
+                      <div key={capability} className="flex justify-between gap-3">
+                        <dt className="text-muted-foreground">{capability}</dt>
+                        <dd className="font-mono">{mode}</dd>
+                      </div>
+                    )
+                  )}
+                  {deploymentCapabilities.data && (
+                    <div className="border-t border-border-muted pt-2 font-mono text-muted-foreground">
+                      Pi {deploymentCapabilities.data.runtimeVersions.piDurable} · Agents{" "}
+                      {deploymentCapabilities.data.runtimeVersions.piHarness} · Computer{" "}
+                      {deploymentCapabilities.data.runtimeVersions.computer} · Code Mode{" "}
+                      {deploymentCapabilities.data.runtimeVersions.codeMode}
+                    </div>
+                  )}
+                </dl>
+              </DetailsSection>
+            )}
             <MemoriesSection sessionId={sessionState.id} />
             {(!presenceSynced || participants.length > 0) && (
               <DetailsSection title="Participants">
@@ -399,18 +470,29 @@ export function SessionRightSidebarContent({
             The agent hasn’t published a task list yet.
           </p>
         )}
+        {piControlsAvailable && (
+          <PiAgentsSection sessionId={sessionId} capabilities={capabilities} />
+        )}
+        {sessionState?.harness === "pi" && deploymentCapabilities.data && !piControlsAvailable && (
+          <p className="text-xs text-muted-foreground">Pi agent controls are unavailable.</p>
+        )}
         {sessionState && <ChildSessionsSection sessionId={sessionState.id} />}
       </InspectorPanel>
 
       <InspectorPanel value="tools" activeTab={activeTab} className="space-y-5">
-        <h3 className="text-sm font-semibold">Workspace tools</h3>
+        <h3 className="text-sm font-semibold">Scratch files</h3>
+        {sessionState?.harness === "pi" && (
+          <ExecutionsSection sessionId={sessionId} capabilities={capabilities} />
+        )}
         {!hasSandboxTools && (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {!sessionState
               ? "Loading workspace tools…"
-              : !capabilities.sandboxAccess
-                ? "Sandbox access is not available with your permissions."
-                : "Sandbox tools will appear here when available."}
+              : isDurable
+                ? "Pi tools are capability-gated and appear in the timeline when used. The agent workspace remains sandbox-free."
+                : !capabilities.sandboxAccess
+                  ? "Sandbox access is not available with your permissions."
+                  : "Sandbox tools will appear here when available."}
           </p>
         )}
 

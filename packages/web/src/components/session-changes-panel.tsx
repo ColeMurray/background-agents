@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
-import { mutate } from "swr";
 import useSWR from "swr";
 import { useEffect, useId, useRef, useState } from "react";
 import { formatRepositoryFullName } from "@open-inspect/shared/types/repositories";
@@ -13,7 +12,7 @@ import {
   type SessionDiffState,
 } from "@open-inspect/shared/types/session-diffs";
 import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-diff-preferences";
-import { sessionDiffKey } from "@/hooks/use-session-diffs";
+import type { SessionDiffRefresh } from "@/hooks/use-session-diffs";
 import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";
 import { usePanelWidth } from "@/hooks/use-panel-width";
 import {
@@ -27,6 +26,7 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { cn } from "@/lib/utils";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { DiffRefreshNotice } from "@/components/diff-refresh-notice";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
 import { BackIcon, ChevronRightIcon, FileIcon, SidebarIcon } from "@/components/ui/icons";
@@ -270,6 +270,7 @@ export function SessionChangesPanel({
   mobile = false,
   sidebarShowsFileList = false,
   capabilities,
+  diffRefresh,
 }: {
   sessionId: string;
   state: SessionDiffState;
@@ -280,6 +281,7 @@ export function SessionChangesPanel({
   /** The session sidebar already lists the changed files beside this panel. */
   sidebarShowsFileList?: boolean;
   capabilities: SessionCapabilities;
+  diffRefresh?: SessionDiffRefresh;
 }) {
   const panelRef = useRef<HTMLElement>(null);
   const codeColumnRef = useRef<HTMLDivElement>(null);
@@ -311,6 +313,18 @@ export function SessionChangesPanel({
     isLoading,
   } = useSWR<string>(patchKey, fetchPatch, {
     revalidateOnFocus: false,
+    shouldRetryOnError: (error) =>
+      !(error instanceof DiffPatchError && error.code === SESSION_DIFF_REVISION_STALE_CODE),
+    onError: (error) => {
+      if (
+        error instanceof DiffPatchError &&
+        error.code === SESSION_DIFF_REVISION_STALE_CODE &&
+        !diffRefresh?.error &&
+        !diffRefresh?.isValidating
+      ) {
+        void diffRefresh?.retry();
+      }
+    },
   });
   const stale =
     patchError instanceof DiffPatchError && patchError.code === SESSION_DIFF_REVISION_STALE_CODE;
@@ -331,10 +345,6 @@ export function SessionChangesPanel({
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
-
-  useEffect(() => {
-    if (stale) void mutate(sessionDiffKey(sessionId));
-  }, [sessionId, stale]);
 
   return (
     <section
@@ -443,7 +453,18 @@ export function SessionChangesPanel({
             ) : isLoading ? (
               <PanelMessage>Loading patch…</PanelMessage>
             ) : stale ? (
-              <PanelMessage>Refreshing the latest revision…</PanelMessage>
+              <PanelMessage>
+                {diffRefresh?.error ? (
+                  <DiffRefreshNotice
+                    message="Unable to refresh changes. Showing the last captured file list."
+                    pendingMessage="Refreshing changes — showing the last captured file list."
+                    isPending={diffRefresh.isValidating}
+                    onRetry={diffRefresh.retry}
+                  />
+                ) : (
+                  "Refreshing the latest revision…"
+                )}
+              </PanelMessage>
             ) : patchError ? (
               <PanelMessage>Unable to load this patch.</PanelMessage>
             ) : previewing ? (

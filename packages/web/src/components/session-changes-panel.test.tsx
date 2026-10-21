@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ComponentProps } from "react";
-import { SWRConfig, mutate } from "swr";
-import type * as SwrModule from "swr";
+import type { ComponentProps, PropsWithChildren } from "react";
+import { SWRConfig } from "swr";
 import type { SessionDiffFile, SessionDiffState } from "@open-inspect/shared/types/session-diffs";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 
@@ -36,12 +35,9 @@ vi.mock("next/dynamic", () => ({
 vi.mock("next-themes", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 const layout = vi.hoisted(() => ({ width: 900 }));
 vi.mock("@/hooks/use-panel-width", () => ({ usePanelWidth: () => layout.width }));
-vi.mock("swr", async (importOriginal) => ({
-  ...(await importOriginal<typeof SwrModule>()),
-  mutate: vi.fn(),
-}));
-
 import { SessionChangesPanel } from "./session-changes-panel";
+import { useSessionDiffs } from "@/hooks/use-session-diffs";
+import { resolveDiffSelection } from "@/lib/session-diffs";
 
 beforeEach(() => {
   layout.width = 900;
@@ -363,11 +359,115 @@ describe("SessionChangesPanel", () => {
       "Refreshing the latest revision…",
     ],
   ])("keeps patch failure and empty states distinct %#", async (response, message) => {
+    const onRefreshDiff = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response()));
-    render(patchPanel());
+    render(
+      patchPanel({
+        diffRefresh: { error: null, isValidating: false, retry: onRefreshDiff },
+      })
+    );
     expect(await screen.findByText(message)).toBeVisible();
     if (message.startsWith("Refreshing"))
-      await waitFor(() => expect(mutate).toHaveBeenCalledWith("/api/sessions/session-1/diff"));
+      await waitFor(() => expect(onRefreshDiff).toHaveBeenCalledOnce());
+  });
+
+  it("keeps a cached revision visibly stale and retryable when manifest refresh fails", async () => {
+    const cachedState: SessionDiffState = {
+      ...state,
+      current: { ...state.current!, repositories: [patchRepository] },
+    };
+    const latestState: SessionDiffState = {
+      ...cachedState,
+      current: { ...cachedState.current!, revisionId: "revision-2" },
+    };
+    let rejectRetry: ((error: Error) => void) | undefined;
+    const failedRetry = new Promise<SessionDiffState>((_resolve, reject) => {
+      rejectRetry = reject;
+    });
+    let resolveSuccess: ((state: SessionDiffState) => void) | undefined;
+    const successfulRetry = new Promise<SessionDiffState>((resolve) => {
+      resolveSuccess = resolve;
+    });
+    const manifestFetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("BFF unavailable"))
+      .mockReturnValueOnce(failedRetry)
+      .mockReturnValueOnce(successfulRetry);
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("revision-1")
+        ? Response.json({ code: "diff_revision_stale" }, { status: 409 })
+        : new Response("+latest patch")
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    function Harness() {
+      const diffs = useSessionDiffs("session-1");
+      const resolved = diffs.state?.current
+        ? resolveDiffSelection(diffs.state.current, {
+            repositoryPosition: 0,
+            path: "src/app.ts",
+          })
+        : null;
+      if (!diffs.state || !resolved) return null;
+      return (
+        <SessionChangesPanel
+          sessionId="session-1"
+          capabilities={FULL_CAPABILITIES}
+          state={diffs.state}
+          resolved={resolved}
+          onClose={vi.fn()}
+          onSelect={vi.fn()}
+          diffRefresh={diffs.refresh}
+        />
+      );
+    }
+
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { "/api/sessions/session-1/diff": cachedState },
+          fetcher: manifestFetcher,
+          shouldRetryOnError: false,
+          dedupingInterval: 0,
+        }}
+      >
+        {children}
+      </SWRConfig>
+    );
+    render(<Harness />, { wrapper });
+
+    expect(
+      await screen.findByText("Unable to refresh changes. Showing the last captured file list.")
+    ).toBeVisible();
+    expect(screen.getByText("src/app.ts")).toBeVisible();
+    expect(screen.queryByTestId("diff-renderer")).not.toBeInTheDocument();
+
+    const retry = screen.getByRole("button", { name: "Retry refresh" });
+    await userEvent.click(retry);
+    const pendingRetry = screen.getByRole("button", { name: "Refreshing…" });
+    expect(pendingRetry).toBe(retry);
+    expect(pendingRetry).toBeDisabled();
+    expect(pendingRetry).toHaveFocus();
+
+    await act(async () => rejectRetry?.(new Error("Still unavailable")));
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Retry refresh" })).toBe(retry);
+    expect(retry).toHaveFocus();
+
+    await userEvent.click(retry);
+    expect(screen.getByRole("button", { name: "Refreshing…" })).toBe(retry);
+    expect(retry).toBeDisabled();
+    await act(async () => resolveSuccess?.(latestState));
+
+    expect(await screen.findByTestId("diff-renderer")).toHaveTextContent("+latest patch");
+    expect(screen.queryByText(/Unable to refresh changes/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /refresh/i })).not.toBeInTheDocument();
+    expect(manifestFetcher).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/sessions/session-1/diff/revision-2/files/file-1",
+      expect.objectContaining({ credentials: "same-origin", mode: "same-origin" })
+    );
   });
 
   it.each([

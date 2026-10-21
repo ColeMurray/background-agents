@@ -7,6 +7,7 @@ const HARNESS_ICONS = {
   opencode: OpenCodeIcon,
   claude: AnthropicIcon,
   codex: OpenAIIcon,
+  pi: OpenAIIcon,
 } as const satisfies Record<HarnessId, unknown>;
 
 export function HarnessIcon({ harness, className }: { harness: HarnessId; className?: string }) {

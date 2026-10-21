@@ -16,9 +16,8 @@ import { cn } from "@/lib/utils";
 /**
  * Ordered multi-select of repositories behind a searchable popover (the
  * automation form's selector pattern) — selection order is list order, so
- * `selected[0]` is the primary. Enforces the session/environment list rules
- * client-side: at most MAX_TARGET_REPOSITORIES entries, and no duplicate
- * repository *name* across owners (checkout paths are /workspace/{repoName}).
+ * `selected[0]` is the primary. Name-rooted sandboxes reject duplicate names;
+ * position-rooted Pi repositories remain distinct across owners.
  */
 export function RepositoryMultiSelect({
   repos,
@@ -29,6 +28,7 @@ export function RepositoryMultiSelect({
   triggerId,
   triggerLabel,
   triggerClassName,
+  checkoutLayout = "name",
 }: {
   repos: Repo[];
   loadingRepos: boolean;
@@ -39,6 +39,7 @@ export function RepositoryMultiSelect({
   triggerId?: string;
   triggerLabel: string;
   triggerClassName?: string;
+  checkoutLayout?: "name" | "position";
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -121,7 +122,9 @@ export function RepositoryMultiSelect({
             const checked = selected.includes(key);
             const atCap = !checked && selected.length >= MAX_TARGET_REPOSITORIES;
             const nameCollision =
-              !checked && selectedNamesByKey.get(repo.name.toLowerCase()) !== undefined;
+              checkoutLayout === "name" &&
+              !checked &&
+              selectedNamesByKey.get(repo.name.toLowerCase()) !== undefined;
             const itemDisabled = atCap || nameCollision;
 
             return (

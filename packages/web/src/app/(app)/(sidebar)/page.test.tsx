@@ -34,6 +34,17 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("shows the connected-account requirement while Pi send is disabled", async () => {
+    render(<Home />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Switch agent to pi" }));
+
+    expect(
+      await screen.findByText("Pi Durable requires an active connected OpenAI account")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+  });
+
   it("creates sessions using the saved personal-memory preference without a composer override", async () => {
     render(<Home />);
     expect(

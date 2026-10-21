@@ -16,17 +16,21 @@ import {
 } from "@open-inspect/shared/models";
 import type {
   ModelProviderAccount,
+  ModelProviderAccountDefault,
   ModelProviderSelections,
   ProviderAuthSelection,
   SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import type { ModelPreference } from "@/lib/model-selection";
 import {
+  hasUsableHarnessProviderAuth,
   parseStoredProviderSelections,
   reconcileProviderSelections,
   setProviderSelection,
 } from "@/lib/provider-selection";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
+import { useAvailableHarnessIds } from "@/lib/available-harnesses";
+import { useDeploymentCapabilities } from "@/hooks/use-deployment-capabilities";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_HARNESS_STORAGE_KEY = "open-inspect-last-selected-harness";
@@ -69,6 +73,7 @@ export interface LaunchPreferencesInput {
   };
   providerAccounts: {
     accounts: ModelProviderAccount[];
+    defaults?: ModelProviderAccountDefault[];
     loading: boolean;
   };
 }
@@ -77,6 +82,8 @@ export function useLaunchPreferences(
   { models, providerAccounts }: LaunchPreferencesInput,
   storage: LaunchPreferenceStorage = browserStorage
 ) {
+  const availableHarnesses = useAvailableHarnessIds();
+  const { isLoading: capabilitiesLoading } = useDeploymentCapabilities();
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = models;
   const [storedPreference, setStoredPreference] = useState<ModelPreference>({
     model: DEFAULT_MODEL,
@@ -90,6 +97,10 @@ export function useLaunchPreferences(
 
   useEffect(() => {
     if (hasHydratedPreferencesRef.current) return;
+    const storedHarness = getValidHarnessOrDefault(
+      storage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)
+    );
+    if (capabilitiesLoading && storedHarness === "pi") return;
 
     const storedModel = storage.getItem(LAST_SELECTED_MODEL_STORAGE_KEY);
     const storedReasoningEffort = storage.getItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
@@ -125,11 +136,16 @@ export function useLaunchPreferences(
       model: storedModel ?? DEFAULT_MODEL,
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
-    setHarness(getValidHarnessOrDefault(storage.getItem(LAST_SELECTED_HARNESS_STORAGE_KEY)));
+    if (availableHarnesses.includes(storedHarness)) {
+      setHarness(storedHarness);
+    } else {
+      setHarness(DEFAULT_HARNESS);
+      storage.removeItem(LAST_SELECTED_HARNESS_STORAGE_KEY);
+    }
     if (storedProviderSelections) setProviderSelections(storedProviderSelections);
     setProviderSelectionsHydrated(true);
     hasHydratedPreferencesRef.current = true;
-  }, [storage]);
+  }, [availableHarnesses, capabilitiesLoading, storage]);
 
   const availableProviderSelections = reconcileProviderSelectionsForHarness(
     harness,
@@ -181,7 +197,16 @@ export function useLaunchPreferences(
   );
   const { model: selectedModel, reasoningEffort } = modelSelection;
   const harnessHasModels = modelSelection.availability.status !== "unavailable";
-  const providerReady = providerSelectionsHydrated && !providerAccounts.loading;
+  const providerReady =
+    providerSelectionsHydrated &&
+    !providerAccounts.loading &&
+    hasUsableHarnessProviderAuth({
+      harness,
+      selections: availableProviderSelections,
+      defaults: providerAccounts.defaults ?? [],
+      accounts: providerAccounts.accounts,
+      unattended: false,
+    });
 
   function saveModelPreferenceDraft(preference: ModelPreference) {
     setModelPreferenceDraft(preference);
