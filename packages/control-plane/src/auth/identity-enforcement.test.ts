@@ -66,7 +66,9 @@ describe("deriveIdentity", () => {
   });
 
   it("derives nothing for sandbox and absent principals", () => {
-    expect(deriveIdentity({ kind: "sandbox", sessionId: "s1" })).toBeNull();
+    expect(
+      deriveIdentity({ kind: "sandbox", sessionId: "s1", credentialClass: "agent" })
+    ).toBeNull();
     expect(deriveIdentity(undefined)).toBeNull();
   });
 
@@ -82,7 +84,10 @@ describe("deriveIdentity", () => {
 
 describe("applyIdentityEnforcement — identityless principals", () => {
   it("403s sandbox and absent principals rather than proceeding identityless", () => {
-    for (const principal of [undefined, { kind: "sandbox", sessionId: "s1" } as const]) {
+    for (const principal of [
+      undefined,
+      { kind: "sandbox", sessionId: "s1", credentialClass: "agent" } as const,
+    ]) {
       const { rejection } = applyIdentityEnforcement(createCtx(principal), "prompt", {});
       expect(rejection?.status).toBe(403);
     }

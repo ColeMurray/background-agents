@@ -35,6 +35,7 @@ const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   trigger_message_id TEXT,
   bundle_json TEXT,
   captured_at INTEGER,
+  pi_publication_generation INTEGER,
   last_error TEXT,
   error_at INTEGER,
   updated_at INTEGER NOT NULL
@@ -54,6 +55,65 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   completed_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER NOT NULL
+);`;
+
+const PI_RESULT_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS pi_result_receipts (
+  operation_id TEXT PRIMARY KEY,
+  projected_at INTEGER NOT NULL
+);`;
+
+const PI_PROJECTION_RELIABILITY_TABLES_SQL = `CREATE TABLE IF NOT EXISTS pi_operation_dispatch (
+  operation_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('dispatching', 'ambiguous', 'admitted', 'stopping', 'settled')),
+  last_projection_sequence INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`;
+
+const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands (
+  id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  request_fingerprint TEXT,
+  actor_kind TEXT,
+  actor_id TEXT,
+  approval_revision INTEGER,
+  credential_profile TEXT,
+  egress_profile TEXT,
+  task_id INTEGER,
+  tool_call_id TEXT,
+  state TEXT NOT NULL,
+  sandbox_id TEXT,
+  bridge_instance_id TEXT,
+  last_output_sequence INTEGER NOT NULL DEFAULT -1,
+  output_bytes INTEGER NOT NULL DEFAULT 0,
+  output_truncated INTEGER NOT NULL DEFAULT 0,
+  exit_code INTEGER,
+  signal TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  dispatched_at INTEGER,
+  dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+  last_dispatch_at INTEGER,
+  accepted_at INTEGER,
+  deadline_at INTEGER,
+  started_at INTEGER,
+  cancel_requested_at INTEGER,
+  cancel_deadline_at INTEGER,
+  cancel_attempts INTEGER NOT NULL DEFAULT 0,
+  replay_gap INTEGER NOT NULL DEFAULT 0,
+  late_completion_at INTEGER,
+  metadata_expires_at INTEGER,
+  completed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS sandbox_command_output (
+  command_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  stream TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (command_id, sequence),
+  FOREIGN KEY (command_id) REFERENCES sandbox_commands(id) ON DELETE CASCADE
 );`;
 
 const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
@@ -109,6 +169,7 @@ CREATE TABLE IF NOT EXISTS session (
   max_cost_usd REAL,                                -- Mutable effective session cost limit; NULL = unlimited
   budget_exhausted INTEGER NOT NULL DEFAULT 0,      -- Pauses prompt admission and dispatch
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
+  pi_feature_capability_snapshot TEXT,              -- Exact creation-time Pi capability snapshot; NULL for non-Pi and legacy sessions
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CHECK (
@@ -226,6 +287,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
   startup_rejected INTEGER NOT NULL DEFAULT 0,        -- rejected startup retains a cleanup obligation
+  runtime_mode TEXT NOT NULL DEFAULT 'agent',         -- 'agent' | 'execution'
+  execution_bridge_id TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -246,6 +309,16 @@ ${SESSION_ALARM_STATE_TABLE_SQL}
 -- A terminal message whose D1 projection has not landed yet. Only the newest
 -- is kept: the projection is monotonic, so an older one would be a no-op.
 ${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
+
+-- Acknowledges a Pi result only after all SessionDO projection work finishes.
+${PI_RESULT_RECEIPTS_TABLE_SQL}
+
+-- Durable Pi dispatch CAS and one acknowledged projection sequence.
+${PI_PROJECTION_RELIABILITY_TABLES_SQL}
+
+-- Durable, provider-neutral command execution ledger. It is dormant until the
+-- Pi sandbox execution gate and an authorized caller both admit a command.
+${SANDBOX_COMMANDS_TABLE_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -283,6 +356,17 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
 import { createLogger } from "../logger";
+import {
+  PI_SESSION_DO_CONTROLS_MIGRATION_ID,
+  PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+  PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+  PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+  PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+} from "@open-inspect/shared/migration-reservations";
+import type { MigrationOwner } from "@open-inspect/shared/migration-reservations";
 import type { SqlStorage } from "./sql-storage";
 
 const schemaLog = createLogger("schema");
@@ -298,6 +382,8 @@ const schemaLog = createLogger("schema");
 export interface SchemaMigration {
   readonly id: number;
   readonly description: string;
+  /** Required when `id` is reserved by MIGRATION_RESERVATIONS. */
+  readonly feature?: MigrationOwner;
   readonly run: string | ((sql: SqlStorage) => void);
 }
 
@@ -758,6 +844,106 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID,
+    description: "Persist completed Pi result projections",
+    feature: "piProjection",
+    run: PI_RESULT_RECEIPTS_TABLE_SQL,
+  },
+  {
+    id: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+    description: "Persist sandbox command execution ledger",
+    feature: "sandboxExecution",
+    run: SANDBOX_COMMANDS_TABLE_SQL,
+  },
+  {
+    id: PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+    description: "Record sandbox runtime mode",
+    feature: "sandboxExecution",
+    run: (sql) => {
+      runMigration(
+        sql,
+        "ALTER TABLE sandbox ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'agent'"
+      );
+      runMigration(sql, "ALTER TABLE sandbox ADD COLUMN execution_bridge_id TEXT");
+    },
+  },
+  {
+    id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+    description: "Persist creation-time Pi capability authority",
+    feature: "coreAuthority",
+    run: "ALTER TABLE session ADD COLUMN pi_feature_capability_snapshot TEXT",
+  },
+  {
+    id: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+    description: "Persist Pi dispatch CAS and projection sequence",
+    feature: "piProjection",
+    run: PI_PROJECTION_RELIABILITY_TABLES_SQL,
+  },
+  {
+    id: PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
+    description: "Fence Pi repository diff publication generations",
+    feature: "repositoryEditing",
+    run: "ALTER TABLE session_diff ADD COLUMN pi_publication_generation INTEGER",
+  },
+  {
+    id: PI_SESSION_DO_CONTROLS_MIGRATION_ID,
+    description: "Persist Pi native control receipts",
+    feature: "piControls",
+    run: (sql) => {
+      sql.exec(`CREATE TABLE pi_control_receipts (
+      request_id TEXT PRIMARY KEY,
+      request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
+      action TEXT NOT NULL,
+      actor_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('processing','accepted','completed','failed','indeterminate')),
+      conversation_id TEXT,
+      operation_id TEXT,
+      submission_id INTEGER,
+      task_id INTEGER,
+      result_json TEXT CHECK(result_json IS NULL OR length(result_json)<=65536),
+      error_code TEXT CHECK(error_code IS NULL OR length(error_code)<=128),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      terminal_at INTEGER
+    )`);
+      sql.exec(
+        "CREATE INDEX idx_pi_control_receipts_terminal ON pi_control_receipts(terminal_at) WHERE terminal_at IS NOT NULL"
+      );
+      sql.exec(
+        "CREATE INDEX idx_pi_control_receipts_actor ON pi_control_receipts(actor_id,created_at)"
+      );
+    },
+  },
+  {
+    id: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+    description: "Persist sandbox execution authority, cancellation, and retention",
+    feature: "sandboxExecution",
+    run: (sql) => {
+      for (const statement of [
+        "ALTER TABLE sandbox_commands ADD COLUMN request_fingerprint TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN actor_kind TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN actor_id TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN approval_revision INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN credential_profile TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN egress_profile TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN task_id INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN tool_call_id TEXT",
+        "ALTER TABLE sandbox_commands ADD COLUMN dispatch_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sandbox_commands ADD COLUMN last_dispatch_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN accepted_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN cancel_requested_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN cancel_deadline_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN cancel_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sandbox_commands ADD COLUMN replay_gap INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE sandbox_commands ADD COLUMN late_completion_at INTEGER",
+        "ALTER TABLE sandbox_commands ADD COLUMN metadata_expires_at INTEGER",
+      ]) {
+        runMigration(sql, statement);
+      }
+    },
   },
 ];
 

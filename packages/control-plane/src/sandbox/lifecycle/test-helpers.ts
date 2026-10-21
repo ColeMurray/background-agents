@@ -70,6 +70,7 @@ export function createMockSession(overrides: Partial<SessionRow> = {}): SessionR
     budget_exhausted: 0,
     sandbox_settings: null,
     environment_id: null,
+    pi_feature_capability_snapshot: null,
     created_at: Date.now() - 60000,
     updated_at: Date.now(),
     ...overrides,
@@ -107,6 +108,8 @@ export function createMockSandbox(
     boot_seq: null,
     fenced: 0,
     startup_rejected: 0,
+    runtime_mode: "agent",
+    execution_bridge_id: null,
     created_at: Date.now() - 60000,
     spawn_failure_count: 0,
     last_spawn_failure: 0,
@@ -270,6 +273,19 @@ export function createMockStorage(
       calls.push(`updateSandboxRuntimeVersion:${runtimeVersion}`);
       if (sandbox) sandbox.runtime_version = runtimeVersion;
     }),
+    recordExecutionBridgeIdentity: vi.fn((generation, bridgeInstanceId: string) => {
+      calls.push(`recordExecutionBridgeIdentity:${bridgeInstanceId}`);
+      if (
+        !sandbox ||
+        sandbox.fenced ||
+        sandbox.modal_sandbox_id !== generation.sandboxId ||
+        sandbox.created_at !== generation.createdAt
+      ) {
+        return false;
+      }
+      sandbox.execution_bridge_id = bridgeInstanceId;
+      return true;
+    }),
     recordSandboxSnapshot: vi.fn(
       (sandboxId: string | null, imageId: string, runtimeVersion: string | null) => {
         calls.push(`recordSandboxSnapshot:${imageId}:${runtimeVersion}`);
@@ -416,6 +432,7 @@ export function createMockProvider(
       supportsSandboxTimeout: true,
       supportsSnapshots: true,
       supportsRestore: true,
+      executionIsolation: "enforced",
       ...overrides.capabilities,
     },
     createSandbox:

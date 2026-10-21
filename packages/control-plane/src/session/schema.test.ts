@@ -3,10 +3,98 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
+import {
+  PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
+  PI_SESSION_DO_CONTROLS_MIGRATION_ID,
+  PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
+  PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+  PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+  validateMigrationArtifacts,
+} from "@open-inspect/shared/migration-reservations";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+
+it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
+  expect(
+    MIGRATIONS.filter(({ id }) => id >= PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID).map(
+      ({ id, feature }) => ({ id, feature })
+    )
+  ).toEqual([
+    {
+      id: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
+      feature: "sandboxExecution",
+    },
+    {
+      id: PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
+      feature: "sandboxExecution",
+    },
+    { id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID, feature: "coreAuthority" },
+    { id: PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID, feature: "piProjection" },
+    { id: PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID, feature: "repositoryEditing" },
+    { id: PI_SESSION_DO_CONTROLS_MIGRATION_ID, feature: "piControls" },
+    {
+      id: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
+      feature: "sandboxExecution",
+    },
+  ]);
+});
+
+it("adds the minimal durable Pi operation reconciliation row", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(
+      ({ id }) => id !== PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID
+    )) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+
+    applyMigrations(createDatabaseSql(db));
+
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'pi_%'").all()
+    ).toEqual([{ name: "pi_operation_dispatch" }]);
+    expect(db.prepare("PRAGMA table_info(pi_operation_dispatch)").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "state" }),
+        expect.objectContaining({ name: "last_projection_sequence" }),
+      ])
+    );
+  } finally {
+    db.close();
+  }
+});
+
+it("adds the creation-time Pi capability snapshot without backfilling legacy sessions", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE session (id TEXT PRIMARY KEY)");
+    db.exec("INSERT INTO session (id) VALUES ('legacy')");
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(
+      ({ id }) => id !== PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID
+    )) {
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    }
+
+    applyMigrations(createDatabaseSql(db));
+
+    expect(db.prepare("SELECT pi_feature_capability_snapshot FROM session").get()).toEqual({
+      pi_feature_capability_snapshot: null,
+    });
+  } finally {
+    db.close();
+  }
+});
 
 /**
  * Create a mock SqlStorage that tracks calls and supports per-query data.
@@ -91,6 +179,16 @@ describe("applyMigrations", () => {
 
   it("has unique, strictly increasing migration ids", () => {
     const ids = MIGRATIONS.map((migration) => migration.id);
+    expect(() =>
+      validateMigrationArtifacts(
+        MIGRATIONS.map((migration) => ({
+          store: "session_do",
+          version: migration.id,
+          name: migration.description,
+          feature: migration.feature,
+        }))
+      )
+    ).not.toThrow();
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
   });

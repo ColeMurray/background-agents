@@ -11,6 +11,8 @@ import { validateReasoningEffort } from "../../reasoning-effort";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxInitializer } from "../../sandbox-ports";
 import type { ParticipantRepository } from "../../participant-repository";
+import type { PiRuntimeDispatch } from "../../../pi/runtime-contract";
+import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 
 const repositoryRefSchema = z.object({
   repoOwner: z.string(),
@@ -27,6 +29,8 @@ const spawnSourceSchema = z.enum([
   "linear-bot",
   "slack-bot",
 ] satisfies [SpawnSource, ...SpawnSource[]]);
+
+const PI_INITIALIZE_MAX_ATTEMPTS = 2;
 
 /**
  * Request body for the /internal/init endpoint.
@@ -90,7 +94,11 @@ export class SessionInitHandler {
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
     private readonly generateId: (bytes?: number) => string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly piRuntime?: Pick<PiRuntimeDispatch, "initialize">,
+    private readonly currentPiCapabilitySnapshot: () => PiFeatureCapabilitySnapshot = () => {
+      throw new Error("Pi capability snapshot resolver is unavailable");
+    }
   ) {}
 
   async init(request: Request, log: Logger): Promise<Response> {
@@ -129,11 +137,29 @@ export class SessionInitHandler {
     // A retried init must not rebuild sandbox/participant rows or reset live
     // budget state. If the first attempt committed but never scheduled the
     // spawn, the first prompt spawns through processMessageQueue.
-    if (this.sessionCoreRepository.getSession()) {
+    const existingSession = this.sessionCoreRepository.getSession();
+    if (existingSession) {
+      if (existingSession.harness === "pi" && this.piRuntime) {
+        const snapshot = this.sessionCoreRepository.getPiFeatureCapabilitySnapshot();
+        if (snapshot) {
+          const initialized = await this.initializePi(
+            existingSession.session_name || sessionName,
+            snapshot,
+            log
+          );
+          if (!initialized) {
+            return Response.json({ error: "Pi Durable is unavailable" }, { status: 503 });
+          }
+        }
+      }
       return Response.json({ sessionId, status: "created" });
     }
 
     const harness = getValidHarnessOrDefault(body.harness);
+    const piRuntimeForSession = harness === "pi" ? this.piRuntime : undefined;
+    if (harness === "pi" && !piRuntimeForSession) {
+      return Response.json({ error: "Pi Durable is not available" }, { status: 503 });
+    }
     let selection;
     try {
       selection = resolveHarnessInitialization(harness, body);
@@ -182,6 +208,8 @@ export class SessionInitHandler {
     const normalizedSandboxSettings = body.sandboxSettings
       ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
       : null;
+    const piFeatureCapabilitySnapshot =
+      harness === "pi" ? this.currentPiCapabilitySnapshot() : null;
 
     this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
@@ -206,6 +234,7 @@ export class SessionInitHandler {
           : null,
         maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
+        piFeatureCapabilitySnapshot,
         createdAt: now,
         updatedAt: now,
       });
@@ -227,13 +256,15 @@ export class SessionInitHandler {
           baseBranch: repo.baseBranch,
         }))
       );
-      const sandboxId = this.generateId();
-      this.sandboxRepository.createSandbox({
-        id: sandboxId,
-        status: "pending",
-        gitSyncStatus: "pending",
-        createdAt: 0,
-      });
+      if (harness !== "pi") {
+        const sandboxId = this.generateId();
+        this.sandboxRepository.createSandbox({
+          id: sandboxId,
+          status: "pending",
+          gitSyncStatus: "pending",
+          createdAt: 0,
+        });
+      }
 
       const participantId = this.generateId();
       this.participantRepository.createParticipant({
@@ -249,9 +280,64 @@ export class SessionInitHandler {
       });
     });
 
-    log.info("Triggering sandbox spawn for new session");
-    this.scheduleWarmSandbox();
+    if (harness === "pi" && piRuntimeForSession) {
+      const piInitializeStartedAt = this.now();
+      log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "session_do_init",
+        timestamp_ms: piInitializeStartedAt,
+        harness: "pi",
+        execution_backend: "durable_object",
+        repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
+        sandbox_avoided: 1,
+      });
+      if (!(await this.initializePi(sessionName, piFeatureCapabilitySnapshot!, log))) {
+        return Response.json({ error: "Pi Durable is unavailable" }, { status: 503 });
+      }
+      const initializedAt = this.now();
+      log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "pi_init",
+        timestamp_ms: initializedAt,
+        duration_ms: initializedAt - piInitializeStartedAt,
+        harness: "pi",
+        execution_backend: "durable_object",
+        repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
+        sandbox_avoided: 1,
+      });
+      log.info("Created sandbox-free Pi Durable session");
+    } else {
+      log.info("Triggering sandbox spawn for new session");
+      this.scheduleWarmSandbox();
+    }
 
     return Response.json({ sessionId, status: "created" });
+  }
+
+  private async initializePi(
+    sessionId: string,
+    snapshot: PiFeatureCapabilitySnapshot,
+    log: Logger
+  ): Promise<boolean> {
+    if (!this.piRuntime) return false;
+    for (let attempt = 1; attempt <= PI_INITIALIZE_MAX_ATTEMPTS; attempt++) {
+      try {
+        await this.piRuntime.initialize(sessionId, snapshot);
+        return true;
+      } catch (error) {
+        const fields = {
+          session_id: sessionId,
+          attempt,
+          max_attempts: PI_INITIALIZE_MAX_ATTEMPTS,
+          error: error instanceof Error ? error : String(error),
+        };
+        if (attempt < PI_INITIALIZE_MAX_ATTEMPTS) {
+          log.warn("Retrying Pi Durable initialization after an unavailable response", fields);
+        } else {
+          log.error("Pi Durable initialization failed", fields);
+        }
+      }
+    }
+    return false;
   }
 }

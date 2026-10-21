@@ -10,6 +10,7 @@ import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
+import { PI_ATTACHMENT_MAX_TURN_BYTES } from "@open-inspect/shared/types/session-attachments";
 import type {
   GitHubAutofixOrigin,
   GitHubAutofixSessionCommand,
@@ -27,7 +28,13 @@ import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
-import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
+import type {
+  MessageRow,
+  ParticipantRow,
+  PromptGitIdentity,
+  SandboxCommand,
+  SessionRow,
+} from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
@@ -46,6 +53,8 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import type { PiHumanControl, PiRuntimeDispatch, PiRuntimeReceipt } from "../pi/runtime-contract";
+import type { PiOperationRepository } from "./pi-operation-repository";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
@@ -53,7 +62,9 @@ import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
   resolveSessionAttachments,
+  type ResolvedSessionAttachments,
 } from "./session-attachment-resolver";
+import { piModelAcceptsImages } from "../pi/model-image-support";
 import type {
   EnqueuedPrompt,
   EnqueuePromptCoreData,
@@ -62,6 +73,7 @@ import type {
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
+const PI_RECONCILE_RETRY_MS = 1_000;
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -132,6 +144,40 @@ export async function fingerprintWebPrompt(
   return hashToken(canonicalRequest);
 }
 
+function isAuthoritativePiAbort(status: Awaited<ReturnType<PiRuntimeDispatch["lookup"]>>): boolean {
+  return (
+    status.status === "settled" &&
+    status.result.status === "unanswered" &&
+    (status.result.reason === "aborted" || status.result.reason === "withdrawn")
+  );
+}
+
+function piControlTimelineContent(control: PiHumanControl): string {
+  switch (control.action) {
+    case "send":
+    case "follow_up":
+      return control.content;
+    case "handoff":
+      return control.handoff;
+    case "cancel_exact":
+      return "Requested Pi agent cancellation.";
+    case "fork":
+      return "Forked a Pi agent conversation.";
+    case "reset":
+      return "Reset a Pi agent conversation.";
+    case "compact":
+      return "Requested Pi conversation compaction.";
+  }
+}
+
+function completionBarrier(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 function resolveParticipantGitIdentity(
   participant: ParticipantRow | null,
   scmProvider: SourceControlProviderName
@@ -153,6 +199,9 @@ function resolveParticipantGitIdentity(
 }
 
 export class SessionMessageQueue {
+  private readonly piSubmissionsInFlight = new Map<string, Promise<void>>();
+  private readonly piStopsInFlight = new Map<string, Promise<void>>();
+
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
     private readonly log: Logger,
@@ -172,10 +221,15 @@ export class SessionMessageQueue {
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
     private readonly executionStop: ExecutionStopCoordinator,
+    private readonly piOperations: Pick<
+      PiOperationRepository,
+      "begin" | "get" | "transition" | "settle"
+    >,
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly piRuntime?: PiRuntimeDispatch
   ) {}
 
   async enqueueAutofix(
@@ -374,6 +428,61 @@ export class SessionMessageQueue {
     await this.processMessageQueue();
   }
 
+  /** Project an authorized human Pi control into the canonical SessionDO message timeline. */
+  recordPiControlMessage(input: {
+    actorId: string;
+    canonicalUserId?: string | null;
+    source: "web" | "slack";
+    requestId: string;
+    requestFingerprint: string;
+    control: PiHumanControl;
+  }): { messageId: string; deduplicated: boolean; conflict: boolean } {
+    this.assertPromptableSession();
+    this.assertBudgetAvailable();
+    let participant = this.participantService.getByUserId(input.actorId);
+    participant ??= this.participantService.create(
+      input.actorId,
+      input.actorId,
+      input.canonicalUserId ?? undefined
+    );
+    const now = Date.now();
+    const messageId = `pi-control:${input.requestId}`;
+    const content = piControlTimelineContent(input.control);
+    const event = {
+      ...this.createUserMessageEvent(participant, content, messageId, now),
+      piControl: {
+        action: input.control.action,
+        ...(input.control.conversationId === undefined
+          ? {}
+          : { conversationId: input.control.conversationId }),
+        ...(input.control.action === "cancel_exact" && input.control.taskId !== undefined
+          ? { taskId: input.control.taskId }
+          : {}),
+      },
+    } satisfies Extract<SandboxEvent, { type: "user_message" }>;
+    const admission = this.messageRepository.recordCompletedControlMessage(
+      {
+        id: messageId,
+        authorId: participant.id,
+        content,
+        source: input.source,
+        clientRequestId: messageId,
+        requestFingerprint: input.requestFingerprint,
+        createdAt: now,
+      },
+      event
+    );
+    if (admission === "created") {
+      this.messenger.broadcast({ type: "sandbox_event", event });
+      this.touchSessionActivity();
+    }
+    return {
+      messageId,
+      deduplicated: admission === "duplicate",
+      conflict: admission === "conflict",
+    };
+  }
+
   async cancelQueuedPrompt(
     ws: SessionWebSocket,
     data: { messageId: string; clientRequestId: string }
@@ -408,8 +517,13 @@ export class SessionMessageQueue {
     if (!currentSession || !isSessionPromptable(currentSession.status)) {
       return;
     }
+    const currentHarness = getValidHarnessOrDefault(currentSession.harness);
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
+      if (currentHarness === "pi") {
+        await this.reconcilePiOperation(currentSession, awaitingStop.id);
+        return;
+      }
       if (awaitingStop.deadline <= Date.now()) {
         await this.executionStop.recoverStopConfirmationTimeout();
       } else {
@@ -421,7 +535,9 @@ export class SessionMessageQueue {
     if (currentSession.budget_exhausted === 1) {
       return;
     }
-    if (this.messageRepository.getProcessingMessage()) {
+    const processing = this.messageRepository.getProcessingMessage();
+    if (processing) {
+      if (currentHarness === "pi") await this.reconcilePiOperation(currentSession, processing.id);
       this.log.debug("processMessageQueue: already processing, returning");
       return;
     }
@@ -460,6 +576,15 @@ export class SessionMessageQueue {
         await this.sessionStatus.reconcileAfterExecution(false);
         await this.processMessageQueue();
       }
+      return;
+    }
+    if (harness === "pi") {
+      await this.dispatchPiMessage(
+        message,
+        currentSession,
+        resolvedModel,
+        inheritedReasoningEffort
+      );
       return;
     }
     const target = this.wsManager.getSandboxCommandTarget();
@@ -625,6 +750,184 @@ export class SessionMessageQueue {
     });
   }
 
+  private async dispatchPiMessage(
+    message: MessageRow,
+    session: SessionRow,
+    resolvedModel: string,
+    inheritedReasoningEffort: string | null | undefined
+  ): Promise<void> {
+    if (!this.piRuntime) {
+      if (this.failMessage(message, "Pi Durable is not available", Date.now(), "pending")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+      }
+      return;
+    }
+    const author = this.participantRepository.getParticipantById(message.author_id);
+    if (!author) throw new Error(`Missing prompt author ${message.author_id}`);
+    const now = Date.now();
+    const requestedEffort =
+      message.reasoning_effort ??
+      inheritedReasoningEffort ??
+      getHarnessReasoningConfig("pi", resolvedModel)?.default ??
+      getDefaultReasoningEffort(resolvedModel);
+    const reasoningEffort =
+      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log, "pi") ??
+      undefined;
+    const attachments = parseStoredSessionAttachments(message.attachments, () =>
+      this.log.error("prompt.invalid_stored_attachments")
+    );
+    const userMessageEvent = this.createUserMessageEvent(
+      author,
+      message.content,
+      message.id,
+      now,
+      attachments,
+      message.origin_context
+    );
+    if (!this.mayDispatch()) return;
+    if (!this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent)) return;
+    this.log.info("pi.latency", {
+      event: "pi.latency",
+      milestone: "prompt_claimed",
+      timestamp_ms: now,
+      message_id: message.id,
+      operation_id: message.id,
+      harness: "pi",
+      execution_backend: "durable_object",
+      source: message.source,
+      model: resolvedModel,
+      repository_mode: session.repo_owner ? "repository" : "none",
+      sandbox_avoided: 1,
+    });
+    const barrier = completionBarrier();
+    this.piSubmissionsInFlight.set(message.id, barrier.promise);
+    let stopAfterBarrier = false;
+    let pumpAfterBarrier = false;
+    try {
+      const firstDispatch = this.piOperations.get(message.id) === null;
+      this.piOperations.begin(message.id, now);
+      this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+      this.messenger.broadcast({ type: "processing_status", isProcessing: true });
+      this.broadcastPromptQueue();
+      await this.alarmScheduler.schedule(now + this.getExecutionTimeoutMs());
+      if (firstDispatch) {
+        this.backgroundTasks.submit(() => this.callbackService.notifyStarted(message.id), {
+          name: "callback.notify_started",
+          context: { message_id: message.id },
+        });
+      }
+
+      let receipt: PiRuntimeReceipt | undefined;
+      let submissionError: unknown;
+      const submitStartedAt = Date.now();
+      this.log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "pi_submit",
+        timestamp_ms: submitStartedAt,
+        message_id: message.id,
+        operation_id: message.id,
+        harness: "pi",
+        execution_backend: "durable_object",
+        source: message.source,
+        model: resolvedModel,
+        sandbox_avoided: 1,
+      });
+      try {
+        receipt = await this.piRuntime.submit({
+          sessionId: session.session_name || session.id,
+          messageId: message.id,
+          content: message.content,
+          model: resolvedModel,
+          reasoningEffort,
+          requirePricing: session.max_cost_usd !== null,
+          // Metadata only: the Pi Durable Object fetches the bytes from the
+          // session that owns them, the way a sandbox harness does.
+          ...(attachments ? { attachments } : {}),
+        });
+      } catch (error) {
+        submissionError = error;
+      }
+
+      if (submissionError !== undefined) {
+        // The RPC may have failed after Pi durably admitted the operation.
+        this.log.warn("prompt.dispatch", {
+          event: "prompt.dispatch",
+          message_id: message.id,
+          outcome: "ambiguous",
+          execution_backend: "durable_object",
+          error_type:
+            submissionError instanceof Error
+              ? submissionError.constructor.name
+              : typeof submissionError,
+        });
+        this.piOperations.transition(message.id, ["dispatching"], "ambiguous", Date.now());
+        stopAfterBarrier = this.piOperations.get(message.id)?.state === "stopping";
+        if (!stopAfterBarrier) {
+          await this.alarmScheduler.schedule(Date.now() + PI_RECONCILE_RETRY_MS);
+        }
+      } else if (receipt?.rejected) {
+        stopAfterBarrier = this.piOperations.get(message.id)?.state === "stopping";
+        if (
+          !stopAfterBarrier &&
+          this.piOperations.settle(
+            message.id,
+            ["dispatching", "ambiguous", "admitted"],
+            Date.now()
+          ) &&
+          this.failMessage(message, receipt.rejected, Date.now(), "processing")
+        ) {
+          this.broadcastPromptQueue();
+          await this.sessionStatus.reconcileAfterExecution(false);
+          pumpAfterBarrier = true;
+        }
+      } else if (receipt) {
+        if (
+          !this.piOperations.transition(
+            message.id,
+            ["dispatching", "ambiguous"],
+            "admitted",
+            Date.now()
+          )
+        ) {
+          stopAfterBarrier = this.piOperations.get(message.id)?.state === "stopping";
+        }
+        this.log.info("prompt.dispatch", {
+          event: "prompt.dispatch",
+          message_id: message.id,
+          outcome: receipt.accepted ? "sent" : "duplicate",
+          model: resolvedModel,
+          reasoning_effort: reasoningEffort,
+          execution_backend: "durable_object",
+          queue_wait_ms: now - message.created_at,
+        });
+        this.log.info("pi.latency", {
+          event: "pi.latency",
+          milestone: "pi_admitted",
+          timestamp_ms: Date.now(),
+          duration_ms: Date.now() - submitStartedAt,
+          message_id: message.id,
+          operation_id: receipt.operationId,
+          harness: "pi",
+          execution_backend: "durable_object",
+          source: message.source,
+          model: resolvedModel,
+          recovery: receipt.accepted ? 0 : 1,
+          sandbox_avoided: 1,
+        });
+      }
+    } finally {
+      barrier.resolve();
+      if (this.piSubmissionsInFlight.get(message.id) === barrier.promise) {
+        this.piSubmissionsInFlight.delete(message.id);
+      }
+    }
+    if (stopAfterBarrier) {
+      await this.ensurePiStop(session, message.id, "Execution was stopped");
+    }
+    if (pumpAfterBarrier) await this.processMessageQueue();
+  }
+
   async handleFatalSandboxFailure(reason: string): Promise<void> {
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
@@ -638,6 +941,14 @@ export class SessionMessageQueue {
       this.failMessage(message, "Execution was cancelled before it started", now, "pending");
     }
 
+    const session = this.repository.getSession();
+    if (session?.harness === "pi" && this.piRuntime) {
+      this.broadcastPromptQueue();
+      this.backgroundTasks.submit(() => this.stopPiExecution("Execution was cancelled"), {
+        name: "pi.abort",
+      });
+      return;
+    }
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (processingMessage) {
       this.failMessage(processingMessage, "Execution was cancelled", now, "processing");
@@ -678,12 +989,157 @@ export class SessionMessageQueue {
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
+    const session = this.repository.getSession();
+    if (session?.harness === "pi" && this.piRuntime) {
+      await this.stopPiExecution(error);
+      return;
+    }
+
     if (!this.failMessage(processingMessage, error, now, "processing")) {
       return;
     }
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
     await this.sessionStatus.reconcileAfterExecution(false);
+  }
+
+  async stopPiExecution(reason = "Execution was stopped"): Promise<void> {
+    const session = this.repository.getSession();
+    const processing = this.messageRepository.getProcessingMessageWithCreatedAt();
+    if (!session || session.harness !== "pi" || !this.piRuntime || !processing) return;
+    const now = Date.now();
+    this.piOperations.begin(processing.id, now);
+    this.messageRepository.markMessageAwaitingStopConfirmation(
+      processing.id,
+      now + PI_RECONCILE_RETRY_MS
+    );
+    this.piOperations.transition(
+      processing.id,
+      ["dispatching", "ambiguous", "admitted"],
+      "stopping",
+      now
+    );
+    await this.ensurePiStop(session, processing.id, reason);
+  }
+
+  private async reconcilePiOperation(
+    session: SessionRow,
+    operationId: string,
+    stopReason = "Execution was stopped"
+  ): Promise<void> {
+    if (!this.piRuntime) return;
+    const inFlight = this.piSubmissionsInFlight.get(operationId);
+    if (inFlight) await inFlight.catch(() => undefined);
+    const record = this.piOperations.get(operationId);
+    if (record?.state === "stopping") {
+      await this.ensurePiStop(session, operationId, stopReason);
+      return;
+    }
+    if (record?.state === "admitted" || record?.state === "settled") return;
+    const now = Date.now();
+    try {
+      const status = await this.piRuntime.lookup(session.session_name || session.id, operationId);
+      if (status.status === "not_found") {
+        if (
+          this.piOperations.transition(
+            operationId,
+            ["dispatching", "ambiguous"],
+            "dispatching",
+            now
+          )
+        ) {
+          this.messageRepository.updateMessageToPending(operationId);
+          this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+          this.broadcastPromptQueue();
+          await this.processMessageQueue();
+        } else if (this.piOperations.get(operationId)?.state === "stopping") {
+          await this.ensurePiStop(session, operationId, stopReason);
+        }
+        return;
+      }
+      if (status.status === "queued" || status.status === "running") {
+        this.piOperations.transition(operationId, ["dispatching", "ambiguous"], "admitted", now);
+        return;
+      }
+      if (status.status === "settled") {
+        this.piOperations.transition(operationId, ["dispatching", "ambiguous"], "admitted", now);
+        return;
+      }
+    } catch (error) {
+      this.log.warn("pi.reconcile_failed", {
+        event: "pi.reconcile_failed",
+        message_id: operationId,
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+    }
+    const reconcileAt = now + PI_RECONCILE_RETRY_MS;
+    await this.alarmScheduler.schedule(reconcileAt);
+  }
+
+  private ensurePiStop(session: SessionRow, operationId: string, reason: string): Promise<void> {
+    const existing = this.piStopsInFlight.get(operationId);
+    if (existing) return existing;
+    const stopping = this.performPiStop(session, operationId, reason).finally(() => {
+      if (this.piStopsInFlight.get(operationId) === stopping) {
+        this.piStopsInFlight.delete(operationId);
+      }
+    });
+    this.piStopsInFlight.set(operationId, stopping);
+    return stopping;
+  }
+
+  private async performPiStop(
+    session: SessionRow,
+    operationId: string,
+    reason: string
+  ): Promise<void> {
+    if (!this.piRuntime) return;
+    const submission = this.piSubmissionsInFlight.get(operationId);
+    if (submission) await submission.catch(() => undefined);
+    try {
+      await this.piRuntime.abort(session.session_name || session.id, operationId);
+    } catch (error) {
+      this.log.warn("pi.abort_failed", {
+        event: "pi.abort_failed",
+        message_id: operationId,
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+    }
+    try {
+      const status = await this.piRuntime.lookup(session.session_name || session.id, operationId);
+      if (status.status === "not_found" || isAuthoritativePiAbort(status)) {
+        const message = this.messageRepository.getMessageById(operationId);
+        if (message) await this.settleStoppedPiOperation(message, reason);
+        return;
+      }
+      // A natural result owns terminal status and callbacks even when it raced stop.
+      if (status.status === "settled") return;
+    } catch (error) {
+      this.log.warn("pi.reconcile_failed", {
+        event: "pi.reconcile_failed",
+        message_id: operationId,
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+    }
+    await this.alarmScheduler.schedule(Date.now() + PI_RECONCILE_RETRY_MS);
+  }
+
+  private async settleStoppedPiOperation(
+    message: { id: string; created_at: number },
+    reason: string
+  ): Promise<void> {
+    const now = Date.now();
+    this.messageRepository.clearMessageAwaitingStopConfirmation(message.id);
+    if (!this.piOperations.settle(message.id, ["stopping"], now)) return;
+    if (this.failMessage(message, reason, now, "processing")) {
+      this.messenger.broadcast({
+        type: "processing_status",
+        isProcessing: this.messageRepository.getProcessingMessage() !== null,
+      });
+      this.broadcastPromptQueue();
+      await this.sessionStatus.reconcileAfterExecution(false);
+      await this.processMessageQueue();
+    }
   }
 
   private failMessage(
@@ -785,6 +1241,7 @@ export class SessionMessageQueue {
       attachments: data.attachments,
       callbackContext: data.callbackContext,
       clientRequestId: data.clientRequestId,
+      originContext: data.originContext,
     });
 
     // An already-active session keeps its index timestamp through the status sync, so
@@ -871,7 +1328,10 @@ export class SessionMessageQueue {
       this.attachmentRepository
     );
     const attachments = resolvedAttachments?.attachments;
-    const messageId = generateId();
+    const messageId =
+      data.source === "slack" && data.clientRequestId?.startsWith("slack-message-")
+        ? data.clientRequestId
+        : generateId();
     const now = Date.now();
 
     let messageModel: string | null = null;
@@ -898,6 +1358,9 @@ export class SessionMessageQueue {
         )
     );
     if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
+    if (harness === "pi" && attachments && attachments.length > 0) {
+      this.assertPiTurnCanCarryAttachments(effectiveModelForEffort, resolvedAttachments);
+    }
     const messageReasoningEffort = validateReasoningEffort(
       effectiveModelForEffort,
       data.reasoningEffort,
@@ -915,6 +1378,7 @@ export class SessionMessageQueue {
           reasoningEffort: messageReasoningEffort,
           attachments: attachments ? JSON.stringify(attachments) : null,
           callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+          originContext: data.originContext ? JSON.stringify(data.originContext) : null,
           clientRequestId: data.clientRequestId ?? null,
           requestFingerprint: requestFingerprint ?? null,
           status: "pending",
@@ -970,6 +1434,31 @@ export class SessionMessageQueue {
   private assertBudgetAvailable(): void {
     if (this.repository.getSession()?.budget_exhausted === 1) {
       throw new BudgetExhaustedError();
+    }
+  }
+
+  /**
+   * Whether a Pi turn can carry the images it was given.
+   *
+   * The Pi runtime keeps a turn's user message as one Durable Object SQLite
+   * row, and a SQLite row caps at 2 MB, so the turn's images must fit in it
+   * beside the prompt text. A model that takes text only would drop the
+   * image, so the turn is refused by name rather than run without it.
+   */
+  private assertPiTurnCanCarryAttachments(
+    model: string,
+    resolved: ResolvedSessionAttachments | undefined
+  ): void {
+    if (!resolved) return;
+    if (resolved.totalBytes > PI_ATTACHMENT_MAX_TURN_BYTES) {
+      throw new SessionAttachmentError(
+        `The attached images are too large for one Pi Durable turn (limit ${PI_ATTACHMENT_MAX_TURN_BYTES / (1024 * 1024)} MB)`
+      );
+    }
+    if (!piModelAcceptsImages(model)) {
+      throw new HarnessModelIncompatibleError(
+        "The selected model does not accept image attachments."
+      );
     }
   }
 

@@ -3,6 +3,18 @@ import { z } from "zod";
 export const MAX_SESSION_ATTACHMENTS_PER_MESSAGE = 6;
 /** Per-image byte cap, enforced by the attachment store and every producer. */
 export const SESSION_ATTACHMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/**
+ * The largest total of image bytes one Pi Durable turn may carry.
+ *
+ * The Pi runtime keeps a turn's user message as one Durable Object SQLite
+ * row, and a SQLite-backed Durable Object caps a row at 2 MB. A turn's images
+ * ride base64-encoded inside that row, so the images of one turn must fit in
+ * a fraction of it: 1 MiB of images is about 1.4 MB of base64, which leaves
+ * room for the prompt text and the record's own fields. A turn over the limit
+ * is refused by the session rather than handed to a runtime that cannot
+ * store it.
+ */
+export const PI_ATTACHMENT_MAX_TURN_BYTES = 1024 * 1024;
 export const SESSION_ATTACHMENT_IMAGE_MIME_TYPES = [
   "image/png",
   "image/jpeg",

@@ -39,7 +39,7 @@ describe("modal-vm alarm lookups for a connected bridge", () => {
     vi.mocked(f.wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
     const restarted = f.makeManager();
     restarted.onSandboxSocketAttached(generation);
-    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     await vi.advanceTimersByTimeAsync(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS + 20_000);
     return { f, restarted, generation };
   }
@@ -94,7 +94,7 @@ describe("modal-vm alarm lookups for a connected bridge", () => {
     // The socket's attach arms its disconnect check before adopting the bridge.
     await manager.scheduleDisconnectCheck();
     manager.onSandboxSocketAttached(generation);
-    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     manager.onShutdownGenerationReady({
       type: "sandbox_generation_ready",
       generation,

@@ -1,4 +1,4 @@
-import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
+import { getStoredHarnessOrRefuse, type HarnessId } from "@open-inspect/shared/harnesses";
 import { extractProviderAndModel, getValidModelOrDefault } from "@open-inspect/shared/models";
 import {
   omitUnsupportedSandboxSettings,
@@ -59,7 +59,9 @@ export interface SandboxLaunchContextDependencies {
   getLogger: () => Pick<Logger, "info" | "warn">;
 }
 
-export type AgentLaunchFields = Pick<CreateSandboxConfig, "harness" | "provider" | "model">;
+export type AgentLaunchFields = Required<
+  Pick<CreateSandboxConfig, "harness" | "provider" | "model">
+>;
 
 export interface RepositoryLaunchInputs {
   repositories: SessionRepositoryInfo[];
@@ -115,9 +117,18 @@ export class SandboxLaunchContext {
   }
 
   resolveAgent(session: SessionRow): AgentLaunchFields {
+    // A stored harness this binary does not know is a session this deployment
+    // cannot run. Falling back to the built-in harness would run it as a
+    // different harness, with no error anywhere.
+    const harness = getStoredHarnessOrRefuse(session.harness);
+    if (!harness) {
+      throw new Error(
+        `Session ${session.id} names a harness this deployment does not know: "${session.harness}"`
+      );
+    }
     return {
       ...extractProviderAndModel(getValidModelOrDefault(session.model || this.config.model)),
-      harness: getValidHarnessOrDefault(session.harness),
+      harness,
     };
   }
 

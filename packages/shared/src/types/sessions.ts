@@ -282,6 +282,12 @@ export const sessionMessageSchema = z.object({
   createdAt: z.number(),
   startedAt: z.number().nullable(),
   completedAt: z.number().nullable(),
+  /**
+   * Typed provenance for a message that came from somewhere else, such as
+   * another session. It lets the timeline say where the message came from
+   * instead of implying it was typed here.
+   */
+  originContext: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 export type SessionMessage = z.infer<typeof sessionMessageSchema>;
 

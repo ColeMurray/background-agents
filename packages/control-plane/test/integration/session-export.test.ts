@@ -106,6 +106,32 @@ describe("GET /sessions/export with include", () => {
     expect(lines.every((line) => line.id !== hidden.sessionName)).toBe(true);
   });
 
+  it("says plainly that a Pi session's own durable record is not in the export", async () => {
+    const pi = await initSession({
+      title: "pi",
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    const sandbox = await initSession({ title: "sandbox" });
+
+    const lines = await exportLines("messages");
+
+    const piLine = lines.find((line) => line.id === pi.sessionName);
+    expect(piLine).toMatchObject({
+      type: "session",
+      harness: "pi",
+      harnessState: { included: false },
+    });
+    expect(typeof (piLine?.harnessState as { reason: string }).reason).toBe("string");
+    expect((piLine?.harnessState as { reason: string }).reason).toMatch(/Pi Durable/);
+
+    const sandboxLine = lines.find((line) => line.id === sandbox.sessionName);
+    expect(sandboxLine).not.toHaveProperty("harnessState");
+  });
+
   it("downloads only the requested session and rejects scope on the single route", async () => {
     const root = await initSession({ title: "root" });
     const child = await initSession({ title: "child" });

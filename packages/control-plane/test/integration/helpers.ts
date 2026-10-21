@@ -11,6 +11,9 @@ import { hashToken } from "../../src/auth/crypto";
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { Env } from "../../src/types";
+import type { SessionDOInternals } from "./session-do-access";
 
 /**
  * The test D1 binding viewed through the engine-neutral interface, so tests
@@ -226,9 +229,9 @@ export async function serviceFetch(url: string, init?: ServiceRequestInit): Prom
 /** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
-  repoOwner?: string;
-  repoName?: string;
-  repoId?: number;
+  repoOwner?: string | null;
+  repoName?: string | null;
+  repoId?: number | null;
   defaultBranch?: string;
   repositories?: Array<{
     repoOwner: string;
@@ -239,12 +242,14 @@ export async function initSession(overrides?: {
   environmentId?: string | null;
   title?: string;
   model?: string;
+  harness?: HarnessId;
   reasoningEffort?: string;
   sandboxSettings?: SandboxSettings;
   userId?: string;
   canonicalUserId?: string;
   scmLogin?: string;
   providerAuth?: SessionModelProviderAuthInput[];
+  configureSessionEnv?: (env: Env) => void;
 }) {
   const defaults = {
     sessionName: `test-${Date.now()}-${crypto.randomUUID()}`,
@@ -256,7 +261,11 @@ export async function initSession(overrides?: {
   };
   const id = env.SESSION.idFromName(defaults.sessionName);
   const stub = env.SESSION.get(id);
-  const { providerAuth = TEST_SESSION_PROVIDER_AUTH, ...doDefaults } = defaults;
+  const {
+    providerAuth = TEST_SESSION_PROVIDER_AUTH,
+    configureSessionEnv,
+    ...doDefaults
+  } = defaults;
   const now = Date.now();
   await new SessionIndexStore(env.DB).create({
     id: defaults.sessionName,
@@ -266,16 +275,21 @@ export async function initSession(overrides?: {
     repoOwner: defaults.repoOwner,
     repoName: defaults.repoName,
     model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    harness: defaults.harness ?? "opencode",
     reasoningEffort: defaults.reasoningEffort ?? null,
-    baseBranch: defaults.defaultBranch ?? "main",
-    repositories: defaults.repositories ?? [
-      {
-        repoOwner: defaults.repoOwner,
-        repoName: defaults.repoName,
-        repoId: defaults.repoId,
-        baseBranch: defaults.defaultBranch ?? "main",
-      },
-    ],
+    baseBranch: defaults.repoOwner ? (defaults.defaultBranch ?? "main") : null,
+    repositories:
+      defaults.repositories ??
+      (defaults.repoOwner && defaults.repoName && defaults.repoId != null
+        ? [
+            {
+              repoOwner: defaults.repoOwner,
+              repoName: defaults.repoName,
+              repoId: defaults.repoId,
+              baseBranch: defaults.defaultBranch ?? "main",
+            },
+          ]
+        : []),
     environmentId: defaults.environmentId ?? null,
     status: "created",
     userId: defaults.canonicalUserId ?? defaults.userId,
@@ -283,6 +297,11 @@ export async function initSession(overrides?: {
     createdAt: now,
     updatedAt: now,
   });
+  if (configureSessionEnv) {
+    await runInSessionDO(stub, (instance) => {
+      configureSessionEnv((instance as unknown as SessionDOInternals).appEnv);
+    });
+  }
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -49,6 +49,30 @@ export interface SessionInternalRouteHandlers {
   expireDraft: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
+  piCredential: SessionInternalRouteHandler;
+  piCapabilityAuthority: SessionInternalRouteHandler;
+  piContext: SessionInternalRouteHandler;
+  piControl: SessionInternalRouteHandler;
+  piControlCompletion: SessionInternalRouteHandler;
+  piAgentControl: SessionInternalRouteHandler;
+  piRepositoryTool: SessionInternalRouteHandler;
+  piRepositoryMaterialization: SessionInternalRouteHandler;
+  piBrowserAuthorize: SessionInternalRouteHandler;
+  piBrowserRead: SessionInternalRouteHandler;
+  piCodeModeAuthorize: SessionInternalRouteHandler;
+  piAttachment: SessionInternalRouteHandler;
+  piMcpList: SessionInternalRouteHandler;
+  piMcpRead: SessionInternalRouteHandler;
+  piMemoryRead: SessionInternalRouteHandler;
+  piMemoryWrite: SessionInternalRouteHandler;
+  piMemorySearch: SessionInternalRouteHandler;
+  piMemoryAuthorize: SessionInternalRouteHandler;
+  piSandboxCommand: SessionInternalRouteHandler;
+  piExecutions: SessionInternalRouteHandler;
+  piExecutionCancel: SessionInternalRouteHandler;
+  piExecutionOutput: SessionInternalRouteHandler;
+  piResult: SessionInternalRouteHandler;
+  piEvent: SessionInternalRouteHandler;
   xaiTokenRefresh: SessionInternalRouteHandler;
   scmCredentials: SessionInternalRouteHandler;
   tunnelUrls: SessionInternalRouteHandler;
@@ -129,6 +153,98 @@ export function createSessionInternalRoutes(
       path: SessionInternalPaths.openaiTokenRefresh,
       handler: handlers.openaiTokenRefresh,
     },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piCredential,
+      handler: handlers.piCredential,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piCapabilityAuthority,
+      handler: handlers.piCapabilityAuthority,
+    },
+    { method: "POST", path: SessionInternalPaths.piContext, handler: handlers.piContext },
+    { method: "POST", path: SessionInternalPaths.piControl, handler: handlers.piControl },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piControlCompletion,
+      handler: handlers.piControlCompletion,
+    },
+    { method: "POST", path: SessionInternalPaths.piAgentControl, handler: handlers.piAgentControl },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piRepositoryTool,
+      handler: handlers.piRepositoryTool,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piRepositoryMaterialization,
+      handler: handlers.piRepositoryMaterialization,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piCodeModeAuthorize,
+      handler: handlers.piCodeModeAuthorize,
+    },
+    { method: "POST", path: SessionInternalPaths.piAttachment, handler: handlers.piAttachment },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piBrowserAuthorize,
+      handler: handlers.piBrowserAuthorize,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piBrowserRead,
+      handler: handlers.piBrowserRead,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMcpRead,
+      handler: handlers.piMcpRead,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piMcpList,
+      handler: handlers.piMcpList,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMemoryRead,
+      handler: handlers.piMemoryRead,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMemoryWrite,
+      handler: handlers.piMemoryWrite,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMemorySearch,
+      handler: handlers.piMemorySearch,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMemoryAuthorize,
+      handler: handlers.piMemoryAuthorize,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piSandboxCommand,
+      handler: handlers.piSandboxCommand,
+    },
+    { method: "GET", path: SessionInternalPaths.piExecutions, handler: handlers.piExecutions },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piExecutionCancel,
+      handler: handlers.piExecutionCancel,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piExecutionOutput,
+      handler: handlers.piExecutionOutput,
+    },
+    { method: "POST", path: SessionInternalPaths.piResult, handler: handlers.piResult },
+    { method: "POST", path: SessionInternalPaths.piEvent, handler: handlers.piEvent },
     {
       method: "POST",
       path: SessionInternalPaths.xaiTokenRefresh,

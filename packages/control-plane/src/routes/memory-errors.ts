@@ -1,17 +1,10 @@
 import type { MemoryAccessDenial } from "../authorization/memory-access";
 import { error, json } from "../http/responses";
-import { MemoryError, type MemoryErrorKind } from "../memory/errors";
-
-const ERROR_STATUS: Record<MemoryErrorKind, number> = {
-  validation: 400,
-  forbidden: 403,
-  not_found: 404,
-  conflict: 409,
-};
+import { MEMORY_ERROR_STATUS, MemoryError } from "../memory/errors";
 
 /** Translate expected memory failures to HTTP responses while preserving unexpected errors. */
 export function memoryErrorResponse(cause: unknown): Response {
-  if (cause instanceof MemoryError) return error(cause.message, ERROR_STATUS[cause.kind]);
+  if (cause instanceof MemoryError) return error(cause.message, MEMORY_ERROR_STATUS[cause.kind]);
   throw cause;
 }
 
@@ -24,7 +17,7 @@ export function memoryDenialResponse(denial: MemoryAccessDenial): Response {
       reason_code: denial.reasonCode,
       repository: denial.repository,
     },
-    ERROR_STATUS[denial.reason]
+    MEMORY_ERROR_STATUS[denial.reason]
   );
 }
 

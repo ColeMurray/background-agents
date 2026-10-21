@@ -15,6 +15,7 @@ import {
 } from "../router.test-support";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
+import { piControlRoutes } from "./pi-controls";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
@@ -24,7 +25,7 @@ vi.mock("../auth/authenticate", async (importOriginal) => ({
   authenticate: mocks.authenticate,
 }));
 
-const handleRequest = createTestRequestHandler([sessionRuntimeProxyRoutes]);
+const handleRequest = createTestRequestHandler([sessionRuntimeProxyRoutes, piControlRoutes]);
 
 const USER: Principal = { kind: "user", userId: "user-1" };
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -138,6 +139,7 @@ describe("session runtime proxy routes", () => {
       init: { headers: SANDBOX_HEADERS, body: JSON.stringify({ error: "crash", fatal: true }) },
     },
     { method: "GET", path: "/sessions/session-1/events", internal: "events" },
+    { method: "GET", path: "/sessions/session-1/executions", internal: "piExecutions" },
     { method: "GET", path: "/sessions/session-1/artifacts", internal: "artifacts" },
     { method: "GET", path: "/sessions/session-1/participants", internal: "participants" },
     {
@@ -188,7 +190,11 @@ describe("session runtime proxy routes", () => {
     async ({ method, path, internal, ...options }) => {
       const paths: string[] = [];
       const fetch = vi.fn(async (request: Request) => {
-        paths.push(new URL(request.url).pathname);
+        const pathname = new URL(request.url).pathname;
+        paths.push(pathname);
+        if (pathname === SessionInternalPaths.verifySandboxToken) {
+          return Response.json({ sandboxId: "sandbox-1", credentialClass: "agent" });
+        }
         return Response.json({ ok: true });
       });
       const init = "init" in options ? options.init : {};
@@ -789,6 +795,158 @@ describe("session runtime proxy routes", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "repoOwner must be a string" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  describe("Pi controls", () => {
+    it("keeps the agent's lifecycle out of the collaborator's authority", async () => {
+      const fetch = vi.fn(async () => Response.json({ state: "accepted" }, { status: 202 }));
+      const env = createEnv(fetch, { permissions: ["sessions.read", "sessions.collaborate"] });
+
+      const messaging = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            requestId: "collaborator-follow-up",
+            action: "follow_up",
+            content: "go",
+          }),
+        }),
+        env
+      );
+      const forked = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            requestId: "collaborator-fork",
+            action: "fork",
+            conversationId: 1,
+          }),
+        }),
+        env
+      );
+      const lifecycle = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/lifecycle-control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ requestId: "collaborator-compact", action: "compact" }),
+        }),
+        env
+      );
+
+      expect(messaging.status).toBe(202);
+      // A collaborator may not reshape the agent's durable conversation.
+      expect(forked.status).toBe(400);
+      await expect(forked.json()).resolves.toMatchObject({
+        error: "Pi control action is not allowed on this route",
+      });
+      expect(lifecycle.status).toBe(403);
+      expect(fetch).toHaveBeenCalledOnce();
+    });
+
+    it("admits the agent's lifecycle to a session owner", async () => {
+      const requests: Request[] = [];
+      const fetch = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return Response.json({ state: "accepted" }, { status: 202 });
+      });
+
+      const payloads: Record<string, Record<string, unknown>> = {
+        fork: { action: "fork", conversationId: 1, entryId: 2 },
+        reset: { action: "reset", conversationId: 1 },
+        handoff: { action: "handoff", conversationId: 1, handoff: "next" },
+        compact: { action: "compact", conversationId: 1 },
+        cancel_exact: { action: "cancel_exact", taskId: 3 },
+      };
+
+      for (const [action, payload] of Object.entries(payloads)) {
+        const response = await dispatch(
+          new Request("https://test.local/sessions/session-1/pi/lifecycle-control", {
+            method: "POST",
+            headers: JSON_HEADERS,
+            body: JSON.stringify({ requestId: `owner-${action}`, ...payload }),
+          }),
+          createEnv(fetch)
+        );
+        expect(response.status).toBe(202);
+      }
+      expect(requests).toHaveLength(5);
+    });
+
+    it("forwards canonical browser identity into SessionDO", async () => {
+      const requests: Request[] = [];
+      const fetch = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return Response.json({ state: "accepted" }, { status: 202 });
+      });
+
+      const response = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ requestId: "web-control", action: "follow_up", content: "focus" }),
+        }),
+        createEnv(fetch)
+      );
+
+      expect(response.status).toBe(202);
+      expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.piControl);
+      await expect(requests[0].json()).resolves.toMatchObject({
+        actorId: "user-1",
+        canonicalUserId: "user-1",
+        source: "web",
+      });
+    });
+
+    it("forwards verified Slack actor identity and only explicit Slack actions", async () => {
+      authenticateAs({
+        kind: "service",
+        service: "slack-bot",
+        actor: {
+          provider: "slack",
+          providerUserId: "U0123",
+          canonicalUserId: "user-1",
+          participantUserId: "slack:U0123",
+        },
+      });
+      const requests: Request[] = [];
+      const fetch = vi.fn(async (request: Request) => {
+        requests.push(request);
+        return Response.json({ state: "accepted" }, { status: 202 });
+      });
+      const env = createEnv(fetch);
+
+      const allowed = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            requestId: "slack-control",
+            action: "follow_up",
+            content: "check tests",
+          }),
+        }),
+        env
+      );
+      const denied = await dispatch(
+        new Request("https://test.local/sessions/session-1/pi/control", {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ requestId: "slack-send", action: "send", content: "bypass" }),
+        }),
+        env
+      );
+
+      expect(allowed.status).toBe(202);
+      await expect(requests[0].json()).resolves.toMatchObject({
+        actorId: "slack:U0123",
+        canonicalUserId: "user-1",
+        source: "slack",
+      });
+      expect(denied.status).toBe(403);
+      expect(fetch).toHaveBeenCalledOnce();
+    });
   });
 
   describe("budget updates", () => {

@@ -14,6 +14,7 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
 import type { GitPushSpec } from "../source-control";
+import { sandboxRuntimeModeSchema } from "@open-inspect/shared";
 import { z } from "zod";
 
 // Database row types (match SQLite schema)
@@ -60,6 +61,7 @@ export const sessionRowSchema = z.object({
   max_cost_usd: z.number().nullable(), // Mutable effective session cost limit; NULL = unlimited
   budget_exhausted: z.number(), // 0 = promptable by budget, 1 = paused
   environment_id: z.string().nullable(), // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
+  pi_feature_capability_snapshot: z.string().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -214,6 +216,8 @@ export const sandboxRowSchema = z.object({
    */
   fenced: z.number(),
   startup_rejected: z.number().default(0),
+  runtime_mode: sandboxRuntimeModeSchema.removeDefault().optional(),
+  execution_bridge_id: z.string().nullable().optional(),
   created_at: z.number(),
 });
 

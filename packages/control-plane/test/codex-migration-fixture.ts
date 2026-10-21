@@ -26,5 +26,7 @@ export const CODEX_MIGRATION_TABLES = [
   "automation_environments",
   "automation_runs",
 ];
-export const CODEX_MIGRATION_SCHEMA_OBJECTS =
-  "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('index', 'trigger', 'view') AND sql IS NOT NULL ORDER BY type, name";
+export const CODEX_MIGRATION_SCHEMA_OBJECTS = `SELECT type, name, tbl_name, sql FROM sqlite_master
+   WHERE type IN ('index', 'trigger', 'view') AND sql IS NOT NULL
+     AND tbl_name IN (${CODEX_MIGRATION_TABLES.map((table) => `'${table}'`).join(", ")})
+   ORDER BY type, name`;

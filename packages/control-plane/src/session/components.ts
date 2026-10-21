@@ -55,12 +55,18 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
+import { callSharedMcpTool } from "./mcp-shared-client";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { MemoryRecordStore } from "../db/memory-records";
+import { SessionMemorySelectionStore } from "../db/session-memory-selections";
+import { LexicalFactIndex } from "../db/lexical-fact-index";
+import { createSessionMemoryAccessPolicy } from "../authorization/memory-access-factory";
+import { SessionMemoryService } from "../memory/session-memory-service";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
@@ -76,6 +82,8 @@ import { SessionCoreRepository } from "./session-core-repository";
 // The composition root grants each consumer only its declared sandbox port.
 // eslint-disable-next-line no-restricted-imports
 import { SandboxRepository } from "./sandbox-repository";
+import { SandboxCommandRepository } from "./sandbox-command-repository";
+import { PiSandboxExecutionCoordinator } from "./pi-sandbox-execution";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -118,6 +126,7 @@ import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler
 import { SessionSandboxEventProcessor } from "./sandbox-events/processor";
 import { SandboxRuntimeEventHandler } from "./sandbox-events/runtime.handler";
 import { SandboxStreamingEventHandler } from "./sandbox-events/streaming.handler";
+import { SandboxCommandEventHandler } from "./sandbox-events/command.handler";
 import { SandboxPushService } from "./sandbox-push-service";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { PersistedTerminalMessageProjectionStore } from "./terminal-message-projection-store";
@@ -132,6 +141,8 @@ import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
 import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
+import { PiSandboxExecutionHandler } from "./http/handlers/pi-sandbox-execution.handler";
+import { PiExecutionsHandler } from "./http/handlers/pi-executions.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -172,6 +183,24 @@ import {
 } from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
+import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
+import { PiCredentialService } from "./pi-credential-service";
+import { PiResultHandler } from "./http/handlers/pi-result.handler";
+import { PiControlHandler } from "./http/handlers/pi-control.handler";
+import { PiControlRepository } from "./pi-control-repository";
+import { PiEventHandler } from "./http/handlers/pi-event.handler";
+import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
+import { PiOperationRepository } from "./pi-operation-repository";
+import { SessionSkillStore } from "../db/session-skills";
+import { PiRepositoryTools } from "../pi/repository-tools";
+import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
+import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
+import { McpSessionHandler } from "./http/handlers/mcp-session.handler";
+import { McpServerReviewStore } from "../db/mcp-server-reviews";
+import { PiMemoryHandler } from "./http/handlers/pi-memory.handler";
+import { createPiOperationFence } from "./http/handlers/pi-operation-fence";
+import { evaluateTurnAuthor } from "../harness/turn-authority";
+import { BrowserGateway } from "./http/handlers/browser-gateway.handler";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -225,6 +254,7 @@ export interface SessionComponents {
   pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
   callbackService: CallbackNotificationService;
+  piSandboxExecution: PiSandboxExecutionCoordinator;
 }
 
 /**
@@ -302,6 +332,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // unmodelled, so it needs the session logger — and it owns encrypt-at-rest
   // for access secrets, so it takes the key.
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
+  const sandboxCommandRepository = new SandboxCommandRepository(sql, transaction);
 
   // Tier 2 — sockets and alarm scheduling.
   const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
@@ -445,7 +476,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new SessionDiffStore(sql),
     sessionCoreRepository,
     messenger,
-    log
+    log,
+    () => generateId(),
+    () => Date.now(),
+    env.PI_SESSION
+      ? async () => {
+          const sessionId = getPublicSessionId();
+          await env.PI_SESSION!.refreshDiff(sessionId);
+        }
+      : undefined
   );
   const diffsHandler = new SessionDiffsHandler(diffService);
   const eventStream = new SessionEventStream(eventRepository);
@@ -477,6 +516,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     callbackService,
     recordTerminalMessage
   );
+  const piOperations = new PiOperationRepository(sql);
   const shutdown = new SandboxShutdownCoordinator({
     log,
     store: new SandboxShutdownRepository(sql),
@@ -528,6 +568,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (): void => messageQueue.broadcastPromptQueue(),
     (): Promise<void> => messageQueue.processMessageQueue()
   );
+  async function processPiEvent(event: SandboxIngressEvent): Promise<void> {
+    await sandboxEventProcessor.processSandboxEvent(event);
+  }
   const messageQueue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
@@ -559,33 +602,161 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     scmProviderName,
     alarmScheduler,
     executionStop,
+    piOperations,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
-    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
+    env.PI_SESSION
   );
 
   // Tier 7 — services over the queue and lifecycle.
+  const isPiSession = () => sessionCoreRepository.getSession()?.harness === "pi";
+  const isSandboxlessPiSession = () => isPiSession() && sandboxRepository.getSandbox() === null;
   const presenceService = new PresenceService({
     getAuthenticatedClients: () => wsManager.getAuthenticatedClients(),
     messenger,
     send: (ws, msg) => wsManager.send(ws, msg),
     getSandboxSocket: () => wsManager.getSandboxSocket(),
     isSpawning: () => lifecycleManager.isSpawning(),
-    warmSandbox: () => lifecycleManager.spawnSandbox("warm"),
+    warmSandbox: async () => {
+      if (isSandboxlessPiSession()) return;
+      await lifecycleManager.spawnSandbox("warm");
+    },
     log,
   });
 
+  const stopExecution = async () => {
+    const session = sessionCoreRepository.getSession();
+    if (session?.harness === "pi" && env.PI_SESSION) {
+      await messageQueue.stopPiExecution("Execution was stopped");
+      return;
+    }
+    await executionStop.stop();
+  };
   const messageService = new MessageService({
     repository: messageRepository,
     eventRepository,
     artifactRepository,
     usageRepository,
     messageQueue,
-    stopExecution: () => executionStop.stop(),
+    stopExecution,
     parseArtifactMetadata: (artifact) => parseArtifactMetadata(artifact, log),
     transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
+  // The shared MCP lane's resolver: the deployment's own servers, so the
+  // session's repositories decide which shared servers exist for it.
+  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
+  const mcpServerLookup: McpServerLookup = {
+    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+  };
+  const mcpReviewStore = new McpServerReviewStore(db);
+  const mcpSessionHandler = new McpSessionHandler({
+    mcp: {
+      liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.mcp,
+      sessionCapability: () =>
+        sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.mcp ?? "off",
+      sharedServers: async () => {
+        const repositories = sessionCoreRepository.getSessionRepositories();
+        const servers = await mcpServerLookup.getDecryptedForSession(
+          repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
+        );
+        const views = [];
+        for (const server of servers) {
+          const metadata = await mcpStore.get(server.id);
+          if (!metadata) continue;
+          const toolNames = await mcpReviewStore.reviewedReadOnlyToolNames(
+            server.id,
+            metadata.revision
+          );
+          if (toolNames.length === 0) continue;
+          views.push({
+            serverId: server.id,
+            serverName: server.name,
+            endpointHost: new URL(server.url ?? "https://mcp.invalid").host,
+            toolNames,
+          });
+        }
+        return views;
+      },
+      callSharedTool: async (request) => {
+        // The session's own repositories decide which servers exist here, so
+        // the shared lane is scoped exactly like the sandbox's.
+        const repositories = sessionCoreRepository.getSessionRepositories();
+        const servers = await mcpServerLookup.getDecryptedForSession(
+          repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
+        );
+        const server = servers.find((entry) => entry.id === request.serverId);
+        if (!server) {
+          throw new Error("This MCP server is not available to this session");
+        }
+        const metadata = await mcpStore.get(server.id);
+        if (!metadata) {
+          throw new Error("This MCP server is not available to this session");
+        }
+        const toolNames = await mcpReviewStore.reviewedReadOnlyToolNames(
+          server.id,
+          metadata.revision
+        );
+        if (!toolNames.includes(request.toolName)) {
+          throw new Error("This MCP tool is not part of the reviewed catalog");
+        }
+        return callSharedMcpTool(
+          {
+            id: server.id,
+            name: server.name,
+            type: server.type,
+            url: server.url,
+            headers: server.headers,
+            env: server.env,
+          },
+          request.toolName,
+          request.arguments
+        );
+      },
+      operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
+    },
+    getSessionId: getPublicSessionId,
+  });
+  const browserGateway = new BrowserGateway({
+    browser: {
+      liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.browser,
+      sessionCapability: () =>
+        sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.browser ?? "off",
+      allowedDomains: () =>
+        (env.PI_BROWSER_ALLOWED_DOMAINS ?? "")
+          .split(",")
+          .map((domain) => domain.trim())
+          .filter((domain) => domain.length > 0),
+      operationActor: (operationId) => messageRepository.getMessageHumanActor(operationId),
+      operationBelongsToSession: (operationId) =>
+        messageRepository.getMessageById(operationId) !== null,
+      // The session holds the browser. The agent never does, and the binding
+      // never leaves this gateway.
+      browserAvailable: () => env.BROWSER?.available() ?? false,
+      read: async (request) => {
+        const transport = env.BROWSER;
+        if (!transport) throw new Error("The browser is not available in this deployment");
+        return transport.run(request);
+      },
+      recordActivity: (input) => {
+        eventRepository.createEvent({
+          id: `browser-activity:${input.operationId}:${Date.now()}`,
+          type: "browser_activity",
+          data: JSON.stringify({
+            url: input.url,
+            outcome: input.outcome,
+            reason: input.reason,
+            actorId: input.actorId,
+          }),
+          messageId: input.operationId,
+          createdAt: Date.now(),
+        });
+      },
+    },
+    getSessionId: getPublicSessionId,
+  });
+
   const budgetService = new SessionBudgetService(
     sessionCoreRepository,
     messageRepository,
@@ -593,10 +764,25 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     executionStop,
     () => messageQueue.processMessageQueue(),
-    generateId
+    generateId,
+    {
+      isPiSession,
+      stopPiExecution: async (reason) => {
+        // Do not call back into PiSessionDO while acknowledging Pi's outbox
+        // fetch; a settled abort may need that same relay to close first.
+        backgroundTasks.submit(() => messageQueue.stopPiExecution(reason), {
+          name: "pi.budget_stop",
+        });
+      },
+    }
   );
 
-  const updateLastActivity = (timestamp: number) => lifecycleManager.updateLastActivity(timestamp);
+  const updateLastActivity = (timestamp: number) => {
+    if (!isSandboxlessPiSession()) lifecycleManager.updateLastActivity(timestamp);
+  };
+  const scheduleInactivityCheck = async () => {
+    if (!isSandboxlessPiSession()) await lifecycleManager.scheduleInactivityCheck();
+  };
   const streamingEventHandler = new SandboxStreamingEventHandler(
     backgroundTasks,
     eventRepository,
@@ -621,16 +807,37 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     recordTerminalMessage,
     statusService,
-    (reason) => lifecycleManager.triggerSnapshot(reason),
+    (reason) =>
+      isSandboxlessPiSession() ? Promise.resolve() : lifecycleManager.triggerSnapshot(reason),
     updateLastActivity,
-    () => lifecycleManager.scheduleInactivityCheck(),
+    scheduleInactivityCheck,
     () => messageQueue.processMessageQueue(),
     () => messageQueue.broadcastPromptQueue(),
     budgetService,
     transaction,
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-    }
+    },
+    isPiSession
+  );
+  const piSandboxExecution = new PiSandboxExecutionCoordinator({
+    commands: sandboxCommandRepository,
+    sandboxes: sandboxRepository,
+    lifecycle: lifecycleManager,
+    sockets: lifecycleSockets,
+    alarmScheduler,
+    getSession: () => sessionCoreRepository.getSession(),
+    isFenced: () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()) !== null,
+    generateId,
+    now: () => Date.now(),
+  });
+  const commandEventHandler = new SandboxCommandEventHandler(
+    sandboxCommandRepository,
+    () => Date.now(),
+    () =>
+      backgroundTasks.submit(() => piSandboxExecution.onCommandTerminal(), {
+        name: "sandbox_command.dispatch_next",
+      })
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -645,7 +852,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         name: "callback.refresh_slack_activity",
         context: { message_id: messageId },
       }),
-    () => lifecycleManager.scheduleInactivityCheck(),
+    scheduleInactivityCheck,
     backgroundTasks,
     messageQueue,
     log,
@@ -666,9 +873,66 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     {
       generationReady: (event) => lifecycleManager.onShutdownGenerationReady(event),
       prepared: (event) => lifecycleManager.onShutdownPrepared(event),
+    },
+    {
+      handle: (event) => commandEventHandler.handle(event),
+      onSandboxReady: () => piSandboxExecution.onSandboxReady(),
     }
   );
-
+  const piResultHandler = new PiResultHandler(
+    messageRepository,
+    processPiEvent,
+    new PiResultReceiptRepository(sql),
+    async (result) => {
+      await terminalMessageProjection.flushPending();
+      await statusService.reconcileAfterExecution(result.success);
+      messenger.broadcast({
+        type: "processing_status",
+        isProcessing: messageRepository.getProcessingMessage() !== null,
+      });
+      messageQueue.broadcastPromptQueue();
+      await messageQueue.processMessageQueue();
+    },
+    isPiSession,
+    getPublicSessionId,
+    Date.now,
+    (operationId, settledAt) => {
+      piSandboxExecution.cancelOperation(operationId);
+      piOperations.settle(
+        operationId,
+        ["dispatching", "ambiguous", "admitted", "stopping"],
+        settledAt
+      );
+    }
+  );
+  const piControlRepository = new PiControlRepository(sql);
+  const piControlHandler = new PiControlHandler(
+    sessionCoreRepository,
+    piControlRepository,
+    env.PI_SESSION,
+    log,
+    (input) => messageQueue.recordPiControlMessage(input)
+  );
+  const visiblePiTokens = new Set<string>();
+  const piEventHandler = new PiEventHandler(
+    piOperations,
+    processPiEvent,
+    isPiSession,
+    Date.now,
+    (event) => {
+      if (event.type !== "token" || visiblePiTokens.has(event.operationId)) return;
+      visiblePiTokens.add(event.operationId);
+      log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "first_token_visible",
+        timestamp_ms: event.timestampMs,
+        operation_id: event.operationId,
+        projection_sequence: event.sequence,
+        harness: "pi",
+        execution_backend: "durable_object",
+      });
+    }
+  );
   const alarmHandler = createAlarmHandler({
     repository: messageRepository,
     messageQueue,
@@ -682,6 +946,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     preserveBeforeWatchdogs: (allowCaptureRetry) =>
       lifecycleManager.handleShutdownAlarm(allowCaptureRetry),
     redriveIdleQueue: () => lifecycleManager.redriveIdleQueue(),
+    sandboxCommandDeadlines: () => piSandboxExecution.handleAlarm(),
+    reconcilePiStop: async () => {
+      if (!isPiSession()) return false;
+      await messageQueue.processMessageQueue();
+      return true;
+    },
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
@@ -760,6 +1030,94 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new ScmCredentialsService(sourceControlProvider(), requestLog, () =>
       resolveCredentialScope(getPublicSessionId())
     ).getCredentials();
+  const piCredentialService = new PiCredentialService(db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
+  const piRepositoryTools = new PiRepositoryTools({
+    repositories: () => sessionCoreRepository.getSessionRepositories(),
+    resolveCredentialScope: () => resolveCredentialScope(getPublicSessionId()),
+    provider: sourceControlProvider,
+    observeMaterialization: (event) => log.info("pi.repository_materialization", event),
+  });
+  // The tenant's memory, reached the way the sandbox path reaches it: the same
+  // service, the same access policy, over the session's own global store.
+  const piMemoryService = (requestId: string) =>
+    new SessionMemoryService({
+      selections: new SessionMemorySelectionStore(db),
+      records: new MemoryRecordStore(db),
+      factIndex: new LexicalFactIndex(db),
+      access: createSessionMemoryAccessPolicy({ db }),
+      requestId,
+    });
+  const piBridgeHandler = new PiBridgeHandler({
+    sessions: sessionCoreRepository,
+    messages: messageRepository,
+    controls: piControlRepository,
+    // A harness with no sandbox has no containment, so the turn's author is
+    // checked again at the moment of each action: a user suspended, or
+    // removed from the team, after the turn started keeps nothing.
+    authorMayAct: async ({ actorId }) => {
+      const session = await new SessionIndexStore(db).get(getPublicSessionId());
+      if (!session) return { kind: "denied", reason: "The session is not initialized" };
+      return evaluateTurnAuthor(
+        { db, action: "collaborate" },
+        {
+          sessionId: getPublicSessionId(),
+          userId: actorId,
+          sessionRow: {
+            id: getPublicSessionId(),
+            ownerUserId: session.userId ?? null,
+            ownerTeamId: session.ownerTeamId ?? null,
+            visibility: session.visibility,
+          },
+        }
+      );
+    },
+    recordCodeModeActivity: (input) => {
+      // The Code Mode run is visible to the session's collaborators, with its
+      // actor.
+      eventRepository.createEvent({
+        id: `code-mode-activity:${input.operationId}:${Date.now()}`,
+        type: "code_mode_activity",
+        data: JSON.stringify({ outcome: input.outcome, actorId: input.actorId }),
+        messageId: input.operationId,
+        createdAt: Date.now(),
+      });
+    },
+    agentControls: { handle: (request) => piControlHandler.handle(request) },
+    credentials: piCredentialService,
+    skills: new SessionSkillStore(db),
+    attachments: attachmentRepository,
+    media: env.MEDIA_BUCKET,
+    repositories: piRepositoryTools,
+    diffs: diffService,
+    memory: {
+      renderedContext: ({ sessionId, requestId }) =>
+        piMemoryService(requestId).renderedContext(sessionId),
+    },
+    getSessionId: getPublicSessionId,
+  });
+  const piMemoryHandler = new PiMemoryHandler({
+    getSessionId: getPublicSessionId,
+    service: piMemoryService,
+    activeOperation: createPiOperationFence({
+      sessions: sessionCoreRepository,
+      messages: messageRepository,
+      controls: piControlRepository,
+    }),
+  });
+  const piSandboxExecutionHandler = new PiSandboxExecutionHandler({
+    execution: piSandboxExecution,
+    commands: sandboxCommandRepository,
+    getProcessingMessageId: () => messageRepository.getProcessingMessage()?.id ?? null,
+    getOperationActor: (operationId) => messageRepository.getMessageActor(operationId),
+    sessionCapability: () =>
+      sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.sandboxExecution ??
+      "off",
+    liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.sandboxExecution,
+  });
+  const piExecutionsHandler = new PiExecutionsHandler({
+    commands: sandboxCommandRepository,
+    execution: piSandboxExecution,
+  });
 
   const sandboxHandler = new SandboxHandler(
     messageRepository,
@@ -790,7 +1148,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    generateId
+    generateId,
+    Date.now,
+    env.PI_SESSION,
+    () => createPiDeploymentCapabilitySnapshot(env)
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
     sessionCoreRepository,
@@ -802,7 +1163,16 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     durableObjectId,
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
-    }
+    },
+    // The Pi Durable Object preserves itself for the archive: it stops the
+    // agent's work and delivers every event the agent produced, so the
+    // session's timeline — and the export read from it — hold the whole
+    // record.
+    env.PI_SESSION
+      ? async () => {
+          await env.PI_SESSION!.preserveForArchive(getPublicSessionId());
+        }
+      : undefined
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()
@@ -969,6 +1339,43 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       sandboxHandler.verifySandboxToken(request, requestLog),
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
+    piCredential: (request) => piBridgeHandler.credential(request),
+    piCapabilityAuthority: () => {
+      const session = sessionCoreRepository.getSession();
+      if (!session) return Response.json({ error: "Session is not initialized" }, { status: 404 });
+      if (session.harness !== "pi") {
+        return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
+      }
+      return Response.json(
+        {
+          snapshot: sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities ?? null,
+          current: createPiDeploymentCapabilitySnapshot(env).capabilities,
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    },
+    piContext: (request) => piBridgeHandler.context(request),
+    piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),
+    piRepositoryMaterialization: (request) => piBridgeHandler.repositoryMaterialization(request),
+    piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
+    piBrowserRead: (request) => browserGateway.readRequest(request),
+    piCodeModeAuthorize: (request) => piBridgeHandler.codeModeAuthorize(request),
+    piAttachment: (request) => piBridgeHandler.attachment(request),
+    piMcpList: (request) => mcpSessionHandler.list(request),
+    piMcpRead: (request) => mcpSessionHandler.read(request),
+    piMemoryRead: (request) => piMemoryHandler.read(request),
+    piMemoryWrite: (request) => piMemoryHandler.write(request),
+    piMemorySearch: (request) => piMemoryHandler.search(request),
+    piMemoryAuthorize: (request) => piMemoryHandler.authorizeWrite(request),
+    piSandboxCommand: (request) => piSandboxExecutionHandler.handle(request),
+    piExecutions: (request) => Promise.resolve(piExecutionsHandler.list(request)),
+    piExecutionCancel: (request) => Promise.resolve(piExecutionsHandler.cancel(request)),
+    piExecutionOutput: (request) => Promise.resolve(piExecutionsHandler.output(request)),
+    piResult: (request) => piResultHandler.handle(request),
+    piControl: (request) => piControlHandler.handle(request),
+    piControlCompletion: (request) => piControlHandler.complete(request),
+    piAgentControl: (request) => piBridgeHandler.agentControl(request),
+    piEvent: (request) => piEventHandler.handle(request),
     xaiTokenRefresh: (_request, _url, requestLog) => sandboxHandler.xaiTokenRefresh(requestLog),
     scmCredentials: (_request, _url, requestLog) => sandboxHandler.scmCredentials(requestLog),
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
@@ -1005,7 +1412,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const clientCommands = new SessionClientCommandFacade(
     connectionAuthenticator,
     messageQueue,
-    () => executionStop.stop(),
+    stopExecution,
     presenceService,
     eventStream,
     (action) => lifecycleManager.recoverShutdown(action)
@@ -1065,6 +1472,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     pushService,
     sessionLifecycleHandler,
     callbackService,
+    piSandboxExecution,
   };
 
   return {
@@ -1092,6 +1500,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 }
 
+/**
+ * The reviewed read-only tools of one server revision.
+ *
+ * A tool that is not in this list is not reachable: a mutation is
+ * unrepresentable, and an unreviewed tool never reaches the agent.
+ */
 interface LifecycleManagerDeps {
   recordWarning: (message: string, eventId: string) => void;
   resumeQueuedWork: () => Promise<void>;
@@ -1129,6 +1543,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     alarmScheduler,
     backgroundTasks,
   } = deps;
+  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
+  const mcpServerLookup: McpServerLookup = {
+    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+  };
+
   // ID generator adapter
   const idGenerator: IdGenerator = {
     generateId: () => generateId(),
@@ -1138,11 +1557,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const controlPlaneUrl =
     env.WORKER_URL ||
     `https://open-inspect-control-plane.${env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
-
-  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
-  const mcpServerLookup: McpServerLookup = {
-    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
-  };
 
   // Session-scoped gate: resolved from the primary member (the scalar mirror
   // this lookup is called with) — see resolveSessionScopedSettings for the
@@ -1192,7 +1606,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
     },
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
-    mcpServerLookup,
+    mcpServerLookup: mcpServerLookup,
     slackAgentNotifyLookup,
     recordWarning: deps.recordWarning,
     resumeQueuedWork: deps.resumeQueuedWork,

@@ -10,6 +10,10 @@ import {
   type SessionRow,
 } from "./types";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import {
+  piFeatureCapabilitySnapshotSchema,
+  type PiFeatureCapabilitySnapshot,
+} from "@open-inspect/shared/pi-feature-capabilities";
 
 const sessionCostRowSchema = sessionRowSchema.pick({ total_cost: true });
 
@@ -36,6 +40,7 @@ export interface UpsertSessionData {
   maxCostUsd?: number | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
+  piFeatureCapabilitySnapshot?: PiFeatureCapabilitySnapshot | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -86,11 +91,11 @@ export class SessionCoreRepository {
     }
 
     this.sql.exec(
-      // max_cost_usd is seeded on insert but absent from the update clause: once
-      // setSessionBudget has written a live limit, it is working state like
-      // branch_name and total_cost, and a repeated init must not reset it.
-      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, max_cost_usd, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      // max_cost_usd and pi_feature_capability_snapshot are seeded on insert but
+      // absent from the update clause: live budget state and creation-time Pi
+      // authority must not be reset by an upsert retry.
+      `INSERT INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, harness, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, pi_feature_capability_snapshot, max_cost_usd, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          session_name = excluded.session_name,
          title = excluded.title,
@@ -107,8 +112,8 @@ export class SessionCoreRepository {
          spawn_depth = excluded.spawn_depth,
          code_server_enabled = excluded.code_server_enabled,
          vnc_enabled = excluded.vnc_enabled,
-         sandbox_settings = excluded.sandbox_settings,
-         environment_id = excluded.environment_id,
+          sandbox_settings = excluded.sandbox_settings,
+          environment_id = excluded.environment_id,
          created_at = excluded.created_at,
          updated_at = excluded.updated_at`,
       data.id,
@@ -129,10 +134,23 @@ export class SessionCoreRepository {
       data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
+      data.piFeatureCapabilitySnapshot == null
+        ? null
+        : JSON.stringify(data.piFeatureCapabilitySnapshot),
       data.maxCostUsd ?? null,
       data.createdAt,
       data.updatedAt
     );
+  }
+
+  getPiFeatureCapabilitySnapshot(): PiFeatureCapabilitySnapshot | null {
+    const serialized = this.getSession()?.pi_feature_capability_snapshot;
+    if (serialized == null) return null;
+    try {
+      return piFeatureCapabilitySnapshotSchema.parse(JSON.parse(serialized));
+    } catch {
+      throw new SessionStorageIntegrityError("Malformed persisted Pi capability snapshot");
+    }
   }
 
   updateSessionRepoId(repoId: number): void {

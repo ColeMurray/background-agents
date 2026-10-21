@@ -1498,7 +1498,8 @@ describe("managed-skill repository reads", () => {
   });
 
   it("resolves commits with GitHub's SHA representation", async () => {
-    mockFetchWithTimeout.mockResolvedValueOnce(new Response("abc123\n"));
+    const sha = "a".repeat(40);
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response(`${sha}\n`));
     const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
 
     await expect(
@@ -1506,13 +1507,22 @@ describe("managed-skill repository reads", () => {
         { owner: "acme", name: "skills", ref: "feature/test" },
         repositoryScope
       )
-    ).resolves.toEqual({ sha: "abc123" });
+    ).resolves.toEqual({ sha });
     expect(mockFetchWithTimeout).toHaveBeenCalledWith(
       expect.stringContaining("commits/feature%2Ftest"),
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/vnd.github.sha" }),
       })
     );
+  });
+
+  it("rejects an abbreviated commit response", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response("abc123\n"));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "main" }, repositoryScope)
+    ).rejects.toThrow("full Git object SHA");
   });
 
   it("returns null for a missing commit ref", async () => {
@@ -1542,12 +1552,51 @@ describe("managed-skill repository reads", () => {
       repositoryScope
     );
 
-    expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
-      { type: "file", executable: false },
-      { type: "file", executable: true },
-      { type: "other", executable: false },
-      { type: "other", executable: false },
+    expect(tree.entries.map(({ type, mode, executable }) => ({ type, mode, executable }))).toEqual([
+      { type: "file", mode: "100644", executable: false },
+      { type: "file", mode: "100755", executable: true },
+      { type: "other", mode: "120000", executable: false },
+      { type: "other", mode: "160000", executable: false },
     ]);
+  });
+
+  it("rejects malformed provider Git modes", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        tree: [{ path: "SKILL.md", type: "blob", mode: "644", sha: "file", size: 10 }],
+      })
+    );
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.listTree(
+        { owner: "acme", name: "skills", commitSha: "a".repeat(40) },
+        repositoryScope
+      )
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  it("marks a caller-bounded tree as truncated without returning excess entries", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(
+      makeJsonResponse({
+        tree: Array.from({ length: 51 }, (_, index) => ({
+          path: `file-${index}.txt`,
+          type: "blob",
+          mode: "100644",
+          sha: `blob-${index}`,
+          size: 1,
+        })),
+      })
+    );
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    const tree = await provider.listTree(
+      { owner: "acme", name: "skills", commitSha: "a".repeat(40), maxEntries: 50 },
+      repositoryScope
+    );
+
+    expect(tree).toMatchObject({ truncated: true });
+    expect(tree.entries).toHaveLength(50);
   });
 
   it("resolves and recursively lists only the requested subtree", async () => {
@@ -1593,6 +1642,30 @@ describe("managed-skill repository reads", () => {
       )
     ).resolves.toEqual({ entries: [], truncated: false });
     expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads one commit-pinned file without listing its recursive parent tree", async () => {
+    mockFetchWithTimeout.mockResolvedValueOnce(new Response("hello"));
+    const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+    await expect(
+      provider.readFile(
+        {
+          owner: "acme",
+          name: "skills",
+          commitSha: "abc123",
+          path: "docs/README.md",
+          maxBytes: 100,
+        },
+        repositoryScope
+      )
+    ).resolves.toEqual(new TextEncoder().encode("hello"));
+    expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+      expect.stringContaining("/contents/docs/README.md?ref=abc123"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/vnd.github.raw" }),
+      })
+    );
   });
 
   it("cancels an undeclared oversized blob while streaming it", async () => {

@@ -23,7 +23,7 @@
         "parentSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "rootSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "spawnDepth": { "type": "number" },
-        "harness": { "type": "string", "enum": ["opencode", "claude", "codex"] },
+        "harness": { "type": "string", "enum": ["opencode", "claude", "codex", "pi"] },
         "repoOwner": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "repoName": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "baseBranch": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
@@ -93,6 +93,14 @@
         },
         "createdAt": { "type": "number" },
         "updatedAt": { "type": "number" },
+        "harnessState": {
+          "type": "object",
+          "properties": {
+            "included": { "type": "boolean", "const": false },
+            "reason": { "type": "string" }
+          },
+          "required": ["included", "reason"]
+        },
         "messages": {
           "type": "array",
           "items": {
@@ -138,7 +146,17 @@
               },
               "createdAt": { "type": "number" },
               "startedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
-              "completedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] }
+              "completedAt": { "anyOf": [{ "type": "number" }, { "type": "null" }] },
+              "originContext": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "propertyNames": { "type": "string" },
+                    "additionalProperties": {}
+                  },
+                  { "type": "null" }
+                ]
+              }
             },
             "required": [
               "id",
@@ -162,6 +180,11 @@
               "type": {
                 "type": "string",
                 "enum": [
+                  "command_accepted",
+                  "command_started",
+                  "command_output",
+                  "command_replay_gap",
+                  "command_completed",
                   "heartbeat",
                   "ready",
                   "sandbox_generation_ready",
@@ -174,15 +197,17 @@
                   "git_sync",
                   "error",
                   "execution_complete",
+                  "browser_activity",
+                  "cross_session_message",
                   "context_compacted",
-                  "artifact",
                   "push_complete",
                   "push_error",
                   "warning",
                   "boot_progress",
                   "session_title",
                   "snapshot_ready",
-                  "user_message"
+                  "user_message",
+                  "artifact"
                 ]
               },
               "data": {
@@ -207,7 +232,7 @@
               "model": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
               "harness": {
                 "anyOf": [
-                  { "type": "string", "enum": ["opencode", "claude", "codex"] },
+                  { "type": "string", "enum": ["opencode", "claude", "codex", "pi"] },
                   { "type": "null" }
                 ]
               },

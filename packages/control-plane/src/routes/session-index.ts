@@ -466,6 +466,15 @@ export async function handleDeleteSession(
   const sessionId = params.id;
 
   const sessionStore = new SessionIndexStore(ctx.db);
+  const session = await sessionStore.get(sessionId);
+  if (session?.harness === "pi") {
+    if (!env.PI_SESSION) return json({ error: "Pi Durable runtime unavailable" }, 503);
+    try {
+      await env.PI_SESSION.destroy(sessionId);
+    } catch {
+      return json({ error: "Pi Durable cleanup unavailable" }, 503);
+    }
+  }
   await sessionStore.delete(sessionId);
 
   return json({ status: "deleted", sessionId });

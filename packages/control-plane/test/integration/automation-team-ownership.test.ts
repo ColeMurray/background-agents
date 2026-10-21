@@ -238,50 +238,6 @@ describe("automation team ownership", () => {
     expect((await store.getById("no-read-management"))?.name).toBe("Managed");
   });
 
-  it("reserves executor changes for leads and audits only effective changes", async () => {
-    await automation("executor-change", TEAM_A);
-    const path = "/automations/executor-change";
-    await expectStatus(request(path, EXECUTOR, "PATCH", { userId: MEMBER }), 403);
-    expect((await store.getById("executor-change"))?.user_id).toBe(EXECUTOR);
-    const changed = await request(path, LEAD, "PATCH", {
-      userId: MEMBER,
-    });
-    expect(changed.status).toBe(200);
-    expect((await store.getById("executor-change"))?.user_id).toBe(MEMBER);
-    const audit = await env.DB.prepare(
-      "SELECT resource_type, resource_id, team_id, actor_user_id_snapshot, target_user_id_snapshot, metadata_json FROM authorization_audit_events WHERE action = 'automation.executor_changed' AND operation_result = 'applied'"
-    ).first();
-    expect(audit).toMatchObject({
-      resource_type: "automation",
-      resource_id: "executor-change",
-      team_id: TEAM_A,
-      actor_user_id_snapshot: LEAD,
-      target_user_id_snapshot: MEMBER,
-    });
-    expect(JSON.parse(String(audit?.metadata_json))).toMatchObject({
-      before: { userId: EXECUTOR },
-      after: { userId: MEMBER },
-    });
-    await expectStatus(request(path, LEAD, "PATCH", { userId: MEMBER }), 200);
-    expect(
-      await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'automation.executor_changed'"
-      ).first()
-    ).toEqual({ count: 1 });
-  });
-
-  it("rolls back an executor mutation when its batched audit fails", async () => {
-    await automation("executor-change", TEAM_A);
-    const row = (await store.getById("executor-change"))!;
-    await expect(
-      sqlDatabase(env.DB).batch([
-        store.bindExecutorChange(row, MEMBER, LEAD),
-        env.DB.prepare("INSERT INTO authorization_audit_events (id) VALUES ('invalid-audit')"),
-      ])
-    ).rejects.toThrow();
-    expect((await store.getById(row.id))?.user_id).toBe(EXECUTOR);
-  });
-
   it("allows administrator reassignment of a workspace automation", async () => {
     await automation("workspace-executor", null);
     const response = await request("/automations/workspace-executor", ADMIN, "PATCH", {

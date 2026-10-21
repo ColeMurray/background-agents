@@ -515,7 +515,7 @@ describe("session index routes", () => {
 
   it.each<Principal>([
     { kind: "service", service: "linear-bot", actor: null },
-    { kind: "sandbox", sessionId: "session-1" },
+    { kind: "sandbox", sessionId: "session-1", credentialClass: "agent" },
   ])("rejects createdBy=me for a $kind principal", async (principal) => {
     const response = await listSessions("?createdBy=me", principal);
 

@@ -40,6 +40,7 @@ import { UserStore } from "./user-store";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import { automationExecutionPredicate } from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
+import type { BoundAppliedAuditEvent } from "./team-audit";
 
 /** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
 function needsCanonicalOwner(row: AutomationRow): boolean {
@@ -726,18 +727,25 @@ export class AutomationStore {
 
   /**
    * Reassign the executor only if, at write time, the caller still holds reassignment authority
-   * and the candidate can still launch the automation's current targets.
+   * and the candidate can still launch the automation's current targets. The returned bundle is
+   * indivisible: UPDATE -> audit preserves the audit helper's immediate `changes()` dependency.
    */
-  bindExecutorChange(automation: AutomationRow, userId: string, actorUserId: string): SqlStatement {
+  bindExecutorChange(
+    automation: AutomationRow,
+    userId: string,
+    actorUserId: string,
+    audit: BoundAppliedAuditEvent
+  ): SqlStatement[] {
     const manageOwn = rolePermissionPredicate("automations.manage.own");
     const manageAny = rolePermissionPredicate("automations.manage.any");
+    const changedAt = Date.now();
     const execution = automationExecutionPredicate({
       automationId: automation.id,
       executionUserId: userId,
       requiresRepositoryUse: "stored",
       requiresEnvironmentUse: "stored",
     });
-    return this.db
+    const executorUpdate = this.db
       .prepare(
         `UPDATE automations SET user_id = ?, updated_at = ?
          WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
@@ -756,7 +764,7 @@ export class AutomationStore {
       )
       .bind(
         userId,
-        Date.now(),
+        changedAt,
         automation.id,
         automation.user_id,
         automation.owner_team_id,
@@ -767,6 +775,7 @@ export class AutomationStore {
         ...WORKSPACE_ADMIN_ROLE_KEYS,
         ...execution.values
       );
+    return [executorUpdate, audit.statement];
   }
 
   /** Build a soft-delete statement for composition in an atomic batch. */

@@ -1,6 +1,6 @@
 import { toSandboxBootPhase, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
-import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
+import type { SandboxReadiness, SandboxReadyOutcome } from "../../sandbox/lifecycle/ports";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
@@ -65,7 +65,7 @@ export class SandboxRuntimeEventHandler {
   async handleReady(
     event: Extract<SandboxEvent, { type: "ready" }>,
     context: SandboxEventContext
-  ): Promise<void> {
+  ): Promise<SandboxReadyOutcome> {
     // The runtime reports which harness actually booted; the session's
     // harness is fixed at create, so a mismatch is an image/config drift
     // worth a log line, never something to reconcile silently.
@@ -77,6 +77,19 @@ export class SandboxRuntimeEventHandler {
         reported_harness: event.harness,
       });
     }
+    // No await before the lifecycle-owned verdict. A fenced or retired
+    // generation must not mutate baselines, runtime facts, or command recovery.
+    const outcome = this.lifecycle.onRuntimeReady(
+      context.now,
+      event.harness,
+      event.preservationProtocolVersion,
+      event.runtimeMode,
+      event.runtimeVersion,
+      event.bridgeInstanceId,
+      event.sandboxId
+    );
+    if (outcome === "rejected") return outcome;
+
     this.diffService.pinBaselines(event);
     // Fills the column a fresh spawn cleared; a restore has already seeded
     // the snapshot's version, which outranks whatever this sandbox reports.
@@ -84,13 +97,9 @@ export class SandboxRuntimeEventHandler {
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
 
-    // No await between the authorized event and the lifecycle-owned commit.
-    // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (
-      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
-    ) {
-      return;
-    }
+    // An accepted reconnect recovers command state in the processor but does
+    // not wake the prompt queue or reset the inactivity deadline.
+    if (outcome !== "became_ready") return outcome;
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });
@@ -100,6 +109,7 @@ export class SandboxRuntimeEventHandler {
     // a bridge is attached (the disconnect check armed at attach, re-armed by
     // every alarm run), and the scheduler keeps the earlier deadline.
     await this.scheduleInactivityCheck();
+    return outcome;
   }
 
   /**

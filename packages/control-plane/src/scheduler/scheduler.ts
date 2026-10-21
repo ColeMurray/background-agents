@@ -10,6 +10,7 @@
 
 import {
   DEFAULT_HARNESS,
+  getStoredHarnessOrRefuse,
   getValidHarnessOrDefault,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
@@ -618,7 +619,14 @@ export class Scheduler {
       { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown } = { providerAuth: [] };
     if (launchCandidates.length > 0) {
       try {
-        const harness = getValidHarnessOrDefault(automation.harness);
+        // A stored harness this binary does not know is an automation this
+        // deployment cannot run. It must not become the built-in harness.
+        const harness = getStoredHarnessOrRefuse(automation.harness);
+        if (!harness) {
+          throw new AutomationExecutionUnauthorizedError(
+            `Automation ${automation.id} names a harness this deployment does not know`
+          );
+        }
         const providerAuth = await resolveAutomationProviderAuth(this.db, automation.id, harness);
         await validateHarnessExecution(
           this.db,
@@ -2019,7 +2027,9 @@ export class Scheduler {
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
-      harness: getValidHarnessOrDefault(automation.harness),
+      harness:
+        getStoredHarnessOrRefuse(automation.harness) ??
+        getValidHarnessOrDefault(automation.harness),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,

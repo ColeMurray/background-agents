@@ -53,7 +53,7 @@ const participantsResponseSchema = z.object({
   ),
 });
 
-type SessionParams = { id: string };
+type SessionParams = { id: string; commandId?: string };
 type ProxyHandler = (
   request: Request,
   env: Env,
@@ -89,6 +89,34 @@ function simpleProxy(config: SimpleProxyConfig): ProxyHandler {
     return response;
   };
 }
+
+const handleExecutionCancel: ProxyHandler = async (_request, _env, params, ctx) => {
+  const commandId = params.commandId;
+  if (!commandId) return error("Execution command not found", 404);
+  return ctx.sessionRuntime.fetch(
+    params.id,
+    SessionInternalPaths.piExecutionCancel,
+    { method: "POST" },
+    `?commandId=${encodeURIComponent(commandId)}`
+  );
+};
+
+const handleExecutionOutput: ProxyHandler = async (request, _env, params, ctx) => {
+  const commandId = params.commandId;
+  if (!commandId) return error("Execution command not found", 404);
+  const source = new URL(request.url).searchParams;
+  const search = new URLSearchParams({ commandId });
+  for (const key of ["afterSequence", "limitBytes"]) {
+    const value = source.get(key);
+    if (value !== null) search.set(key, value);
+  }
+  return ctx.sessionRuntime.fetch(
+    params.id,
+    SessionInternalPaths.piExecutionOutput,
+    undefined,
+    `?${search.toString()}`
+  );
+};
 
 function legacyTokenRefresh(
   provider: SubscriptionProviderId,
@@ -371,6 +399,11 @@ sessionRuntimeProxyRoutes.post(
       simpleProxy({ internalPath: SessionInternalPaths.stop, runtimeMethod: "POST" })
     )
 );
+sessionRuntimeProxyRoutes.get(
+  "/sessions/:id/executions/:commandId/output",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
+  (c) => dispatchSession(c, handleExecutionOutput)
+);
 sessionRuntimeProxyRoutes.post(
   "/sessions/:id/sandbox-error",
   admit({ ...SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE, authorization: NO_AUTHORIZATION }),
@@ -389,6 +422,20 @@ sessionRuntimeProxyRoutes.get(
       c,
       simpleProxy({ internalPath: SessionInternalPaths.events, forwardSearch: true })
     )
+);
+sessionRuntimeProxyRoutes.get(
+  "/sessions/:id/executions",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") }),
+  (c) =>
+    dispatchSession(
+      c,
+      simpleProxy({ internalPath: SessionInternalPaths.piExecutions, forwardSearch: true })
+    )
+);
+sessionRuntimeProxyRoutes.post(
+  "/sessions/:id/executions/:commandId/cancel",
+  admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("collaborate") }),
+  (c) => dispatchSession(c, handleExecutionCancel)
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/artifacts",

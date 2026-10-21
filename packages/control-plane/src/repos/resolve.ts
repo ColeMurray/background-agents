@@ -68,7 +68,8 @@ export async function resolveSessionRepositories(
   inputs: SessionRepositoryResolutionInput[],
   ctx: RequestContext,
   logger: Logger,
-  sourceControlProvider?: SourceControlProvider
+  sourceControlProvider?: SourceControlProvider,
+  options: { checkoutLayout?: "name" | "position" } = {}
 ): Promise<RepositoryRef[]> {
   const provider = sourceControlProvider ?? createRouteSourceControlProvider(env);
 
@@ -136,7 +137,7 @@ export async function resolveSessionRepositories(
     if (seenFullNames.has(fullName)) {
       throw new HttpError(`repositories resolve to the same repository: ${fullName}`, 400);
     }
-    if (seenNames.has(ref.repoName)) {
+    if (options.checkoutLayout !== "position" && seenNames.has(ref.repoName)) {
       throw new HttpError(`repositories resolve to the same checkout path: ${ref.repoName}`, 400);
     }
     seenFullNames.add(fullName);
