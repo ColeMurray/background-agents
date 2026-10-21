@@ -601,6 +601,37 @@ def test_long_native_diagnostics_are_clipped():
     assert "\n" not in state.error
 
 
+@pytest.mark.parametrize(
+    ("native", "leaked"),
+    [
+        ("Authorization: Bearer abc.def-ghi_jkl", "abc.def-ghi_jkl"),
+        ('401 {"error": {"api_key": "sk-proj-SyntheticFixtureKey"}}', "SyntheticFixtureKey"),
+        ("Incorrect API key provided: sk-SyntheticFixture1234", "SyntheticFixture1234"),
+        ("token=opaque-value; retry", "opaque-value"),
+        ("access eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "eyJzdWIiOiIxIn0"),
+        ("session 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc expired", "9f8e7d6c5b4a3928"),
+    ],
+)
+def test_native_diagnostics_redact_credentials(native, leaked):
+    state = _turn()
+    retry = _notice(
+        "error", threadId="thread", turnId="turn", willRetry=True, error={"message": native}
+    )
+    [warning] = state.accept(retry)
+    [config] = state.accept(_notice("configWarning", summary=native))
+    [error] = state.accept(_turn_completed("failed", {"message": native}))
+    for text in (warning["message"], config["message"], error["error"], state.error):
+        assert leaked not in text
+        assert "***" in text
+
+
+def test_redaction_keeps_ordinary_diagnostics_readable():
+    state = _turn()
+    message = "stream disconnected before completion: Reconnecting... 2/5 (gpt-6.1-sol)"
+    [warning] = state.accept(_notice("warning", message=message))
+    assert warning["message"] == message
+
+
 def _rate_limits(**snapshot):
     return _notice("account/rateLimits/updated", rateLimits=snapshot)
 
@@ -626,23 +657,32 @@ def test_rate_limit_warns_once_per_limit_state():
         }
     ]
     # Rolling updates within the same state stay quiet.
-    assert state.accept(_rate_limits(primary={"usedPercent": 95, "windowDurationMins": 300})) == []
+    assert state.accept(_rate_limits(primary={"usedPercent": 95})) == []
     reached = _rate_limits(
         rateLimitReachedType="rate_limit_reached",
-        primary={"usedPercent": 100, "windowDurationMins": 300},
+        primary={"usedPercent": 100},
         secondary={"usedPercent": 40, "windowDurationMins": 10080},
     )
-    assert state.accept(reached) == [
-        {
-            "type": "warning",
-            "scope": "provider",
-            "message": "OpenAI rate limit reached; 5-hour limit 100% used.",
-        }
+    # Omitted window metadata is carried over from the earlier update.
+    assert [event["message"] for event in state.accept(reached)] == [
+        "OpenAI rate limit reached; 5-hour limit 100% used, resets 2027-01-15 08:00 UTC."
     ]
     assert state.accept(reached) == []
-    [weekly] = state.accept(
-        _rate_limits(secondary={"usedPercent": 90, "windowDurationMins": 10080})
-    )
-    assert weekly["message"] == "OpenAI 7-day limit 90% used."
-    [spend] = state.accept(_rate_limits(spendControlReached=True))
+
+
+def test_sparse_rate_limit_updates_merge_into_the_last_snapshot():
+    state = _turn()
+    first = _rate_limits(limitId="quota-a", primary={"usedPercent": 92, "windowDurationMins": 300})
+    [warning] = state.accept(first)
+    assert warning["message"] == "OpenAI 5-hour limit 92% used."
+    # A missing limitId (or null field) does not clear the last known value.
+    assert state.accept(_rate_limits(primary={"usedPercent": 95}, limitName=None)) == []
+    assert state.accept(_rate_limits(limitId=None, primary={"usedPercent": 96})) == []
+    # A separately updated window is combined with the retained one.
+    [both] = state.accept(_rate_limits(secondary={"usedPercent": 90, "windowDurationMins": 10080}))
+    assert both["message"] == "OpenAI 5-hour limit 96% used; 7-day limit 90% used."
+    # A different limit starts from its own snapshot.
+    [other] = state.accept(_rate_limits(limitId="quota-b", primary={"usedPercent": 91}))
+    assert other["message"] == "OpenAI primary limit 91% used."
+    [spend] = state.accept(_rate_limits(limitId="quota-c", spendControlReached=True))
     assert spend["message"] == "OpenAI spend control limit reached."

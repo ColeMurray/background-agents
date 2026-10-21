@@ -46,8 +46,30 @@ AUTH_RECOVERY_SUMMARIES = {
 }
 
 
+# Native text is free-form (it can embed vendor HTTP bodies), so credential
+# shapes are masked before anything reaches the persisted session timeline.
+SECRET_PATTERNS = (
+    (re.compile(r"(?i)\b(bearer|basic)\s+[^\s\"',;]+"), r"\1 ***"),
+    (
+        re.compile(
+            r"(?i)\b([\w-]*(?:api[_-]?key|token|secret|password|authorization|cookie)[\w-]*)"
+            r"(\"?\s*[:=]\s*\"?)[^\s\"',;}]+"
+        ),
+        r"\1\2***",
+    ),
+    (re.compile(r"\beyJ[\w-]+\.[\w-]+\.[\w-]*"), "***"),
+    (re.compile(r"\bsk-[\w-]{8,}"), "***"),
+    # Opaque credentials of unknown shape: long runs that include a digit.
+    (re.compile(r"(?=[A-Za-z0-9_+=-]*[0-9])[A-Za-z0-9_+=-]{32,}"), "***"),
+)
+
+
 def _clip(text: str) -> str:
-    text = " ".join(text.split())
+    """Redacted, whitespace-collapsed, and bounded native diagnostic text."""
+    # Pre-bounding keeps redaction cheap; masking only shortens the text.
+    text = " ".join(text[: 4 * MAX_DIAGNOSTIC_CHARS].split())
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
     if len(text) <= MAX_DIAGNOSTIC_CHARS:
         return text
     return text[: MAX_DIAGNOSTIC_CHARS - 1] + "…"
@@ -67,6 +89,18 @@ def _failure_message(error: Any) -> str:
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
     mapped = FAILURE_MESSAGES.get(info) if isinstance(info, str) else None
     return mapped or _native_message(error) or TURN_FAILED_MESSAGE
+
+
+def _merge_sparse(previous: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Apply a sparse update: an omitted or null field keeps its prior value."""
+    merged = dict(previous)
+    for key, value in update.items():
+        if value is None:
+            continue
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            value = _merge_sparse(merged[key], value)
+        merged[key] = value
+    return merged
 
 
 def _window_label(name: str, window: dict[str, Any]) -> str:
@@ -157,6 +191,7 @@ class CodexTurnEvents:
         # A non-retried native error, used if ``turn/completed`` omits its own.
         self._fatal_error: dict[str, Any] | None = None
         self._warned: set[str] = set()
+        self._rate_limits: dict[str, Any] = {}
         self.tokens: dict[str, Any] | None = None
         self.usage_valid = True
         self.has_usage = False
@@ -357,6 +392,10 @@ class CodexTurnEvents:
         """Warn once per limit state; rolling updates below the threshold are silent."""
         if not isinstance(snapshot, dict):
             return []
+        # Updates are sparse: merge into the last snapshot of the same limit.
+        limit_id = snapshot.get("limitId")
+        previous = self._rate_limits if limit_id in (None, self._rate_limits.get("limitId")) else {}
+        self._rate_limits = snapshot = _merge_sparse(previous, snapshot)
         parts, levels = [], []
         reached = snapshot.get("rateLimitReachedType")
         if isinstance(reached, str):
