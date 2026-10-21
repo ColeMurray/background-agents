@@ -676,3 +676,39 @@ async def test_generation_reauthentication_waits_for_the_stopped_turn_to_unwind(
         await turn
     await reauth
     assert h._factory.call_count == opens + 1
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "expected", "cancelled"),
+    [
+        ("failed", {"message": "boom", "codexErrorInfo": "unauthorized"}, "OPENAI_API_KEY", False),
+        ("failed", {"message": "stream broke"}, "stream broke", False),
+        ("failed", None, "Codex turn failed", False),
+        ("interrupted", {"message": "stopped"}, "Codex turn interrupted", True),
+    ],
+)
+async def test_terminal_outcome_carries_native_failure_detail(
+    tmp_path, status, error, expected, cancelled
+):
+    harness, client = build(tmp_path)
+    await harness.open()
+    harness.session_id = "thread"
+    client.request.return_value = {"turn": {"id": "turn"}}
+    client.next_notification = AsyncMock(
+        return_value={
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread",
+                "turn": {"id": "turn", "status": status, "error": error},
+            },
+        }
+    )
+    emit = AsyncMock()
+    outcome = await harness.run_prompt(HarnessPrompt("message", "hello"), emit)
+    assert not outcome.success
+    assert outcome.cancelled is cancelled
+    assert expected in outcome.error
+    errors = [call.args[0] for call in emit.await_args_list if call.args[0]["type"] == "error"]
+    assert errors == (
+        [] if cancelled else [{"type": "error", "error": outcome.error, "messageId": "message"}]
+    )

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from ..tool_results import content_text
@@ -22,6 +24,69 @@ TOKEN_FIELDS = (
     "totalTokens",
 )
 MAX_SAFE_TOKEN_COUNT = 2**53 - 1
+# Native diagnostics can embed HTTP bodies; keep user-facing notices short.
+MAX_DIAGNOSTIC_CHARS = 500
+RATE_LIMIT_WARNING_PERCENT = 90
+TURN_FAILED_MESSAGE = "Codex turn failed"
+FAILURE_MESSAGES = {
+    "unauthorized": (
+        "OpenAI rejected this session's credential. Reconnect the OpenAI account in "
+        "Settings (or check OPENAI_API_KEY) and try again."
+    ),
+    "usageLimitExceeded": "OpenAI usage limit reached; retry after it resets.",
+    "rateLimitExceeded": "OpenAI rate limit reached; retry shortly.",
+    "serverOverloaded": "OpenAI is overloaded right now; retry shortly.",
+    "contextWindowExceeded": (
+        "This conversation no longer fits in the model's context window; start a new session."
+    ),
+}
+AUTH_RECOVERY_SUMMARIES = {
+    "modelProvider/authRecoveryStarted": "Codex is recovering {} authentication",
+    "modelProvider/authRecoveryCompleted": "Codex finished recovering {} authentication",
+}
+
+
+def _clip(text: str) -> str:
+    text = " ".join(text.split())
+    if len(text) <= MAX_DIAGNOSTIC_CHARS:
+        return text
+    return text[: MAX_DIAGNOSTIC_CHARS - 1] + "…"
+
+
+def _with_detail(summary: str, detail: Any) -> str:
+    return f"{summary}: {detail}" if isinstance(detail, str) and detail.strip() else summary
+
+
+def _native_message(error: Any) -> str:
+    message = error.get("message") if isinstance(error, dict) else None
+    return _clip(message) if isinstance(message, str) else ""
+
+
+def _failure_message(error: Any) -> str:
+    """An actionable message for a failed turn's native ``TurnError``."""
+    info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    mapped = FAILURE_MESSAGES.get(info) if isinstance(info, str) else None
+    return mapped or _native_message(error) or TURN_FAILED_MESSAGE
+
+
+def _window_label(name: str, window: dict[str, Any]) -> str:
+    minutes = window.get("windowDurationMins")
+    if type(minutes) is int and minutes > 0:
+        for size, unit in ((24 * 60, "day"), (60, "hour"), (1, "minute")):
+            if minutes % size == 0:
+                return f"{minutes // size}-{unit}"
+    return name
+
+
+def _resets(window: dict[str, Any]) -> str:
+    resets_at = window.get("resetsAt")
+    if type(resets_at) is not int:
+        return ""
+    try:
+        moment = datetime.fromtimestamp(resets_at, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return f", resets {moment:%Y-%m-%d %H:%M} UTC"
 
 
 def _token_counts(value: Any) -> dict[str, int] | None:
@@ -87,6 +152,11 @@ class CodexTurnEvents:
         self._last_text_at: float | None = None
         self._last_text = ""
         self.status: str | None = None
+        # Actionable detail for a failed turn; set once, with its ``error`` event.
+        self.error: str | None = None
+        # A non-retried native error, used if ``turn/completed`` omits its own.
+        self._fatal_error: dict[str, Any] | None = None
+        self._warned: set[str] = set()
         self.tokens: dict[str, Any] | None = None
         self.usage_valid = True
         self.has_usage = False
@@ -117,15 +187,49 @@ class CodexTurnEvents:
         # Frames come from a separate process: tolerate null/non-object fields.
         if not isinstance(params, dict):
             return []
+        # Account- and process-level notices carry no turn (or thread) identity.
+        if method == "account/rateLimits/updated":
+            return self._rate_limit_warning(params.get("rateLimits"))
+        if method == "configWarning":
+            return self._warning(params.get("summary"))
+        if method == "warning" and params.get("threadId") in (None, self.thread_id):
+            return self._warning(params.get("message"))
         if params.get("threadId") != self.thread_id:
             return []
+        if method == "guardianWarning":
+            return self._warning(params.get("message"))
         turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
         turn_id = params.get("turnId") or turn.get("id")
         if turn_id != self.turn_id:
             return []
         if method == "turn/completed":
             self.status = turn.get("status")
-            return self._text_event(force=True)
+            events = self._text_event(force=True)
+            if self.status == "failed":
+                events.extend(self._failed(turn.get("error") or self._fatal_error))
+            return events
+        if method == "error":
+            error = params.get("error")
+            if params.get("willRetry") is True:
+                return self._warning(
+                    _with_detail("Codex hit an error and is retrying", _native_message(error))
+                )
+            # The terminal ``turn/completed`` reports the failure exactly once.
+            if isinstance(error, dict):
+                self._fatal_error = error
+            return []
+        if method == "model/rerouted":
+            to_model, reason = params.get("toModel"), params.get("reason")
+            if not isinstance(to_model, str):
+                return []
+            message = f"Codex switched this turn from {params.get('fromModel')} to {to_model}"
+            if isinstance(reason, str):
+                message += f" ({re.sub(r'(?<!^)(?=[A-Z])', ' ', reason).lower()})"
+            return self._warning(message)
+        if method in AUTH_RECOVERY_SUMMARIES:
+            provider = params.get("provider") or "model provider"
+            summary = AUTH_RECOVERY_SUMMARIES[method].format(provider)
+            return self._warning(_with_detail(summary, params.get("message")))
         if method == "thread/tokenUsage/updated":
             usage = params.get("tokenUsage")
             total = _token_counts(usage.get("total") if isinstance(usage, dict) else None)
@@ -232,6 +336,48 @@ class CodexTurnEvents:
         self.has_usage = False
         self.tokens = None
         return [self.finish()]
+
+    def _failed(self, error: Any) -> list[dict[str, Any]]:
+        if self.error is not None:
+            return []
+        self.error = _failure_message(error)
+        return [{"type": "error", "error": self.error, "messageId": self.message_id}]
+
+    def _warning(self, message: Any, *, key: str | None = None) -> list[dict[str, Any]]:
+        if not isinstance(message, str) or not message.strip():
+            return []
+        message = _clip(message)
+        key = key or message
+        if key in self._warned:
+            return []
+        self._warned.add(key)
+        return [{"type": "warning", "scope": "provider", "message": message}]
+
+    def _rate_limit_warning(self, snapshot: Any) -> list[dict[str, Any]]:
+        """Warn once per limit state; rolling updates below the threshold are silent."""
+        if not isinstance(snapshot, dict):
+            return []
+        parts, levels = [], []
+        reached = snapshot.get("rateLimitReachedType")
+        if isinstance(reached, str):
+            parts.append(reached.replace("_", " "))
+            levels.append(reached)
+        if snapshot.get("spendControlReached") is True:
+            parts.append("spend control limit reached")
+            levels.append("spendControl")
+        for name in ("primary", "secondary"):
+            window = snapshot.get(name)
+            if not isinstance(window, dict):
+                continue
+            used = window.get("usedPercent")
+            if type(used) is not int or used < RATE_LIMIT_WARNING_PERCENT:
+                continue
+            parts.append(f"{_window_label(name, window)} limit {used}% used{_resets(window)}")
+            levels.append(f"{name}:{'reached' if used >= 100 else 'near'}")
+        if not parts:
+            return []
+        key = f"rateLimit:{snapshot.get('limitId')}:{','.join(levels)}"
+        return self._warning(f"OpenAI {'; '.join(parts)}.", key=key)
 
     def _record_text(self, item_id: str, text: str, *, replace: bool = False) -> None:
         previous_length = sum(map(len, self.text.get(item_id, ()))) if replace else 0

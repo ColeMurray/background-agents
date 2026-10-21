@@ -383,3 +383,266 @@ def test_large_tool_arguments_are_left_to_the_event_forwarder():
 )
 def test_malformed_native_fields_are_ignored(params):
     assert _turn().accept({"method": "item/completed", "params": params}) == []
+
+
+def _notice(method, **params):
+    return {"method": method, "params": params}
+
+
+def _turn_completed(status, error=None, *, turn_id="turn"):
+    return _notice(
+        "turn/completed",
+        threadId="thread",
+        turn={"id": turn_id, "status": status, "error": error},
+    )
+
+
+@pytest.mark.parametrize(
+    ("info", "expected"),
+    [
+        ("unauthorized", "Reconnect the OpenAI account in Settings (or check OPENAI_API_KEY)"),
+        ("usageLimitExceeded", "usage limit reached"),
+        ("rateLimitExceeded", "rate limit reached"),
+        ("contextWindowExceeded", "context window"),
+        ("serverOverloaded", "overloaded"),
+        ("sandboxError", "native detail"),
+        ({"httpConnectionFailed": {"httpStatusCode": 502}}, "native detail"),
+        (None, "native detail"),
+    ],
+)
+def test_failed_turn_emits_one_actionable_error(info, expected):
+    state = _turn()
+    events = state.accept(
+        _turn_completed("failed", {"message": "native detail", "codexErrorInfo": info})
+    )
+    assert state.status == "failed"
+    assert expected in state.error
+    assert events == [{"type": "error", "error": state.error, "messageId": "m"}]
+    # A duplicate terminal frame never reports the failure twice.
+    assert state.accept(_turn_completed("failed", {"message": "again"})) == []
+    assert expected in state.error
+
+
+def test_failed_turn_without_detail_falls_back_and_flushes_text_first(monkeypatch):
+    # A fixed clock keeps the second delta pending until the terminal frame.
+    monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: 0.0)
+    state = _turn()
+    state.accept(_frame("item/agentMessage/delta", itemId="a", delta="hi"))
+    assert state.accept(_frame("item/agentMessage/delta", itemId="a", delta=" there")) == []
+    events = state.accept(_turn_completed("failed"))
+    assert [(event["type"], event.get("content")) for event in events] == [
+        ("token", "hi there"),
+        ("error", None),
+    ]
+    assert state.error == events[1]["error"] == "Codex turn failed"
+
+
+@pytest.mark.parametrize("status", ["completed", "interrupted"])
+def test_non_failed_turn_reports_no_error(status):
+    state = _turn()
+    state.accept(
+        _notice(
+            "error",
+            threadId="thread",
+            turnId="turn",
+            willRetry=False,
+            error={"message": "late", "codexErrorInfo": "other"},
+        )
+    )
+    assert state.accept(_turn_completed(status, {"message": "x"})) == []
+    assert state.error is None
+
+
+def test_retried_error_warns_and_fatal_error_feeds_terminal_failure():
+    state = _turn()
+    retry = _notice(
+        "error",
+        threadId="thread",
+        turnId="turn",
+        willRetry=True,
+        error={"message": "Reconnecting... 1/5", "codexErrorInfo": "serverOverloaded"},
+    )
+    assert state.accept(retry) == [
+        {
+            "type": "warning",
+            "scope": "provider",
+            "message": "Codex hit an error and is retrying: Reconnecting... 1/5",
+        }
+    ]
+    assert state.accept(retry) == []
+    fatal = _notice(
+        "error",
+        threadId="thread",
+        turnId="turn",
+        willRetry=False,
+        error={"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+    )
+    assert state.accept(fatal) == []
+    assert state.error is None
+    events = state.accept(_turn_completed("failed"))
+    assert events == [
+        {
+            "type": "error",
+            "error": "OpenAI usage limit reached; retry after it resets.",
+            "messageId": "m",
+        }
+    ]
+
+
+def test_error_notifications_are_correlated_to_this_turn():
+    state = _turn()
+    for thread_id, turn_id in [("other", "turn"), ("thread", "other")]:
+        assert (
+            state.accept(
+                _notice(
+                    "error",
+                    threadId=thread_id,
+                    turnId=turn_id,
+                    willRetry=True,
+                    error={"message": "elsewhere"},
+                )
+            )
+            == []
+        )
+    assert state.accept(_turn_completed("failed", turn_id="other")) == []
+    assert state.status is None and state.error is None
+
+
+@pytest.mark.parametrize(
+    ("frame", "message"),
+    [
+        (_notice("warning", message="Process-wide notice"), "Process-wide notice"),
+        (_notice("warning", message="Thread notice", threadId="thread"), "Thread notice"),
+        (
+            _notice("configWarning", summary="Ignored unknown key", details="secret-ish detail"),
+            "Ignored unknown key",
+        ),
+        (
+            _notice("guardianWarning", message="Guardian notice", threadId="thread"),
+            "Guardian notice",
+        ),
+        (
+            _notice(
+                "model/rerouted",
+                threadId="thread",
+                turnId="turn",
+                fromModel="gpt-6.1-sol",
+                toModel="gpt-6.1-mini",
+                reason="highRiskCyberActivity",
+            ),
+            "Codex switched this turn from gpt-6.1-sol to gpt-6.1-mini (high risk cyber activity)",
+        ),
+        (
+            _notice(
+                "modelProvider/authRecoveryStarted",
+                threadId="thread",
+                turnId="turn",
+                provider="openai",
+                message="Refreshing credentials",
+            ),
+            "Codex is recovering openai authentication: Refreshing credentials",
+        ),
+        (
+            _notice(
+                "modelProvider/authRecoveryCompleted",
+                threadId="thread",
+                turnId="turn",
+                provider="openai",
+                message="",
+            ),
+            "Codex finished recovering openai authentication",
+        ),
+    ],
+)
+def test_provider_notices_become_deduplicated_warnings(frame, message):
+    state = _turn()
+    assert state.accept(frame) == [{"type": "warning", "scope": "provider", "message": message}]
+    assert state.accept(frame) == []
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        _notice("warning", message="Other thread", threadId="other"),
+        _notice("guardianWarning", message="Other thread", threadId="other"),
+        _notice("warning", message="   "),
+        _notice("warning", message=None),
+        _notice("deprecationNotice", summary="Old flag"),
+        _notice(
+            "model/rerouted",
+            threadId="thread",
+            turnId="other",
+            fromModel="a",
+            toModel="b",
+            reason="highRiskCyberActivity",
+        ),
+        _notice(
+            "modelProvider/authRecoveryStarted",
+            threadId="thread",
+            turnId="other",
+            provider="openai",
+            message="x",
+        ),
+    ],
+)
+def test_unrelated_or_empty_notices_are_dropped(frame):
+    state = _turn()
+    assert state.accept(frame) == []
+
+
+def test_long_native_diagnostics_are_clipped():
+    from sandbox_runtime.harness.codex.events import MAX_DIAGNOSTIC_CHARS
+
+    state = _turn()
+    [warning] = state.accept(_notice("warning", message="x" * 10_000))
+    assert len(warning["message"]) == MAX_DIAGNOSTIC_CHARS
+    state.accept(_turn_completed("failed", {"message": "y\n" * 10_000}))
+    assert len(state.error) == MAX_DIAGNOSTIC_CHARS
+    assert "\n" not in state.error
+
+
+def _rate_limits(**snapshot):
+    return _notice("account/rateLimits/updated", rateLimits=snapshot)
+
+
+def test_rate_limit_updates_below_threshold_are_silent():
+    state = _turn()
+    assert state.accept(_rate_limits(primary={"usedPercent": 89})) == []
+    assert state.accept(_rate_limits(credits={"hasCredits": False, "unlimited": False})) == []
+    assert state.accept(_rate_limits()) == []
+    assert state.accept(_notice("account/rateLimits/updated", rateLimits=None)) == []
+
+
+def test_rate_limit_warns_once_per_limit_state():
+    state = _turn()
+    near = _rate_limits(
+        primary={"usedPercent": 92, "windowDurationMins": 300, "resetsAt": 1_800_000_000}
+    )
+    assert state.accept(near) == [
+        {
+            "type": "warning",
+            "scope": "provider",
+            "message": "OpenAI 5-hour limit 92% used, resets 2027-01-15 08:00 UTC.",
+        }
+    ]
+    # Rolling updates within the same state stay quiet.
+    assert state.accept(_rate_limits(primary={"usedPercent": 95, "windowDurationMins": 300})) == []
+    reached = _rate_limits(
+        rateLimitReachedType="rate_limit_reached",
+        primary={"usedPercent": 100, "windowDurationMins": 300},
+        secondary={"usedPercent": 40, "windowDurationMins": 10080},
+    )
+    assert state.accept(reached) == [
+        {
+            "type": "warning",
+            "scope": "provider",
+            "message": "OpenAI rate limit reached; 5-hour limit 100% used.",
+        }
+    ]
+    assert state.accept(reached) == []
+    [weekly] = state.accept(
+        _rate_limits(secondary={"usedPercent": 90, "windowDurationMins": 10080})
+    )
+    assert weekly["message"] == "OpenAI 7-day limit 90% used."
+    [spend] = state.accept(_rate_limits(spendControlReached=True))
+    assert spend["message"] == "OpenAI spend control limit reached."

@@ -39,7 +39,7 @@ from .env import (
     validate_native_configuration,
     validate_native_state,
 )
-from .events import CodexTurnEvents
+from .events import TURN_FAILED_MESSAGE, CodexTurnEvents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
@@ -440,7 +440,7 @@ class CodexHarness:
                     False,
                     "Codex turn interrupted"
                     if state.status == "interrupted"
-                    else "Codex turn failed",
+                    else state.error or TURN_FAILED_MESSAGE,
                     cancelled=state.status == "interrupted",
                     message_cost_usd=0,
                 )
