@@ -11,7 +11,7 @@ import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
-import { messageOriginSchema } from "@open-inspect/shared/types/sandbox-events";
+import { crossSessionOriginSchema } from "@open-inspect/shared/types/cross-session";
 import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -162,7 +162,7 @@ export class MessageRepository {
   /**
    * The human behind one message.
    *
-   * A message that arrived from elsewhere was started by another session's
+   * A message that arrived from another session was started by that session's
    * agent on behalf of a human, so the human who initiated it is the actor.
    * A message that started here is authored by its own participant.
    */
@@ -179,7 +179,7 @@ export class MessageRepository {
     const originContext = (raw as { origin_context?: string | null }).origin_context ?? null;
     if (originContext) {
       try {
-        const parsed = messageOriginSchema.safeParse(JSON.parse(originContext));
+        const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
         if (parsed.success) return parsed.data.humanActorId;
       } catch {
         // A malformed provenance falls back to the message author.
@@ -187,6 +187,26 @@ export class MessageRepository {
     }
     const actorId = (raw as { actor_id?: string | null }).actor_id ?? null;
     return typeof actorId === "string" && actorId.length > 0 ? actorId : null;
+  }
+
+  /**
+   * How many session-to-session hops the message behind one operation made.
+   *
+   * A message that arrived from another session carries its depth. A message
+   * that started here has none, so it has travelled no hops at all.
+   */
+  getMessageCrossSessionDepth(messageId: string): number {
+    const raw = this.sql
+      .exec("SELECT origin_context FROM messages WHERE id = ?", messageId)
+      .toArray()[0];
+    const originContext = (raw as { origin_context?: string | null } | undefined)?.origin_context;
+    if (!originContext) return 0;
+    try {
+      const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
+      return parsed.success ? parsed.data.depth : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /**

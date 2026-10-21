@@ -4,7 +4,7 @@ import {
   piRuntimeOperationStatusSchema,
   toPiModel,
   toPiThinkingLevel,
-} from "../pi/runtime-contract";
+} from "./runtime-contract";
 
 describe("Pi runtime contract", () => {
   it("bounds native controls and requires exact cancellation targets", () => {
@@ -12,7 +12,7 @@ describe("Pi runtime contract", () => {
       piRuntimeControlSchema.safeParse({
         sessionId: "s",
         requestId: "r",
-        action: "follow_up",
+        action: "steer",
         content: "x".repeat(20_001),
       }).success
     ).toBe(false);

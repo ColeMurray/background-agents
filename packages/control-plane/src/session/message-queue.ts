@@ -20,6 +20,10 @@ import type {
 } from "@open-inspect/shared";
 import { githubAutofixOriginSchema } from "@open-inspect/shared";
 import {
+  crossSessionOriginSchema,
+  type CrossSessionOrigin,
+} from "@open-inspect/shared/types/cross-session";
+import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   isValidModel,
@@ -1312,9 +1316,16 @@ export class SessionMessageQueue {
     originContext?: string | null
   ): UserMessageEventWithOrigin {
     let origin: GitHubAutofixOrigin | undefined;
+    let crossSessionOrigin: CrossSessionOrigin | undefined;
     if (originContext) {
       try {
-        origin = githubAutofixOriginSchema.parse(JSON.parse(originContext));
+        const parsed: unknown = JSON.parse(originContext);
+        const crossSession = crossSessionOriginSchema.safeParse(parsed);
+        if (crossSession.success) {
+          crossSessionOrigin = crossSession.data;
+        } else {
+          origin = githubAutofixOriginSchema.parse(parsed);
+        }
       } catch {
         this.log.error("prompt.invalid_origin_context", { message_id: messageId });
       }
@@ -1332,6 +1343,7 @@ export class SessionMessageQueue {
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(origin ? { origin } : {}),
+      ...(crossSessionOrigin ? { crossSessionOrigin } : {}),
     };
   }
 

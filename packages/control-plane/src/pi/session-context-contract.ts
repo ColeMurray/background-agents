@@ -41,11 +41,27 @@ export const piSessionContextRequestSchema = z
     }
   });
 
+/** One external publication this session may ask for. */
+export const piExternalActionProviderSchema = z.object({
+  provider: z.string().min(1).max(128),
+  action: z.string().min(1).max(128),
+  /** The stable tool name the model calls. */
+  toolName: z.string().min(1).max(128),
+});
+
 export const piSessionContextSchema = z.object({
   repositories: z.array(
     piRepositoryIdentitySchema.extend({ commitSha: fullGitObjectIdSchema.optional() })
   ),
   skills: sandboxSkillInstallationSchema.nullable(),
+  /**
+   * The publications this session may propose.
+   *
+   * A provider is listed only when the deployment named it and holds a
+   * credential for it, so the model never sees a publication that could not
+   * complete.
+   */
+  externalActions: z.array(piExternalActionProviderSchema).default([]),
   /**
    * The session's pinned memory, rendered for Pi.
    *

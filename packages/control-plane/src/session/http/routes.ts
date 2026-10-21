@@ -60,16 +60,26 @@ export interface SessionInternalRouteHandlers {
   piAgentControl: SessionInternalRouteHandler;
   piRepositoryTool: SessionInternalRouteHandler;
   piRepositoryMaterialization: SessionInternalRouteHandler;
+  piExternalActionPrepare: SessionInternalRouteHandler;
+  piExternalActionStatus: SessionInternalRouteHandler;
+  piExternalActionExecute: SessionInternalRouteHandler;
+  crossSessionMessage: SessionInternalRouteHandler;
+  crossSessionAuthorize: SessionInternalRouteHandler;
   piBrowserAuthorize: SessionInternalRouteHandler;
   piBrowserRead: SessionInternalRouteHandler;
   piCodeModeAuthorize: SessionInternalRouteHandler;
   piAttachment: SessionInternalRouteHandler;
   piMcpList: SessionInternalRouteHandler;
+  mcpPinGrant: SessionInternalRouteHandler;
   piMcpRead: SessionInternalRouteHandler;
   piMemoryRead: SessionInternalRouteHandler;
   piMemoryWrite: SessionInternalRouteHandler;
   piMemorySearch: SessionInternalRouteHandler;
   piMemoryAuthorize: SessionInternalRouteHandler;
+  crossSessionInbound: SessionInternalRouteHandler;
+  externalActionStatus: SessionInternalRouteHandler;
+  externalActionPending: SessionInternalRouteHandler;
+  externalActionDecision: SessionInternalRouteHandler;
   piSandboxCommand: SessionInternalRouteHandler;
   piExecutions: SessionInternalRouteHandler;
   piExecutionCancel: SessionInternalRouteHandler;
@@ -193,6 +203,26 @@ export function createSessionInternalRoutes(
     },
     {
       method: "POST",
+      path: SessionInternalPaths.piExternalActionPrepare,
+      handler: handlers.piExternalActionPrepare,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.piExternalActionStatus,
+      handler: handlers.piExternalActionStatus,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piExternalActionExecute,
+      handler: handlers.piExternalActionExecute,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.externalActionStatus,
+      handler: handlers.externalActionStatus,
+    },
+    {
+      method: "POST",
       path: SessionInternalPaths.piCodeModeAuthorize,
       handler: handlers.piCodeModeAuthorize,
     },
@@ -209,13 +239,18 @@ export function createSessionInternalRoutes(
     },
     {
       method: "POST",
-      path: SessionInternalPaths.piMcpRead,
-      handler: handlers.piMcpRead,
+      path: SessionInternalPaths.mcpPinGrant,
+      handler: handlers.mcpPinGrant,
     },
     {
       method: "GET",
       path: SessionInternalPaths.piMcpList,
       handler: handlers.piMcpList,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.piMcpRead,
+      handler: handlers.piMcpRead,
     },
     {
       method: "POST",
@@ -236,6 +271,31 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.piMemoryAuthorize,
       handler: handlers.piMemoryAuthorize,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.crossSessionAuthorize,
+      handler: handlers.crossSessionAuthorize,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.crossSessionMessage,
+      handler: handlers.crossSessionMessage,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.crossSessionInbound,
+      handler: handlers.crossSessionInbound,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.externalActionPending,
+      handler: handlers.externalActionPending,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.externalActionDecision,
+      handler: handlers.externalActionDecision,
     },
     {
       method: "POST",

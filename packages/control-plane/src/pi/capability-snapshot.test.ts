@@ -22,13 +22,15 @@ describe("readPiFeatureCapabilitySnapshot", () => {
 
     await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toBeUndefined();
     expect(PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "off",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
+        externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -37,13 +39,15 @@ describe("readPiFeatureCapabilitySnapshot", () => {
 
   it("returns the exact complete durable snapshot", async () => {
     const original = {
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
+        externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -62,19 +66,22 @@ describe("readPiFeatureCapabilitySnapshot", () => {
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
+        externalActions: "off",
+        mcp: "off",
       },
     };
     const fake = storage(original);
 
     await expect(readPiFeatureCapabilitySnapshot(fake.port)).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
-        // A feature that did not exist cannot have been enabled.
+        externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },

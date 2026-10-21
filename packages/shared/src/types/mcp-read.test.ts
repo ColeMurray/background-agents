@@ -5,7 +5,7 @@ import { findCredentialLikeKeys } from "./credential-shaped";
 describe("the MCP read result", () => {
   it("accepts a provider answer that carries no credential", () => {
     const parsed = mcpReadResultSchema.safeParse({
-      serverId: "mcpsrv_1",
+      connectionId: "connection-1",
       toolName: "search_issues",
       content: { items: [{ title: "A bug" }] },
       truncated: false,
@@ -16,7 +16,7 @@ describe("the MCP read result", () => {
 
   it("refuses a provider answer that carries a credential-shaped key", () => {
     const parsed = mcpReadResultSchema.safeParse({
-      serverId: "mcpsrv_1",
+      connectionId: "connection-1",
       toolName: "whoami",
       content: { accessToken: "gho_secret" },
       truncated: false,
@@ -27,7 +27,7 @@ describe("the MCP read result", () => {
 
   it("refuses a credential nested inside the provider answer", () => {
     const parsed = mcpReadResultSchema.safeParse({
-      serverId: "mcpsrv_1",
+      connectionId: "connection-1",
       toolName: "whoami",
       content: { account: { credentials: { refresh_token: "secret" } } },
       truncated: false,

@@ -9,6 +9,7 @@ import type { FetchClient, QueueMetricsSource } from "./platform-ports";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
 import type { PiRuntimeDispatch } from "./pi/runtime-contract";
+import type { McpConnectionBrokerDispatch } from "./mcp/broker-contract";
 import type { PiBrowserTransport } from "./pi/browser-transport";
 
 /**
@@ -24,6 +25,7 @@ export interface EnvConfig {
   BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: string;
+  MCP_OAUTH_ENCRYPTION_KEY?: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
@@ -111,11 +113,15 @@ export interface EnvConfig {
   PI_CODE_MODE?: string; // Creation admission plus live deny for top-level calls still in Pi's call phase
   PI_SANDBOX_EXECUTION_MODE?: string; // Creation admission plus live deny for new execution calls
   PI_SANDBOX_EXECUTION_ATTESTATION?: string; // Generation/artifact provider canary evidence
-  PI_MCP_MODE?: string; // New-session admission only; the shared MCP lane
+  PI_EXTERNAL_ACTIONS_MODE?: string; // New-session admission only
+  PI_EXTERNAL_ACTION_PROVIDERS?: string; // Comma-separated providers this deployment may publish through
   LINEAR_API_KEY?: string; // Optional Linear API key used for a comment-posting publication
+  PI_MCP_MODE?: string; // New-session admission only
+  PI_CROSS_SESSION_MESSAGING_MODE?: string; // New-session admission only
   PI_BROWSER_MODE?: string; // New-session admission only
   PI_BROWSER_ALLOWED_DOMAINS?: string; // Comma-separated hosts the browser may reach
   PI_MEMORY_MODE?: string; // New-session admission only; "read_only" withholds the memory write
+  MCP_CONNECTIONS_ENABLED?: string; // "true" enables staging personal MCP OAuth connections
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
@@ -134,6 +140,8 @@ export interface Platform {
   SESSION: SessionRuntimeDispatch;
   /** Optional sandbox-free Pi Durable runtime. Absent unless explicitly deployed. */
   PI_SESSION?: PiRuntimeDispatch;
+  /** Dormant per-connection broker identity/lifecycle port. */
+  MCP_CONNECTION?: McpConnectionBrokerDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
   /** Media artifacts: screenshots, uploads, session media. */

@@ -4,6 +4,7 @@ import { useState, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
 import type {
   CreateMcpServerRequest,
+  McpConnectionMetadata,
   McpServerMetadata,
 } from "@open-inspect/shared/types/integrations";
 import { DEFAULT_MCP_SERVER_ENABLED } from "@open-inspect/shared/types/integrations";
@@ -13,6 +14,12 @@ import {
   updateMcpServer,
   deleteMcpServer,
 } from "@/hooks/use-mcp-servers";
+import {
+  authorizeMcpConnection,
+  createMcpConnection,
+  deleteMcpConnection,
+  useMcpConnections,
+} from "@/hooks/use-mcp-connections";
 import { useRepos } from "@/hooks/use-repos";
 import { parseMaybeEnvContent } from "@/lib/env-paste";
 import { PlusIcon, TerminalIcon, GlobeIcon, ChevronRightIcon } from "@/components/ui/icons";
@@ -440,6 +447,176 @@ function McpServerForm({
 }
 
 /**
+ * How one connection's durable state reads to its owner.
+ *
+ * The wording is the owner's, not the store's: a person is told what they
+ * have to do next, not which enum the row happens to hold.
+ */
+const CONNECTION_STATUS_LABELS: Record<string, string> = {
+  foundation_staged: "Not authorized yet",
+  oauth_authorizing: "Waiting for your approval",
+  oauth_ready: "Authorized",
+  transport_ready: "Connected",
+  failed: "Could not connect",
+  revoking: "Being removed",
+  revoked: "Removed",
+};
+
+function PersonalMcpConnections({ servers }: { servers: McpServerMetadata[] }) {
+  const { enabled, connections, loading, mutate } = useMcpConnections();
+  const [authorizingId, setAuthorizingId] = useState<string | null>(null);
+  const connectedServerIds = new Set(connections.map((connection) => connection.serverId));
+  const eligibleServers = servers.filter(
+    (server) =>
+      server.type === "remote" &&
+      server.enabled &&
+      !server.hasHeaders &&
+      !connectedServerIds.has(server.id)
+  );
+
+  async function stage(server: McpServerMetadata) {
+    try {
+      await createMcpConnection({ serverId: server.id });
+      await mutate();
+      toast.success("MCP connection added");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to add the MCP connection");
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await deleteMcpConnection(id);
+      await mutate();
+      toast.success("MCP connection removed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to remove the MCP connection");
+    }
+  }
+
+  /**
+   * Start the server's authorization.
+   *
+   * The server answers with its own authorization URL, which the owner visits
+   * to grant the access. The URL is a URL: no credential ever reaches this
+   * page.
+   */
+  async function authorize(connection: McpConnectionMetadata, reconnect: boolean) {
+    setAuthorizingId(connection.id);
+    try {
+      const result = await authorizeMcpConnection(connection.id, { reconnect });
+      if (result.authUrl) {
+        window.location.assign(result.authUrl);
+        return;
+      }
+      await mutate();
+      toast.success(
+        result.state === "failed"
+          ? "The MCP server could not be reached"
+          : "The MCP connection is authorized"
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to start the MCP authorization");
+    } finally {
+      setAuthorizingId(null);
+    }
+  }
+
+  return (
+    <section className="mt-8 border-t border-border pt-6" aria-labelledby="personal-mcp-heading">
+      <h3 id="personal-mcp-heading" className="text-base font-medium text-foreground">
+        Personal MCP connections
+      </h3>
+      {!enabled ? (
+        <p className="mt-1 text-sm text-muted-foreground">
+          This connection foundation is dormant for this deployment. No credentials, transport, or
+          tools are sent to agents.
+        </p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            A personal connection carries your own access to an MCP server. Authorize it once, and
+            only the tools the server&rsquo;s catalog review already approved are ever read.
+          </p>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading personal connections...</p>
+          ) : (
+            <>
+              {connections.map((connection) => (
+                <div
+                  key={connection.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {connection.serverName}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {connection.endpointHost} ·{" "}
+                      {CONNECTION_STATUS_LABELS[connection.status] ?? connection.status} ·{" "}
+                      {connection.tools.length} reviewed read-only tools
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {needsAuthorization(connection.status) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={authorizingId === connection.id}
+                        onClick={() => authorize(connection, connection.status === "failed")}
+                        aria-label={`Authorize ${connection.serverName}`}
+                      >
+                        {authorizingId === connection.id
+                          ? "Authorizing..."
+                          : connection.status === "failed"
+                            ? "Reconnect"
+                            : "Authorize"}
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={() => remove(connection.id)}
+                      aria-label={`Remove connection for ${connection.serverName}`}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {eligibleServers.map((server) => (
+                <Button
+                  key={server.id}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => stage(server)}
+                  aria-label={`Add a connection for ${server.name}`}
+                >
+                  Add {server.name}
+                </Button>
+              ))}
+              {connections.length === 0 && eligibleServers.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No enabled, credential-free remote catalog servers are available.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Whether the owner still has to approve this connection. */
+function needsAuthorization(status: string): boolean {
+  return status === "foundation_staged" || status === "oauth_authorizing" || status === "failed";
+}
+
+/**
  * Lists workspace MCP servers and exposes create, edit, and delete controls only to authorized users.
  */
 export function McpServersSettings() {
@@ -722,6 +899,8 @@ export function McpServersSettings() {
           })}
         </div>
       )}
+
+      <PersonalMcpConnections servers={servers} />
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={canManage && !!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>

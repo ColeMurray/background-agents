@@ -17,6 +17,8 @@ type PiDeploymentCapabilityConfig = Pick<
   | "PI_CODE_MODE"
   | "PI_SANDBOX_EXECUTION_MODE"
   | "PI_MCP_MODE"
+  | "PI_EXTERNAL_ACTIONS_MODE"
+  | "PI_CROSS_SESSION_MESSAGING_MODE"
   | "PI_BROWSER_MODE"
   | "PI_MEMORY_MODE"
 >;
@@ -31,6 +33,8 @@ function resolvePiDeploymentCapabilities(config: PiDeploymentCapabilityConfig) {
     codeMode: config.PI_CODE_MODE,
     sandboxExecution: config.PI_SANDBOX_EXECUTION_MODE,
     mcp: config.PI_MCP_MODE,
+    externalActions: config.PI_EXTERNAL_ACTIONS_MODE,
+    crossSessionMessaging: config.PI_CROSS_SESSION_MESSAGING_MODE,
     browser: config.PI_BROWSER_MODE,
     memory: config.PI_MEMORY_MODE,
   });

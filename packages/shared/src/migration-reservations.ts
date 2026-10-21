@@ -5,6 +5,10 @@
  * migration that claims a slot another feature owns is refused before it is
  * applied.
  */
+export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 9001;
+export const PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION = 9003;
+export const PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION = 9004;
+
 export type MigrationOwner =
   | "scratchWorkspace"
   | "repositoryEditing"
@@ -16,7 +20,9 @@ export type MigrationOwner =
   | "coreAuthority"
   | "piProjection"
   | "piControls"
-  | "slackIngress";
+  | "slackIngress"
+  | "externalActions"
+  | "crossSessionMessaging";
 
 /**
  * The stores that carry a tracked migration registry.
@@ -43,11 +49,13 @@ export const PI_DO_TURN_AUTHORITY_MIGRATION_ID = 4;
 export const PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID = 57;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID = 58;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID = 59;
+export const PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID = 60;
 export const PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID = 61;
 export const PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID = 62;
 export const PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID = 63;
 export const PI_SESSION_DO_CONTROLS_MIGRATION_ID = 64;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID = 65;
+export const PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID = 66;
 export const IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID = 67;
 export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION = 91;
@@ -119,6 +127,12 @@ export const MIGRATION_RESERVATIONS = [
   },
   {
     store: "session_do",
+    version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+    feature: "externalActions",
+    purpose: "The external-action grant ledger",
+  },
+  {
+    store: "session_do",
     version: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
     feature: "coreAuthority",
     purpose: "creation-time Pi capability authority",
@@ -149,9 +163,33 @@ export const MIGRATION_RESERVATIONS = [
   },
   {
     store: "session_do",
+    version: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+    feature: "externalActions",
+    purpose: "The external-action lifecycle",
+  },
+  {
+    store: "session_do",
     version: IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
     feature: "coreAuthority",
     purpose: "canonical queued controls for in-process harnesses",
+  },
+  {
+    store: "d1",
+    version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+    feature: "externalActions",
+    purpose: "The external-action ledger and its audit trail",
+  },
+  {
+    store: "d1",
+    version: PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+    feature: "crossSessionMessaging",
+    purpose: "Cross-session delivery receipts",
+  },
+  {
+    store: "d1",
+    version: PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION,
+    feature: "mcp",
+    purpose: "The session grants of a personal MCP connection",
   },
   {
     store: "d1",

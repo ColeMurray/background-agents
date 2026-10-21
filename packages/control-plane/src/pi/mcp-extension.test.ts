@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createMcpExtension } from "./mcp-extension";
 
 type McpReadRequest = {
-  serverId: string;
+  connectionId?: string;
+  serverId?: string;
   toolName: string;
   arguments: Record<string, unknown>;
 };
@@ -13,12 +14,13 @@ function harness(result: { content: unknown; truncated: boolean }) {
       _request: McpReadRequest,
       _signal?: AbortSignal
     ): Promise<{
-      serverId: string;
+      connectionId?: string;
+      serverId?: string;
       toolName: string;
       content: unknown;
       truncated: boolean;
     }> => ({
-      serverId: "mcpsrv_1",
+      connectionId: "mcpconn_1",
       toolName: "search",
       content: result.content,
       truncated: result.truncated,
@@ -27,13 +29,14 @@ function harness(result: { content: unknown; truncated: boolean }) {
   const extension = createMcpExtension({
     client: {
       read,
-      list: async () => ({ shared: [] }),
+      list: async () => ({ grants: [], shared: [] }),
     },
   });
   const tools = extension.tools ?? [];
   const shared = tools.find((tool) => tool.name === "mcp_read_shared");
-  if (!shared) throw new Error("The extension contributes no MCP read tools");
-  return { shared, read };
+  const connection = tools.find((tool) => tool.name === "mcp_read_connection");
+  if (!shared || !connection) throw new Error("The extension contributes no MCP read tools");
+  return { shared, connection, read };
 }
 
 const api = { callId: "call-1", taskId: 7, conversationId: "conversation-1" } as never;
@@ -43,8 +46,8 @@ describe("mcp extension", () => {
   it("asks the owning session to read the reviewed tool", async () => {
     const h = harness({ content: { hits: ["one"] }, truncated: false });
 
-    const output = await h.shared.execute(
-      { serverId: "mcpsrv_1", toolName: "search", arguments: { query: "x" } },
+    const output = await h.connection.execute(
+      { connectionId: "mcpconn_1", toolName: "search", arguments: { query: "x" } },
       api,
       context
     );
@@ -52,7 +55,7 @@ describe("mcp extension", () => {
     expect(output.isError).toBe(false);
     expect(h.read).toHaveBeenCalledWith(
       {
-        serverId: "mcpsrv_1",
+        connectionId: "mcpconn_1",
         toolName: "search",
         arguments: { query: "x" },
       },
@@ -64,8 +67,8 @@ describe("mcp extension", () => {
   it("states that a result was cut", async () => {
     const h = harness({ content: { preview: "…" }, truncated: true });
 
-    const output = await h.shared.execute(
-      { serverId: "mcpsrv_1", toolName: "search" },
+    const output = await h.connection.execute(
+      { connectionId: "mcpconn_1", toolName: "search" },
       api,
       context
     );
@@ -73,23 +76,34 @@ describe("mcp extension", () => {
     expect(output.details).toMatchObject({ truncated: true });
   });
 
-  it("names exactly one target in its parameters", () => {
+  it("keeps the shared lane and the personal lane in separate tools", async () => {
+    const h = harness({ content: { hits: ["one"] }, truncated: false });
+
+    await h.shared.execute({ serverId: "srv_1", toolName: "search" }, api, context);
+
+    expect(h.read).toHaveBeenCalledWith(
+      { serverId: "srv_1", toolName: "search", arguments: {} },
+      undefined
+    );
+    // The shared lane never names a connection, and the personal lane never
+    // names a server: exactly one target, at the tool boundary.
+    expect(h.read.mock.calls[0]?.[0]).not.toHaveProperty("connectionId");
+  });
+
+  it("names exactly one target in each tool's parameters", () => {
     const h = harness({ content: {}, truncated: false });
 
     const shared = h.shared.parameters as unknown as {
       properties: Record<string, unknown>;
       required: string[];
     };
+    const connection = h.connection.parameters as unknown as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
     expect(Object.keys(shared.properties)).toEqual(["serverId", "toolName", "arguments"]);
     expect(shared.required).toEqual(["serverId", "toolName"]);
-  });
-
-  it("contributes no personal-connection tool", () => {
-    const h = harness({ content: {}, truncated: false });
-
-    expect((h.shared as { name: string }).name).toBe("mcp_read_shared");
-    const properties = (h.shared.parameters as unknown as { properties: Record<string, unknown> })
-      .properties;
-    expect(Object.keys(properties)).not.toContain("connectionId");
+    expect(Object.keys(connection.properties)).toEqual(["connectionId", "toolName", "arguments"]);
+    expect(connection.required).toEqual(["connectionId", "toolName"]);
   });
 });

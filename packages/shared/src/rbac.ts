@@ -46,6 +46,8 @@ export const PERMISSION_IDS = [
   "automations.manage.any",
   "automations.manage.own",
   "automations.read",
+  "external_actions.manage_grants",
+  "external_actions.approve",
   "automations.trigger.any",
   "automations.trigger.own",
   "commit_signing.manage",

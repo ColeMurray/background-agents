@@ -25,7 +25,16 @@ export const EXTENSION_SLOTS = [
   "memory",
 ] as const;
 
-export type ExtensionSlot = (typeof EXTENSION_SLOTS)[number];
+/**
+ * A slot a harness runtime installs an extension into.
+ *
+ * The core declares the slots every harness has. A **deployment** may add
+ * its own — the overlay's external-action lane and its cross-session lane
+ * both do — so the type is open. The order is fixed regardless: the policy
+ * slot first, because the policy hook must be in place before a tool runs,
+ * then the slots in declaration order.
+ */
+export type ExtensionSlot = (typeof EXTENSION_SLOTS)[number] | (string & {});
 
 type ExtensionGate =
   | { readonly feature?: never; readonly minimumCapability?: never }
@@ -89,7 +98,23 @@ export interface ExtensionAssembly<T extends HarnessExtension = HarnessExtension
   readonly effects: ReadonlyMap<string, ToolEffectRegistration>;
 }
 
-const slotOrder = new Map(EXTENSION_SLOTS.map((slot, index) => [slot, index]));
+const slotOrder = new Map<string, number>(EXTENSION_SLOTS.map((slot, index) => [slot, index]));
+
+/**
+ * The order the slots install in.
+ *
+ * The policy slot leads, because a tool must never run before the policy
+ * hook that governs it is in place. A slot the core does not declare — a
+ * deployment's own — keeps its declaration order, after the core's.
+ */
+function compareSlots(left: ExtensionSlot, right: ExtensionSlot): number {
+  const leftIndex = slotOrder.get(left);
+  const rightIndex = slotOrder.get(right);
+  if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex;
+  if (leftIndex !== undefined) return -1;
+  if (rightIndex !== undefined) return 1;
+  return 0;
+}
 const mutatingEffects = new Set<ToolEffectKind>([
   "local_mutation",
   "external_mutation",
@@ -126,10 +151,7 @@ export function assembleExtensions<T extends HarnessExtension>(
   return {
     effects,
     extensions: resolved
-      .sort(
-        (left, right) =>
-          slotOrder.get(left.contribution.slot)! - slotOrder.get(right.contribution.slot)!
-      )
+      .sort((left, right) => compareSlots(left.contribution.slot, right.contribution.slot))
       .map(({ extension }) => extension),
   };
 }

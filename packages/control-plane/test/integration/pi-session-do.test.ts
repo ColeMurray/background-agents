@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { collectMessages, initSession, openClientWs, queryDO } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -13,7 +13,7 @@ import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snap
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
 import { SessionInternalPaths } from "../../src/session/contracts";
-import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
+import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
 import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
 import type {
   PiRuntimeControl,
@@ -304,7 +304,7 @@ describe("PiSessionDO", () => {
       "SELECT pi_feature_capability_snapshot FROM session"
     );
     expect(JSON.parse(rows[0]!.pi_feature_capability_snapshot)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -312,7 +312,9 @@ describe("PiSessionDO", () => {
         // Sandbox execution stays off until a provider passes the generation-78
         // isolation canary, so a creation snapshot never admits it.
         sandboxExecution: "off",
+        externalActions: "enabled",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -397,6 +399,36 @@ describe("PiSessionDO", () => {
     expect(outcome).toContain("Malformed persisted Pi capability snapshot");
   });
 
+  it("installs the cross-session tool once when the capability is enabled", async () => {
+    const { sessionName } = await initSession({
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      configureSessionEnv: (sessionEnv) => {
+        sessionEnv.PI_WORKSPACE_MODE = "off";
+        sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
+        sessionEnv.PI_CODE_MODE = "off";
+        sessionEnv.PI_SANDBOX_EXECUTION_MODE = "off";
+        sessionEnv.PI_EXTERNAL_ACTIONS_MODE = "off";
+        sessionEnv.PI_MCP_MODE = "off";
+        sessionEnv.PI_CROSS_SESSION_MESSAGING_MODE = "enabled";
+      },
+    });
+
+    await piStub(sessionName).status(sessionName);
+    const tools = await runInPiSessionDO(piStub(sessionName), async (instance) => {
+      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
+    });
+
+    // The tool is installed exactly once. A second contribution for the same
+    // slot is refused by the assembler, so a duplicate never reaches a
+    // session.
+    expect(tools.filter((name) => name === "message_session")).toHaveLength(1);
+  });
+
   it("installs the memory tools only when the capability admits them", async () => {
     const toolNames = async (mode: string) => {
       const { sessionName } = await initSession({
@@ -410,6 +442,7 @@ describe("PiSessionDO", () => {
           sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
           sessionEnv.PI_CODE_MODE = "off";
           sessionEnv.PI_SANDBOX_EXECUTION_MODE = "off";
+          sessionEnv.PI_EXTERNAL_ACTIONS_MODE = "off";
           sessionEnv.PI_MCP_MODE = "off";
           sessionEnv.PI_MEMORY_MODE = mode;
         },
@@ -451,6 +484,7 @@ describe("PiSessionDO", () => {
         sessionEnv.PI_REPOSITORY_EDITING_MODE = "off";
         sessionEnv.PI_CODE_MODE = "off";
         sessionEnv.PI_SANDBOX_EXECUTION_MODE = "off";
+        sessionEnv.PI_EXTERNAL_ACTIONS_MODE = "off";
         sessionEnv.PI_MCP_MODE = "off";
       },
     });
@@ -1230,7 +1264,7 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -1238,7 +1272,9 @@ describe("PiSessionDO", () => {
         // Sandbox execution stays off until a provider passes the generation-78
         // isolation canary, so a creation snapshot never admits it.
         sandboxExecution: "off",
+        externalActions: "enabled",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -1991,13 +2027,14 @@ describe("PiSessionDO", () => {
       "open-inspect.subagent",
       "open-inspect.workspace",
       "open-inspect.repository-overlay",
+      "open-inspect.external-actions",
     ]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -2005,7 +2042,9 @@ describe("PiSessionDO", () => {
         // Sandbox execution stays off until a provider passes the generation-78
         // isolation canary, so a creation snapshot never admits it.
         sandboxExecution: "off",
+        externalActions: "enabled",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -2067,19 +2106,20 @@ describe("PiSessionDO", () => {
     );
 
     expect(result).toMatchObject({ isError: false });
-    await vi.waitFor(async () => {
-      const rows = await queryDO<{ bundle_json: string }>(
-        sessionStub,
-        "SELECT bundle_json FROM session_diff WHERE singleton = 1"
-      );
-      expect(JSON.parse(rows[0]?.bundle_json ?? "null")).toMatchObject({
-        repositories: [
-          {
-            baseSha: "a".repeat(40),
-            files: [expect.objectContaining({ path: "src/app.ts", status: "modified" })],
-          },
-        ],
-      });
+    await runInPiSessionDO(stub, (instance) =>
+      (instance as unknown as { alarm(): Promise<void> }).alarm()
+    );
+    const rows = await queryDO<{ bundle_json: string }>(
+      sessionStub,
+      "SELECT bundle_json FROM session_diff WHERE singleton = 1"
+    );
+    expect(JSON.parse(rows[0]?.bundle_json ?? "null")).toMatchObject({
+      repositories: [
+        {
+          baseSha: "a".repeat(40),
+          files: [expect.objectContaining({ path: "src/app.ts", status: "modified" })],
+        },
+      ],
     });
 
     const retry = await sessionStub.fetch(

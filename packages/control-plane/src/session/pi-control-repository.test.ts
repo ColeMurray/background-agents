@@ -18,7 +18,7 @@ describe("PiControlRepository", () => {
     const input = {
       requestId: "request-1",
       requestHash: "a".repeat(64),
-      action: "follow_up",
+      action: "steer",
       actorId: "user-1",
       source: "web",
     };

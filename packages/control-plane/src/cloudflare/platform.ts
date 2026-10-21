@@ -14,12 +14,15 @@ import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dis
 import { createDurableObjectPiRuntimeDispatch } from "./pi-runtime-dispatch";
 import type { CodemodeSandboxDurableObject } from "@earendil-works/pi-codemode/cloudflare";
 import type { PiSessionDO } from "./pi-durable-object";
+import type { McpConnectionDO } from "./mcp-connection-durable-object";
+import { createMcpConnectionBrokerDispatch } from "./mcp-connection-dispatch";
 import { BrowserRenderingTransport } from "./browser-rendering-transport";
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
   PI_SESSION?: DurableObjectNamespace<PiSessionDO>;
+  MCP_CONNECTION?: DurableObjectNamespace<McpConnectionDO>;
   /** External, separately deployed VM object. Never adapt this into the application Platform. */
   CODEMODE_SANDBOX?: DurableObjectNamespace<CodemodeSandboxDurableObject>;
   /** Optional isolate loader for the read-only Computer JavaScript backend. */
@@ -53,6 +56,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     DB,
     SESSION,
     PI_SESSION,
+    MCP_CONNECTION,
     CODEMODE_SANDBOX: _CODEMODE_SANDBOX,
     WORKSPACE_LOADER: _WORKSPACE_LOADER,
     REPOS_CACHE,
@@ -69,6 +73,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
     PI_SESSION: PI_SESSION ? createDurableObjectPiRuntimeDispatch(PI_SESSION) : undefined,
+    MCP_CONNECTION: MCP_CONNECTION ? createMcpConnectionBrokerDispatch(MCP_CONNECTION) : undefined,
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
     SLACK_BOT,

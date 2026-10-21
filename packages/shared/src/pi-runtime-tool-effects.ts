@@ -1,21 +1,36 @@
 import { harnessMemoryToolName } from "./memory-tools";
-import {
-  createToolEffectRegistry,
-  SANDBOX_EXECUTION_TOOL_EFFECT,
-  type ToolEffectRegistration,
-} from "./tool-effects";
 
-export {
-  createToolEffectRegistry,
-  SANDBOX_EXECUTION_TOOL_EFFECT,
-  TOOL_CALLERS,
-  TOOL_EFFECT_KINDS,
-  TOOL_REPLAY_POLICIES,
-  type ToolCaller,
-  type ToolEffectKind,
-  type ToolEffectRegistration,
-  type ToolReplayPolicy,
-} from "./tool-effects";
+/** Where a Pi tool can cause observable work. This is metadata only. */
+export const TOOL_EFFECT_KINDS = [
+  "local_read",
+  "local_mutation",
+  "external_read",
+  "external_mutation",
+  "sandbox_execution",
+  "control",
+] as const;
+
+export type ToolEffectKind = (typeof TOOL_EFFECT_KINDS)[number];
+
+/** Canonical effect classification for any exposed sandbox process execution. */
+export const SANDBOX_EXECUTION_TOOL_EFFECT = "sandbox_execution" satisfies ToolEffectKind;
+
+/** Pi Durable callers which may invoke a registered tool. */
+export const TOOL_CALLERS = ["model", "tools"] as const;
+
+export type ToolCaller = (typeof TOOL_CALLERS)[number];
+
+/** Pi Durable replay declarations. */
+export const TOOL_REPLAY_POLICIES = ["safe", "unsafe"] as const;
+
+export type ToolReplayPolicy = (typeof TOOL_REPLAY_POLICIES)[number];
+
+export interface ToolEffectRegistration {
+  readonly name: string;
+  readonly effect: ToolEffectKind;
+  readonly callers: readonly ToolCaller[];
+  readonly replay: ToolReplayPolicy;
+}
 
 /**
  * Effect declarations for the stable Pi tools that predate feature extensions.
@@ -105,19 +120,45 @@ export const PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS = [
 ] as const satisfies readonly ToolEffectRegistration[];
 
 /**
- * The MCP read tool.
+ * The MCP read tools.
  *
- * The tool is declared here, before any extension is assembled, so the
- * assembler knows its effect without asking the session. The tool is
- * read-only: an MCP mutation never becomes a tool.
+ * They are declared here, before any extension is assembled, so the assembler
+ * knows their effect without asking the session. The tools are read-only: an
+ * MCP mutation never becomes a tool, it becomes an external action that a
+ * person approves.
  *
- * There is one, because the core has one lane: the shared server belongs to
- * the deployment and is scoped by the session's own repositories.
+ * There are two, not one, because the two lanes are different credential
+ * domains: `mcp_read_shared` reads through the deployment's own server
+ * credential, scoped by the session's repositories, and `mcp_read_connection`
+ * reads through one person's OAuth connection. One model-visible tool that
+ * spans both would let the model confuse a deployment-wide read with a
+ * person's, which no other harness's MCP surface allows.
  */
 export const PI_MCP_TOOL_EFFECT_REGISTRATIONS = [
   {
     name: "mcp_read_shared",
     effect: "external_read",
+    callers: ["model"],
+    replay: "safe",
+  },
+  {
+    name: "mcp_read_connection",
+    effect: "external_read",
+    callers: ["model"],
+    replay: "safe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
+/**
+ * The cross-session messaging tool.
+ *
+ * It changes something outside the model, so it is owned by the cross-session
+ * policy delegate and authorized by the owning session on every call.
+ */
+export const CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "message_session",
+    effect: "external_mutation",
     callers: ["model"],
     replay: "safe",
   },
@@ -147,6 +188,12 @@ export const PI_BROWSER_TOOL_EFFECT_REGISTRATIONS = [
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 
+/**
+ * The cross-session messaging tool.
+ *
+ * It changes something outside the model, so it is owned by the cross-session
+ * policy delegate and authorized by the owning session on every call.
+ */
 /**
  * The memory tools.
  *
@@ -189,6 +236,20 @@ export const PI_MEMORY_TOOL_EFFECT_REGISTRATIONS = [
   ...PI_MEMORY_READ_TOOL_EFFECT_REGISTRATIONS,
   ...PI_MEMORY_WRITE_TOOL_EFFECT_REGISTRATIONS,
 ] as const satisfies readonly ToolEffectRegistration[];
+
+/** Build a lookup while rejecting accidental tool shadowing across extensions. */
+export function createToolEffectRegistry(
+  ...registrationGroups: readonly (readonly ToolEffectRegistration[])[]
+): ReadonlyMap<string, ToolEffectRegistration> {
+  const registry = new Map<string, ToolEffectRegistration>();
+  for (const registration of registrationGroups.flat()) {
+    if (registry.has(registration.name)) {
+      throw new Error(`Duplicate Pi tool effect registration: "${registration.name}"`);
+    }
+    registry.set(registration.name, registration);
+  }
+  return registry;
+}
 
 /** Baseline registry; feature branches should compose this declaration list with their own. */
 export const PI_TOOL_EFFECT_REGISTRY = createToolEffectRegistry(PI_TOOL_EFFECT_REGISTRATIONS);

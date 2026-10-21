@@ -52,6 +52,39 @@ lives in `src/db` or `src/session` and is checked.
 Migrations already merged are grandfathered by number, not rewritten. Converting them is a separate
 piece of work; the baseline exists so the pile stops growing meanwhile.
 
+## Compatibility window for unpublished migration 0090
+
+Do not infer that a migration is unpublished only because it is absent from the canonical branch.
+Before changing migration `0090`, inventory **every database installation**: Cloudflare D1 and
+Node-hosted SQLite, including personal, staging, and any database updated manually or from an
+out-of-band feature branch:
+
+```sql
+SELECT version, name, applied_at
+FROM _schema_migrations
+WHERE version = '0090';
+
+SELECT name
+FROM sqlite_schema
+WHERE type = 'trigger'
+  AND name = 'revoke_external_action_grants_on_executor_change';
+```
+
+Canonical `origin/main` did not contain migration `0090` when application-level external-action
+grant revocation was added. That repository fact does not prove that an operator never applied the
+feature branch directly. Both migration runners skip a version already present in
+`_schema_migrations`; neither compares the recorded file's contents with the repository copy. Stop
+and reconcile any installation where the ledger and trigger inventory differ from the expected
+schema; do not rewrite its ledger or add a down migration.
+
+The first compatibility release deliberately keeps the trigger in `0090` while also deploying the
+atomic application statement bundles. This protects rollback to `6c125c95`-class binaries, whose
+bare guarded executor update and user-merge batch still rely on the trigger. Only after those
+binaries are outside **every** installation's rollback window may a later release add a separately
+numbered, forward-only migration that runs
+`DROP TRIGGER IF EXISTS revoke_external_action_grants_on_executor_change`. Do not add or apply that
+drop migration during the compatibility release.
+
 ## Exceptions
 
 A construct that genuinely has no portable form is listed in `scripts/sql-portability-baseline.json`

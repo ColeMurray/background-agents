@@ -113,7 +113,7 @@ export class PiControlRepository {
       .exec(
         `SELECT 1 AS active FROM pi_control_receipts
          WHERE request_id=?
-           AND action IN ('submit','send','follow_up','compact')
+           AND action IN ('submit','send','steer','follow_up','compact')
            AND state IN ('processing','accepted','indeterminate')`,
         requestId
       )

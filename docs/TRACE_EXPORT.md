@@ -48,12 +48,32 @@ a CLI. Unattended export requires a separate machine credential, which is not av
 The response has `Content-Type: application/x-ndjson` and `Cache-Control: private, no-store`. Lines
 are `schemaVersion: 2` and one of:
 
-| `type`          | Meaning                                                                                                                                                                                                                                                                                                  |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session`       | Session-index metadata (identity, hierarchy, owner, model/provider, repositories, PRs, token totals, cost and timestamps), plus only the requested trace arrays. Nullable fields are present; unrequested arrays are absent.                                                                             |
-| `session_error` | An included trace could not be read; **no partial session line** is emitted for this ID. `reason` is `http_error` (with `status`), `runtime_failure`, `page_cap_reached`, or `trace_budget_exceeded`. Retry the window or use `format=compact`/fewer includes; do not count this as an exported session. |
-| `cursor`        | Last line of a nonterminal page; pass `nextCursor` on the next request. A terminal page has no cursor line.                                                                                                                                                                                              |
-| `error`         | Terminal streaming error, for example a failed index read. Treat the page/window as incomplete.                                                                                                                                                                                                          |
+| `type`          | Meaning                                                                                                                                                                                                                                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session`       | Session-index metadata (identity, hierarchy, owner, model/provider, repositories, PRs, token totals, cost and timestamps), plus only the requested trace arrays. Nullable fields are present; unrequested arrays are absent. A Pi session also carries `harnessState`, which says that Pi's own durable record is not in this export. |
+| `session_error` | An included trace could not be read; **no partial session line** is emitted for this ID. `reason` is `http_error` (with `status`), `runtime_failure`, `page_cap_reached`, or `trace_budget_exceeded`. Retry the window or use `format=compact`/fewer includes; do not count this as an exported session.                              |
+| `cursor`        | Last line of a nonterminal page; pass `nextCursor` on the next request. A terminal page has no cursor line.                                                                                                                                                                                                                           |
+| `error`         | Terminal streaming error, for example a failed index read. Treat the page/window as incomplete.                                                                                                                                                                                                                                       |
+
+## What the export does not carry
+
+A session line is never the whole agent's record. The export carries the session-index projection
+and the collections the session runtime read.
+
+A **Pi Durable** session keeps the agent's own record — the native transcript, the task graph, the
+compaction boundaries and the workspace files — in its own Durable Object. The export reads the
+session's projection of that record, so a Pi session line carries `harnessState`:
+
+```json
+{
+  "included": false,
+  "reason": "Pi Durable's native transcript, task graph, compaction boundaries and workspace files are not part of this export; the messages and events are the session's projection of them."
+}
+```
+
+`harnessState` is absent for every other harness. A consumer that needs Pi's own record must read it
+from the Pi Durable Object; it is not in this file. The field is additive inside schema 2: consumers
+**must ignore unknown fields**, so an older consumer still parses the line.
 
 Each included session trace is read via **one** runtime `GET /internal/trace-export` call in a
 single storage snapshot. Its collections share a 4 MiB serialized-response budget and at most 25

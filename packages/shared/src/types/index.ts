@@ -6,25 +6,6 @@
  */
 
 export {
-  mcpToolReviewInputSchema,
-  mcpServerReviewInputSchema,
-  mcpServerReviewViewSchema,
-  mcpReadRequestSchema,
-  mcpReadResultSchema,
-  mcpSharedServerSchema,
-  mcpSharedServerListSchema,
-  MAX_MCP_READ_RESULT_BYTES,
-} from "./mcp-read";
-export type {
-  McpServerReviewInput,
-  McpServerReviewView,
-  McpReadRequest,
-  McpReadResult,
-  McpSharedServer,
-  McpSharedServerList,
-} from "./mcp-read";
-
-export {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
@@ -216,6 +197,63 @@ export {
 
 export { sandboxShutdownSchema } from "./sandbox-shutdown";
 export type { SandboxShutdownState } from "./sandbox-shutdown";
+export {
+  MAX_EXTERNAL_ACTION_DOCUMENT_BYTES,
+  externalActionStateSchema,
+  externalActionApprovalSchema,
+  externalActionPrepareRequestSchema,
+  externalActionSchema,
+  externalActionHistoryEventSchema,
+  externalActionStatusResponseSchema,
+  externalActionPendingSchema,
+  externalActionPendingListSchema,
+  externalActionToolName,
+} from "./external-actions";
+export type {
+  ExternalActionState,
+  ExternalActionApproval,
+  ExternalActionPrepareRequest,
+  ExternalAction,
+  ExternalActionHistoryEvent,
+  ExternalActionStatusResponse,
+  ExternalActionPending,
+  ExternalActionPendingList,
+} from "./external-actions";
+export {
+  MAX_CROSS_SESSION_MESSAGE_CHARACTERS,
+  MAX_CROSS_SESSION_DEPTH,
+  MAX_CROSS_SESSION_FAN_OUT,
+  crossSessionMessageRequestSchema,
+  crossSessionReceiptSchema,
+  crossSessionDeliverySchema,
+  crossSessionDeliveryResultSchema,
+} from "./cross-session";
+export {
+  mcpToolReviewInputSchema,
+  mcpServerReviewInputSchema,
+  mcpServerReviewViewSchema,
+  mcpSessionGrantInputSchema,
+  mcpSessionPinSchema,
+  mcpSessionPinListSchema,
+  mcpReadRequestSchema,
+  mcpReadResultSchema,
+  MAX_MCP_READ_RESULT_BYTES,
+} from "./mcp-read";
+export type {
+  McpServerReviewInput,
+  McpServerReviewView,
+  McpSessionGrantInput,
+  McpSessionPin,
+  McpSessionPinList,
+  McpReadRequest,
+  McpReadResult,
+} from "./mcp-read";
+export type {
+  CrossSessionMessageRequest,
+  CrossSessionReceipt,
+  CrossSessionDelivery,
+  CrossSessionDeliveryResult,
+} from "./cross-session";
 export {
   DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS,
   MAX_SANDBOX_COMMAND_TIMEOUT_MS,

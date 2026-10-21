@@ -811,3 +811,98 @@ export const INTEGRATION_DEFINITIONS: {
     description: "Agent-driven Slack notifications and mention policy",
   },
 ];
+
+// The personal MCP lane's wire types. The core has no personal lane.
+export const mcpConnectionCreateInputSchema = z
+  .object({
+    serverId: z.string().trim().min(1),
+  })
+  .strict();
+
+/** Durable connection state; `staged` is intentionally not a live OAuth connection. */
+export const mcpConnectionStatusSchema = z.enum([
+  "foundation_staged",
+  "revoking",
+  "transport_ready",
+  "oauth_authorizing",
+  "oauth_ready",
+  "failed",
+  "revoked",
+]);
+
+export type CreateMcpConnectionRequest = z.input<typeof mcpConnectionCreateInputSchema>;
+export type McpConnectionStatus = z.infer<typeof mcpConnectionStatusSchema>;
+
+/**
+ * The transport state of one personal MCP connection, as the broker sees it.
+ *
+ * `authenticating` is the state the owner has to act on: the server is waiting
+ * for the owner's approval, and only the owner can complete it.
+ */
+export const mcpConnectionTransportStateSchema = z.enum([
+  "authenticating",
+  "connecting",
+  "connected",
+  "ready",
+  "failed",
+]);
+export type McpConnectionTransportState = z.infer<typeof mcpConnectionTransportStateSchema>;
+
+/**
+ * The owner's view of one connection's authorization.
+ *
+ * The authorization URL is the server's own URL: the owner visits it to grant
+ * the access. It is never a credential, and it is never part of the connection
+ * metadata a session or an agent may read.
+ */
+export interface McpConnectionAuthorization {
+  state: McpConnectionTransportState;
+  authUrl?: string;
+}
+
+/** The owner's request to make one connection usable. */
+export const mcpConnectionAuthorizeInputSchema = z
+  .object({
+    /**
+     * Discard the stored credential and start a fresh authorization.
+     *
+     * It is the owner's explicit act, and it is the only way a credential the
+     * provider has refused can be replaced.
+     */
+    reconnect: z.boolean().optional(),
+  })
+  .strict();
+export type McpConnectionAuthorizeInput = z.input<typeof mcpConnectionAuthorizeInputSchema>;
+
+/** Human-reviewed catalog entry. Only read-only tools are representable in this first contract. */
+export interface McpReviewedReadOnlyTool {
+  stableToolId: string;
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: unknown;
+  inputSchemaSha256: string;
+  outputSchema?: unknown;
+  outputSchemaSha256?: string;
+  reviewedAt: number;
+}
+
+/** Owner-safe MCP connection metadata. OAuth credentials are never part of this shape. */
+export interface McpConnectionMetadata {
+  id: string;
+  serverId: string;
+  serverRevision: number;
+  serverName: string;
+  endpointUrl: string;
+  endpointHost: string;
+  catalogSnapshotSha256: string;
+  status: McpConnectionStatus;
+  tools: McpReviewedReadOnlyTool[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface McpConnectionsResponse {
+  enabled: boolean;
+  connections: McpConnectionMetadata[];
+}

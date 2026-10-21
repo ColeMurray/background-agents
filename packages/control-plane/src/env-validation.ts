@@ -58,3 +58,13 @@ export function requireRepoSecretsEncryptionKey(
 export function requireTokenEncryptionKey(env: Pick<EnvConfig, "TOKEN_ENCRYPTION_KEY">): string {
   return requireEncryptionKey(env.TOKEN_ENCRYPTION_KEY, "TOKEN_ENCRYPTION_KEY", "OAuth tokens");
 }
+
+export function requireMcpOAuthEncryptionKey(
+  env: Pick<EnvConfig, "MCP_OAUTH_ENCRYPTION_KEY">
+): string {
+  return requireEncryptionKey(
+    env.MCP_OAUTH_ENCRYPTION_KEY,
+    "MCP_OAUTH_ENCRYPTION_KEY",
+    "MCP OAuth state and credentials"
+  );
+}

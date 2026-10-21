@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(252);
+    expect(routes).toHaveLength(267);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(195);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(252);
+    expect(new Set(paths).size).toBe(206);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(267);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },
@@ -82,6 +82,55 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/sessions/session-1/executions/cmd-1/cancel")).toMatchObject({
       authentication: { kind: "user" },
       authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
+    });
+    expect(routeFor("POST", "/mcp-connections")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-self" },
+      cacheControl: "private, no-store",
+    });
+    // The owner's own authorization of a connection is the owner's act on
+    // their own account, so the same self authority decides.
+    expect(routeFor("POST", "/mcp-connections/mcpconn_1/authorize")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-self" },
+      cacheControl: "private, no-store",
+    });
+    // The server's OAuth callback goes to the broker that owns the
+    // connection, and only the connection's owner may reach it.
+    expect(routeFor("GET", "/mcp/oauth/callback/mcpconn_1")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-self" },
+      cacheControl: "private, no-store",
+    });
+    // Attaching a personal MCP connection to a session is an action in that
+    // session, so the session's own authority decides.
+    expect(routeFor("POST", "/sessions/session-1/mcp-pins")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
+    });
+    expect(routeFor("GET", "/sessions/session-1/external-actions/action-1")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
+      },
+    });
+    expect(routeFor("GET", "/sessions/session-1/external-actions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
+      },
+    });
+    expect(
+      routeFor("POST", "/sessions/session-1/external-actions/action-1/decision")
+    ).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [
+          // Deciding an external effect is an action, not a read.
+          { kind: "session", action: "collaborate", sessionIdParam: "id" },
+          { kind: "permission", permission: "external_actions.approve" },
+        ],
+      },
     });
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
