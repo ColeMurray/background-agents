@@ -318,6 +318,30 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("shows each result's pull request state next to its title", () => {
+    mockUseSessionDiscovery.mockReturnValue({
+      ...defaultHookResult,
+      sessions: [
+        session("merged", {
+          prCount: 1,
+          pullRequestSummary: { total: 1, open: 0, draft: 0, merged: 1, closed: 0 },
+        }),
+        session("mixed", {
+          prCount: 3,
+          pullRequestSummary: { total: 3, open: 1, draft: 1, merged: 1, closed: 0 },
+        }),
+        session("no-prs"),
+      ],
+    });
+
+    render(<SessionsPage />);
+
+    const rows = within(screen.getByRole("list", { name: "Sessions" })).getAllByRole("link");
+    expect(within(rows[0]).getByTestId("pr-state-merged")).toHaveAccessibleName("PR merged");
+    expect(within(rows[1]).getByTestId("pr-state-open")).toHaveAccessibleName("3 PRs · 2 open");
+    expect(within(rows[2]).queryByTestId(/^pr-state-/)).not.toBeInTheDocument();
+  });
+
   it("restores every control from a shared URL and keeps unknown selections visible", () => {
     mockSearchParamsState.value = new URLSearchParams(
       "q=login&createdBy=me&repoOwner=partner&repoName=sdk&environmentId=env-gone&lifecycle=archived&origin=automation"

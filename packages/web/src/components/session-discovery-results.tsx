@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { Badge } from "@/components/ui/badge";
 import { BoxIcon } from "@/components/ui/icons";
+import { pullRequestSummaryDisplay } from "@/lib/pr-summary";
 import { formatRelativeTime } from "@/lib/time";
 import {
   SESSION_ORIGIN_LABELS,
@@ -40,6 +42,7 @@ function SessionDiscoveryRow({
   const hiddenRepositories = repositoryLabels.slice(INLINE_REPOSITORY_LABELS);
   const creator = formatCreator(session, currentUserId);
   const isArchived = session.status === "archived";
+  const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
 
   return (
     <li>
@@ -48,8 +51,11 @@ function SessionDiscoveryRow({
         className="block px-4 py-3 transition hover:bg-muted focus-visible:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
       >
         <div className="flex items-start justify-between gap-3">
-          <span className="min-w-0 truncate text-sm font-medium text-foreground">
-            {session.title || UNTITLED_SESSION_LABEL}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
+            <span className="truncate text-sm font-medium text-foreground">
+              {session.title || UNTITLED_SESSION_LABEL}
+            </span>
           </span>
           <Badge
             variant={isArchived ? "default" : session.status === "failed" ? "pr-closed" : "default"}
