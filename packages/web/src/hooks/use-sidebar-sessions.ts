@@ -541,12 +541,21 @@ export function useSidebarSessions() {
     [filters, mine]
   );
 
+  // A poll can surface new descendants while the write is in flight, so the
+  // handler reconciles the hierarchy as the latest render lists it.
+  const inboxItemsRef = useRef(inboxItems);
+  useEffect(() => {
+    inboxItemsRef.current = inboxItems;
+  }, [inboxItems]);
+
   // Scoped by the same filters, so the server marks exactly the hierarchy this
   // row lists. Only that hierarchy is reconciled; unrelated loaded pages stay.
   const handleMarkHierarchyRead = useCallback(
     async (rootSessionId: string) => {
       await markSessionInboxHierarchyRead({ ...filters, mine, rootSessionId });
-      const item = inboxItems.find(({ rootSession }) => rootSession.id === rootSessionId);
+      const item = inboxItemsRef.current.find(
+        ({ rootSession }) => rootSession.id === rootSessionId
+      );
       if (!item) return;
       await reconcileSidebarReadStates(
         [item.rootSession, ...item.descendantSessions]
@@ -558,7 +567,7 @@ export function useSidebarSessions() {
           }))
       );
     },
-    [filters, inboxItems, mine, reconcileSidebarReadStates]
+    [filters, mine, reconcileSidebarReadStates]
   );
 
   const unreadDescendantRootIds = useMemo(

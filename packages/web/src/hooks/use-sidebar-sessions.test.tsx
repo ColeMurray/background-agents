@@ -712,6 +712,47 @@ describe("useSidebarSessions", () => {
     expect(result.current.finished.map(({ id }) => id)).toEqual(["finished", "finished-tail"]);
   });
 
+  it("reconciles descendants that surface while the hierarchy write is in flight", async () => {
+    const response = deferred<Response>();
+    vi.mocked(browserApiFetch).mockReturnValue(response.promise);
+    const child = { ...unreadItem("child").rootSession, parentSessionId: "parent" };
+    const lateChild = { ...unreadItem("late-child").rootSession, parentSessionId: "parent" };
+    let descendants = [child];
+    const fetcher = vi.fn(async () =>
+      snapshot({
+        needs_attention: {
+          items: [{ ...unreadItem("parent"), descendantSessions: descendants }],
+          hasMore: false,
+          nextCursor: null,
+        },
+      })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let marking!: Promise<void>;
+    act(() => {
+      marking = result.current.handleMarkHierarchyRead("parent");
+    });
+    descendants = [child, lateChild];
+    await act(() => result.current.refreshSnapshot());
+    await waitFor(() => expect(result.current.childrenMap.get("parent")).toHaveLength(2));
+    // Hold revalidation on the pre-write snapshot so only reconciliation can clear the rows.
+    fetcher.mockImplementation(() => new Promise(() => undefined));
+    await act(async () => {
+      response.resolve(Response.json({ markedCount: 3 }));
+      await marking;
+    });
+
+    expect(result.current.needsAttention).toEqual([]);
+    expect(
+      result.current.childrenMap.get("parent")?.map(({ id, readState }) => [id, readState.unread])
+    ).toEqual([
+      ["late-child", false],
+      ["child", false],
+    ]);
+  });
+
   it("reconciles read state on retained pages when a session is marked read", async () => {
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")
