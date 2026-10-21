@@ -176,12 +176,16 @@ class CodexTurnEvents:
             ):
                 return self._invalid_usage()
             counts = {k: total[k] - self.baseline[k] for k in TOKEN_FIELDS}
-            if self.baseline_known and _token_counts(counts) is None:
-                return self._invalid_usage()
-            previous, self.total = self.total, total
-            self.has_usage = True
             # Codex sends one update per model request; `last` is that request.
-            request = {k: total[k] - previous[k] for k in TOKEN_FIELDS}
+            request = {k: total[k] - self.total[k] for k in TOKEN_FIELDS}
+            # Valid cumulative totals can still yield an inconsistent request
+            # delta, which must not be priced.
+            if self.baseline_known and (
+                _token_counts(counts) is None or _token_counts(request) is None
+            ):
+                return self._invalid_usage()
+            self.total = total
+            self.has_usage = True
             last = _token_counts(usage.get("last") if isinstance(usage, dict) else None)
             if not self.baseline_known:
                 if not self.attribution_complete or not any(request.values()):

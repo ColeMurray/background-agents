@@ -315,6 +315,17 @@ def test_absolute_valid_but_overlapping_delta_cannot_be_attributed():
     assert not state.has_usage
 
 
+def test_request_delta_that_breaks_token_invariants_is_not_priced():
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE)
+    assert usage(state, counts(100))["cost"] == 0.0002
+    # Both totals are valid, and so is the turn's, but this request's 150 cached
+    # tokens exceed its 100 input tokens.
+    projected = usage(state, {**counts(200), "cachedInputTokens": 150})
+    assert not state.usage_valid
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0.0002
+
+
 def test_unknown_baseline_tracks_valid_totals_without_using_unsafe_deltas():
     state = CodexTurnEvents(
         "m", "thread", "turn", "gpt-6.1-sol", counts(100), baseline_known=False, price=PRICE
