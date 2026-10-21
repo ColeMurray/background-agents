@@ -282,6 +282,80 @@ async def test_create_sandbox_passes_unknown_fields_to_session_config_helper(mon
 
 
 @pytest.mark.asyncio
+async def test_create_sandbox_preserves_execution_runtime_mode(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    await _call_create_sandbox(
+        {
+            **CREATE_REQUEST,
+            "repo_owner": None,
+            "repo_name": None,
+            "runtime_mode": "execution",
+            "harness": None,
+            "provider": None,
+            "model": None,
+            "execution_policy": {
+                "artifactGeneration": 78,
+                "networkProfile": "package-install-v1",
+                "allowedDomains": [
+                    "control-plane.example",
+                    "registry.npmjs.org",
+                    "pypi.org",
+                    "files.pythonhosted.org",
+                ],
+            },
+        }
+    )
+
+    assert captured["config"].session_config == {
+        "session_id": "sess-1",
+        "runtime_mode": "execution",
+        "bridge_early_connect": True,
+    }
+    assert captured["config"].execution_policy["artifactGeneration"] == 78
+
+
+@pytest.mark.asyncio
+async def test_execution_runtime_rejects_extra_network_domains_and_secret_fields(monkeypatch):
+    _patch_auth(monkeypatch)
+    captured = {}
+    _patch_manager(monkeypatch, captured)
+    request = {
+        **CREATE_REQUEST,
+        "repo_owner": None,
+        "repo_name": None,
+        "runtime_mode": "execution",
+        "harness": None,
+        "provider": None,
+        "model": None,
+        "execution_policy": {
+            "artifactGeneration": 78,
+            "networkProfile": "package-install-v1",
+            "allowedDomains": [
+                "control-plane.example",
+                "registry.npmjs.org",
+                "pypi.org",
+                "files.pythonhosted.org",
+                "github.com",
+            ],
+        },
+    }
+
+    with pytest.raises(HTTPException) as network_error:
+        await _call_create_sandbox(request)
+    assert network_error.value.status_code == 400
+
+    request["execution_policy"]["allowedDomains"].pop()
+    request["user_env_vars"] = {"OPENAI_API_KEY": "secret"}
+    with pytest.raises(HTTPException) as secret_error:
+        await _call_create_sandbox(request)
+    assert secret_error.value.status_code == 400
+    assert "config" not in captured
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("call", [_call_create_sandbox, _call_restore_sandbox])
 async def test_sandbox_generic_failures_raise_500_and_log_request(monkeypatch, call):
     _patch_auth(monkeypatch)

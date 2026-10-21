@@ -1184,6 +1184,12 @@ async def main() -> None:
     parser.add_argument("--token", required=True, help="Auth token")
     parser.add_argument("--opencode-port", type=int, default=4096, help="OpenCode port")
     parser.add_argument(
+        "--runtime-mode",
+        choices=("agent",),
+        default="agent",
+        help="Runtime role; execution starts no agent harness",
+    )
+    parser.add_argument(
         "--harness",
         default=DEFAULT_HARNESS_ID.value,
         help="Agent harness id",
@@ -1193,7 +1199,6 @@ async def main() -> None:
         action="store_true",
         help="Connect before the repository boots; attach the harness when the supervisor reports it up",
     )
-
     args = parser.parse_args()
 
     bridge = AgentBridge(

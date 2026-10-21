@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -17,6 +18,7 @@ IMAGE_ID_ENV = "OPENINSPECT_MODAL_BASE_IMAGE_ID"
 # The optional Docker-capable variant: the default image plus one install phase.
 # Provisioned separately; absent until an operator builds and verifies it.
 DOCKER_IMAGE_ID_ENV = "OPENINSPECT_MODAL_DOCKER_IMAGE_ID"
+EXECUTION_IMAGE_ID_ENV = "OPENINSPECT_MODAL_EXECUTION_IMAGE_ID"
 # The Modal option that launches a Docker-capable VM instead of a gVisor sandbox.
 MODAL_VM_EXPERIMENTAL_OPTIONS: dict[str, bool] = {"vm_runtime": True}
 
@@ -45,6 +47,9 @@ def deployed_image_environment() -> dict[str, str]:
         docker_image_id = os.environ.get(DOCKER_IMAGE_ID_ENV)
         if docker_image_id:
             environment[DOCKER_IMAGE_ID_ENV] = docker_image_id
+        execution_image_id = os.environ.get(EXECUTION_IMAGE_ID_ENV)
+        if execution_image_id:
+            environment[EXECUTION_IMAGE_ID_ENV] = execution_image_id
         return environment
     path = image_reference_path()
     if not path.is_file():
@@ -62,6 +67,11 @@ def deployed_image_environment() -> dict[str, str]:
         if not isinstance(docker_image_id, str) or not docker_image_id.strip():
             raise RuntimeError("Built Modal image record has an invalid Docker image ID")
         environment[DOCKER_IMAGE_ID_ENV] = docker_image_id
+    execution_image_id = record.get("executionImageId")
+    if execution_image_id is not None:
+        if not isinstance(execution_image_id, str) or not execution_image_id.strip():
+            raise RuntimeError("Built Modal execution image record is invalid")
+        environment[EXECUTION_IMAGE_ID_ENV] = execution_image_id
     if os.environ.get("BUILD_MODAL_VM_IMAGE") == "true" and DOCKER_IMAGE_ID_ENV not in environment:
         raise RuntimeError("Build and verify the Docker sandbox image before deploying functions")
     return environment
@@ -98,3 +108,31 @@ def _define_docker_image() -> modal.Image | None:
 
 
 docker_image = _define_docker_image()
+
+
+def _define_execution_image() -> tuple[modal.Image | None, dict[str, Any] | None]:
+    if not modal.is_local():
+        image_id = os.environ.get(EXECUTION_IMAGE_ID_ENV)
+        return (modal.Image.from_id(image_id) if image_id else None), None
+    bundle, plan = local_image_plan()
+    plan = {
+        **plan,
+        "buildHash": hashlib.sha256(f"{plan['buildHash']}:execution-v1".encode()).hexdigest(),
+    }
+    (bundle / "build-config.json").write_text(json.dumps(plan) + "\n")
+    return (
+        (
+            modal.Image.from_registry(plan["target"]["base"])
+            .add_local_dir(str(bundle), "/tmp/openinspect-image", copy=True)
+            .run_commands(
+                "bash /tmp/openinspect-image/packages/sandbox-images/install/install.sh execution",
+                "rm -rf /tmp/openinspect-image",
+            )
+            .env(plan["runtimeEnv"] | {"SANDBOX_VERSION": plan["runtimeVersion"]})
+            .workdir("/workspace")
+        ),
+        plan,
+    )
+
+
+execution_image, execution_image_plan = _define_execution_image()

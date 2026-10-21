@@ -192,6 +192,51 @@ def test_local_base_image_retains_its_packed_plan(monkeypatch, tmp_path) -> None
     image.env.assert_called_once_with({"PACKED_PLAN": "true", "SANDBOX_VERSION": "packed-runtime"})
 
 
+def test_build_publishes_a_separately_verified_execution_artifact(monkeypatch, tmp_path) -> None:
+    deployed_app = object()
+    monkeypatch.setattr(deploy.modal.App, "lookup", Mock(return_value=deployed_app))
+    monkeypatch.setattr(deploy, "base_image", Mock(build=Mock(), object_id="im-agent"))
+    monkeypatch.setattr(
+        deploy,
+        "base_image_plan",
+        {"buildHash": "agent-hash", "runtimeEnv": {"SANDBOX_VERSION": "v78"}},
+    )
+    execution_build = Mock()
+    monkeypatch.setattr(
+        deploy,
+        "execution_image",
+        Mock(build=execution_build, object_id="im-execution"),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "execution_image_plan",
+        {"buildHash": "execution-hash", "runtimeEnv": {"SANDBOX_VERSION": "v78"}},
+    )
+    agent_sandbox = _verifying_sandbox(exit_codes=[0])
+    execution_sandbox = _verifying_sandbox(exit_codes=[0])
+    create = Mock(side_effect=[agent_sandbox, execution_sandbox])
+    monkeypatch.setattr(deploy.modal.Sandbox, "create", create)
+    record_path = tmp_path / "selected.json"
+    monkeypatch.setattr(deploy, "image_reference_path", lambda: record_path)
+    monkeypatch.setenv("OPENINSPECT_IMAGE_RESULT", str(tmp_path / "candidate.json"))
+
+    deploy.build_sandbox_image()
+
+    execution_build.assert_called_once_with(deployed_app)
+    assert create.call_args_list[1].kwargs["block_network"] is True
+    execution_sandbox.exec.assert_called_once_with(
+        "/opt/openinspect/python/bin/python",
+        "/app/verify/execution_smoke.py",
+        timeout=240,
+    )
+    assert json.loads(record_path.read_text()) == {
+        "imageId": "im-agent",
+        "buildHash": "agent-hash",
+        "executionImageId": "im-execution",
+        "executionBuildHash": "execution-hash",
+    }
+
+
 def _run_deploy_script(
     tmp_path: Path, *, deploy_module: str = "deploy", fail_eager_build: bool = False
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:

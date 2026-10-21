@@ -563,6 +563,38 @@ class TestAgentBridgeProcessEarlyConnect:
 
         assert "--early-connect" not in spawned[0]
 
+    async def test_execution_mode_cannot_enter_the_argv_bridge(self, monkeypatch):
+        process = self._process(
+            {
+                "SANDBOX_ID": "sandbox-1",
+                "CONTROL_PLANE_URL": "https://cp.example.com",
+                "SANDBOX_AUTH_TOKEN": "tok",
+                "SESSION_CONFIG": json.dumps(
+                    {
+                        "session_id": "session-1",
+                        "runtime_mode": "execution",
+                        "harness": "pi",
+                    }
+                ),
+            }
+        )
+        spawned = []
+
+        async def fake_exec(*args, **_kwargs):
+            spawned.append(args)
+            child = MagicMock(returncode=None, stdout=None)
+            return child
+
+        monkeypatch.setattr(
+            "sandbox_runtime.agent_bridge_process.asyncio.create_subprocess_exec", fake_exec
+        )
+        monkeypatch.setattr("sandbox_runtime.agent_bridge_process.asyncio.sleep", AsyncMock())
+
+        with pytest.raises(RuntimeError, match="in-process bridge"):
+            await process.start()
+
+        assert spawned == []
+
     async def test_wait_returns_the_exit_code(self):
         process = self._process(
             {
