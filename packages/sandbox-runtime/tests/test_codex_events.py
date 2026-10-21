@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from sandbox_runtime.harness.codex.events import CodexTurnEvents
+from sandbox_runtime.harness.codex.events import CodexRateLimits, CodexTurnEvents
 
 
 @pytest.mark.parametrize("method", ["item/started", "item/completed"])
@@ -41,7 +41,7 @@ from sandbox_runtime.harness.codex.events import CodexTurnEvents
     ],
 )
 def test_web_actions_use_display_tool_and_arguments(method, action, summary, tool, args):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     event = state.accept(
         {
             "method": method,
@@ -63,7 +63,7 @@ def test_long_text_is_coalesced_and_final_projection_fits_transport(monkeypatch)
 
     now = 0.0
     monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: now)
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     events = []
     # Escaped controls and non-BMP Unicode exercise JSON's worst-case expansion.
     chunk = '\U0001f642"\\\n' * 256
@@ -100,7 +100,7 @@ def test_long_text_is_coalesced_and_final_projection_fits_transport(monkeypatch)
 
 def test_turn_completion_flushes_coalesced_text_and_preserves_item_order(monkeypatch):
     monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: 0.0)
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
 
     def event(method, **params):
         return state.accept(
@@ -116,7 +116,9 @@ def test_turn_completion_flushes_coalesced_text_and_preserves_item_order(monkeyp
 
 
 def test_turn_text_repair_and_child_completion_are_isolated():
-    state = CodexTurnEvents("message", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents(
+        "message", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits()
+    )
 
     def event(method, **params):
         return state.accept(
@@ -150,7 +152,9 @@ def test_usage_charges_only_this_turn_and_counts_cache_and_reasoning_once():
         "reasoningOutputTokens": 50,
         "totalTokens": 1100,
     }
-    state = CodexTurnEvents("m2", "thread", "turn2", "gpt-6.1-sol", prior)
+    state = CodexTurnEvents(
+        "m2", "thread", "turn2", "gpt-6.1-sol", prior, rate_limits=CodexRateLimits()
+    )
     total = {
         "inputTokens": 2000,
         "cachedInputTokens": 1000,
@@ -197,7 +201,13 @@ def counts(input_tokens):
 
 def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     state = CodexTurnEvents(
-        "m2", "thread", "turn2", "gpt-6.1-sol", counts(100), baseline_known=False
+        "m2",
+        "thread",
+        "turn2",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        rate_limits=CodexRateLimits(),
     )
     # The native history includes 50 previously unobserved tokens, then this turn's 10.
     projected = usage(state, counts(160))
@@ -207,7 +217,9 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     assert state.has_usage
     assert state.total["inputTokens"] == 160
 
-    following = CodexTurnEvents("m3", "thread", "turn3", "gpt-6.1-sol", state.total)
+    following = CodexTurnEvents(
+        "m3", "thread", "turn3", "gpt-6.1-sol", state.total, rate_limits=CodexRateLimits()
+    )
     projected = usage(following, counts(170))
     assert projected["tokens"]["input"] == 10
     assert projected["cost"] == 0
@@ -233,7 +245,7 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     ],
 )
 def test_malformed_usage_does_not_invent_tokens(invalid):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     assert usage(state, counts(50))["cost"] == 0
     projected = usage(state, invalid)
     assert projected["cost"] == 0
@@ -247,20 +259,30 @@ def test_malformed_usage_does_not_invent_tokens(invalid):
 
 
 def test_absolute_valid_but_overlapping_delta_cannot_be_attributed():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", counts(100))
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", counts(100), rate_limits=CodexRateLimits()
+    )
     assert usage(state, {**counts(100), "cachedInputTokens": 1})["cost"] == 0
     assert not state.has_usage
 
 
 def test_unknown_baseline_tracks_valid_totals_without_using_unsafe_deltas():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", counts(100), baseline_known=False)
+    state = CodexTurnEvents(
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        rate_limits=CodexRateLimits(),
+    )
     assert usage(state, {**counts(160), "cachedInputTokens": 150})["cost"] == 0
     assert state.has_usage
     assert state.total["cachedInputTokens"] == 150
 
 
 def test_no_usage_and_nonmonotonic_series_cannot_establish_a_safe_baseline():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     assert not state.has_usage
     usage(state, counts(100))
     assert usage(state, counts(99))["cost"] == 0
@@ -269,7 +291,7 @@ def test_no_usage_and_nonmonotonic_series_cannot_establish_a_safe_baseline():
 
 @pytest.mark.parametrize("envelope", [None, [], "invalid"])
 def test_malformed_usage_envelope_does_not_throw(envelope):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     projected = state.accept(
         {
             "method": "thread/tokenUsage/updated",
@@ -281,7 +303,9 @@ def test_malformed_usage_envelope_does_not_throw(envelope):
 
 
 def test_zero_usage_is_authoritative_and_cost_is_zero_for_unknown_models():
-    state = CodexTurnEvents("m", "thread", "turn", "unknown-model", {})
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "unknown-model", {}, rate_limits=CodexRateLimits()
+    )
     projected = usage(state, counts(0))
     assert state.has_usage
     assert projected["tokens"]["total"] == 0
@@ -290,14 +314,16 @@ def test_zero_usage_is_authoritative_and_cost_is_zero_for_unknown_models():
 
 
 def test_invalid_restored_baseline_can_recover_authoritative_totals():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {"inputTokens": True})
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {"inputTokens": True}, rate_limits=CodexRateLimits()
+    )
     assert usage(state, counts(10))["cost"] == 0
     assert state.has_usage
     assert state.total["inputTokens"] == 10
 
 
 def _turn():
-    return CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    return CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
 
 
 def _frame(method, **params):
@@ -385,6 +411,393 @@ def test_malformed_native_fields_are_ignored(params):
     assert _turn().accept({"method": "item/completed", "params": params}) == []
 
 
+def _notice(method, **params):
+    return {"method": method, "params": params}
+
+
+def _turn_completed(status, error=None, *, turn_id="turn"):
+    return _notice(
+        "turn/completed",
+        threadId="thread",
+        turn={"id": turn_id, "status": status, "error": error},
+    )
+
+
+@pytest.mark.parametrize(
+    ("info", "expected"),
+    [
+        ("unauthorized", "Reconnect the OpenAI account in Settings (or check OPENAI_API_KEY)"),
+        ("usageLimitExceeded", "usage limit reached"),
+        ("rateLimitExceeded", "rate limit reached"),
+        ("contextWindowExceeded", "context window"),
+        ("serverOverloaded", "overloaded"),
+        ("sandboxError", "native detail"),
+        ({"httpConnectionFailed": {"httpStatusCode": 502}}, "native detail"),
+        (None, "native detail"),
+    ],
+)
+def test_failed_turn_emits_one_actionable_error(info, expected):
+    state = _turn()
+    events = state.accept(
+        _turn_completed("failed", {"message": "native detail", "codexErrorInfo": info})
+    )
+    assert state.status == "failed"
+    assert expected in state.error
+    assert events == [{"type": "error", "error": state.error, "messageId": "m"}]
+    # A duplicate terminal frame never reports the failure twice.
+    assert state.accept(_turn_completed("failed", {"message": "again"})) == []
+    assert expected in state.error
+
+
+def test_failed_turn_without_detail_falls_back_and_flushes_text_first(monkeypatch):
+    # A fixed clock keeps the second delta pending until the terminal frame.
+    monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: 0.0)
+    state = _turn()
+    state.accept(_frame("item/agentMessage/delta", itemId="a", delta="hi"))
+    assert state.accept(_frame("item/agentMessage/delta", itemId="a", delta=" there")) == []
+    events = state.accept(_turn_completed("failed"))
+    assert [(event["type"], event.get("content")) for event in events] == [
+        ("token", "hi there"),
+        ("error", None),
+    ]
+    assert state.error == events[1]["error"] == "Codex turn failed"
+
+
+@pytest.mark.parametrize("status", ["completed", "interrupted"])
+def test_non_failed_turn_reports_no_error(status):
+    state = _turn()
+    state.accept(
+        _notice(
+            "error",
+            threadId="thread",
+            turnId="turn",
+            willRetry=False,
+            error={"message": "late", "codexErrorInfo": "other"},
+        )
+    )
+    assert state.accept(_turn_completed(status, {"message": "x"})) == []
+    assert state.error is None
+
+
+def test_retried_error_warns_and_fatal_error_feeds_terminal_failure():
+    state = _turn()
+    retry = _notice(
+        "error",
+        threadId="thread",
+        turnId="turn",
+        willRetry=True,
+        error={"message": "Reconnecting... 1/5", "codexErrorInfo": "serverOverloaded"},
+    )
+    assert state.accept(retry) == [
+        {
+            "type": "warning",
+            "scope": "provider",
+            "message": "Codex hit an error and is retrying: Reconnecting... 1/5",
+        }
+    ]
+    assert state.accept(retry) == []
+    fatal = _notice(
+        "error",
+        threadId="thread",
+        turnId="turn",
+        willRetry=False,
+        error={"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+    )
+    assert state.accept(fatal) == []
+    assert state.error is None
+    events = state.accept(_turn_completed("failed"))
+    assert events == [
+        {
+            "type": "error",
+            "error": "OpenAI usage limit reached; retry after it resets.",
+            "messageId": "m",
+        }
+    ]
+
+
+def test_pending_fatal_error_is_reported_once_without_turn_completion():
+    state = _turn()
+    assert state.fail_pending() == []
+    state.accept(
+        _notice(
+            "error",
+            threadId="thread",
+            turnId="turn",
+            willRetry=False,
+            error={"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+        )
+    )
+    assert state.fail_pending() == [
+        {
+            "type": "error",
+            "error": "OpenAI usage limit reached; retry after it resets.",
+            "messageId": "m",
+        }
+    ]
+    assert state.fail_pending() == []
+    assert state.status is None
+
+
+@pytest.mark.parametrize("malformed", ["boom", ["boom"], 1])
+def test_malformed_completion_error_keeps_recorded_native_error(malformed):
+    state = _turn()
+    state.accept(
+        _notice(
+            "error",
+            threadId="thread",
+            turnId="turn",
+            willRetry=False,
+            error={"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+        )
+    )
+    state.accept(_turn_completed("failed", malformed))
+    assert state.error == "OpenAI usage limit reached; retry after it resets."
+
+
+def test_error_notifications_are_correlated_to_this_turn():
+    state = _turn()
+    for thread_id, turn_id in [("other", "turn"), ("thread", "other")]:
+        assert (
+            state.accept(
+                _notice(
+                    "error",
+                    threadId=thread_id,
+                    turnId=turn_id,
+                    willRetry=True,
+                    error={"message": "elsewhere"},
+                )
+            )
+            == []
+        )
+    assert state.accept(_turn_completed("failed", turn_id="other")) == []
+    assert state.status is None and state.error is None
+
+
+@pytest.mark.parametrize(
+    ("frame", "message"),
+    [
+        (_notice("warning", message="Process-wide notice"), "Process-wide notice"),
+        (_notice("warning", message="Thread notice", threadId="thread"), "Thread notice"),
+        (
+            _notice("configWarning", summary="Ignored unknown key", details="secret-ish detail"),
+            "Ignored unknown key",
+        ),
+        (
+            _notice("guardianWarning", message="Guardian notice", threadId="thread"),
+            "Guardian notice",
+        ),
+        (
+            _notice(
+                "model/rerouted",
+                threadId="thread",
+                turnId="turn",
+                fromModel="gpt-6.1-sol",
+                toModel="gpt-6.1-mini",
+                reason="highRiskCyberActivity",
+            ),
+            "Codex switched this turn from gpt-6.1-sol to gpt-6.1-mini (high risk cyber activity)",
+        ),
+        (
+            _notice(
+                "modelProvider/authRecoveryStarted",
+                threadId="thread",
+                turnId="turn",
+                provider="openai",
+                message="Refreshing credentials",
+            ),
+            "Codex is recovering openai authentication: Refreshing credentials",
+        ),
+        (
+            _notice(
+                "modelProvider/authRecoveryCompleted",
+                threadId="thread",
+                turnId="turn",
+                provider="openai",
+                message="",
+            ),
+            "Codex finished recovering openai authentication",
+        ),
+    ],
+)
+def test_provider_notices_become_deduplicated_warnings(frame, message):
+    state = _turn()
+    assert state.accept(frame) == [{"type": "warning", "scope": "provider", "message": message}]
+    assert state.accept(frame) == []
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        _notice("warning", message="Other thread", threadId="other"),
+        _notice("guardianWarning", message="Other thread", threadId="other"),
+        _notice("warning", message="   "),
+        _notice("warning", message=None),
+        _notice("deprecationNotice", summary="Old flag"),
+        _notice(
+            "model/rerouted",
+            threadId="thread",
+            turnId="other",
+            fromModel="a",
+            toModel="b",
+            reason="highRiskCyberActivity",
+        ),
+        _notice(
+            "modelProvider/authRecoveryStarted",
+            threadId="thread",
+            turnId="other",
+            provider="openai",
+            message="x",
+        ),
+    ],
+)
+def test_unrelated_or_empty_notices_are_dropped(frame):
+    state = _turn()
+    assert state.accept(frame) == []
+
+
+def test_long_native_diagnostics_are_clipped():
+    from sandbox_runtime.harness.codex.events import MAX_DIAGNOSTIC_CHARS
+
+    state = _turn()
+    [warning] = state.accept(_notice("warning", message="x" * 10_000))
+    assert len(warning["message"]) == MAX_DIAGNOSTIC_CHARS
+    state.accept(_turn_completed("failed", {"message": "y\n" * 10_000}))
+    assert len(state.error) == MAX_DIAGNOSTIC_CHARS
+    assert "\n" not in state.error
+
+
+@pytest.mark.parametrize(
+    ("native", "leaked"),
+    [
+        ("Authorization: Bearer abc.def-ghi_jkl", "abc.def-ghi_jkl"),
+        ('401 {"error": {"api_key": "sk-proj-SyntheticFixtureKey"}}', "SyntheticFixtureKey"),
+        ("Incorrect API key provided: sk-SyntheticFixture1234", "SyntheticFixture1234"),
+        ("token=opaque-value; retry", "opaque-value"),
+        ("access eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl rejected", "eyJzdWIiOiIxIn0"),
+        ("session 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc expired", "9f8e7d6c5b4a3928"),
+    ],
+)
+def test_native_diagnostics_redact_credentials(native, leaked):
+    state = _turn()
+    retry = _notice(
+        "error", threadId="thread", turnId="turn", willRetry=True, error={"message": native}
+    )
+    [warning] = state.accept(retry)
+    [config] = state.accept(_notice("configWarning", summary=native))
+    [error] = state.accept(_turn_completed("failed", {"message": native}))
+    for text in (warning["message"], config["message"], error["error"], state.error):
+        assert leaked not in text
+        assert "***" in text
+
+
+def test_redaction_keeps_ordinary_diagnostics_readable():
+    state = _turn()
+    message = "stream disconnected before completion: Reconnecting... 2/5 (gpt-6.1-sol)"
+    [warning] = state.accept(_notice("warning", message=message))
+    assert warning["message"] == message
+
+
+def _rate_limits(**snapshot):
+    return _notice("account/rateLimits/updated", rateLimits=snapshot)
+
+
+def test_rate_limit_updates_below_threshold_are_silent():
+    state = _turn()
+    assert state.accept(_rate_limits(primary={"usedPercent": 89})) == []
+    assert state.accept(_rate_limits(credits={"hasCredits": False, "unlimited": False})) == []
+    assert state.accept(_rate_limits()) == []
+    assert state.accept(_notice("account/rateLimits/updated", rateLimits=None)) == []
+
+
+def test_rate_limit_warns_once_per_limit_state():
+    state = _turn()
+    near = _rate_limits(
+        primary={"usedPercent": 92, "windowDurationMins": 300, "resetsAt": 1_800_000_000}
+    )
+    assert state.accept(near) == [
+        {
+            "type": "warning",
+            "scope": "provider",
+            "message": "OpenAI 5-hour limit 92% used, resets 2027-01-15 08:00 UTC.",
+        }
+    ]
+    # Rolling updates within the same state stay quiet.
+    assert state.accept(_rate_limits(primary={"usedPercent": 95})) == []
+    reached = _rate_limits(
+        rateLimitReachedType="rate_limit_reached",
+        primary={"usedPercent": 100},
+        secondary={"usedPercent": 40, "windowDurationMins": 10080},
+    )
+    # Omitted window metadata is carried over from the earlier update.
+    assert [event["message"] for event in state.accept(reached)] == [
+        "OpenAI rate limit reached; 5-hour limit 100% used, resets 2027-01-15 08:00 UTC."
+    ]
+    assert state.accept(reached) == []
+
+
+def test_sparse_rate_limit_updates_merge_into_the_last_snapshot():
+    state = _turn()
+    first = _rate_limits(limitId="quota-a", primary={"usedPercent": 92, "windowDurationMins": 300})
+    [warning] = state.accept(first)
+    assert warning["message"] == "OpenAI 5-hour limit 92% used."
+    # A missing limitId (or null field) does not clear the last known value.
+    assert state.accept(_rate_limits(primary={"usedPercent": 95}, limitName=None)) == []
+    assert state.accept(_rate_limits(limitId=None, primary={"usedPercent": 96})) == []
+    # A separately updated window is combined with the retained one.
+    [both] = state.accept(_rate_limits(secondary={"usedPercent": 90, "windowDurationMins": 10080}))
+    assert both["message"] == "OpenAI 5-hour limit 96% used; 7-day limit 90% used."
+    # A different limit starts from its own snapshot.
+    [other] = state.accept(_rate_limits(limitId="quota-b", primary={"usedPercent": 91}))
+    assert other["message"] == "OpenAI primary limit 91% used."
+    [spend] = state.accept(_rate_limits(limitId="quota-c", spendControlReached=True))
+    assert spend["message"] == "OpenAI spend control limit reached."
+
+
+def test_quota_state_is_retained_per_limit_id():
+    limits = CodexRateLimits()
+    first = {
+        "limitId": "a",
+        "primary": {"usedPercent": 92, "windowDurationMins": 300},
+        "secondary": {"usedPercent": 90, "windowDurationMins": 10080},
+    }
+    assert limits.update(first) == "OpenAI 5-hour limit 92% used; 7-day limit 90% used."
+    assert limits.update({"limitId": "b", "primary": {"usedPercent": 10}}) is None
+    # Quota B did not discard quota A's snapshot or its warning state.
+    assert limits.update({"limitId": "a", "primary": {"usedPercent": 95}}) is None
+    assert limits.update({"limitId": "a", "primary": {"usedPercent": 100}}) == (
+        "OpenAI 5-hour limit 100% used; 7-day limit 90% used."
+    )
+    # An update without a limitId belongs to the last identified quota.
+    assert limits.update({"secondary": {"usedPercent": 91}}) is None
+
+
+def test_quota_warning_rearms_after_recovery_or_window_reset():
+    limits = CodexRateLimits()
+    near = {"usedPercent": 92, "windowDurationMins": 300, "resetsAt": 1_800_000_000}
+    assert limits.update({"primary": near}) is not None
+    assert limits.update({"primary": {"usedPercent": 93}}) is None
+    # The window reset into a new period below the threshold.
+    assert limits.update({"primary": {"usedPercent": 0, "resetsAt": 1_800_018_000}}) is None
+    assert limits.update({"primary": {"usedPercent": 92}}) == (
+        "OpenAI 5-hour limit 92% used, resets 2027-01-15 13:00 UTC."
+    )
+    assert limits.update({"primary": {"usedPercent": 100}}) is not None
+    # Dipping back to near and returning to reached is the same period.
+    assert limits.update({"primary": {"usedPercent": 99}}) is None
+    assert limits.update({"primary": {"usedPercent": 100}}) is None
+
+
+def test_quota_state_outlives_the_turn_projection():
+    limits = CodexRateLimits()
+    update = _rate_limits(limitId="a", primary={"usedPercent": 95})
+
+    def turn(turn_id):
+        return CodexTurnEvents("m", "thread", turn_id, "gpt-6.1-sol", {}, rate_limits=limits)
+
+    assert [event["type"] for event in turn("one").accept(update)] == ["warning"]
+    assert turn("two").accept(update) == []
+
+
 def _plan_frame(plan, *, thread_id="thread", turn_id="turn", **extra):
     return {
         "method": "turn/plan/updated",
@@ -393,7 +806,7 @@ def _plan_frame(plan, *, thread_id="thread", turn_id="turn", **extra):
 
 
 def test_plan_update_projects_to_todowrite_with_web_statuses():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = _turn()
 
     events = state.accept(
         _plan_frame(
@@ -429,7 +842,7 @@ def test_plan_update_projects_to_todowrite_with_web_statuses():
 
 
 def test_each_plan_update_is_a_distinct_call():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = _turn()
     plan = [{"step": "Work", "status": "pending"}]
 
     first = state.accept(_plan_frame(plan))[0]
@@ -441,7 +854,7 @@ def test_each_plan_update_is_a_distinct_call():
 
 @pytest.mark.parametrize("plan", [[], None])
 def test_empty_plan_clears_tasks(plan):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = _turn()
 
     [event] = state.accept(_plan_frame(plan))
 
@@ -451,7 +864,7 @@ def test_empty_plan_clears_tasks(plan):
 
 @pytest.mark.parametrize("ids", [{"thread_id": "other"}, {"turn_id": "other"}])
 def test_plan_updates_for_other_threads_or_turns_are_ignored(ids):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = _turn()
 
     assert state.accept(_plan_frame([{"step": "Work", "status": "pending"}], **ids)) == []
     assert state.accept(_plan_frame([]))[0]["callId"] == "codex:turn:plan:1"

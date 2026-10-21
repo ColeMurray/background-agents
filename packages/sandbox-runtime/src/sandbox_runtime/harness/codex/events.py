@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from ..tool_results import content_text
@@ -27,6 +29,103 @@ PLAN_STEP_STATUSES = {
     "inProgress": "in_progress",
     "completed": "completed",
 }
+# Native diagnostics can embed HTTP bodies; keep user-facing notices short.
+MAX_DIAGNOSTIC_CHARS = 500
+RATE_LIMIT_WARNING_PERCENT = 90
+TURN_FAILED_MESSAGE = "Codex turn failed"
+FAILURE_MESSAGES = {
+    "unauthorized": (
+        "OpenAI rejected this session's credential. Reconnect the OpenAI account in "
+        "Settings (or check OPENAI_API_KEY) and try again."
+    ),
+    "usageLimitExceeded": "OpenAI usage limit reached; retry after it resets.",
+    "rateLimitExceeded": "OpenAI rate limit reached; retry shortly.",
+    "serverOverloaded": "OpenAI is overloaded right now; retry shortly.",
+    "contextWindowExceeded": (
+        "This conversation no longer fits in the model's context window; start a new session."
+    ),
+}
+AUTH_RECOVERY_SUMMARIES = {
+    "modelProvider/authRecoveryStarted": "Codex is recovering {} authentication",
+    "modelProvider/authRecoveryCompleted": "Codex finished recovering {} authentication",
+}
+
+
+# Native text is free-form (it can embed vendor HTTP bodies), so credential
+# shapes are masked before anything reaches the persisted session timeline.
+SECRET_PATTERNS = (
+    (re.compile(r"(?i)\b(bearer|basic)\s+[^\s\"',;]+"), r"\1 ***"),
+    (
+        re.compile(
+            r"(?i)\b([\w-]*(?:api[_-]?key|token|secret|password|authorization|cookie)[\w-]*)"
+            r"(\"?\s*[:=]\s*\"?)[^\s\"',;}]+"
+        ),
+        r"\1\2***",
+    ),
+    (re.compile(r"\beyJ[\w-]+\.[\w-]+\.[\w-]*"), "***"),
+    (re.compile(r"\bsk-[\w-]{8,}"), "***"),
+    # Opaque credentials of unknown shape: long runs that include a digit.
+    (re.compile(r"(?=[A-Za-z0-9_+=-]*[0-9])[A-Za-z0-9_+=-]{32,}"), "***"),
+)
+
+
+def _clip(text: str) -> str:
+    """Redacted, whitespace-collapsed, and bounded native diagnostic text."""
+    # Pre-bounding keeps redaction cheap; masking only shortens the text.
+    text = " ".join(text[: 4 * MAX_DIAGNOSTIC_CHARS].split())
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    if len(text) <= MAX_DIAGNOSTIC_CHARS:
+        return text
+    return text[: MAX_DIAGNOSTIC_CHARS - 1] + "…"
+
+
+def _with_detail(summary: str, detail: Any) -> str:
+    return f"{summary}: {detail}" if isinstance(detail, str) and detail.strip() else summary
+
+
+def _native_message(error: Any) -> str:
+    message = error.get("message") if isinstance(error, dict) else None
+    return _clip(message) if isinstance(message, str) else ""
+
+
+def _failure_message(error: Any) -> str:
+    """An actionable message for a failed turn's native ``TurnError``."""
+    info = error.get("codexErrorInfo") if isinstance(error, dict) else None
+    mapped = FAILURE_MESSAGES.get(info) if isinstance(info, str) else None
+    return mapped or _native_message(error) or TURN_FAILED_MESSAGE
+
+
+def _merge_sparse(previous: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Apply a sparse update: an omitted or null field keeps its prior value."""
+    merged = dict(previous)
+    for key, value in update.items():
+        if value is None:
+            continue
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            value = _merge_sparse(merged[key], value)
+        merged[key] = value
+    return merged
+
+
+def _window_label(name: str, window: dict[str, Any]) -> str:
+    minutes = window.get("windowDurationMins")
+    if type(minutes) is int and minutes > 0:
+        for size, unit in ((24 * 60, "day"), (60, "hour"), (1, "minute")):
+            if minutes % size == 0:
+                return f"{minutes // size}-{unit}"
+    return name
+
+
+def _resets(window: dict[str, Any]) -> str:
+    resets_at = window.get("resetsAt")
+    if type(resets_at) is not int:
+        return ""
+    try:
+        moment = datetime.fromtimestamp(resets_at, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return f", resets {moment:%Y-%m-%d %H:%M} UTC"
 
 
 def _token_counts(value: Any) -> dict[str, int] | None:
@@ -80,6 +179,57 @@ def _plan_todos(plan: Any) -> list[dict[str, str]]:
     ]
 
 
+class CodexRateLimits:
+    """Account-level quota state, kept across turns, that warns only on escalation.
+
+    Rolling updates are sparse, so each merges into its own quota's retained
+    snapshot. A window that drops below the threshold (recovery, or a reset into
+    a new period) re-arms its warning; rolling updates within a state stay quiet.
+    """
+
+    def __init__(self) -> None:
+        self._snapshots: dict[str | None, dict[str, Any]] = {}
+        self._levels: dict[str | None, dict[str, Any]] = {}
+        self._limit_id: str | None = None
+
+    def update(self, snapshot: Any) -> str | None:
+        """The warning this update warrants, if any."""
+        if not isinstance(snapshot, dict):
+            return None
+        if isinstance(snapshot.get("limitId"), str):
+            self._limit_id = snapshot["limitId"]
+        # An update without a limitId belongs to the last identified quota.
+        quota = self._limit_id
+        merged = _merge_sparse(self._snapshots.get(quota, {}), snapshot)
+        self._snapshots[quota] = merged
+        previous = self._levels.get(quota, {})
+        levels: dict[str, Any] = {}
+        parts = []
+        reached = merged.get("rateLimitReachedType")
+        if isinstance(reached, str):
+            levels["reached"] = reached
+            parts.append(reached.replace("_", " "))
+        if merged.get("spendControlReached") is True:
+            levels["spendControl"] = 1
+            parts.append("spend control limit reached")
+        for name in ("primary", "secondary"):
+            window = merged.get(name)
+            if not isinstance(window, dict):
+                continue
+            used = window.get("usedPercent")
+            if type(used) is not int or used < RATE_LIMIT_WARNING_PERCENT:
+                continue
+            # Near is 1 and reached is 2; dipping back to near does not re-arm.
+            levels[name] = max(2 if used >= 100 else 1, previous.get(name, 0))
+            parts.append(f"{_window_label(name, window)} limit {used}% used{_resets(window)}")
+        self._levels[quota] = levels
+        escalated = any(
+            value != previous.get(level) if level == "reached" else value > previous.get(level, 0)
+            for level, value in levels.items()
+        )
+        return _clip(f"OpenAI {'; '.join(parts)}.") if escalated else None
+
+
 class CodexTurnEvents:
     def __init__(
         self,
@@ -89,6 +239,7 @@ class CodexTurnEvents:
         model: str,
         baseline: dict[str, int],
         *,
+        rate_limits: CodexRateLimits,
         baseline_known: bool = True,
     ) -> None:
         self.message_id, self.thread_id, self.turn_id = message_id, thread_id, turn_id
@@ -107,6 +258,12 @@ class CodexTurnEvents:
         self._last_text_at: float | None = None
         self._last_text = ""
         self.status: str | None = None
+        # Actionable detail for a failed turn; set once, with its ``error`` event.
+        self.error: str | None = None
+        # A non-retried native error, used if ``turn/completed`` omits its own.
+        self._fatal_error: dict[str, Any] | None = None
+        self._warned: set[str] = set()
+        self.rate_limits = rate_limits
         self.tokens: dict[str, Any] | None = None
         self.usage_valid = True
         self.has_usage = False
@@ -138,15 +295,51 @@ class CodexTurnEvents:
         # Frames come from a separate process: tolerate null/non-object fields.
         if not isinstance(params, dict):
             return []
+        # Account- and process-level notices carry no turn (or thread) identity.
+        if method == "account/rateLimits/updated":
+            message = self.rate_limits.update(params.get("rateLimits"))
+            return [{"type": "warning", "scope": "provider", "message": message}] if message else []
+        if method == "configWarning":
+            return self._warning(params.get("summary"))
+        if method == "warning" and params.get("threadId") in (None, self.thread_id):
+            return self._warning(params.get("message"))
         if params.get("threadId") != self.thread_id:
             return []
+        if method == "guardianWarning":
+            return self._warning(params.get("message"))
         turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
         turn_id = params.get("turnId") or turn.get("id")
         if turn_id != self.turn_id:
             return []
         if method == "turn/completed":
             self.status = turn.get("status")
-            return self._text_event(force=True)
+            events = self._text_event(force=True)
+            if self.status == "failed":
+                error = turn.get("error")
+                events.extend(self._failed(error if isinstance(error, dict) else self._fatal_error))
+            return events
+        if method == "error":
+            error = params.get("error")
+            if params.get("willRetry") is True:
+                return self._warning(
+                    _with_detail("Codex hit an error and is retrying", _native_message(error))
+                )
+            # The terminal ``turn/completed`` reports the failure exactly once.
+            if isinstance(error, dict):
+                self._fatal_error = error
+            return []
+        if method == "model/rerouted":
+            to_model, reason = params.get("toModel"), params.get("reason")
+            if not isinstance(to_model, str):
+                return []
+            message = f"Codex switched this turn from {params.get('fromModel')} to {to_model}"
+            if isinstance(reason, str):
+                message += f" ({re.sub(r'(?<!^)(?=[A-Z])', ' ', reason).lower()})"
+            return self._warning(message)
+        if method in AUTH_RECOVERY_SUMMARIES:
+            provider = params.get("provider") or "model provider"
+            summary = AUTH_RECOVERY_SUMMARIES[method].format(provider)
+            return self._warning(_with_detail(summary, params.get("message")))
         if method == "thread/tokenUsage/updated":
             usage = params.get("tokenUsage")
             total = _token_counts(usage.get("total") if isinstance(usage, dict) else None)
@@ -269,6 +462,25 @@ class CodexTurnEvents:
         self.has_usage = False
         self.tokens = None
         return [self.finish()]
+
+    def fail_pending(self) -> list[dict[str, Any]]:
+        """Report a recorded non-retried native error when ``turn/completed`` never arrives."""
+        return self._failed(self._fatal_error) if self._fatal_error is not None else []
+
+    def _failed(self, error: Any) -> list[dict[str, Any]]:
+        if self.error is not None:
+            return []
+        self.error = _failure_message(error)
+        return [{"type": "error", "error": self.error, "messageId": self.message_id}]
+
+    def _warning(self, message: Any) -> list[dict[str, Any]]:
+        if not isinstance(message, str) or not message.strip():
+            return []
+        message = _clip(message)
+        if message in self._warned:
+            return []
+        self._warned.add(message)
+        return [{"type": "warning", "scope": "provider", "message": message}]
 
     def _record_text(self, item_id: str, text: str, *, replace: bool = False) -> None:
         previous_length = sum(map(len, self.text.get(item_id, ()))) if replace else 0

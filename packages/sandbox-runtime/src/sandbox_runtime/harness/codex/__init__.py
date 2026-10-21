@@ -39,7 +39,7 @@ from .env import (
     validate_native_configuration,
     validate_native_state,
 )
-from .events import CodexTurnEvents
+from .events import TURN_FAILED_MESSAGE, CodexRateLimits, CodexTurnEvents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
@@ -99,6 +99,8 @@ class CodexHarness:
         self._epoch = ""
         self._total: dict[str, int] = {}
         self._usage_baseline_known = True
+        # Account quota state outlives a turn; each turn projects into it.
+        self._rate_limits = CodexRateLimits()
         self._manifest_path = config.state_dir / "openinspect-state.json"
         # A rejected manifest is kept here, not deleted, until a fresh thread
         # replaces it: a rejected record must never read as an absent one, even
@@ -417,6 +419,7 @@ class CodexHarness:
                     self._turn_id,
                     model,
                     self._total,
+                    rate_limits=self._rate_limits,
                     baseline_known=baseline_known,
                 )
                 await emit(state.start())
@@ -440,7 +443,7 @@ class CodexHarness:
                     False,
                     "Codex turn interrupted"
                     if state.status == "interrupted"
-                    else "Codex turn failed",
+                    else state.error or TURN_FAILED_MESSAGE,
                     cancelled=state.status == "interrupted",
                     message_cost_usd=0,
                 )
@@ -462,6 +465,8 @@ class CodexHarness:
                     "Codex could not prepare the turn within its runtime budget",
                     message_cost_usd=0,
                 )
+            if stopped and (pending := await self._pending_failure(state, emit)):
+                return pending
             return TurnOutcome.failed(
                 "Codex transport failed; retry to resume the conversation"
                 if stopped
@@ -501,6 +506,8 @@ class CodexHarness:
             self._usage_baseline_known = False
             if self.session_id:
                 self._persist()
+            if stopped and (pending := await self._pending_failure(state, emit)):
+                return pending
             return TurnOutcome.failed(
                 f"Codex produced no output for {timeout_seconds:.0f}s."
                 if stopped
@@ -520,6 +527,16 @@ class CodexHarness:
             self._turn_id = None
             for path in paths:
                 path.unlink(missing_ok=True)
+
+    async def _pending_failure(
+        self, state: CodexTurnEvents | None, emit: EventSink
+    ) -> TurnOutcome | None:
+        """The fatal native error a turn recorded before ending without ``turn/completed``."""
+        if state is None:
+            return None
+        for event in state.fail_pending():
+            await emit(event)
+        return TurnOutcome.failed(state.error, message_cost_usd=0) if state.error else None
 
     async def _next_notification(self) -> dict[str, Any]:
         """Next frame, bounded by the inactivity budget while no host tool call is running."""
