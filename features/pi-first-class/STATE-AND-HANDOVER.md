@@ -107,6 +107,8 @@ its own authorization.
 | `58928c92` | The browser's execution moves behind the session that authorizes it                                | 5,421 unit                                                      |
 | `603087fe` | Why the browser transport uses the classic rendering endpoint                                      | —                                                               |
 | `0cdd49ea` | The Code Mode and retention deviations the audit found                                             | 5,430 unit, 2,475 workerd                                       |
+| `c4cf45bb` | The Code Mode registry no longer declares the model-call tools                                     | 5,430 unit, 2,480 workerd                                       |
+| `62e580f7` | The agents SDK 0.29.0, the shim deleted, and the SDK contract pinned by a workerd test             | 5,430 unit, 2,480 workerd, worker-build gate                    |
 | `HEAD~1`   | The MCP grant becomes a session action, with the core's repository scope rule                      | 5,409 unit, 2,475 workerd                                       |
 
 ## Slice 7A — what landed
