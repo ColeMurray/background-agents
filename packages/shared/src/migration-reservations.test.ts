@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
+  IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION,
+  PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
+  PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+  PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+  PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION,
+  PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
   PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION,
   PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
   PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
@@ -18,11 +25,10 @@ import {
   PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID,
-  IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   assertMigrationReservation,
   validateMigrationArtifacts,
   validateMigrationReservations,
-} from "./migration-reservations";
+} from "./overlay-migration-reservations";
 
 describe("Pi migration reservations", () => {
   it("keeps personal MCP migration reservations out of the neutral core registry", () => {
@@ -52,8 +58,17 @@ describe("Pi migration reservations", () => {
       PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION,
       PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
       PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
+      PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
+      PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+      PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+      PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION,
+      PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+      PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
       IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
-    ]).toEqual([1, 2, 3, 4, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 67]);
+    ]).toEqual([
+      1, 2, 3, 4, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 9002, 9001, 9003, 9004, 60, 66,
+      67,
+    ]);
     expect(MIGRATION_RESERVATIONS).toEqual([
       {
         store: "pi_do",
@@ -99,6 +114,12 @@ describe("Pi migration reservations", () => {
       },
       {
         store: "session_do",
+        version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+        feature: "externalActions",
+        purpose: "The external-action grant ledger",
+      },
+      {
+        store: "session_do",
         version: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
         feature: "coreAuthority",
         purpose: "creation-time Pi capability authority",
@@ -129,9 +150,39 @@ describe("Pi migration reservations", () => {
       },
       {
         store: "session_do",
+        version: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+        feature: "externalActions",
+        purpose: "The external-action lifecycle",
+      },
+      {
+        store: "session_do",
         version: IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
         feature: "coreAuthority",
         purpose: "canonical queued controls for in-process harnesses",
+      },
+      {
+        store: "d1",
+        version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
+        feature: "externalActions",
+        purpose: "The external-action ledger and its audit trail",
+      },
+      {
+        store: "d1",
+        version: PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
+        feature: "mcp",
+        purpose: "The personal MCP connection's credential storage",
+      },
+      {
+        store: "d1",
+        version: PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
+        feature: "crossSessionMessaging",
+        purpose: "Cross-session delivery receipts",
+      },
+      {
+        store: "d1",
+        version: PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION,
+        feature: "mcp",
+        purpose: "The session grants of a personal MCP connection",
       },
       {
         store: "d1",

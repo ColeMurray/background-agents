@@ -31,8 +31,6 @@ describe("readPiFeatureCapabilitySnapshot", () => {
         externalActions: "off",
         mcp: "off",
         crossSessionMessaging: "off",
-        externalActions: "off",
-        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },

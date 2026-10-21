@@ -22,7 +22,9 @@ describe("Pi feature capability contracts", () => {
       "repositoryEditing",
       "codeMode",
       "sandboxExecution",
+      "externalActions",
       "mcp",
+      "crossSessionMessaging",
       "browser",
       "memory",
     ]);
@@ -34,7 +36,9 @@ describe("Pi feature capability contracts", () => {
       repositoryEditing: "off",
       codeMode: "off",
       sandboxExecution: "off",
+      externalActions: "off",
       mcp: "off",
+      crossSessionMessaging: "off",
       browser: "off",
       memory: "off",
     } as const satisfies PiFeatureCapabilityMatrix;
@@ -57,6 +61,9 @@ describe("Pi feature capability contracts", () => {
       codeMode: "enabled",
       sandboxExecution: "off",
       mcp: "off",
+      externalActions: "off",
+      mcp: "off",
+      crossSessionMessaging: "off",
       browser: "off",
       memory: "off",
     });
@@ -74,15 +81,20 @@ describe("Pi feature capability contracts", () => {
   it("creates one validated versioned snapshot for durable per-session latching", () => {
     const snapshot = createPiFeatureCapabilitySnapshot({ scratchWorkspace: "read_only" });
 
-    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(6);
+    expect(PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION).toBe(7);
     expect(snapshot).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
+        externalActions: "off",
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -104,7 +116,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(preMcp)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -112,6 +124,9 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -131,7 +146,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(preMemory)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -139,6 +154,9 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         // A feature that did not exist cannot have been enabled.
         memory: "off",
@@ -158,7 +176,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(legacy)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         // The rename never changes what a session may do.
         scratchWorkspace: "enabled",
@@ -167,6 +185,9 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -185,7 +206,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(renamed)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "off",
@@ -193,6 +214,9 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -211,7 +235,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(preBrowser)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "off",
         repositoryEditing: "off",
@@ -219,6 +243,9 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -243,7 +270,7 @@ describe("Pi feature capability contracts", () => {
     };
 
     expect(piFeatureCapabilitySnapshotSchema.parse(stored)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "off",
@@ -251,6 +278,9 @@ describe("Pi feature capability contracts", () => {
         sandboxExecution: "off",
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
+        externalActions: "off",
+        mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
