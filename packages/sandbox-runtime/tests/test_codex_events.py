@@ -357,6 +357,21 @@ def test_malformed_request_report_makes_the_cost_an_estimate(last, exact):
     assert any(event["type"] == "warning" for event in events) is not exact
 
 
+@pytest.mark.parametrize(("to_model", "exact"), [("gpt-6.1-mini", False), ("gpt-6.1-sol", True)])
+def test_rerouted_turn_cost_is_an_estimate_at_the_requested_model_prices(to_model, exact):
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    events = state.accept(
+        _frame("model/rerouted", fromModel="gpt-6.1-sol", toModel=to_model, reason="other")
+    )
+    estimate = [e for e in events if e["message"].startswith("Codex switched models")]
+    assert len(estimate) == (0 if exact else 1)
+    projected = usage(state, counts(100), last=counts(100))
+    assert ("cost" in projected) is exact
+    assert projected["messageCostUsd"] == 0.0002
+
+
 def test_replayed_report_is_a_no_op():
     state = CodexTurnEvents(
         "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()

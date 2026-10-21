@@ -43,6 +43,10 @@ COMBINED_USAGE_WARNING = (
     "Codex did not report this turn's usage one request at a time, so this turn's cost is "
     "an estimate."
 )
+REROUTED_MODEL_WARNING = (
+    "Codex switched models during this turn, so this turn's cost is an estimate at the "
+    "requested model's prices."
+)
 INCONSISTENT_USAGE_WARNING = (
     "Codex reported inconsistent token usage, so this turn's cost covers only the usage "
     "reported before it."
@@ -292,6 +296,8 @@ class CodexTurnEvents:
         # Reporting facts only; neither stops later increments from counting.
         self.attribution_complete = True
         self.requests_separable = True
+        # False once Codex reroutes the turn: prices are for the requested model.
+        self.model_priced = True
         self.text: dict[str, list[str]] = {}
         self._text_length = 0
         self._text_truncated = False
@@ -331,6 +337,7 @@ class CodexTurnEvents:
             and self.usage_valid
             and self.attribution_complete
             and self.requests_separable
+            and self.model_priced
         )
 
     def finish(self) -> dict[str, Any]:
@@ -392,7 +399,12 @@ class CodexTurnEvents:
             message = f"Codex switched this turn from {params.get('fromModel')} to {to_model}"
             if isinstance(reason, str):
                 message += f" ({re.sub(r'(?<!^)(?=[A-Z])', ' ', reason).lower()})"
-            return self._warning(message)
+            events = self._warning(message)
+            if to_model != self.model and self.price is not None:
+                # Pricing is never resolved while native work runs.
+                self.model_priced = False
+                events += self._warning(REROUTED_MODEL_WARNING)
+            return events
         if method in AUTH_RECOVERY_SUMMARIES:
             provider = params.get("provider") or "model provider"
             summary = AUTH_RECOVERY_SUMMARIES[method].format(provider)
