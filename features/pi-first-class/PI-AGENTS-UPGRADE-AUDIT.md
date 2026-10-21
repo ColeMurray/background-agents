@@ -265,6 +265,9 @@ packages/control-plane/src/pi/managed-skills-extension.ts
                                              the tools: extension.tools?.map(...) override deleted
 packages/control-plane/src/pi/managed-skills-extension.test.ts
                                              the mock now returns output, as 0.29.0 does
+packages/control-plane/test/integration/pi-skills-extension.test.ts
+                                             new: the SDK contract, checked against the
+                                             installed SDK rather than a mock
 features/pi-first-class/PI-AGENTS-UPGRADE-AUDIT.md
                                              this document
 ```
@@ -299,6 +302,29 @@ output contract aligned there is nothing left to wrap.
 The unit test's mock of `agents/harness/pi` was returning the **0.28.1** shape (`content`) and
 asserting the **0.29.0** shape (`output`) — it was passing because of the shim. The mock now returns
 `output`, so the test asserts the contract the installed SDK actually has.
+
+### The new test: the SDK contract, checked against the SDK
+
+A mock can only ever assert what Open-Inspect believes the SDK does. The old unit test was exactly
+that, and it hid one thing: its mock invented an `isError: true` flag on a missing skill resource
+that **the SDK never sets**. The real SDK refuses a traversing path with a plain text result ("Skill
+resource not found: review/../secret") and no error flag — and it did so identically in 0.28.1,
+since the SDK's `skills.ts` region is byte-identical between the two versions apart from
+`textResult`. The mock's flag was a fiction, harmless but untested against reality.
+
+`packages/control-plane/test/integration/pi-skills-extension.test.ts` closes that gap. It runs in
+the workerd pool (the pi harness imports `cloudflare:workers`, so it cannot run in plain node),
+imports the **installed** `agents/harness/pi`, and asserts:
+
+1. the extension is named `open-inspect.skills` and publishes exactly `activate_skill` and
+   `read_skill_resource`;
+2. a tool result carries `output` and **not** `content` — the contract the shim used to bridge;
+3. a declared resource reads back, and a traversing path is refused without disclosing the bundle's
+   content.
+
+Against 0.28.1, assertion 2 fails, because the SDK returns `content` there. That is the point: the
+guard now fails loudly if a future SDK bump reintroduces the mismatch, instead of the mismatch being
+papered over by an adapter.
 
 ## 7. The worker bundle's resolution, before and after
 
@@ -343,17 +369,18 @@ and in particular:
 Run on **node 24.22.0 / npm 11.19.1** (the repository's declared version), after
 `npm run build -w @open-inspect/shared`.
 
-| Lane                                | Command                                                                 | Result                                 |
-| ----------------------------------- | ----------------------------------------------------------------------- | -------------------------------------- |
-| shared build                        | `npm run build -w @open-inspect/shared`                                 | pass                                   |
-| control-plane unit                  | `npm test -w @open-inspect/control-plane`                               | **338 files / 5413 passed, 1 skipped** |
-| **worker-build gate**               | `npx vitest run src/worker-build.test.ts --root packages/control-plane` | **1 passed**                           |
-| typecheck                           | `npm run typecheck`                                                     | pass (all workspaces, including `web`) |
-| lint                                | `npm run lint`                                                          | pass                                   |
-| format                              | `npm run format:check`                                                  | pass                                   |
-| shared unit                         | `npm test -w @open-inspect/shared`                                      | 63 files / 1314 passed                 |
-| web unit                            | `npm test -w @open-inspect/web`                                         | 229/233 files passed; see below        |
-| control-plane integration (workerd) | `npm run test:integration -w @open-inspect/control-plane`               | 171/174 files passed; see below        |
+| Lane                                | Command                                                                                             | Result                                 |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| shared build                        | `npm run build -w @open-inspect/shared`                                                             | pass                                   |
+| control-plane unit                  | `npm test -w @open-inspect/control-plane`                                                           | **338 files / 5413 passed, 1 skipped** |
+| **worker-build gate**               | `npx vitest run src/worker-build.test.ts --root packages/control-plane`                             | **1 passed**                           |
+| typecheck                           | `npm run typecheck`                                                                                 | pass (all workspaces, including `web`) |
+| lint                                | `npm run lint`                                                                                      | pass                                   |
+| format                              | `npm run format:check`                                                                              | pass                                   |
+| shared unit                         | `npm test -w @open-inspect/shared`                                                                  | 63 files / 1314 passed                 |
+| web unit                            | `npm test -w @open-inspect/web`                                                                     | 229/233 files passed; see below        |
+| control-plane integration (workerd) | `npm run test:integration -w @open-inspect/control-plane`                                           | 171/174 files passed; see below        |
+| the SDK contract, against the SDK   | `npx vitest run --config vitest.integration.config.ts test/integration/pi-skills-extension.test.ts` | **3 passed**                           |
 
 **The worker-build gate passes.** It is the check that would have caught a resolution mistake such
 as the one `--legacy-peer-deps` causes, and it passes on the tree as committed.
@@ -375,6 +402,13 @@ Same signature: `Test timed out in 5000ms`, in `child-session-ops.test.ts`,
 harness, the skills extension, or the MCP broker — with the failing set changing between runs. A
 baseline run of the same lane on the **pre-upgrade** commit (`a6ab76de`, `agents@0.28.1`) in a
 separate worktree is the control; see section 9.
+
+**The machine was not idle.** A second agent's worktree (`pi-mcp-oauth`) was running its own workerd
+integration lane on the same host throughout these runs, and the baseline run was deliberately
+executed alongside it. Both lanes are CPU-bound and the failures are 5-second timeouts in the
+slowest files, which is the signature of an overloaded host rather than of a defect. CI shards the
+integration lane in two (`.github/workflows/ci.yml:286`) and runs it on a dedicated runner, so it
+does not see this load.
 
 ## 9. UNVERIFIED
 
