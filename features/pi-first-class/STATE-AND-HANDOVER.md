@@ -102,6 +102,7 @@ its own authorization.
 | `c47b8baf` | One browser activity per page, not two                                                             | 5,406 unit, 2,474 workerd, 2,578 web, 1,314 shared              |
 | `b1f53734` | The restart, the budget, and the attribution findings of the sixth audit                           | 5,407 unit                                                      |
 | `3ddf7332` | Code Mode runs behind the owning session's authority                                               | 5,409 unit                                                      |
+| `1d05cfe5` | The MCP transport: the manager, the registration, the call, and the OAuth callback route           | 5,409 unit                                                      |
 
 ## Slice 7A — what landed
 
@@ -158,7 +159,7 @@ The external-action authority now holds to the rule that reading a session is no
 | Code Mode                    | Ready behind paid canary             | Task-scoped policy, bounded FIFO, durable parent record, observed attestation               |
 | Native execution             | **Unavailable by construction**      | Every provider is `canary_blocked` until a live isolation canary passes                     |
 | External publication         | Ready behind its own gate            | Four credential-closed providers, a per-call credential source, the generic suite, a tool   |
-| MCP read                     | Boundary ready, transport open       | Grants, reviewed catalog, gateway, broker authority, keyring, egress, RESTRICT merge        |
+| MCP read                     | Ready behind its own gate            | Grants, reviewed catalog, gateway, broker authority, the transport, the OAuth callback      |
 | Cross-session messaging      | Ready behind its own gate            | Source SessionDO to D1 to target SessionDO, with durable receipts and confirmed provenance  |
 | Browser                      | Ready behind its own gate            | Session gateway, host allowlist, activity on the timeline, and a bounded transport          |
 
@@ -345,10 +346,11 @@ its UI belong to the MCP transport and stay open with it.
 
 ## What is still open, in order
 
-1. **The MCP transport and the OAuth lifecycle.** The read gateway, the reviewed catalog, the
-   session grants, the broker authority, the rotatable keyring, the DNS and redirect-safe egress,
-   and the `RESTRICT` user merge are built. The live transport, the opaque callback with S256, the
-   refresh, revoke, and tombstone, and the identity-first lifecycle remain.
+1. **The MCP OAuth lifecycle, from the owner's side.** The transport is installed: the broker
+   registers the server, connects it with the encrypted OAuth provider, calls a reviewed read
+   through the client's own transport, and serves the server's OAuth callback on a route that only
+   the connection's owner may reach. What remains is the owner's half: surfacing the authorization
+   URL to the browser, the refresh, the revoke, and the tombstone.
 2. **The browser canary.** The transport exists: the session gateway authorizes every request, the
    page is loaded in a fresh browser with no cookie jar, the content is marked untrusted, and the
    result is bounded. What remains is a live canary on a deployment with Browser Rendering, the
