@@ -8,27 +8,39 @@ import { getSlackSettings } from "../slack-settings";
 import { getUserPreferences, resolveUserPreferences } from "../user-preferences";
 import { getAvailableModels } from "./models";
 import { buildAppHomeView } from "./view";
+import { DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
+import { getAvailableHarnessIds } from "../sessions/control-plane-client";
 
 const log = createLogger("app-home");
 
 export async function publishAppHome(env: Env, userId: string): Promise<void> {
-  const [prefs, availableModels, slackConfig, repos, repoBranchPreferences] = await Promise.all([
-    getUserPreferences(env, userId),
-    getAvailableModels(env),
-    getSlackSettings(env),
-    getAvailableRepos(env),
-    getUserRepoBranchPreferences(env, userId),
-  ]);
+  const [prefs, availableModels, slackConfig, repos, repoBranchPreferences, availableHarnesses] =
+    await Promise.all([
+      getUserPreferences(env, userId),
+      getAvailableModels(env),
+      getSlackSettings(env),
+      getAvailableRepos(env),
+      getUserRepoBranchPreferences(env, userId),
+      getAvailableHarnessIds(env),
+    ]);
+  const workspaceHarness = availableHarnesses.includes(slackConfig.harness)
+    ? slackConfig.harness
+    : DEFAULT_HARNESS;
+  const availablePreferences =
+    prefs?.harness && !availableHarnesses.includes(prefs.harness)
+      ? { ...prefs, harness: undefined }
+      : prefs;
   const current = resolveUserPreferences(
-    prefs,
+    availablePreferences,
     slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    slackConfig.harness
+    workspaceHarness
   );
   const view = buildAppHomeView({
     appName: resolveAppName(env),
     availableModels,
-    userHarness: prefs?.harness,
-    workspaceHarness: slackConfig.harness,
+    userHarness: availablePreferences?.harness,
+    workspaceHarness,
+    availableHarnesses,
     currentModel: current.model,
     currentEffort: current.reasoningEffort,
     currentBranch: current.branch,

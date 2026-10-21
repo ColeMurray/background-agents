@@ -1,7 +1,7 @@
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
-import type { BackgroundTaskScheduler, Env } from "../types";
+import type { BackgroundTaskScheduler, Env, SlackIngressExecution } from "../types";
 import { handleAppMention, handleDirectMessage } from "./message-handler";
 import type { SlackEventPayload } from "./payload";
 
@@ -15,7 +15,8 @@ export async function handleSlackEvent(
   payload: SlackEventPayload,
   env: Env,
   traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  scheduleBackground: BackgroundTaskScheduler,
+  ingress?: SlackIngressExecution
 ): Promise<void> {
   if (payload.type !== "event_callback" || !payload.event) return;
   const event = payload.event;
@@ -40,7 +41,8 @@ export async function handleSlackEvent(
       },
       env,
       traceId,
-      scheduleBackground
+      scheduleBackground,
+      ingress
     );
     return;
   }
@@ -58,7 +60,8 @@ export async function handleSlackEvent(
       },
       env,
       traceId,
-      scheduleBackground
+      scheduleBackground,
+      ingress
     );
     return;
   }

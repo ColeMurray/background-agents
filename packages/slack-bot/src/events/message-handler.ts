@@ -42,7 +42,12 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import { checkPublicationAccess } from "../sessions/control-plane-client";
+import {
+  checkPublicationAccess,
+  getDeploymentCapabilities,
+  sendPiSessionControl,
+} from "../sessions/control-plane-client";
+import { parseSlackPiExplicitControl, slackPiControlRequestId } from "../pi-explicit-control";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -57,7 +62,7 @@ import {
 } from "../sessions/thread-session-store";
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
 import { targetId } from "../targets";
-import type { BackgroundTaskScheduler, Env, ThreadSession } from "../types";
+import type { BackgroundTaskScheduler, Env, ThreadSession, SlackIngressExecution } from "../types";
 import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
@@ -105,6 +110,7 @@ interface IncomingMessageParams {
   env: Env;
   traceId?: string;
   scheduleBackground: BackgroundTaskScheduler;
+  ingress?: SlackIngressExecution;
 }
 
 async function resolveThreadSessionAdmission(
@@ -174,6 +180,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     env,
     traceId,
     scheduleBackground,
+    ingress,
   } = params;
   const { text: messageText, images, forwarded, inlinePromptOptions, inlineFlagError } = content;
   const hasInlineOverrides = hasInlinePromptOptions(inlinePromptOptions);
@@ -206,6 +213,57 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
   if (admission.kind === "followUp") {
     const { session: existingSession, threadTs } = admission;
+    const explicitPiControl =
+      existingSession.harness === "pi" ? parseSlackPiExplicitControl(messageText) : null;
+    if (explicitPiControl) {
+      if (images.length > 0 || forwarded.entries.length > 0) {
+        await postMessage(env.SLACK_BOT_TOKEN, channel, "Pi follow-up commands accept text only.", {
+          thread_ts: threadTs,
+        });
+        return;
+      }
+      const deployment = await getDeploymentCapabilities(env, traceId).catch(() => null);
+      if (!deployment?.pi.enabled || !deployment.pi.bindingReachable) {
+        await postMessage(
+          env.SLACK_BOT_TOKEN,
+          channel,
+          "Pi controls are not available in this deployment.",
+          { thread_ts: threadTs }
+        );
+        return;
+      }
+      const explicitActor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
+      const result = await sendPiSessionControl(env, {
+        sessionId: existingSession.sessionId,
+        channel,
+        actorId: `slack:${user}`,
+        requestId: await slackPiControlRequestId(
+          ingress?.stableMessageId ?? `${channel}:${threadTs}:${ts}`
+        ),
+        action: explicitPiControl.action,
+        content: formatAttributedRequest(explicitActor.senderLabel, explicitPiControl.content, []),
+        traceId,
+      });
+      if (!result.ok) {
+        await postMessage(env.SLACK_BOT_TOKEN, channel, result.message, { thread_ts: threadTs });
+        return;
+      }
+      await advanceLastPromptTs(env, channel, threadTs, ts);
+      const reaction = await addReaction(env.SLACK_BOT_TOKEN, channel, ts, "eyes");
+      if (!reaction.ok && reaction.error !== "already_reacted") {
+        log.warn("slack.reaction.add", {
+          trace_id: traceId,
+          channel,
+          message_ts: ts,
+          reaction: "eyes",
+          slack_error: reaction.error,
+        });
+      }
+      await postMessage(env.SLACK_BOT_TOKEN, channel, "Queued an immediate Pi follow-up.", {
+        thread_ts: threadTs,
+      });
+      return;
+    }
     let turnPlan: ResolvedTurnPlan | undefined;
     if (hasInlineOverrides) {
       const enabledModels = await getAuthoritativeModels(env, traceId);
@@ -266,6 +324,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     const interimContext = interimHistory
       ? formatInterimThreadContext(interimHistory.messages)
       : "";
+    if (existingSession.harness === "pi" && images.length > 0) {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        "Pi Durable does not support image attachments yet. Send a text-only follow-up.",
+        { thread_ts: threadTs }
+      );
+      return;
+    }
     const promptResult = await deliverPrompt(env, {
       sessionId: existingSession.sessionId,
       content:
@@ -276,7 +343,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       attachments: await preparePromptImageAttachments(
         env,
         images,
-        imageOnly ? [] : (interimHistory?.images ?? []),
+        imageOnly || existingSession.harness === "pi" ? [] : (interimHistory?.images ?? []),
         traceId
       ),
       imageOnly,
@@ -285,6 +352,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       channel,
       threadTs,
       traceId,
+      clientRequestId: ingress?.stableMessageId,
     });
     if (promptResult.ok) {
       // Only advance the checkpoint past messages we know were considered.
@@ -498,6 +566,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     launchPlan,
     launchSettings,
     traceId,
+    ingress,
   });
   if (!sessionResult) return;
   if (ackTs) {
@@ -532,14 +601,16 @@ export async function handleAppMention(
   },
   env: Env,
   traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  scheduleBackground: BackgroundTaskScheduler,
+  ingress?: SlackIngressExecution
 ): Promise<void> {
-  const admission = await resolveThreadSessionAdmission(
-    env,
-    event.channel,
-    event.thread_ts,
-    traceId
-  );
+  let admission = await resolveThreadSessionAdmission(env, event.channel, event.thread_ts, traceId);
+  if (
+    ingress?.state === "prompt_queued" &&
+    admission.kind === "followUp" &&
+    admission.session.sessionId === ingress.sessionId
+  )
+    admission = { kind: "launch" };
   if (admission.kind === "stop") return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
@@ -624,6 +695,7 @@ export async function handleAppMention(
     env,
     traceId,
     scheduleBackground,
+    ingress,
   });
 }
 
@@ -642,15 +714,17 @@ export async function handleDirectMessage(
   },
   env: Env,
   traceId: string | undefined,
-  scheduleBackground: BackgroundTaskScheduler
+  scheduleBackground: BackgroundTaskScheduler,
+  ingress?: SlackIngressExecution
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
-  const admission = await resolveThreadSessionAdmission(
-    env,
-    event.channel,
-    event.thread_ts,
-    traceId
-  );
+  let admission = await resolveThreadSessionAdmission(env, event.channel, event.thread_ts, traceId);
+  if (
+    ingress?.state === "prompt_queued" &&
+    admission.kind === "followUp" &&
+    admission.session.sessionId === ingress.sessionId
+  )
+    admission = { kind: "launch" };
   if (admission.kind === "stop") return;
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
@@ -676,5 +750,6 @@ export async function handleDirectMessage(
     env,
     traceId,
     scheduleBackground,
+    ingress,
   });
 }

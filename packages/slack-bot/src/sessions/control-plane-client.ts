@@ -7,13 +7,14 @@ import {
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
-import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 import { z } from "zod";
+import { deploymentCapabilitiesSchema } from "@open-inspect/shared";
+import { HARNESS_IDS, type HarnessId } from "@open-inspect/shared/harnesses";
 
 const log = createLogger("handler");
 
@@ -27,6 +28,30 @@ const controlPlaneErrorBodySchema = z.object({
 });
 
 type ControlPlaneErrorBody = z.infer<typeof controlPlaneErrorBodySchema>;
+
+export async function getDeploymentCapabilities(env: ControlPlaneEnv, traceId?: string) {
+  const response = await signedControlPlaneFetch(
+    env,
+    { method: "GET", url: "https://internal/capabilities", traceId },
+    { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+  );
+  if (!response.ok) throw new Error(`Deployment capabilities unavailable (${response.status})`);
+  return deploymentCapabilitiesSchema.parse(await response.json());
+}
+
+/** Capability outages fail Pi advertising closed without breaking existing Slack harnesses. */
+export async function getAvailableHarnessIds(
+  env: ControlPlaneEnv,
+  traceId?: string
+): Promise<readonly HarnessId[]> {
+  try {
+    return (await getDeploymentCapabilities(env, traceId)).harnesses
+      .filter((harness) => harness.available)
+      .map((harness) => harness.id);
+  } catch {
+    return HARNESS_IDS.filter((harness) => harness !== "pi");
+  }
+}
 
 async function readErrorBody(response: Response): Promise<ControlPlaneErrorBody> {
   const parsed = controlPlaneErrorBodySchema.safeParse(await response.json().catch(() => null));
@@ -44,6 +69,7 @@ interface CreateSessionOptions {
   slackUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
+  ingress?: { receiptId: string; sessionId: string };
 }
 
 export type SendPromptResult =
@@ -110,6 +136,7 @@ export async function createSession(
     slackUserId,
     actorDisplayName,
     actorEmail,
+    ingress,
   } = options;
   const startTime = Date.now();
   const base = {
@@ -131,6 +158,7 @@ export async function createSession(
       reasoningEffort,
       actorDisplayName,
       actorEmail,
+      ingress,
     });
     const response = await signedControlPlaneFetch(
       env,
@@ -199,6 +227,55 @@ export interface SendPromptOptions {
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
+  clientRequestId?: string;
+}
+
+export type PiSlackControlAction = "follow_up";
+
+export async function sendPiSessionControl(
+  env: ControlPlaneEnv,
+  options: {
+    sessionId: string;
+    channel: string;
+    actorId: string;
+    requestId: string;
+    action: PiSlackControlAction;
+    content: string;
+    traceId?: string;
+  }
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const url = new URL(
+    `https://internal/sessions/${encodeURIComponent(options.sessionId)}/pi/control`
+  );
+  url.searchParams.set("channel", `slack:${options.channel}`);
+  try {
+    const response = await signedControlPlaneFetch(
+      env,
+      {
+        method: "POST",
+        url: url.toString(),
+        actor: options.actorId,
+        traceId: options.traceId,
+        body: JSON.stringify({
+          action: options.action,
+          requestId: options.requestId,
+          content: options.content,
+        }),
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+    if (response.ok) return { ok: true };
+    const errorBody = await readErrorBody(response);
+    return {
+      ok: false,
+      message:
+        response.status === 403
+          ? "You do not have permission to control this Pi session."
+          : (errorBody.error ?? `Pi control failed (${response.status}).`),
+    };
+  } catch {
+    return { ok: false, message: "Pi controls are temporarily unavailable. Please try again." };
+  }
 }
 
 export async function sendPrompt(
@@ -215,6 +292,7 @@ export async function sendPrompt(
     callbackContext,
     attachments,
     traceId,
+    clientRequestId,
   } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
@@ -227,6 +305,7 @@ export async function sendPrompt(
       model,
       reasoningEffort,
       callbackContext,
+      clientRequestId,
       ...(attachments?.length ? { attachments } : {}),
     });
     const response = await signedControlPlaneFetch(

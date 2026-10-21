@@ -31,6 +31,7 @@ export interface AppHomeViewState {
   /** The harness the user chose; undefined follows the workspace harness. */
   userHarness: HarnessId | undefined;
   workspaceHarness: HarnessId;
+  availableHarnesses?: readonly HarnessId[];
   currentModel: string;
   currentEffort: string | undefined;
   currentBranch: string | undefined;
@@ -70,13 +71,14 @@ function toSelectOption(model: ModelOption): SlackSelectOption {
 
 function buildHarnessBlocks(
   userHarness: HarnessId | undefined,
-  workspaceHarness: HarnessId
+  workspaceHarness: HarnessId,
+  availableHarnesses: readonly HarnessId[] = HARNESS_IDS.filter((harness) => harness !== "pi")
 ): AppHomeBlock[] {
   const workspaceOption: SlackSelectOption = {
     text: plainTextOption(`Workspace default (${getHarnessLabel(workspaceHarness)})`),
     value: WORKSPACE_HARNESS_OPTION_VALUE,
   };
-  const harnessOptions = HARNESS_IDS.map((harness) => ({
+  const harnessOptions = availableHarnesses.map((harness) => ({
     text: plainTextOption(getHarnessLabel(harness)),
     value: harness,
   }));
@@ -399,6 +401,7 @@ export function buildAppHomeView({
   availableModels,
   userHarness,
   workspaceHarness,
+  availableHarnesses,
   currentModel,
   currentEffort,
   currentBranch,
@@ -430,7 +433,7 @@ export function buildAppHomeView({
         },
       },
       { type: "divider" },
-      ...buildHarnessBlocks(userHarness, workspaceHarness),
+      ...buildHarnessBlocks(userHarness, workspaceHarness, availableHarnesses),
       ...buildModelBlocks(harness, currentModel, currentModelInfo, modelOptions, modelDisabled),
       ...(currentModelInfo ? buildReasoningBlocks(currentModel, effectiveEffort) : []),
       ...buildGlobalBranchBlocks(currentBranch),

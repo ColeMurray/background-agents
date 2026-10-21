@@ -3,15 +3,20 @@
  */
 
 import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
 import type { ClassificationEnv } from "@open-inspect/shared/classification";
 import type { SlackCompletionJob } from "./completion/job";
+import type { SlackIngressJob } from "./ingress-authority";
 // targets.ts is a pure leaf (types + policy functions, no I/O), so the types
 // barrel can depend on it without a cycle.
 import type { SlackSessionTarget } from "./targets";
 
 interface SlackCompletionQueue {
   send(message: SlackCompletionJob, options?: { contentType?: "json" }): Promise<unknown>;
+}
+interface SlackIngressQueue {
+  send(message: SlackIngressJob, options?: { contentType?: "json" }): Promise<unknown>;
 }
 
 /**
@@ -26,6 +31,7 @@ export interface Env extends ClassificationEnv {
 
   // Durable completion handoff. All Slack completion callbacks enqueue here.
   SLACK_COMPLETION_QUEUE: SlackCompletionQueue;
+  SLACK_INGRESS_QUEUE?: SlackIngressQueue;
 
   // Environment variables
   DEPLOYMENT_NAME: string;
@@ -34,6 +40,8 @@ export interface Env extends ClassificationEnv {
   DEFAULT_MODEL: string;
   CLASSIFICATION_MODEL: string;
   APP_NAME?: string;
+  PI_DURABLE_ENABLED?: string;
+  PI_SLACK_DURABLE_INGRESS_ENABLED?: string;
 
   // Secrets
   SLACK_BOT_TOKEN: string;
@@ -55,6 +63,14 @@ export interface ThreadContext {
   channelDescription?: string;
   threadTs?: string;
   previousMessages?: string[];
+}
+export interface SlackIngressExecution {
+  receiptId: string;
+  leaseOwner: string;
+  stableSessionId: string;
+  stableMessageId: string;
+  state: string;
+  sessionId?: string | null;
 }
 
 /**
@@ -103,6 +119,7 @@ export interface ThreadSession {
   repoFullName: string;
   model: string;
   reasoningEffort?: string;
+  harness?: HarnessId;
   /** Unix timestamp of when the session was created. Used for debugging and observability. */
   createdAt: number;
   /**

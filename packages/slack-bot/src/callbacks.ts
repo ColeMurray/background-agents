@@ -308,6 +308,9 @@ callbacksRouter.post("/complete", async (c) => {
   });
   if (rejection) return rejection;
 
+  if (valid.context.ingressReceiptId)
+    await lookupThreadSession(c.env, valid.context.channel, valid.context.threadTs);
+
   return enqueueCompletion(
     c,
     createSlackCompletionJob({
