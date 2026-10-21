@@ -123,6 +123,7 @@ export const SessionInternalPaths = {
   piBrowserAuthorize: "/internal/pi-browser/authorize",
   piCodeModeAuthorize: "/internal/pi-codemode/authorize",
   piMcpList: "/internal/pi-mcp/list",
+  mcpPinGrant: "/internal/mcp/pin-grant",
   piMcpRead: "/internal/pi-mcp/read",
   crossSessionInbound: "/internal/cross-session-inbound",
   externalActionStatus: "/internal/external-action/status",

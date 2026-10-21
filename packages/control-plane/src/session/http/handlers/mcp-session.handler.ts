@@ -58,6 +58,28 @@ export interface McpSessionBridge {
   }): Promise<void>;
   /** The human actor whose turn the current operation belongs to. */
   operationActor(operationId: string): string | null;
+  /**
+   * Attach one of the owner's connections to this session.
+   *
+   * The session applies the server's repository scope, the same rule the
+   * shared MCP servers obey, and writes the attachment itself. It returns a
+   * refusal rather than throwing, so the caller learns the reason.
+   */
+  grantPin(input: {
+    ownerUserId: string;
+    connectionId: string;
+    catalogSnapshotSha256: string;
+    toolNames: string[];
+  }): Promise<
+    | {
+        id: string;
+        sessionId: string;
+        connectionId: string;
+        toolNames: string[];
+        createdAt: number;
+      }
+    | { error: string }
+  >;
 }
 
 export interface McpSessionHandlerOptions {
@@ -69,6 +91,38 @@ export class McpSessionHandler {
   constructor(private readonly options: McpSessionHandlerOptions) {}
 
   /** The session's authorized attachments. It never names a credential. */
+  /**
+   * Attach one of the owner's connections to this session.
+   *
+   * The owner is named by the route, not by the body: the connection is the
+   * caller's own, and the session decides whether the server may be used
+   * here at all.
+   */
+  async grantPin(request: Request): Promise<Response> {
+    const ownerUserId = request.headers.get("X-Mcp-Pin-Owner-ID");
+    if (!ownerUserId) {
+      return Response.json({ error: "The connection owner is required" }, { status: 400 });
+    }
+    const body = (await request.json().catch(() => null)) as {
+      connectionId?: string;
+      catalogSnapshotSha256?: string;
+      toolNames?: string[];
+    } | null;
+    if (!body?.connectionId || !body.catalogSnapshotSha256 || !body.toolNames) {
+      return Response.json({ error: "Invalid MCP grant request" }, { status: 400 });
+    }
+    const result = await this.options.mcp.grantPin({
+      ownerUserId,
+      connectionId: body.connectionId,
+      catalogSnapshotSha256: body.catalogSnapshotSha256,
+      toolNames: body.toolNames,
+    });
+    if ("error" in result) {
+      return Response.json({ error: result.error }, { status: 403 });
+    }
+    return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+  }
+
   async list(request: Request): Promise<Response> {
     const bridge = this.options.mcp;
     if (bridge.sessionCapability() === "off" || bridge.liveMode() === "off") {

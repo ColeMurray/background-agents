@@ -15,12 +15,10 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import type { Env } from "../types";
 import { parseBody } from "./body";
 import { McpConnectionStore } from "../db/mcp-connections";
-import {
-  McpSessionPinConflictError,
-  McpSessionPinStore,
-  McpSessionPinValidationError,
-} from "../db/mcp-session-pins";
+import { McpSessionPinStore } from "../db/mcp-session-pins";
+import { SessionInternalPaths } from "../session/contracts";
 import { mcpSessionGrantInputSchema } from "@open-inspect/shared/types/mcp-read";
+import { dispatchSession, type SessionRouteContext } from "./session-route";
 import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   error,
@@ -36,45 +34,61 @@ const OWNER_ROUTE = admit({
   cacheControl: "private, no-store",
 });
 
+/**
+ * Attach one of the caller's own MCP connections to a session.
+ *
+ * The session is the caller's own act, so the session's authority is
+ * resolved first: the caller must be able to act in the session they are
+ * attaching to. The session then applies the server's repository scope, the
+ * same rule the shared MCP servers obey.
+ */
 async function handleGrant(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
-  ctx: RequestContext
+  ctx: SessionRouteContext
 ): Promise<Response> {
-  const ownerUserId = ctx.principal?.kind === "user" ? ctx.principal.userId : null;
+  const ownerUserId = ctx.authorization?.userId ?? null;
   if (!ownerUserId) return error("Unauthorized", 401);
-  const body = await parseBody(request, mcpSessionGrantInputSchema, "sessionId is required");
+  const body = await parseBody(request, mcpSessionGrantInputSchema, "connectionId is required");
   if (body instanceof Response) return body;
 
   const connections = new McpConnectionStore(ctx.db);
-  const connection = await connections.getOwned(params.id, ownerUserId);
+  const connection = await connections.getOwned(body.connectionId, ownerUserId);
   if (!connection) return error("MCP connection not found", 404);
 
-  try {
-    const pin = await new McpSessionPinStore(ctx.db).grant({
-      ownerUserId,
+  // The session owns the grant: it knows its own repositories, it applies
+  // the server's scope, and it writes the attachment.
+  const response = await ctx.sessionRuntime.fetch(params.id, SessionInternalPaths.mcpPinGrant, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Mcp-Pin-Owner-ID": ownerUserId,
+    },
+    body: JSON.stringify({
       connectionId: connection.id,
-      sessionId: body.sessionId,
       catalogSnapshotSha256: connection.catalogSnapshotSha256,
       toolNames: connection.tools.map((tool) => tool.name),
-    });
-    return json({
-      pin: {
-        id: pin.id,
-        sessionId: pin.sessionId,
-        connectionId: pin.connectionId,
-        serverName: connection.serverName,
-        endpointHost: new URL(connection.endpointUrl).host,
-        toolNames: pin.toolNames,
-        createdAt: pin.createdAt,
-      },
-    });
-  } catch (cause) {
-    if (cause instanceof McpSessionPinValidationError) return error(cause.message, 400);
-    if (cause instanceof McpSessionPinConflictError) return error(cause.message, 409);
-    throw cause;
+    }),
+  });
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+    return error(failure?.error ?? "The MCP connection could not be attached", 400);
   }
+  const pin = (await response.json()) as {
+    id: string;
+    sessionId: string;
+    connectionId: string;
+    toolNames: string[];
+    createdAt: number;
+  };
+  return json({
+    pin: {
+      ...pin,
+      serverName: connection.serverName,
+      endpointHost: new URL(connection.endpointUrl).host,
+    },
+  });
 }
 
 async function handleRevoke(
@@ -119,8 +133,17 @@ async function handleListForSession(
 
 export const mcpSessionPinRoutes = new Hono<ControlPlaneHonoEnv>();
 
-mcpSessionPinRoutes.post("/mcp-connections/:id/session-pins", OWNER_ROUTE, (c) =>
-  dispatch(c, handleGrant)
+mcpSessionPinRoutes.post(
+  "/sessions/:id/mcp-pins",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    // Attaching a credential to a session is an action in that session, so
+    // the session's own authority decides. A private break-glass reader and
+    // a workspace administrator without current owning-team membership are
+    // both refused.
+    authorization: requireSession("collaborate"),
+  }),
+  (c) => dispatchSession(c, handleGrant)
 );
 mcpSessionPinRoutes.delete("/mcp-connections/:id/session-pins/:pinId", OWNER_ROUTE, (c) =>
   dispatch(c, handleRevoke)

@@ -44,6 +44,13 @@ function harness(
     callTool,
     audit,
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
+    grantPin: vi.fn(async () => ({
+      id: "pin-1",
+      sessionId: "session-1",
+      connectionId: "mcpconn_1",
+      toolNames: ["search"],
+      createdAt: 1_000,
+    })),
   };
   const handler = new McpSessionHandler({
     mcp: bridge,

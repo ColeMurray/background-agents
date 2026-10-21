@@ -42,7 +42,7 @@ describe("route policy table", () => {
     expect(routes).toHaveLength(266);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(206);
+    expect(new Set(paths).size).toBe(205);
     expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(266);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
@@ -94,6 +94,12 @@ describe("route policy table", () => {
       authentication: { kind: "user" },
       authorization: { kind: "active-self" },
       cacheControl: "private, no-store",
+    });
+    // Attaching a personal MCP connection to a session is an action in that
+    // session, so the session's own authority decides.
+    expect(routeFor("POST", "/sessions/session-1/mcp-pins")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
     });
     expect(routeFor("GET", "/sessions/session-1/external-actions/action-1")).toMatchObject({
       authentication: { kind: "user" },

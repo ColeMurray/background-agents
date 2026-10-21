@@ -192,7 +192,11 @@ import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilit
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 import { McpSessionHandler } from "./http/handlers/mcp-session.handler";
 import { BrowserGateway } from "./http/handlers/browser-gateway.handler";
-import { McpSessionPinStore } from "../db/mcp-session-pins";
+import {
+  McpSessionPinConflictError,
+  McpSessionPinStore,
+  McpSessionPinValidationError,
+} from "../db/mcp-session-pins";
 import { McpConnectionStore } from "../db/mcp-connections";
 import { McpReadAuditStore } from "../db/mcp-read-audit";
 import { CrossSessionHandler } from "./http/handlers/cross-session.handler";
@@ -726,6 +730,56 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.mcp,
       sessionCapability: () =>
         sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.mcp ?? "off",
+      grantPin: async (input) => {
+        // The connection is the caller's own, and it must name a server this
+        // session may use: the same repository scope the shared MCP servers
+        // obey, resolved from the session's own repositories.
+        const connection = await new McpConnectionStore(db).getOwned(
+          input.connectionId,
+          input.ownerUserId
+        );
+        if (!connection) return { error: "MCP connection not found" };
+        const server = await new McpServerStore(db, repoSecretsEncryptionKey).get(
+          connection.serverId
+        );
+        if (!server) return { error: "MCP server not found" };
+        const scopes = server.repoScopes;
+        if (scopes && scopes.length > 0) {
+          const repositories = new Set(
+            sessionCoreRepository
+              .getSessionRepositories()
+              .map((repository) => `${repository.repoOwner}/${repository.repoName}`.toLowerCase())
+          );
+          const allowed = scopes.some((scope) => repositories.has(scope.toLowerCase()));
+          if (!allowed) {
+            return { error: "This MCP server is not available to this session" };
+          }
+        }
+        try {
+          const pin = await new McpSessionPinStore(db).grant({
+            ownerUserId: input.ownerUserId,
+            connectionId: input.connectionId,
+            sessionId: getPublicSessionId(),
+            catalogSnapshotSha256: input.catalogSnapshotSha256,
+            toolNames: input.toolNames,
+          });
+          return {
+            id: pin.id,
+            sessionId: pin.sessionId,
+            connectionId: pin.connectionId,
+            toolNames: pin.toolNames,
+            createdAt: pin.createdAt,
+          };
+        } catch (error) {
+          if (
+            error instanceof McpSessionPinConflictError ||
+            error instanceof McpSessionPinValidationError
+          ) {
+            return { error: error.message };
+          }
+          throw error;
+        }
+      },
       grants: async () => {
         const pins = await new McpSessionPinStore(db).listForSession(getPublicSessionId());
         const connections = new McpConnectionStore(db);
@@ -1447,6 +1501,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
     piCodeModeAuthorize: (request) => piBridgeHandler.codeModeAuthorize(request),
     piMcpList: (request) => mcpSessionHandler.list(request),
+    mcpPinGrant: (request) => mcpSessionHandler.grantPin(request),
     piMcpRead: (request) => mcpSessionHandler.read(request),
     crossSessionInbound: (request) => crossSessionHandler.inbound(request),
     externalActionStatus: (request) => piBridgeHandler.humanExternalActionStatus(request),

@@ -59,7 +59,13 @@ export type McpServerReviewView = z.infer<typeof mcpServerReviewViewSchema>;
 /** Grant one connection to one session. */
 export const mcpSessionGrantInputSchema = z
   .object({
-    sessionId: z.string().trim().min(1).max(256),
+    /**
+     * The connection to attach.
+     *
+     * The session is named by the route, so the session's own authority is
+     * resolved before anything is attached.
+     */
+    connectionId: z.string().trim().min(1).max(256),
   })
   .strict();
 
