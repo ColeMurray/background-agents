@@ -20,8 +20,10 @@ import pytest
 from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
 from sandbox_runtime.harness.codex.client import CodexClient
+from sandbox_runtime.model_prices import ModelPriceCatalog
 
 BINARY = os.environ.get("OI_TEST_CODEX_BINARY")
+CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
 pytestmark = pytest.mark.skipif(
     not BINARY, reason="Set OI_TEST_CODEX_BINARY for pinned native integration"
 )
@@ -329,6 +331,7 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
             credential_client=Broker() if subscription else None,
             client_factory=native_factory,
             environ={"PATH": os.environ["PATH"], "OPENAI_API_KEY": token},
+            prices=ModelPriceCatalog(CATALOG, MagicMock()),
         )
 
     events = []
@@ -347,11 +350,13 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
             HarnessPrompt("m1", "Remember sapphire. Reply once."), emit
         )
         assert result.success, result
-        assert result.message_cost_usd == 0
+        # gpt-6.1-sol: 100 input at $2/M, 15 output and 5 reasoning at $10/M. A
+        # subscription reports the same model-price equivalent.
+        assert result.message_cost_usd == 0.0004
         thread_id = harness.session_id
         result = await harness.run_prompt(HarnessPrompt("m2", "Recall the previous marker."), emit)
         assert result.success, result
-        assert result.message_cost_usd == 0
+        assert result.message_cost_usd == 0.0004
         if not subscription:
             assert harness._client.auth_logins == 1
     finally:
@@ -367,7 +372,8 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
             emit,
         )
         assert result.success, result
-        assert result.message_cost_usd == 0
+        # The restored manifest keeps a trusted baseline: gpt-5.6-sol at $4/M and $20/M.
+        assert result.message_cost_usd == 0.0008
         if not subscription:
             assert resumed._client.auth_logins == 1
     finally:
@@ -375,7 +381,13 @@ async def test_native_auth_two_turns_restart_resume_and_no_persisted_secret(
     assert len(requests) == 3
     steps = [event for event in events if event["type"] == "step_finish"]
     assert steps and any("tokens" in event for event in steps)
-    assert all(event["cost"] == event["messageCostUsd"] == 0 for event in steps)
+    assert all(event["cost"] == event["messageCostUsd"] for event in steps)
+    assert [event["messageCostUsd"] for event in steps if event["reason"] == "completed"] == [
+        0.0004,
+        0.0004,
+        0.0008,
+    ]
+    assert not [event for event in events if event["type"] == "warning"]
     assert all("pricingVersion" not in event and "costBasis" not in event for event in steps)
     assert all(request["auth"] == f"Bearer {token}" for request in requests)
     assert "sapphire" in json.dumps(requests[-1]["body"])

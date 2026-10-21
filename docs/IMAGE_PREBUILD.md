@@ -196,6 +196,10 @@ work. The step is best-effort: a failure is logged and the build continues. Open
 environment variables (`OPENCODE_MODELS_URL`, `OPENCODE_MODELS_PATH`) apply to the refresh as they
 do to sessions.
 
+Codex sessions price their token usage from the same file, so a model published after the image was
+built has no price there: its turns are recorded as $0 with a timeline warning until the image is
+rebuilt.
+
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
 state in `global.db`. Both hosts run the same finalization handler and retry contract.

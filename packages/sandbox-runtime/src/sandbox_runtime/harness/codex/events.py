@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import time
+from decimal import Decimal
 from typing import Any
 
+from ...model_prices import ModelPrice, TokenBuckets
 from ..tool_results import content_text
 
 # Even non-BMP characters expand to at most 12 JSON bytes each. Leave ample
@@ -44,6 +46,20 @@ def _token_counts(value: Any) -> dict[str, int] | None:
     return counts
 
 
+def _buckets(counts: dict[str, int]) -> TokenBuckets:
+    # Native input includes cached reads and writes, native output includes
+    # reasoning. Neutral buckets are disjoint.
+    read, write = counts["cachedInputTokens"], counts["cacheWriteInputTokens"]
+    reasoning = counts["reasoningOutputTokens"]
+    return TokenBuckets(
+        input=max(0, counts["inputTokens"] - read - write),
+        output=max(0, counts["outputTokens"] - reasoning),
+        reasoning=reasoning,
+        cache_read=read,
+        cache_write=write,
+    )
+
+
 def _tool_output(kind: str, item: dict[str, Any]) -> str:
     """Project a native tool result onto the bridge's text-output contract."""
     if kind == "dynamicToolCall":
@@ -70,9 +86,12 @@ class CodexTurnEvents:
         baseline: dict[str, int],
         *,
         baseline_known: bool = True,
+        price: ModelPrice | None = None,
     ) -> None:
         self.message_id, self.thread_id, self.turn_id = message_id, thread_id, turn_id
         self.model = model
+        self.price = price
+        self._cost = Decimal(0)
         self.step_id = f"codex:{thread_id}:{turn_id}"
         normalized_baseline = _token_counts(
             baseline if baseline else dict.fromkeys(TOKEN_FIELDS, 0)
@@ -80,6 +99,9 @@ class CodexTurnEvents:
         self.baseline = normalized_baseline or dict.fromkeys(TOKEN_FIELDS, 0)
         self.baseline_known = baseline_known and normalized_baseline is not None
         self.total = self.baseline.copy()
+        # Without a trusted baseline, usage is attributed request by request.
+        self._attributed = dict.fromkeys(TOKEN_FIELDS, 0)
+        self.attribution_complete = True
         self.text: dict[str, list[str]] = {}
         self._text_length = 0
         self._text_truncated = False
@@ -99,6 +121,16 @@ class CodexTurnEvents:
             "model": f"openai/{self.model}",
         }
 
+    @property
+    def message_cost_usd(self) -> float:
+        """Priced cost of the requests observed so far in this turn."""
+        return float(self._cost)
+
+    @property
+    def cost_complete(self) -> bool:
+        """Whether every request this turn reported could be priced."""
+        return self.price is not None and self.usage_valid and self.attribution_complete
+
     def finish(self) -> dict[str, Any]:
         return {
             "type": "step_finish",
@@ -106,9 +138,10 @@ class CodexTurnEvents:
             "stepId": self.step_id,
             "model": f"openai/{self.model}",
             **({"tokens": self.tokens} if self.tokens is not None else {}),
-            # Native turn events report tokens, not dollar costs.
-            "cost": 0,
-            "messageCostUsd": 0,
+            # One step per turn, so the step's cost is the turn's. An absent
+            # cost marks a turn that could not be priced.
+            **({"cost": self.message_cost_usd} if self.cost_complete else {}),
+            "messageCostUsd": self.message_cost_usd,
             "reason": self.status or "unknown",
         }
 
@@ -138,22 +171,35 @@ class CodexTurnEvents:
             counts = {k: total[k] - self.baseline[k] for k in TOKEN_FIELDS}
             if self.baseline_known and _token_counts(counts) is None:
                 return self._invalid_usage()
-            self.total = total
+            previous, self.total = self.total, total
             self.has_usage = True
+            # Codex sends one update per model request; `last` is that request.
+            request = {k: total[k] - previous[k] for k in TOKEN_FIELDS}
+            last = _token_counts(usage.get("last") if isinstance(usage, dict) else None)
             if not self.baseline_known:
-                # A contained cancellation can leave native history ahead of
-                # the last observed total. Re-establish a baseline, not a bill.
-                return [self.finish()]
-            read, write = counts["cachedInputTokens"], counts["cacheWriteInputTokens"]
-            # Native input includes cached reads and writes, native output
-            # includes reasoning. Neutral buckets are disjoint.
-            input_tokens = counts["inputTokens"] - read - write
-            reasoning = counts["reasoningOutputTokens"]
+                if not self.attribution_complete or not any(request.values()):
+                    return [self.finish()]
+                # A contained cancellation can leave native history ahead of the
+                # last observed total, so the advance may include earlier work.
+                # Only the request this turn's update reports is attributed.
+                if last is None or any(last[k] > request[k] for k in TOKEN_FIELDS):
+                    self.attribution_complete = False
+                    self.tokens = None
+                    return [self.finish()]
+                request = last
+                self._attributed = {k: self._attributed[k] + last[k] for k in TOKEN_FIELDS}
+                counts = self._attributed
+            if self.price is not None:
+                # Each request is priced on its own: context-tier rates depend on
+                # that request's input size, not the turn's.
+                context = (last or request)["inputTokens"]
+                self._cost += self.price.cost(_buckets(request), context)
+            buckets = _buckets(counts)
             self.tokens = {
-                "input": input_tokens,
-                "output": counts["outputTokens"] - reasoning,
-                "reasoning": reasoning,
-                "cache": {"read": read, "write": write},
+                "input": buckets.input,
+                "output": buckets.output,
+                "reasoning": buckets.reasoning,
+                "cache": {"read": buckets.cache_read, "write": buckets.cache_write},
                 "total": counts["totalTokens"],
             }
             return [self.finish()]

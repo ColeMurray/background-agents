@@ -45,8 +45,15 @@ from .tools import CodexTools
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from ...model_prices import ModelPriceCatalog
+
 STATE_VERSION = 1
 STOP_TIMEOUT_SECONDS = 5.0
+
+
+def _observed_cost(state: CodexTurnEvents | None) -> float:
+    """Cost of the requests a turn reported before it ended, however it ended."""
+    return state.message_cost_usd if state is not None else 0
 
 
 class _InactivityTimeout(Exception):
@@ -76,8 +83,10 @@ class CodexHarness:
         credential_client: OpenAIAccessTokenClient | None = None,
         client_factory: Callable[..., CodexClient] = CodexClient,
         environ: Mapping[str, str] | None = None,
+        prices: ModelPriceCatalog | None = None,
     ) -> None:
         self.config, self.log, self.limits = config, log, limits
+        self._prices = prices
         self._credentials = credential_client
         self._factory = client_factory
         self._environ = dict(os.environ if environ is None else environ)
@@ -388,6 +397,8 @@ class CodexHarness:
                     inputs.append({"type": "localImage", "path": str(path)})
                 if asyncio.get_running_loop().time() >= deadline:
                     raise TimeoutError
+                # Resolved before submission: pricing never runs while native work does.
+                price = self._prices.price(model) if self._prices else None
                 # Durably distrust the baseline while native work may run: a crash
                 # mid-turn must not bill unobserved usage to the next message.
                 baseline_known = self._usage_baseline_known
@@ -418,6 +429,7 @@ class CodexHarness:
                     model,
                     self._total,
                     baseline_known=baseline_known,
+                    price=price,
                 )
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
@@ -431,18 +443,19 @@ class CodexHarness:
                         self._persist()
                 self._usage_baseline_known = state.status == "completed" and state.has_usage
                 self._persist()
+                warning = self._cost_warning(state)
+                if warning:
+                    await emit({"type": "warning", "scope": "provider", "message": warning})
                 await emit(state.finish())
                 if state.status == "completed":
-                    return TurnOutcome.ok(
-                        message_cost_usd=0,
-                    )
+                    return TurnOutcome.ok(message_cost_usd=state.message_cost_usd)
                 return TurnOutcome(
                     False,
                     "Codex turn interrupted"
                     if state.status == "interrupted"
                     else "Codex turn failed",
                     cancelled=state.status == "interrupted",
-                    message_cost_usd=0,
+                    message_cost_usd=state.message_cost_usd,
                 )
         except asyncio.CancelledError:
             stopped = await asyncio.shield(self.stop_execution(STOP_TIMEOUT_SECONDS))
@@ -460,13 +473,13 @@ class CodexHarness:
             if stopped and not self._submitting:
                 return TurnOutcome.failed(
                     "Codex could not prepare the turn within its runtime budget",
-                    message_cost_usd=0,
+                    message_cost_usd=_observed_cost(state),
                 )
             return TurnOutcome.failed(
                 "Codex transport failed; retry to resume the conversation"
                 if stopped
                 else "Codex process containment could not be confirmed",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except OpenAIAccessTokenUnavailable:
             # Transient (timeout, 5xx, 429): a plain retry can succeed, so do not
@@ -474,11 +487,11 @@ class CodexHarness:
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
                 return TurnOutcome.failed(
                     "Codex process containment could not be confirmed",
-                    message_cost_usd=0,
+                    message_cost_usd=_observed_cost(state),
                 )
             return TurnOutcome.failed(
                 "Codex could not obtain a credential right now; retry shortly",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except (
             CodexRpcError,
@@ -488,11 +501,11 @@ class CodexHarness:
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
                 return TurnOutcome.failed(
                     "Codex process containment could not be confirmed",
-                    message_cost_usd=0,
+                    message_cost_usd=_observed_cost(state),
                 )
             return TurnOutcome.failed(
                 "Codex rejected this session's configuration or credential; check Settings before retrying",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except _InactivityTimeout:
             timeout_seconds = self.limits.inactivity_timeout_seconds
@@ -505,7 +518,7 @@ class CodexHarness:
                 f"Codex produced no output for {timeout_seconds:.0f}s."
                 if stopped
                 else "Codex process containment could not be confirmed",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except Exception:
             # Any other abnormal exit (e.g. the event sink) may leave native work
@@ -520,6 +533,30 @@ class CodexHarness:
             self._turn_id = None
             for path in paths:
                 path.unlink(missing_ok=True)
+
+    def _cost_warning(self, state: CodexTurnEvents) -> str | None:
+        """Why this turn's reported cost is incomplete, for the session timeline."""
+        if not state.attribution_complete:
+            return (
+                "Some of this turn's Codex usage could not be separated from earlier work in "
+                "this conversation, so it is not included in the turn's cost."
+            )
+        if not state.usage_valid:
+            return (
+                "Codex reported inconsistent token usage, so this turn's cost covers only "
+                "the usage reported before it."
+            )
+        if state.price is None and state.has_usage:
+            if self._prices is None or not self._prices.available:
+                return (
+                    "Model prices are unavailable in this sandbox, so this turn's cost is "
+                    "recorded as $0."
+                )
+            return (
+                f"No price is listed for {state.model} in this sandbox, so this turn's cost "
+                "is recorded as $0."
+            )
+        return None
 
     async def _next_notification(self) -> dict[str, Any]:
         """Next frame, bounded by the inactivity budget while no host tool call is running."""
