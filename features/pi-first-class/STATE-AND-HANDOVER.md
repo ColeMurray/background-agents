@@ -537,6 +537,14 @@ fixed or listed as still open above.
 
 ## How to work in this repository
 
+- **The order is always: audit what Open-Inspect already has and how it works, then design the best
+  way to add the thing, then implement it — one thing at a time.** The audit reads the code and
+  cites `file:line`; the design is derived only from that audit; the implementation follows the
+  design. A feature is never designed from memory, from a plan document, or from a conversation.
+  Every document in this directory is a **claim to be checked**, not evidence. If the code and the
+  documents disagree, the code wins and the document is corrected.
+- Nothing is implemented while an audit of the same area is open. A parallel implementation would
+  encode a design the audit has not yet tested.
 - Both `feat/pi-first-class` and `feat/pi-go-live-integration-v2` are at the same commit, so the
   integration worktree and the main worktree hold identical trees. Continue in
   `/Users/param/.local/share/opencode/worktree/0e6d72/pi-go-live-v2` on
