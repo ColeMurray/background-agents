@@ -3,7 +3,15 @@
 **Change:** bump the exact `agents` pin from `0.28.1` to `0.29.0` in the Open-Inspect Pi
 integration, and delete the compatibility shim the bump makes unnecessary.
 
-**Branch:** `feat/pi-agents-upgrade` (from `feat/pi-go-live-integration-v2` at `a6ab76de`)
+**Branch:** `feat/pi-agents-upgrade`, rebased onto `feat/pi-go-live-integration-v2` at `b23780cd`.
+
+**Commits** (the branch tip is the last of these; they are named by subject because the base branch
+was moving underneath the work and rebasing rewrites their hashes):
+
+1. `feat: upgrade the agents SDK to 0.29.0 and drop its shim`
+2. `test: pin the Agents SDK's pi skills contract against the installed SDK`
+3. `docs: record the upgrade's control run and the pi lane results`
+4. `docs: the upgrade, rebased and re-verified on the current base`
 
 **Brief:** `features/pi-first-class/PI-REMAINING-AUDIT-BRIEFS.md`, section 7.
 
@@ -32,6 +40,14 @@ checked against the **installed tree** in `node_modules` after the bump.
 The worker bundle's resolution was captured before and after the change from esbuild's
 `dist/meta.json` (`packages/control-plane/dist/meta.json`), and the two input lists were diffed.
 That is the ground truth for "what the shipped worker resolves".
+
+**The base branch moved while the audit was running, twice.** `feat/pi-go-live-integration-v2`
+advanced from `a6ab76de` to `95ea8054` (the Pi integration audit and three fixes it drove) and then
+to `b23780cd` (two commits removing a temporary patch script). The branch was rebased onto each new
+tip — the merges are clean, the base still pins `agents@0.28.1`, and the base's
+`packages/shared/src/pi-tool-effects.ts` still declares `activate_skill` and `read_skill_resource`
+at the same lines — and every lane was re-run on the rebased tree. The results in section 8 are the
+ones from the final rebase, onto `b23780cd`.
 
 ## 2. The dependency surface of `agents` inside this repo
 
@@ -385,23 +401,45 @@ and in particular:
 ## 8. Test results
 
 Run on **node 24.22.0 / npm 11.19.1** (the repository's declared version), after
-`npm run build -w @open-inspect/shared`.
+`npm run build -w @open-inspect/shared`, on the tree as committed (rebased onto
+`feat/pi-go-live-integration-v2` at `b23780cd`).
 
-| Lane                                | Command                                                                                             | Result                                 |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| shared build                        | `npm run build -w @open-inspect/shared`                                                             | pass                                   |
-| control-plane unit                  | `npm test -w @open-inspect/control-plane`                                                           | **338 files / 5413 passed, 1 skipped** |
-| **worker-build gate**               | `npx vitest run src/worker-build.test.ts --root packages/control-plane`                             | **1 passed**                           |
-| typecheck                           | `npm run typecheck`                                                                                 | pass (all workspaces, including `web`) |
-| lint                                | `npm run lint`                                                                                      | pass                                   |
-| format                              | `npm run format:check`                                                                              | pass                                   |
-| shared unit                         | `npm test -w @open-inspect/shared`                                                                  | 63 files / 1314 passed                 |
-| web unit                            | `npm test -w @open-inspect/web`                                                                     | 229/233 files passed; see below        |
-| control-plane integration (workerd) | `npm run test:integration -w @open-inspect/control-plane`                                           | 171/174 files passed; see below        |
-| the SDK contract, against the SDK   | `npx vitest run --config vitest.integration.config.ts test/integration/pi-skills-extension.test.ts` | **3 passed**                           |
+| Lane                                | Command                                                                                             | Result                                         |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| shared build                        | `npm run build -w @open-inspect/shared`                                                             | pass                                           |
+| control-plane unit                  | `npm test -w @open-inspect/control-plane`                                                           | **339 files / 5430 passed, 1 skipped**         |
+| **worker-build gate**               | `npx vitest run src/worker-build.test.ts --root packages/control-plane`                             | **1 passed**                                   |
+| typecheck                           | `npm run typecheck`                                                                                 | pass (all workspaces, including `web`)         |
+| lint                                | `npm run lint`                                                                                      | pass                                           |
+| format                              | `npm run format:check`                                                                              | pass                                           |
+| shared unit                         | `npm test -w @open-inspect/shared`                                                                  | 1 failure, in the base's own change; see below |
+| web unit                            | `npm test -w @open-inspect/web`                                                                     | 229/233 files passed; see below                |
+| control-plane integration (workerd) | `npm run test:integration -w @open-inspect/control-plane`                                           | 171/174 files passed; see below                |
+| the pi, skills, and MCP suites      | the seven files listed below                                                                        | **7 files / 147 passed**                       |
+| the SDK contract, against the SDK   | `npx vitest run --config vitest.integration.config.ts test/integration/pi-skills-extension.test.ts` | **3 passed**                                   |
 
 **The worker-build gate passes.** It is the check that would have caught a resolution mistake such
 as the one `--legacy-peer-deps` causes, and it passes on the tree as committed.
+
+### The base branch's one remaining failure, which this change does not cause
+
+The base branch `feat/pi-go-live-integration-v2` has a failing test of its own. It was verified to
+be present on the base **without** this change, in a separate worktree checked out at `b23780cd`:
+
+```
+FAIL src/pi-tool-effects.test.ts > Pi tool effect registry >
+     declares Code Mode and its reserved internal model tools before exposure
+Test Files  1 failed | 62 passed (63)
+```
+
+It comes from the base's own `packages/shared/src/pi-tool-effects.ts` change. **It is not caused by
+this change and is not fixed by it** — it belongs to the base branch, and is recorded here so the
+next reader does not attribute it to the upgrade. The shared package has no dependency path to
+`agents` at all. Every file this change touches lints, formats, and type-checks clean.
+
+(The base branch also carried two temporary scratch scripts that failed lint and format; its own
+later commits removed them, and `npm run lint` and `npm run format:check` now pass on the merged
+tree.)
 
 ### The web lane's failures are load-induced timeouts, and they are not in the blast radius
 
@@ -455,7 +493,7 @@ npx vitest run --config vitest.integration.config.ts \
   test/integration/mcp-servers.test.ts
 
 Test Files  7 passed (7)
-Tests       145 passed (145)
+Tests       147 passed (147)
 ```
 
 `pi-session-do.test.ts` includes the Durable Object eviction path, so the pi session store — the one
@@ -516,7 +554,7 @@ case, described the peer step incorrectly. They are corrected in this change:
 - The browser capability does not touch `agents`.
 - The worker bundle's resolution changes by four files, all accounted for.
 - The lockfile diff is twelve lines.
-- The pi, skills, and MCP integration suites pass on the upgraded tree (145 tests), including the
+- The pi, skills, and MCP integration suites pass on the upgraded tree (147 tests), including the
   Durable Object eviction path.
 - The new workerd test pins the SDK's tool names and result contract against the **installed** SDK,
   so the mismatch this upgrade removes cannot silently return.
