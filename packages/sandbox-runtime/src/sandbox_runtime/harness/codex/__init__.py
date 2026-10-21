@@ -39,7 +39,7 @@ from .env import (
     validate_native_configuration,
     validate_native_state,
 )
-from .events import TURN_FAILED_MESSAGE, CodexTurnEvents
+from .events import TURN_FAILED_MESSAGE, CodexRateLimits, CodexTurnEvents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
@@ -99,6 +99,8 @@ class CodexHarness:
         self._epoch = ""
         self._total: dict[str, int] = {}
         self._usage_baseline_known = True
+        # Account quota state outlives a turn; each turn projects into it.
+        self._rate_limits = CodexRateLimits()
         self._manifest_path = config.state_dir / "openinspect-state.json"
         # A rejected manifest is kept here, not deleted, until a fresh thread
         # replaces it: a rejected record must never read as an absent one, even
@@ -417,6 +419,7 @@ class CodexHarness:
                     self._turn_id,
                     model,
                     self._total,
+                    rate_limits=self._rate_limits,
                     baseline_known=baseline_known,
                 )
                 await emit(state.start())

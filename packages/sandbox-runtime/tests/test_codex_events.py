@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from sandbox_runtime.harness.codex.events import CodexTurnEvents
+from sandbox_runtime.harness.codex.events import CodexRateLimits, CodexTurnEvents
 
 
 @pytest.mark.parametrize("method", ["item/started", "item/completed"])
@@ -41,7 +41,7 @@ from sandbox_runtime.harness.codex.events import CodexTurnEvents
     ],
 )
 def test_web_actions_use_display_tool_and_arguments(method, action, summary, tool, args):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     event = state.accept(
         {
             "method": method,
@@ -63,7 +63,7 @@ def test_long_text_is_coalesced_and_final_projection_fits_transport(monkeypatch)
 
     now = 0.0
     monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: now)
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     events = []
     # Escaped controls and non-BMP Unicode exercise JSON's worst-case expansion.
     chunk = '\U0001f642"\\\n' * 256
@@ -100,7 +100,7 @@ def test_long_text_is_coalesced_and_final_projection_fits_transport(monkeypatch)
 
 def test_turn_completion_flushes_coalesced_text_and_preserves_item_order(monkeypatch):
     monkeypatch.setattr("sandbox_runtime.harness.codex.events.time.monotonic", lambda: 0.0)
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
 
     def event(method, **params):
         return state.accept(
@@ -116,7 +116,9 @@ def test_turn_completion_flushes_coalesced_text_and_preserves_item_order(monkeyp
 
 
 def test_turn_text_repair_and_child_completion_are_isolated():
-    state = CodexTurnEvents("message", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents(
+        "message", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits()
+    )
 
     def event(method, **params):
         return state.accept(
@@ -150,7 +152,9 @@ def test_usage_charges_only_this_turn_and_counts_cache_and_reasoning_once():
         "reasoningOutputTokens": 50,
         "totalTokens": 1100,
     }
-    state = CodexTurnEvents("m2", "thread", "turn2", "gpt-6.1-sol", prior)
+    state = CodexTurnEvents(
+        "m2", "thread", "turn2", "gpt-6.1-sol", prior, rate_limits=CodexRateLimits()
+    )
     total = {
         "inputTokens": 2000,
         "cachedInputTokens": 1000,
@@ -197,7 +201,13 @@ def counts(input_tokens):
 
 def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     state = CodexTurnEvents(
-        "m2", "thread", "turn2", "gpt-6.1-sol", counts(100), baseline_known=False
+        "m2",
+        "thread",
+        "turn2",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        rate_limits=CodexRateLimits(),
     )
     # The native history includes 50 previously unobserved tokens, then this turn's 10.
     projected = usage(state, counts(160))
@@ -207,7 +217,9 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     assert state.has_usage
     assert state.total["inputTokens"] == 160
 
-    following = CodexTurnEvents("m3", "thread", "turn3", "gpt-6.1-sol", state.total)
+    following = CodexTurnEvents(
+        "m3", "thread", "turn3", "gpt-6.1-sol", state.total, rate_limits=CodexRateLimits()
+    )
     projected = usage(following, counts(170))
     assert projected["tokens"]["input"] == 10
     assert projected["cost"] == 0
@@ -233,7 +245,7 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     ],
 )
 def test_malformed_usage_does_not_invent_tokens(invalid):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     assert usage(state, counts(50))["cost"] == 0
     projected = usage(state, invalid)
     assert projected["cost"] == 0
@@ -247,20 +259,30 @@ def test_malformed_usage_does_not_invent_tokens(invalid):
 
 
 def test_absolute_valid_but_overlapping_delta_cannot_be_attributed():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", counts(100))
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", counts(100), rate_limits=CodexRateLimits()
+    )
     assert usage(state, {**counts(100), "cachedInputTokens": 1})["cost"] == 0
     assert not state.has_usage
 
 
 def test_unknown_baseline_tracks_valid_totals_without_using_unsafe_deltas():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", counts(100), baseline_known=False)
+    state = CodexTurnEvents(
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        rate_limits=CodexRateLimits(),
+    )
     assert usage(state, {**counts(160), "cachedInputTokens": 150})["cost"] == 0
     assert state.has_usage
     assert state.total["cachedInputTokens"] == 150
 
 
 def test_no_usage_and_nonmonotonic_series_cannot_establish_a_safe_baseline():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     assert not state.has_usage
     usage(state, counts(100))
     assert usage(state, counts(99))["cost"] == 0
@@ -269,7 +291,7 @@ def test_no_usage_and_nonmonotonic_series_cannot_establish_a_safe_baseline():
 
 @pytest.mark.parametrize("envelope", [None, [], "invalid"])
 def test_malformed_usage_envelope_does_not_throw(envelope):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
     projected = state.accept(
         {
             "method": "thread/tokenUsage/updated",
@@ -281,7 +303,9 @@ def test_malformed_usage_envelope_does_not_throw(envelope):
 
 
 def test_zero_usage_is_authoritative_and_cost_is_zero_for_unknown_models():
-    state = CodexTurnEvents("m", "thread", "turn", "unknown-model", {})
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "unknown-model", {}, rate_limits=CodexRateLimits()
+    )
     projected = usage(state, counts(0))
     assert state.has_usage
     assert projected["tokens"]["total"] == 0
@@ -290,14 +314,16 @@ def test_zero_usage_is_authoritative_and_cost_is_zero_for_unknown_models():
 
 
 def test_invalid_restored_baseline_can_recover_authoritative_totals():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {"inputTokens": True})
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {"inputTokens": True}, rate_limits=CodexRateLimits()
+    )
     assert usage(state, counts(10))["cost"] == 0
     assert state.has_usage
     assert state.total["inputTokens"] == 10
 
 
 def _turn():
-    return CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    return CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
 
 
 def _frame(method, **params):
@@ -709,3 +735,48 @@ def test_sparse_rate_limit_updates_merge_into_the_last_snapshot():
     assert other["message"] == "OpenAI primary limit 91% used."
     [spend] = state.accept(_rate_limits(limitId="quota-c", spendControlReached=True))
     assert spend["message"] == "OpenAI spend control limit reached."
+
+
+def test_quota_state_is_retained_per_limit_id():
+    limits = CodexRateLimits()
+    first = {
+        "limitId": "a",
+        "primary": {"usedPercent": 92, "windowDurationMins": 300},
+        "secondary": {"usedPercent": 90, "windowDurationMins": 10080},
+    }
+    assert limits.update(first) == "OpenAI 5-hour limit 92% used; 7-day limit 90% used."
+    assert limits.update({"limitId": "b", "primary": {"usedPercent": 10}}) is None
+    # Quota B did not discard quota A's snapshot or its warning state.
+    assert limits.update({"limitId": "a", "primary": {"usedPercent": 95}}) is None
+    assert limits.update({"limitId": "a", "primary": {"usedPercent": 100}}) == (
+        "OpenAI 5-hour limit 100% used; 7-day limit 90% used."
+    )
+    # An update without a limitId belongs to the last identified quota.
+    assert limits.update({"secondary": {"usedPercent": 91}}) is None
+
+
+def test_quota_warning_rearms_after_recovery_or_window_reset():
+    limits = CodexRateLimits()
+    near = {"usedPercent": 92, "windowDurationMins": 300, "resetsAt": 1_800_000_000}
+    assert limits.update({"primary": near}) is not None
+    assert limits.update({"primary": {"usedPercent": 93}}) is None
+    # The window reset into a new period below the threshold.
+    assert limits.update({"primary": {"usedPercent": 0, "resetsAt": 1_800_018_000}}) is None
+    assert limits.update({"primary": {"usedPercent": 92}}) == (
+        "OpenAI 5-hour limit 92% used, resets 2027-01-15 13:00 UTC."
+    )
+    assert limits.update({"primary": {"usedPercent": 100}}) is not None
+    # Dipping back to near and returning to reached is the same period.
+    assert limits.update({"primary": {"usedPercent": 99}}) is None
+    assert limits.update({"primary": {"usedPercent": 100}}) is None
+
+
+def test_quota_state_outlives_the_turn_projection():
+    limits = CodexRateLimits()
+    update = _rate_limits(limitId="a", primary={"usedPercent": 95})
+
+    def turn(turn_id):
+        return CodexTurnEvents("m", "thread", turn_id, "gpt-6.1-sol", {}, rate_limits=limits)
+
+    assert [event["type"] for event in turn("one").accept(update)] == ["warning"]
+    assert turn("two").accept(update) == []

@@ -159,6 +159,57 @@ def _tool_output(kind: str, item: dict[str, Any]) -> str:
     return output if isinstance(output, str) else json.dumps(output)
 
 
+class CodexRateLimits:
+    """Account-level quota state, kept across turns, that warns only on escalation.
+
+    Rolling updates are sparse, so each merges into its own quota's retained
+    snapshot. A window that drops below the threshold (recovery, or a reset into
+    a new period) re-arms its warning; rolling updates within a state stay quiet.
+    """
+
+    def __init__(self) -> None:
+        self._snapshots: dict[str | None, dict[str, Any]] = {}
+        self._levels: dict[str | None, dict[str, Any]] = {}
+        self._limit_id: str | None = None
+
+    def update(self, snapshot: Any) -> str | None:
+        """The warning this update warrants, if any."""
+        if not isinstance(snapshot, dict):
+            return None
+        if isinstance(snapshot.get("limitId"), str):
+            self._limit_id = snapshot["limitId"]
+        # An update without a limitId belongs to the last identified quota.
+        quota = self._limit_id
+        merged = _merge_sparse(self._snapshots.get(quota, {}), snapshot)
+        self._snapshots[quota] = merged
+        previous = self._levels.get(quota, {})
+        levels: dict[str, Any] = {}
+        parts = []
+        reached = merged.get("rateLimitReachedType")
+        if isinstance(reached, str):
+            levels["reached"] = reached
+            parts.append(reached.replace("_", " "))
+        if merged.get("spendControlReached") is True:
+            levels["spendControl"] = 1
+            parts.append("spend control limit reached")
+        for name in ("primary", "secondary"):
+            window = merged.get(name)
+            if not isinstance(window, dict):
+                continue
+            used = window.get("usedPercent")
+            if type(used) is not int or used < RATE_LIMIT_WARNING_PERCENT:
+                continue
+            # Near is 1 and reached is 2; dipping back to near does not re-arm.
+            levels[name] = max(2 if used >= 100 else 1, previous.get(name, 0))
+            parts.append(f"{_window_label(name, window)} limit {used}% used{_resets(window)}")
+        self._levels[quota] = levels
+        escalated = any(
+            value != previous.get(level) if level == "reached" else value > previous.get(level, 0)
+            for level, value in levels.items()
+        )
+        return _clip(f"OpenAI {'; '.join(parts)}.") if escalated else None
+
+
 class CodexTurnEvents:
     def __init__(
         self,
@@ -168,6 +219,7 @@ class CodexTurnEvents:
         model: str,
         baseline: dict[str, int],
         *,
+        rate_limits: CodexRateLimits,
         baseline_known: bool = True,
     ) -> None:
         self.message_id, self.thread_id, self.turn_id = message_id, thread_id, turn_id
@@ -191,7 +243,7 @@ class CodexTurnEvents:
         # A non-retried native error, used if ``turn/completed`` omits its own.
         self._fatal_error: dict[str, Any] | None = None
         self._warned: set[str] = set()
-        self._rate_limits: dict[str, Any] = {}
+        self.rate_limits = rate_limits
         self.tokens: dict[str, Any] | None = None
         self.usage_valid = True
         self.has_usage = False
@@ -224,7 +276,8 @@ class CodexTurnEvents:
             return []
         # Account- and process-level notices carry no turn (or thread) identity.
         if method == "account/rateLimits/updated":
-            return self._rate_limit_warning(params.get("rateLimits"))
+            message = self.rate_limits.update(params.get("rateLimits"))
+            return [{"type": "warning", "scope": "provider", "message": message}] if message else []
         if method == "configWarning":
             return self._warning(params.get("summary"))
         if method == "warning" and params.get("threadId") in (None, self.thread_id):
@@ -382,45 +435,14 @@ class CodexTurnEvents:
         self.error = _failure_message(error)
         return [{"type": "error", "error": self.error, "messageId": self.message_id}]
 
-    def _warning(self, message: Any, *, key: str | None = None) -> list[dict[str, Any]]:
+    def _warning(self, message: Any) -> list[dict[str, Any]]:
         if not isinstance(message, str) or not message.strip():
             return []
         message = _clip(message)
-        key = key or message
-        if key in self._warned:
+        if message in self._warned:
             return []
-        self._warned.add(key)
+        self._warned.add(message)
         return [{"type": "warning", "scope": "provider", "message": message}]
-
-    def _rate_limit_warning(self, snapshot: Any) -> list[dict[str, Any]]:
-        """Warn once per limit state; rolling updates below the threshold are silent."""
-        if not isinstance(snapshot, dict):
-            return []
-        # Updates are sparse: merge into the last snapshot of the same limit.
-        limit_id = snapshot.get("limitId")
-        previous = self._rate_limits if limit_id in (None, self._rate_limits.get("limitId")) else {}
-        self._rate_limits = snapshot = _merge_sparse(previous, snapshot)
-        parts, levels = [], []
-        reached = snapshot.get("rateLimitReachedType")
-        if isinstance(reached, str):
-            parts.append(reached.replace("_", " "))
-            levels.append(reached)
-        if snapshot.get("spendControlReached") is True:
-            parts.append("spend control limit reached")
-            levels.append("spendControl")
-        for name in ("primary", "secondary"):
-            window = snapshot.get(name)
-            if not isinstance(window, dict):
-                continue
-            used = window.get("usedPercent")
-            if type(used) is not int or used < RATE_LIMIT_WARNING_PERCENT:
-                continue
-            parts.append(f"{_window_label(name, window)} limit {used}% used{_resets(window)}")
-            levels.append(f"{name}:{'reached' if used >= 100 else 'near'}")
-        if not parts:
-            return []
-        key = f"rateLimit:{snapshot.get('limitId')}:{','.join(levels)}"
-        return self._warning(f"OpenAI {'; '.join(parts)}.", key=key)
 
     def _record_text(self, item_id: str, text: str, *, replace: bool = False) -> None:
         previous_length = sum(map(len, self.text.get(item_id, ()))) if replace else 0
