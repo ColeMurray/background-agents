@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { toast } from "sonner";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import type {
   ModelProviderAccount,
   ModelProviderAccountDefault,
@@ -98,8 +99,38 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 describe("ProviderAccountsSettings", () => {
+  it("preserves checked usage across attribution and rename updates", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      Response.json({
+        usage: {
+          status: "available",
+          collectedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+          allowed: true,
+          limitReached: false,
+          windows: [
+            {
+              id: "primary",
+              usedPercent: 25,
+              windowDurationMs: 18_000_000,
+              resetsAt: Date.now() + 3600_000,
+            },
+          ],
+        },
+      })
+    );
+    const view = render(<ProviderAccountsSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Check usage" }));
+    await screen.findByText("25% used · 75% remaining");
+    accountsResult = [{ ...account, displayName: "Renamed", updatedAt: 2, lastUsedAt: 2 }];
+    view.rerender(<ProviderAccountsSettings />);
+    expect(screen.getByText("25% used · 75% remaining")).toBeInTheDocument();
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     refresh.mockResolvedValue(undefined);
@@ -504,7 +535,7 @@ describe("ProviderAccountsSettings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "ChatGPT" }));
 
     expect(await screen.findByText(/expires in/)).toBeInTheDocument();
-    const liveRegion = document.querySelector('[aria-live="polite"]');
+    const liveRegion = screen.getByRole("dialog").querySelector('[aria-live="polite"]');
     expect(liveRegion).toHaveTextContent(
       "Device authorization started. Waiting for authorization."
     );

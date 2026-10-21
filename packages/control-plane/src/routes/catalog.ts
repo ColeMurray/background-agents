@@ -25,6 +25,7 @@ import { mcpServerRoutes } from "./mcp-servers";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
 import { modelProviderAccountRoutes } from "./model-provider-accounts";
+import { providerAccountUsageRoutes } from "./provider-account-usage";
 import { providerRuntimeCredentialRoutes } from "./provider-runtime-credentials";
 import { rbacRoutes } from "./rbac";
 import { reposRoutes } from "./repos";
@@ -73,6 +74,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Subscription provider account management and sandbox access broker
   modelProviderAccountRoutes,
+  providerAccountUsageRoutes,
   // Delivery of stored provider secrets to sandboxes (Anthropic)
   providerRuntimeCredentialRoutes,
 
