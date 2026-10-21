@@ -294,7 +294,8 @@ class CodexTurnEvents:
             self.status = turn.get("status")
             events = self._text_event(force=True)
             if self.status == "failed":
-                events.extend(self._failed(turn.get("error") or self._fatal_error))
+                error = turn.get("error")
+                events.extend(self._failed(error if isinstance(error, dict) else self._fatal_error))
             return events
         if method == "error":
             error = params.get("error")

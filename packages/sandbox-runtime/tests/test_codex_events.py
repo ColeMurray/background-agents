@@ -538,6 +538,22 @@ def test_pending_fatal_error_is_reported_once_without_turn_completion():
     assert state.status is None
 
 
+@pytest.mark.parametrize("malformed", ["boom", ["boom"], 1])
+def test_malformed_completion_error_keeps_recorded_native_error(malformed):
+    state = _turn()
+    state.accept(
+        _notice(
+            "error",
+            threadId="thread",
+            turnId="turn",
+            willRetry=False,
+            error={"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+        )
+    )
+    state.accept(_turn_completed("failed", malformed))
+    assert state.error == "OpenAI usage limit reached; retry after it resets."
+
+
 def test_error_notifications_are_correlated_to_this_turn():
     state = _turn()
     for thread_id, turn_id in [("other", "turn"), ("thread", "other")]:
