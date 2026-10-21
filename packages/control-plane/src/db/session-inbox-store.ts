@@ -219,20 +219,27 @@ export class SessionInboxStore {
    * Mark every unread session the inbox lists under these filters as read for
    * the viewer. Any unread session puts its hierarchy in needs attention, so
    * this empties that category, including pages the client has not loaded.
-   * Returns the number of sessions whose read state changed.
+   * A `rootSessionId` limits marking to the one hierarchy the inbox lists
+   * under that root. Returns the number of sessions whose read state changed.
    */
-  async markAllRead(options: InboxFilterOptions): Promise<number> {
-    const { sql, params } = this.eligibleSessionsCte(options);
-    const binds = [...params, options.viewerUserId, Date.now()];
+  async markAllRead(options: InboxFilterOptions, rootSessionId?: string): Promise<number> {
+    const { sql, params } = this.inboxCtes(options);
+    const binds = [
+      ...params,
+      options.viewerUserId,
+      Date.now(),
+      ...(rootSessionId === undefined ? [] : [rootSessionId]),
+    ];
     assertD1QueryParameterLimit(binds.length);
     const result = await this.db
       .prepare(
-        `WITH ${sql}
+        `${sql}
          INSERT INTO session_read_states
            (user_id, session_id, last_read_message_id, updated_at)
          SELECT ?, id, latest_terminal_message_id, ?
-         FROM eligible_sessions
+         FROM effective_sessions
          WHERE unread = 1
+           ${rootSessionId === undefined ? "" : "AND effective_root_session_id = ?"}
          ON CONFLICT(user_id, session_id) DO UPDATE SET
            last_read_message_id = excluded.last_read_message_id,
            updated_at = excluded.updated_at

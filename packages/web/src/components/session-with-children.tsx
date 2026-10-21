@@ -4,6 +4,22 @@ import { Fragment } from "react";
 import { SessionListItem, ChildSessionListItem } from "@/components/session-list-item";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
+/** Unread sessions anywhere in the tree rendered below the root. */
+function countUnreadDescendants(rootId: string, childrenMap: Map<string, SessionItem[]>): number {
+  let count = 0;
+  const visitedIds = new Set([rootId]);
+  const pendingIds = [rootId];
+  for (let parentId = pendingIds.pop(); parentId; parentId = pendingIds.pop()) {
+    for (const child of childrenMap.get(parentId) ?? []) {
+      if (visitedIds.has(child.id)) continue;
+      visitedIds.add(child.id);
+      pendingIds.push(child.id);
+      if (child.readState.unread) count += 1;
+    }
+  }
+  return count;
+}
+
 export function SessionWithChildren({
   session,
   environmentName,
@@ -13,6 +29,7 @@ export function SessionWithChildren({
   onArchive,
   onSessionSelect,
   onMarkLatestMessageRead,
+  onMarkHierarchyRead,
 }: {
   session: SessionItem;
   environmentName?: string;
@@ -22,6 +39,7 @@ export function SessionWithChildren({
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
+  onMarkHierarchyRead: (rootSessionId: string) => Promise<void>;
 }) {
   return (
     <>
@@ -30,9 +48,11 @@ export function SessionWithChildren({
         environmentName={environmentName}
         isActive={session.id === currentSessionId}
         isMobile={isMobile}
+        unreadDescendantCount={countUnreadDescendants(session.id, childrenMap)}
         onArchive={onArchive}
         onSessionSelect={onSessionSelect}
         onMarkLatestMessageRead={onMarkLatestMessageRead}
+        onMarkHierarchyRead={onMarkHierarchyRead}
       />
       <ChildSessionTree
         parentId={session.id}

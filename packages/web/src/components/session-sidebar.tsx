@@ -131,6 +131,7 @@ export function SessionSidebar({
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
+    handleMarkHierarchyRead,
     handleMarkAllAttentionRead,
   } = useSidebarSessions();
   const activeTeamName = teams.find((team) => team.id === activeTeamId)?.name;
@@ -253,6 +254,7 @@ export function SessionSidebar({
                   onArchive={handleArchivedSession}
                   onSessionSelect={onSessionSelect}
                   onMarkLatestMessageRead={handleMarkLatestMessageRead}
+                  onMarkHierarchyRead={handleMarkHierarchyRead}
                 />
               ))}
               {Boolean(pagination.error) && (

@@ -667,6 +667,24 @@ describe("useSidebarSessions", () => {
     expect(result.current.finished.map(({ id }) => id)).toEqual(["attention", "tail-unread"]);
   });
 
+  it("marks one hierarchy read under the active filters", async () => {
+    teamContext.activeTeamId = "team_alpha";
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ markedCount: 3 }));
+    const fetcher = vi.fn(async () => snapshot({ needs_attention: page(["parent"]) }));
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.handleMarkHierarchyRead("parent");
+    });
+
+    expect(browserApiFetch).toHaveBeenCalledWith("/api/sessions/inbox/read-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamIds: ["team_alpha"], mine: false, rootSessionId: "parent" }),
+    });
+  });
+
   it("reconciles read state on retained pages when a session is marked read", async () => {
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")

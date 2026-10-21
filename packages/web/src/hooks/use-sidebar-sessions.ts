@@ -522,6 +522,14 @@ export function useSidebarSessions() {
     [filters, mine]
   );
 
+  // Scoped by the same filters, so the server marks exactly the hierarchy this row lists.
+  const handleMarkHierarchyRead = useCallback(
+    async (rootSessionId: string) => {
+      await markSessionInboxRead({ ...filters, mine, rootSessionId });
+    },
+    [filters, mine]
+  );
+
   return {
     needsAttention: attentionItems.map((item) => item.rootSession),
     attentionUnreadCount: countUnreadSessions(attentionItems),
@@ -545,6 +553,7 @@ export function useSidebarSessions() {
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
+    handleMarkHierarchyRead,
     handleMarkAllAttentionRead,
   };
 }
