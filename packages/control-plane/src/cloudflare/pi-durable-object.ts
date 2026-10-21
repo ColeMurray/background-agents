@@ -26,8 +26,10 @@ import {
   type TaskId,
   type SubmissionId,
   type UsageState,
+  type UserInput,
 } from "@earendil-works/pi-durable";
-import type { ToolCall } from "@earendil-works/pi-ai";
+import type { ImageContent, TextContent, ToolCall } from "@earendil-works/pi-ai";
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import { DurableObject } from "cloudflare:workers";
 import { BrowserRenderingTransport } from "./browser-rendering-transport";
 import { createBrowserExtension } from "../pi/browser-extension";
@@ -162,6 +164,7 @@ import { RepositoryDiffPublicationCapability } from "../pi/repository-diff-publi
 import { OpenInspectPiTelemetryContext } from "../pi/pi-telemetry";
 import { PiHarnessWakeController } from "../pi/pi-harness-wake";
 import { piTraceHeader, piTraceId } from "../pi/pi-trace";
+import { modelAcceptsImages } from "../pi/model-image-support";
 import { createLogger } from "../logger";
 
 type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX" | "BROWSER">;
@@ -200,6 +203,21 @@ const CONTROL_SUBMISSION_REQUEST_PREFIX = "open-inspect-control:";
 const MAX_OPERATION_METADATA_TOMBSTONES = 128;
 const DIFF_FAILURE_REPORT_TIMEOUT_MS = 5_000;
 const MAX_PENDING_AGENT_MESSAGES = 16;
+
+/**
+ * Base64-encode bytes for a model request.
+ *
+ * `btoa` takes a string, and one argument list this long would overflow the
+ * call stack, so the bytes are encoded in chunks.
+ */
+function encodeBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
 
 interface PiOperationMetadata {
   readonly model: string;
@@ -701,10 +719,24 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   async submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt> {
     const submitStartedAt = Date.now();
+    let userInput: UserInput;
     try {
       await this.ensureSession(input.sessionId);
       await this.configure(input);
       await this.ensureSession(input.sessionId);
+      // The turn's images are fetched before anything is recorded or
+      // scheduled: a turn that cannot carry its image is refused outright,
+      // never admitted and quietly run without one.
+      const hydrated = await this.buildUserInput(input);
+      if (!hydrated.ok) {
+        await this.stopEventRelay(input.messageId).catch(() => {});
+        return {
+          operationId: input.messageId,
+          accepted: false,
+          rejected: hydrated.reason,
+        };
+      }
+      userInput = hydrated.userInput;
       const baseline = await this.accountingTotals();
       await this.rememberOperation(input, baseline);
       await this.startEventRelay(input.sessionId, input.messageId);
@@ -721,7 +753,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         rejected: "Pi Durable initialization failed",
       };
     }
-    const receipt = await this.harness.submit(input.content, {
+    const receipt = await this.harness.submit(userInput, {
       session: ROOT_SESSION,
       operationId: input.messageId,
     });
@@ -750,6 +782,83 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
     );
     return { operationId: receipt.operationId, accepted: receipt.accepted };
+  }
+
+  /**
+   * The turn's user input, with the images the turn claimed.
+   *
+   * The bytes stay in the session's media bucket: the session that owns the
+   * turn serves them over the binding, the way it serves a sandbox harness
+   * its images. They are base64-encoded here because that is what a model
+   * request carries. A turn whose image cannot be loaded is refused with a
+   * bounded reason the user can act on.
+   */
+  private async buildUserInput(
+    input: PiRuntimePrompt
+  ): Promise<{ ok: true; userInput: UserInput } | { ok: false; reason: string }> {
+    const attachments = input.attachments ?? [];
+    if (attachments.length === 0) return { ok: true, userInput: input.content };
+    if (!this.modelTakesImages(input.model)) {
+      return { ok: false, reason: "The selected model does not accept image attachments" };
+    }
+    const parts: Array<TextContent | ImageContent> = [];
+    if (input.content.trim().length > 0) {
+      parts.push({ type: "text", text: input.content });
+    }
+    for (const attachment of attachments) {
+      const image = await this.fetchAttachmentImage(input, attachment);
+      if (!image) {
+        return { ok: false, reason: "An attached image could not be loaded" };
+      }
+      parts.push(image);
+    }
+    return { ok: true, userInput: parts };
+  }
+
+  /**
+   * Whether the model this turn runs takes images.
+   *
+   * The registry the Pi Durable Object opened is the authority here: it is
+   * the catalog the turn's model is actually served from.
+   */
+  private modelTakesImages(modelId: string): boolean {
+    let reference: { provider: "openai-codex"; id: string };
+    try {
+      reference = toPiModel(modelId);
+    } catch {
+      return false;
+    }
+    return modelAcceptsImages(this.models.getModel(reference.provider, reference.id));
+  }
+
+  private async fetchAttachmentImage(
+    input: PiRuntimePrompt,
+    attachment: ResolvedSessionAttachment
+  ): Promise<ImageContent | null> {
+    const response = await this.env.SESSION.getByName(input.sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.piAttachment}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": input.messageId,
+        },
+        body: JSON.stringify({ attachmentId: attachment.attachmentId }),
+      })
+    );
+    if (!response.ok) {
+      this.log.warn("pi.attachment_unavailable", {
+        event: "pi.attachment_unavailable",
+        session_id: input.sessionId,
+        operation_id: input.messageId,
+        attachment_id: attachment.attachmentId,
+        status: response.status,
+      });
+      return null;
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0) return null;
+    const mimeType = response.headers.get("Content-Type") ?? attachment.mimeType;
+    return { type: "image", data: encodeBase64(bytes), mimeType };
   }
 
   private async waitForResult(operationId: string): Promise<PiRuntimeResult> {

@@ -1361,6 +1361,129 @@ describe("PiSessionDO", () => {
     }
   );
 
+  it("hands a turn's image to the model as an image block", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-attachment-hydration");
+    await stub.status(sessionName);
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const requested: Array<{ attachmentId: unknown; operationId: string | null }> = [];
+    const realSessionNamespace = await runInPiSessionDO(stub, (instance) => {
+      const faux = fauxProvider();
+      (faux.provider as unknown as { id: string }).id = "openai-codex";
+      (faux.provider.getModels()[0] as unknown as { provider: string }).provider = "openai-codex";
+      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const real = piEnv.SESSION;
+      piEnv.SESSION = {
+        getByName: () => ({
+          fetch: async (request: Request) => {
+            const path = new URL(request.url).pathname;
+            if (path === SessionInternalPaths.piCredential) {
+              return Response.json({
+                access_token: "fake-access-token",
+                expires_in: 3_600,
+                credential_version: 1,
+              });
+            }
+            if (path === SessionInternalPaths.piAttachment) {
+              const body = (await request.json()) as { attachmentId: string };
+              requested.push({
+                attachmentId: body.attachmentId,
+                operationId: request.headers.get("X-Pi-Operation-ID"),
+              });
+              return new Response(imageBytes, { headers: { "Content-Type": "image/png" } });
+            }
+            return Response.json({ status: "projected" });
+          },
+        }),
+      };
+      return real;
+    });
+
+    try {
+      await expect(
+        stub.submit({
+          sessionId: sessionName,
+          messageId: "message-1",
+          content: "describe this",
+          model: "openai/faux-1",
+          requirePricing: false,
+          attachments: [{ name: "shot.png", attachmentId: "upload-1", mimeType: "image/png" }],
+        })
+      ).resolves.toMatchObject({ accepted: true });
+
+      expect(requested).toEqual([{ attachmentId: "upload-1", operationId: "message-1" }]);
+      const entries = await runInPiSessionDO(stub, (instance) =>
+        instance.harness.messages({ session: "1" })
+      );
+      const userMessage = entries.find((entry) => entry.model?.[0]?.role === "user");
+      expect(userMessage?.model?.[0]?.content).toEqual([
+        { type: "text", text: "describe this" },
+        {
+          type: "image",
+          data: Buffer.from(imageBytes).toString("base64"),
+          mimeType: "image/png",
+        },
+      ]);
+    } finally {
+      await runInPiSessionDO(stub, (instance) => {
+        (instance as unknown as { env: { SESSION: unknown } }).env.SESSION = realSessionNamespace;
+      });
+    }
+  });
+
+  it("refuses a turn whose image the session cannot serve", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-attachment-missing");
+    await stub.status(sessionName);
+    const realSessionNamespace = await runInPiSessionDO(stub, (instance) => {
+      const faux = fauxProvider();
+      (faux.provider as unknown as { id: string }).id = "openai-codex";
+      (faux.provider.getModels()[0] as unknown as { provider: string }).provider = "openai-codex";
+      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const real = piEnv.SESSION;
+      piEnv.SESSION = {
+        getByName: () => ({
+          fetch: async (request: Request) => {
+            const path = new URL(request.url).pathname;
+            if (path === SessionInternalPaths.piCredential) {
+              return Response.json({
+                access_token: "fake-access-token",
+                expires_in: 3_600,
+                credential_version: 1,
+              });
+            }
+            if (path === SessionInternalPaths.piAttachment) {
+              return Response.json({ error: "Attachment not found" }, { status: 404 });
+            }
+            return Response.json({ status: "projected" });
+          },
+        }),
+      };
+      return real;
+    });
+
+    try {
+      await expect(
+        stub.submit({
+          sessionId: sessionName,
+          messageId: "message-1",
+          content: "describe this",
+          model: "openai/faux-1",
+          requirePricing: false,
+          attachments: [{ name: "shot.png", attachmentId: "upload-1", mimeType: "image/png" }],
+        })
+      ).resolves.toEqual({
+        operationId: "message-1",
+        accepted: false,
+        rejected: "An attached image could not be loaded",
+      });
+    } finally {
+      await runInPiSessionDO(stub, (instance) => {
+        (instance as unknown as { env: { SESSION: unknown } }).env.SESSION = realSessionNamespace;
+      });
+    }
+  });
+
   it("returns a definite rejection when initialization fails before Pi admission", async () => {
     const sessionId = `missing-${crypto.randomUUID()}`;
     const stub = piStub(sessionId);

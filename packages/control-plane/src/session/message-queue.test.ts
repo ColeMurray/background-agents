@@ -8,6 +8,7 @@ import {
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import { PI_ATTACHMENT_MAX_TURN_BYTES } from "@open-inspect/shared/types/session-attachments";
 import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
@@ -29,6 +30,13 @@ import type {
   PiDispatchState,
   PiOperationRepository,
 } from "./pi-operation-repository";
+
+// The model a Pi turn runs decides whether it can take an image. Every model
+// the catalog offers today can, so the flag stands in for a text-only model.
+const piModelSupport = vi.hoisted(() => ({ acceptsImages: true }));
+vi.mock("../pi/model-image-support", () => ({
+  piModelAcceptsImages: () => piModelSupport.acceptsImages,
+}));
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -736,20 +744,98 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 
-  it("rejects Pi attachments before claiming uploaded files", async () => {
+  it("accepts Pi attachments and claims them with the message", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(
       createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
     );
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
+      {
+        id: "upload-1",
+        mime_type: "image/png",
+        size_bytes: 1024,
+        object_key: "sessions/sess-1/attachments/upload-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    await h.queue.enqueuePromptFromApi({
+      content: "Inspect this",
+      authorId: "user-1",
+      source: "agent",
+      attachments: [{ name: "shot.png", attachmentId: "upload-1" }],
+    });
+
+    expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: JSON.stringify([
+          { name: "shot.png", attachmentId: "upload-1", mimeType: "image/png" },
+        ]),
+      }),
+      ["upload-1"]
+    );
+  });
+
+  it("refuses Pi attachments the runtime could not carry in one turn", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
+      {
+        id: "upload-1",
+        mime_type: "image/png",
+        size_bytes: PI_ATTACHMENT_MAX_TURN_BYTES + 1,
+        object_key: "sessions/sess-1/attachments/upload-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
 
     await expect(
       h.queue.enqueuePromptFromApi({
         content: "Inspect this",
         authorId: "user-1",
         source: "agent",
-        attachments: [{ name: "document.pdf", attachmentId: "upload-1" }],
+        attachments: [{ name: "shot.png", attachmentId: "upload-1" }],
       })
-    ).rejects.toThrow("Pi Durable does not support attachments yet");
+    ).rejects.toThrow("too large for one Pi Durable turn");
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+  });
+
+  it("refuses Pi attachments for a model that takes text only", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.attachmentRepository.getUnreferenced.mockReturnValue([
+      {
+        id: "upload-1",
+        mime_type: "image/png",
+        size_bytes: 1024,
+        object_key: "sessions/sess-1/attachments/upload-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+    piModelSupport.acceptsImages = false;
+
+    try {
+      await expect(
+        h.queue.enqueuePromptFromApi({
+          content: "Inspect this",
+          authorId: "user-1",
+          source: "agent",
+          attachments: [{ name: "shot.png", attachmentId: "upload-1" }],
+        })
+      ).rejects.toThrow("does not accept image attachments");
+    } finally {
+      piModelSupport.acceptsImages = true;
+    }
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
   });
 
