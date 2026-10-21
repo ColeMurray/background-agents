@@ -20,8 +20,12 @@ const BROWSER_RENDERING_ENDPOINT = "https://browser-rendering-endpoint";
  *
  * Each request is a fresh browser run with no cookie jar, so a page never
  * inherits a human's session and one session never sees another's browser
- * state. The deployment decides which hosts the session may reach; this
+ * state. The deployment decides which hosts the session may name, and this
  * transport only carries out what the session already authorized.
+ *
+ * The named host is the only host the session's list covers: a Quick Action
+ * has no hostname guardrails, so what the page itself loads is not bounded
+ * by that list. See `PI-BROWSER-CONTEXT-AUDIT.md` §5.2.
  */
 export class BrowserRenderingTransport implements PiBrowserTransport {
   constructor(private readonly binding: BrowserRenderingBinding | undefined) {}

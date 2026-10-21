@@ -29,9 +29,8 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import { DurableObject } from "cloudflare:workers";
-import { BrowserRenderingTransport } from "./browser-rendering-transport";
-import { createBrowserExtension } from "../pi/browser-extension";
-import type { PiBrowserAction } from "../pi/browser-transport";
+import { createBrowserExtension, type BrowserReadAnswer } from "../pi/browser-extension";
+import type { PiBrowserAction, PiBrowserOutcome } from "../pi/browser-transport";
 import { PiHarness } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
 import { SessionInternalPaths } from "../session/contracts";
@@ -164,7 +163,17 @@ import { PiHarnessWakeController } from "../pi/pi-harness-wake";
 import { piTraceHeader, piTraceId } from "../pi/pi-trace";
 import { createLogger } from "../logger";
 
-type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX" | "BROWSER">;
+/**
+ * The Pi Durable Object's bindings.
+ *
+ * There is no browser binding here on purpose: the browser belongs to the
+ * owning session, whose gateway authorizes every request and drives the
+ * browser itself. The agent proposes; the session acts.
+ */
+type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
+
+/** What the owning session answers to one browser request. */
+type BrowserReadBody = { allowed?: boolean; reason?: string; outcome?: PiBrowserOutcome };
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
@@ -240,7 +249,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private codeModeCoordinator: PiCodeModeExecutionCoordinator | undefined;
   private rawWorkspace: Workspace | undefined;
-  private readonly browserTransport = new BrowserRenderingTransport(this.env.BROWSER);
   private repositoryWorkspace: PiRepositoryWorkspace | undefined;
   private repositoryWorkspaceInitialization: Promise<PiRepositoryWorkspace> | undefined;
   private repositoryWorkspaceInitializer:
@@ -490,14 +498,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           ownedToolNames: CROSS_SESSION_TOOL_EFFECT_REGISTRATIONS.map((effect) => effect.name),
         });
       }
-      if (capabilities.browser !== "off" && this.browserTransport.available()) {
+      if (capabilities.browser !== "off") {
         extensions.push({
           slot: "browser",
           feature: "browser",
           minimumCapability: "enabled",
           extension: createBrowserExtension({
-            transport: this.browserTransport,
-            authorize: (request) => this.authorizeBrowserRequest(request),
+            read: (request, signal) => this.readBrowser(request, signal),
           }),
           effects: PI_BROWSER_TOOL_EFFECT_REGISTRATIONS,
           ownedToolNames: PI_BROWSER_TOOL_EFFECT_REGISTRATIONS.map((effect) => effect.name),
@@ -1993,35 +2000,47 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
   }
 
-  private async authorizeBrowserRequest(request: {
-    action: PiBrowserAction;
-    url: string;
-  }): Promise<{ allowed: boolean; reason?: string }> {
+  /**
+   * Ask the owning session to read one page.
+   *
+   * The session authorizes the request, records it on the session's timeline,
+   * and drives the browser itself. The agent proposes; the session decides
+   * and acts, and the agent receives the bounded page and nothing else.
+   */
+  private async readBrowser(
+    request: { action: PiBrowserAction; url: string },
+    signal?: AbortSignal
+  ): Promise<BrowserReadAnswer> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) return { allowed: false, reason: "The session is not initialized" };
     const operationId = await this.attributedOperationId(ROOT_SESSION);
-    const response = await this.env.SESSION.getByName(sessionId).fetch(
-      new Request(`http://session${SessionInternalPaths.piBrowserAuthorize}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
-          ...(operationId ? piTraceHeader(operationId) : {}),
-        },
-        body: JSON.stringify({ action: request.action, url: request.url }),
-      })
-    );
-    const body = (await response.json().catch(() => null)) as {
-      allowed?: boolean;
-      reason?: string;
-    } | null;
-    if (!response.ok || !body?.allowed) {
-      return {
-        allowed: false,
-        reason: body?.reason ?? "The browser is not available for this session",
-      };
+    let body: BrowserReadBody | null = null;
+    try {
+      const response = await this.env.SESSION.getByName(sessionId).fetch(
+        new Request(`http://session${SessionInternalPaths.piBrowserRead}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(operationId ? { "X-Pi-Operation-ID": operationId } : {}),
+            ...(operationId ? piTraceHeader(operationId) : {}),
+          },
+          body: JSON.stringify({ action: request.action, url: request.url }),
+          signal,
+        })
+      );
+      body = (await response.json().catch(() => null)) as BrowserReadBody | null;
+      if (!response.ok || !body?.allowed || !body.outcome) {
+        return {
+          allowed: false,
+          reason: body?.reason ?? "The page could not be loaded",
+        };
+      }
+    } catch {
+      // The session's own string stays inside the platform. The model only
+      // learns that the page did not load.
+      return { allowed: false, reason: "The page could not be loaded" };
     }
-    return { allowed: true };
+    return { allowed: true, outcome: body.outcome };
   }
 
   private async authorizeBrowser(

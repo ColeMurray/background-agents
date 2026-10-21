@@ -942,6 +942,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       operationActor: (operationId) => messageRepository.getMessageHumanActor(operationId),
       operationBelongsToSession: (operationId) =>
         messageRepository.getMessageById(operationId) !== null,
+      // The session holds the browser. The agent never does, and the binding
+      // never leaves this gateway.
+      browserAvailable: () => env.BROWSER?.available() ?? false,
+      read: async (request) => {
+        const transport = env.BROWSER;
+        if (!transport) throw new Error("The browser is not available in this deployment");
+        return transport.run(request);
+      },
       recordActivity: (input) => {
         eventRepository.createEvent({
           id: `browser-activity:${input.operationId}:${Date.now()}`,
@@ -1562,6 +1570,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     crossSessionMessage: (request) => crossSessionHandler.outbound(request),
     crossSessionAuthorize: (request) => crossSessionHandler.authorize(request),
     piBrowserAuthorize: (request) => browserGateway.authorizeRequest(request),
+    piBrowserRead: (request) => browserGateway.readRequest(request),
     piCodeModeAuthorize: (request) => piBridgeHandler.codeModeAuthorize(request),
     piMcpList: (request) => mcpSessionHandler.list(request),
     mcpPinGrant: (request) => mcpSessionHandler.grantPin(request),

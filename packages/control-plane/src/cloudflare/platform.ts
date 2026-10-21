@@ -16,6 +16,7 @@ import type { CodemodeSandboxDurableObject } from "@earendil-works/pi-codemode/c
 import type { PiSessionDO } from "./pi-durable-object";
 import type { McpConnectionDO } from "./mcp-connection-durable-object";
 import { createMcpConnectionBrokerDispatch } from "./mcp-connection-dispatch";
+import { BrowserRenderingTransport } from "./browser-rendering-transport";
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
@@ -33,8 +34,9 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   /**
    * The Workers Browser Rendering binding.
    *
-   * It is read by the Pi Durable Object, which is the only component that
-   * drives a browser. Absent unless the deployment stages it.
+   * It is read by the session's browser gateway, which holds it as a port and
+   * drives it only for a request it has authorized. Absent unless the
+   * deployment stages it.
    */
   BROWSER?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
@@ -61,6 +63,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     IMAGE_BUILD_FINALIZATION_QUEUE,
+    BROWSER,
     ...config
   } = bindings;
   const platform: Platform = {
@@ -75,6 +78,10 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     JOBS: createQueueJobs({ IMAGE_BUILD_FINALIZATION_QUEUE, AUTOFIX_QUEUE }),
+    // The browser stays behind the session's gateway: the port is what the
+    // session's browser gateway drives, and the binding never reaches the
+    // Pi Durable Object.
+    BROWSER: BROWSER ? new BrowserRenderingTransport(BROWSER) : undefined,
   };
   return { ...config, ...platform };
 }
@@ -84,9 +91,6 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
 // of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
-  Exclude<
-    keyof WorkerBindings,
-    keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX" | "BROWSER"
-  >,
+  Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX">,
   keyof EnvConfig
 >;

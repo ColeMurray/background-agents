@@ -121,6 +121,7 @@ export const SessionInternalPaths = {
   crossSessionMessage: "/internal/cross-session-message",
   crossSessionAuthorize: "/internal/cross-session-authorize",
   piBrowserAuthorize: "/internal/pi-browser/authorize",
+  piBrowserRead: "/internal/pi-browser/read",
   piCodeModeAuthorize: "/internal/pi-codemode/authorize",
   piMcpList: "/internal/pi-mcp/list",
   mcpPinGrant: "/internal/mcp/pin-grant",

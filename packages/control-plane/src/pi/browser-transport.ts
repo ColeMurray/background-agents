@@ -4,7 +4,7 @@ import type { JsonValue } from "@earendil-works/chord";
  * The browser transport.
  *
  * The transport is the only part of the browser capability that reaches a
- * browser. It is Open-Inspect's code, it is created per session, and the
+ * browser. It is Open-Inspect's code, the owning session holds it, and the
  * model never receives it.
  *
  * Every page is loaded in a fresh browser with no cookie jar of its own, so
@@ -16,6 +16,17 @@ import type { JsonValue } from "@earendil-works/chord";
 export const PI_BROWSER_ACTIONS = ["read", "screenshot"] as const;
 
 export type PiBrowserAction = (typeof PI_BROWSER_ACTIONS)[number];
+
+/**
+ * Whether an action is one the browser offers.
+ *
+ * The guard is a narrowing one: the gateway's request schema also admits the
+ * sensitive actions, so that the gateway can refuse them by name instead of
+ * failing a parse. Every other caller holds a plain string.
+ */
+export function isPiBrowserAction(action: string): action is PiBrowserAction {
+  return (PI_BROWSER_ACTIONS as readonly string[]).includes(action);
+}
 
 /**
  * The browser work that needs a human decision before it may happen.
