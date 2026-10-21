@@ -19,5 +19,6 @@ export function createMcpConnectionBrokerDispatch(
     callTool: (call: McpBrokerCall): Promise<McpBrokerCallResult> =>
       stub(call.connectionId).callTool(call),
     destroy: (connectionId, ownerUserId) => stub(connectionId).destroy(connectionId, ownerUserId),
+    handleCallback: (connectionId, request) => stub(connectionId).handleCallback(request),
   };
 }

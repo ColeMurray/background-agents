@@ -92,7 +92,27 @@ async function deleteConnection(
   return json({ ok: true, result });
 }
 
+async function oauthCallback(
+  request: Request,
+  env: Env,
+  params: { id: string },
+  ctx: UserRouteContext
+): Promise<Response> {
+  if (!env.MCP_CONNECTION) return error("Personal MCP connections are disabled", 503);
+  const connection = await new McpConnectionStore(ctx.db).getOwned(params.id, ctx.principal.userId);
+  if (!connection) return error("MCP connection not found", 404);
+  return env.MCP_CONNECTION.handleCallback(params.id, request);
+}
+
 export const mcpConnectionRoutes = new Hono<ControlPlaneHonoEnv>();
+/**
+ * The server sends the owner back here after an OAuth approval.
+ *
+ * The request goes to the broker that owns the connection, and the broker
+ * handles it. Nothing else is reachable on this route.
+ */
+mcpConnectionRoutes.get("/mcp/oauth/callback/:id", OWNER_ROUTE, (c) => dispatch(c, oauthCallback));
+
 mcpConnectionRoutes.get("/mcp-connections", OWNER_ROUTE, (c) => dispatch(c, listConnections));
 mcpConnectionRoutes.post("/mcp-connections", OWNER_ROUTE, (c) => dispatch(c, createConnection));
 mcpConnectionRoutes.get("/mcp-connections/:id", OWNER_ROUTE, (c) => dispatch(c, getConnection));

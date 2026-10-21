@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(265);
+    expect(routes).toHaveLength(266);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(205);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(265);
+    expect(new Set(paths).size).toBe(206);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(266);
     expect(routeFor("GET", "/capabilities")).toMatchObject({
       authentication: { kind: "public" },
       authorization: { kind: "none" },
@@ -84,6 +84,13 @@ describe("route policy table", () => {
       authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
     });
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-self" },
+      cacheControl: "private, no-store",
+    });
+    // The server's OAuth callback goes to the broker that owns the
+    // connection, and only the connection's owner may reach it.
+    expect(routeFor("GET", "/mcp/oauth/callback/mcpconn_1")).toMatchObject({
       authentication: { kind: "user" },
       authorization: { kind: "active-self" },
       cacheControl: "private, no-store",

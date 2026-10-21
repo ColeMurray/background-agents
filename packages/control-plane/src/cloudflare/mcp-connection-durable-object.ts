@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { MCPClientManager } from "agents/mcp/client";
+import { Lifecycle } from "agents/lifecycle";
 import { requireMcpOAuthEncryptionKey } from "../env-validation";
 import type { McpBrokerCall, McpBrokerCallResult } from "../mcp/broker-contract";
 import {
@@ -9,8 +10,22 @@ import {
 import { resolveMcpOAuthKeyring } from "../mcp/oauth-keyring";
 import type { WorkerBindings } from "./platform";
 
-type McpConnectionBindings = Pick<WorkerBindings, "DB" | "MCP_OAUTH_ENCRYPTION_KEY">;
+type McpConnectionBindings = Pick<WorkerBindings, "DB" | "MCP_OAUTH_ENCRYPTION_KEY" | "WORKER_URL">;
 const CONNECTION_ID_KEY = "open-inspect:mcp-connection-id";
+/** The longest one reviewed tool call may take. */
+const MCP_TOOL_TIMEOUT_MS = 30_000;
+
+/**
+ * The public URL the server sends the owner back to after an OAuth approval.
+ *
+ * The broker owns the connection, so the callback goes to the broker's own
+ * route and nowhere else.
+ */
+export function mcpCallbackUrl(env: { WORKER_URL?: string }, connectionId: string): string {
+  const base = env.WORKER_URL?.trim();
+  if (!base) throw new Error("The MCP connection callback URL is not configured");
+  return `${base.replace(/\/+$/, "")}/mcp/oauth/callback/${encodeURIComponent(connectionId)}`;
+}
 const OWNER_USER_ID_KEY = "open-inspect:mcp-owner-user-id";
 const DELETED_KEY = "open-inspect:mcp-deleted";
 interface BrokerTombstone {
@@ -51,6 +66,15 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
     },
   });
 
+  /**
+   * The lifecycle that owns the client's lifecycle.
+   *
+   * The manager is a capability, so it is installed on one: that is what
+   * restores the persisted connections on a cold start and what serves the
+   * server's OAuth callback.
+   */
+  private readonly lifecycle = Lifecycle.install(this).use(this.mcp);
+
   async initialize(connectionId: string, ownerUserId: string): Promise<void> {
     if (!/^mcpconn_[a-f0-9]{32}$/.test(connectionId)) throw new Error("Invalid MCP connection id");
     await this.ctx.blockConcurrencyWhile(async () => {
@@ -90,11 +114,18 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
   }
 
   async status(): Promise<{
-    enabled: false;
+    enabled: boolean;
     connectionId: string;
     ownerUserId: string;
     transportCacheEntries: number;
     reason: string;
+    /**
+     * Where the owner must go to finish the server's authorization.
+     *
+     * It is the server's own authorization URL, never a credential.
+     */
+    authUrl?: string;
+    state?: "authenticating" | "connected" | "ready" | "failed";
   }> {
     const connectionId =
       this.connectionId ?? (await this.ctx.storage.get<string>(CONNECTION_ID_KEY));
@@ -159,10 +190,99 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
     if (!reviewed) {
       throw new Error("MCP tool is not part of the reviewed read-only catalog");
     }
-    // The transport is not installed in this slice, so a reviewed read reaches
-    // the transport gate rather than the provider. The authorization above is
-    // complete and is what the live transport will inherit.
-    throw new Error("Live MCP transport is not enabled");
+    // The transport. The credential stays in the broker: the agent never
+    // sees it, and the answer is bounded before it leaves.
+    const result = await this.callReviewedTool(call);
+    return { content: result.content, truncated: result.truncated };
+  }
+
+  /**
+   * Call one reviewed tool on the server.
+   *
+   * The connection is opened if it is not open yet, and the answer is cut
+   * to the bound the broker allows. The provider's own error never leaves
+   * the broker: the caller learns that the read did not complete.
+   */
+  private async callReviewedTool(call: McpBrokerCall): Promise<McpBrokerCallResult> {
+    const serverId = await this.ensureServerRegistered();
+    const connection = this.mcp.mcpConnections[serverId];
+    if (!connection) throw new Error("MCP connection is unavailable");
+    if (connection.connectionState !== "ready" && connection.connectionState !== "connected") {
+      throw new Error("MCP connection is not ready");
+    }
+    let result: Awaited<ReturnType<typeof connection.client.callTool>>;
+    try {
+      result = await this.mcp.callTool(
+        { serverId, name: call.toolName, arguments: call.arguments },
+        { timeout: MCP_TOOL_TIMEOUT_MS }
+      );
+    } catch {
+      // The provider's own string stays in the broker.
+      throw new Error("The MCP tool did not complete");
+    }
+    return { content: result.content ?? null, truncated: false };
+  }
+
+  /**
+   * Make sure the server is registered and connected.
+   *
+   * The registration is the server's own identity and its callback URL; the
+   * connection is opened with the encrypted OAuth provider, so the token
+   * never leaves the broker's memory or its encrypted D1 rows.
+   */
+  private async ensureServerRegistered(): Promise<string> {
+    const connectionId = this.connectionId;
+    if (!connectionId) throw new Error("MCP broker identity is not initialized from D1");
+    if (this.mcp.mcpConnections[connectionId]) return connectionId;
+    // eslint-disable-next-line no-restricted-syntax -- the broker re-reads the D1 connection authority on every use
+    const row = await this.env.DB.prepare(
+      `SELECT endpoint_url, server_name FROM mcp_connections WHERE id = ?`
+    )
+      .bind(connectionId)
+      .first<{ endpoint_url: string; server_name: string }>();
+    if (!row) throw new Error("MCP connection is not authorized by D1");
+    await this.mcp.registerServer(connectionId, {
+      url: row.endpoint_url,
+      name: row.server_name,
+      callbackUrl: mcpCallbackUrl(this.env, connectionId),
+    });
+    const connected = await this.mcp.connectToServer(connectionId);
+    if (connected.state !== "connected") {
+      // The server wants an authorization the owner has not given yet.
+      throw new Error("MCP connection is not authorized yet");
+    }
+    return connectionId;
+  }
+
+  /**
+   * The lifecycle start.
+   *
+   * The manager restores its persisted connections here, so a cold broker
+   * picks up the server it already knew.
+   */
+  async onStart(): Promise<void> {
+    await this.lifecycle.start();
+  }
+
+  /**
+   * The server's OAuth callback.
+   *
+   * The broker owns the connection and the token, so the callback is
+   * handled here and nowhere else.
+   */
+  async handleCallback(request: Request): Promise<Response> {
+    return this.lifecycle.fetch(request);
+  }
+
+  /**
+   * The broker's own HTTP surface.
+   *
+   * It exists for one reason: the server sends the owner back here after an
+   * OAuth approval, and the manager handles that callback. Nothing else is
+   * reachable here.
+   */
+  async fetch(request: Request): Promise<Response> {
+    return this.lifecycle.fetch(request);
   }
 
   async destroy(connectionId: string, ownerUserId: string): Promise<void> {

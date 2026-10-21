@@ -8,11 +8,20 @@ import { z } from "zod";
  * generic "call anything" entry point: a call must name a reviewed tool.
  */
 export interface McpConnectionBrokerStatus {
-  enabled: false;
+  enabled: boolean;
   connectionId: string;
   ownerUserId: string;
   transportCacheEntries: number;
   reason: string;
+  /**
+   * Where the owner must go to finish the server's authorization.
+   *
+   * It is present only while the server is waiting for the owner. It is the
+   * server's own authorization URL, never a credential.
+   */
+  authUrl?: string;
+  /** The state of the connection to the server. */
+  state?: "authenticating" | "connected" | "ready" | "failed";
 }
 
 /** One reviewed read-only tool call. */
@@ -51,4 +60,11 @@ export interface McpConnectionBrokerDispatch {
    */
   callTool(call: McpBrokerCall): Promise<McpBrokerCallResult>;
   destroy(connectionId: string, ownerUserId: string): Promise<void>;
+  /**
+   * Hand the server's OAuth callback to the broker that owns the connection.
+   *
+   * The broker holds the token, so the callback never reaches the browser
+   * with anything but the server's own authorization code.
+   */
+  handleCallback(connectionId: string, request: Request): Promise<Response>;
 }
