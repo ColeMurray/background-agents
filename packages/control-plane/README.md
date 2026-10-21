@@ -63,6 +63,16 @@ not pass through Hono.
 | --------- | ------ | ------------ |
 | `/health` | GET    | Health check |
 
+### Actors
+
+| Endpoint     | Method | Description                                                       |
+| ------------ | ------ | ----------------------------------------------------------------- |
+| `/actors/me` | POST   | Enroll the signed bot actor with its attested name, email, avatar |
+
+A new bot actor links to an existing user only by the email it presents when it is enrolled, and a
+known actor is never relinked. A bot sends `POST /actors/me` before any other request that carries
+the actor, so the first request that enrolls the actor includes its email.
+
 ### Sessions
 
 | Endpoint                        | Method    | Description                          |

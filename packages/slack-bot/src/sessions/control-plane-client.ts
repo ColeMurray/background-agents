@@ -5,6 +5,7 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { EnrollActorRequest } from "@open-inspect/shared/types/actors";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -13,6 +14,7 @@ import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import type { SlackActorIdentity } from "../user-identity";
 import { z } from "zod";
 
 const log = createLogger("handler");
@@ -93,6 +95,43 @@ export async function requirePublicationAccess(
       `Control plane publication access ${access}`,
       access === "denied" ? 403 : undefined
     );
+}
+
+/**
+ * Present the actor's Slack profile before any other request that carries the
+ * actor: the control plane links a new actor to an existing user by email
+ * only when it enrolls the actor. Best effort, so a failure never blocks the
+ * message, but the next request carrying the actor then enrolls it without
+ * an email and the resulting split needs an operator merge.
+ */
+export async function enrollActor(
+  env: ControlPlaneEnv,
+  actor: SlackActorIdentity,
+  traceId?: string
+): Promise<void> {
+  const base = { trace_id: traceId, slack_user_id: actor.userId, outcome: "error" };
+  const body: EnrollActorRequest = { displayName: actor.displayName, email: actor.email };
+  try {
+    const response = await signedControlPlaneFetch(
+      env,
+      {
+        method: "POST",
+        url: "https://internal/actors/me",
+        body: JSON.stringify(body),
+        actor: `slack:${actor.userId}`,
+        traceId,
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+    if (!response.ok) {
+      log.warn("control_plane.enroll_actor", { ...base, http_status: response.status });
+    }
+  } catch (e) {
+    log.warn("control_plane.enroll_actor", {
+      ...base,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
 }
 
 export async function createSession(

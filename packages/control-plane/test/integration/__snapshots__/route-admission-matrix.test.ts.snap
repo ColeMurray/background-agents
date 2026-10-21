@@ -252,6 +252,7 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /teams/:id/secrets owner=200",
   "PUT /teams/:id/secrets owner=400",
   "DELETE /teams/:id/secrets/:key owner=404",
+  "POST /actors/me owner=204",
 ]
 `;
 
@@ -493,6 +494,7 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /internal/github-event anonymous=401",
   "POST /internal/slack-event anonymous=401",
   "GET /github/route anonymous=401",
+  "POST /actors/me anonymous=401",
 ]
 `;
 
