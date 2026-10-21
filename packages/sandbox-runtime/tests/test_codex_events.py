@@ -211,7 +211,7 @@ def usage(state, total, last=None):
                 "tokenUsage": token_usage,
             },
         }
-    )[0]
+    )[-1]
 
 
 def counts(input_tokens):
@@ -280,8 +280,7 @@ def test_unknown_baseline_attributes_each_request_from_its_own_usage():
     assert state.attribution_complete
 
 
-@pytest.mark.parametrize("last", [None, counts(61), {"inputTokens": True}])
-def test_unknown_baseline_without_separable_request_usage_stops_attributing(last):
+def test_untrusted_checkpoint_is_settled_by_the_first_observed_total():
     state = CodexTurnEvents(
         "m",
         "thread",
@@ -293,15 +292,66 @@ def test_unknown_baseline_without_separable_request_usage_stops_attributing(last
         rate_limits=CodexRateLimits(),
     )
     assert usage(state, counts(110), last=counts(10))["cost"] == 0.00002
-    projected = usage(state, counts(170), last=last)
-    assert not state.attribution_complete
-    assert "cost" not in projected
-    assert "tokens" not in projected
-    # Later requests are not attributed either: the turn's usage is no longer whole.
+    # Later advances are this turn's own usage, with or without `last`.
+    usage(state, counts(170))
     projected = usage(state, counts(180), last=counts(10))
-    assert "tokens" not in projected
-    assert projected["messageCostUsd"] == 0.00002
-    assert state.total["inputTokens"] == 180
+    assert projected["tokens"]["input"] == 80
+    assert projected["cost"] == projected["messageCostUsd"] == 0.00016
+
+
+@pytest.mark.parametrize("last", [None, counts(61), {"inputTokens": True}])
+def test_unattributable_first_request_leaves_later_requests_counted(last):
+    state = CodexTurnEvents(
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
+    )
+    # 60 tokens, some of which may be earlier native history.
+    events = state.accept(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn",
+                "tokenUsage": {"total": counts(160), "last": last},
+            },
+        }
+    )
+    [warning] = [event for event in events if event["type"] == "warning"]
+    assert warning["message"].startswith("Some of this turn's Codex usage")
+    assert "tokens" not in events[-1]
+    usage(state, counts(170), last=counts(10))
+    projected = usage(state, counts(180))
+    assert not state.attribution_complete
+    # Usage the turn could attribute still counts; the gap keeps `cost` absent.
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0.00004
+    assert projected["tokens"]["input"] == 20
+
+
+def test_replayed_report_is_a_no_op():
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    first = usage(state, counts(100), last=counts(100))
+    events = state.accept(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn",
+                "tokenUsage": {"total": counts(100), "last": counts(100)},
+            },
+        }
+    )
+    assert [event["type"] for event in events] == ["step_finish"]
+    assert first["cost"] == events[-1]["cost"] == 0.0002
+    assert state.requests_separable
 
 
 @pytest.mark.parametrize(

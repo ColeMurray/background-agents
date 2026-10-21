@@ -401,6 +401,7 @@ class CodexHarness:
                     raise TimeoutError
                 # Resolved before submission: pricing never runs while native work does.
                 price = self._prices.price(model) if self._prices else None
+                unpriced = None if price is not None else self._unpriced_warning(model)
                 # Durably distrust the baseline while native work may run: a crash
                 # mid-turn must not bill unobserved usage to the next message.
                 baseline_known = self._usage_baseline_known
@@ -433,6 +434,7 @@ class CodexHarness:
                     rate_limits=self._rate_limits,
                     baseline_known=baseline_known,
                     price=price,
+                    unpriced_warning=unpriced,
                 )
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
@@ -446,9 +448,6 @@ class CodexHarness:
                         self._persist()
                 self._usage_baseline_known = state.status == "completed" and state.has_usage
                 self._persist()
-                warning = self._cost_warning(state)
-                if warning:
-                    await emit({"type": "warning", "scope": "provider", "message": warning})
                 await emit(state.finish())
                 if state.status == "completed":
                     return TurnOutcome.ok(message_cost_usd=state.message_cost_usd)
@@ -541,34 +540,11 @@ class CodexHarness:
             for path in paths:
                 path.unlink(missing_ok=True)
 
-    def _cost_warning(self, state: CodexTurnEvents) -> str | None:
-        """Why this turn's reported cost is incomplete, for the session timeline."""
-        if not state.attribution_complete:
-            return (
-                "Some of this turn's Codex usage could not be separated from earlier work in "
-                "this conversation, so it is not included in the turn's cost."
-            )
-        if not state.requests_separable:
-            return (
-                "Codex reported usage for several requests together, so this turn's cost is "
-                "an estimate."
-            )
-        if not state.usage_valid:
-            return (
-                "Codex reported inconsistent token usage, so this turn's cost covers only "
-                "the usage reported before it."
-            )
-        if state.price is None and state.has_usage:
-            if self._prices is None or not self._prices.available:
-                return (
-                    "Model prices are unavailable in this sandbox, so this turn's cost is "
-                    "recorded as $0."
-                )
-            return (
-                f"No price is listed for {state.model} in this sandbox, so this turn's cost "
-                "is recorded as $0."
-            )
-        return None
+    def _unpriced_warning(self, model: str) -> str:
+        """Why a model's usage cannot be priced in this sandbox."""
+        if self._prices is None or not self._prices.available:
+            return "Model prices are unavailable in this sandbox, so this turn's cost is recorded as $0."
+        return f"No price is listed for {model} in this sandbox, so this turn's cost is recorded as $0."
 
     async def _pending_failure(
         self, state: CodexTurnEvents | None, emit: EventSink

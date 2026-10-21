@@ -261,6 +261,27 @@ async def test_recorded_native_failure_reports_the_cost_observed_before_it(tmp_p
     assert outcome.message_cost_usd == 0.002
 
 
+@pytest.mark.parametrize(
+    ("catalog", "last", "message"),
+    [
+        (None, tokens(1_000), "Model prices are unavailable in this sandbox"),
+        (CATALOG, tokens(400), "Codex reported usage for several requests together"),
+    ],
+)
+async def test_accounting_warning_is_reported_when_observed_not_at_completion(
+    tmp_path, catalog, last, message
+):
+    harness = build(
+        tmp_path,
+        [usage("turn-1", tokens(1_000), last), CodexTransportError("gone")],
+        catalog=catalog,
+    )
+    outcome, events = await run(harness)
+    assert not outcome.success
+    [warning] = warnings(events)
+    assert warning.startswith(message)
+
+
 async def test_failure_before_the_turn_starts_costs_nothing(tmp_path):
     harness = build(tmp_path, [])
     harness._factory.return_value.open.side_effect = CodexTransportError("no process")
