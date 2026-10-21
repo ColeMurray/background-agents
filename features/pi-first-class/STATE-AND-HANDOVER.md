@@ -103,6 +103,10 @@ its own authorization.
 | `b1f53734` | The restart, the budget, and the attribution findings of the sixth audit                           | 5,407 unit                                                      |
 | `3ddf7332` | Code Mode runs behind the owning session's authority                                               | 5,409 unit                                                      |
 | `1d05cfe5` | The MCP transport: the manager, the registration, the call, and the OAuth callback route           | 5,409 unit                                                      |
+| `00991358` | Pi turns carry the session's image attachments, through the session's own authority                | 5,422 unit                                                      |
+| `58928c92` | The browser's execution moves behind the session that authorizes it                                | 5,421 unit                                                      |
+| `603087fe` | Why the browser transport uses the classic rendering endpoint                                      | —                                                               |
+| `0cdd49ea` | The Code Mode and retention deviations the audit found                                             | 5,430 unit, 2,475 workerd                                       |
 | `HEAD~1`   | The MCP grant becomes a session action, with the core's repository scope rule                      | 5,409 unit, 2,475 workerd                                       |
 
 ## Slice 7A — what landed
