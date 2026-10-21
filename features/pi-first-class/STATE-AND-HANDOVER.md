@@ -103,6 +103,7 @@ its own authorization.
 | `b1f53734` | The restart, the budget, and the attribution findings of the sixth audit                           | 5,407 unit                                                      |
 | `3ddf7332` | Code Mode runs behind the owning session's authority                                               | 5,409 unit                                                      |
 | `1d05cfe5` | The MCP transport: the manager, the registration, the call, and the OAuth callback route           | 5,409 unit                                                      |
+| `HEAD~1`   | The MCP grant becomes a session action, with the core's repository scope rule                      | 5,409 unit, 2,475 workerd                                       |
 
 ## Slice 7A — what landed
 
@@ -392,6 +393,7 @@ fixed or listed as still open above.
 | The MCP grant list was not tied to a turn                                                                     | low      | fixed: it names the turn, as the read does                         |
 | An event could be projected for an operation whose dispatch was ambiguous                                     | low      | fixed: an ambiguous dispatch takes no projections                  |
 | The external-action providers had no credential source                                                        | high     | fixed: a per-call credential from the deployment credential        |
+| A personal MCP grant could name any session, so the session's authority was never consulted                   | high     | fixed: the grant is a session action, with the core's scope rule   |
 | The external-action delegate claimed every external mutation, so the cross-session tool was unreachable       | blocking | fixed, with an assembler invariant for an unowned mutation         |
 | The publication capability had no model-facing surface                                                        | medium   | fixed: a tool per provider the deployment holds a credential for   |
 | An MCP answer could carry a credential into the shared timeline                                               | medium   | fixed: a shared credential guard and a redacted read output        |
