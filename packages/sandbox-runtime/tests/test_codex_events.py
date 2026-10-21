@@ -816,6 +816,8 @@ def test_plan_update_projects_to_todowrite_with_web_statuses():
                 {"step": "Run tests", "status": "pending"},
                 {"step": "Future status", "status": "blocked"},
                 "not a step",
+                {"step": None, "status": "pending"},
+                {"step": {"text": "structured"}, "status": "pending"},
             ],
             explanation="Fixing the bug",
         )

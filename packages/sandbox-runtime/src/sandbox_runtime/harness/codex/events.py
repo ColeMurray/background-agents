@@ -170,12 +170,12 @@ def _plan_todos(plan: Any) -> list[dict[str, str]]:
         return []
     return [
         {
-            "content": str(step.get("step", "")),
+            "content": step["step"],
             # The web task list treats unknown statuses as pending.
             "status": PLAN_STEP_STATUSES.get(str(step.get("status")), "pending"),
         }
         for step in plan
-        if isinstance(step, dict)
+        if isinstance(step, dict) and isinstance(step.get("step"), str)
     ]
 
 
