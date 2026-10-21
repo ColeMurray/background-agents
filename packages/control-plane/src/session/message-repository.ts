@@ -162,7 +162,7 @@ export class MessageRepository {
   /**
    * The human behind one message.
    *
-   * A message that arrived from another session was started by that session's
+   * A message that arrived from elsewhere was started by another session's
    * agent on behalf of a human, so the human who initiated it is the actor.
    * A message that started here is authored by its own participant.
    */

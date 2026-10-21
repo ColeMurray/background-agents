@@ -28,11 +28,11 @@ export const EXTENSION_SLOTS = [
 /**
  * A slot a harness runtime installs an extension into.
  *
- * The core declares the slots every harness has. A **deployment** may add
- * its own — the overlay's external-action lane and its cross-session lane
- * both do — so the type is open. The order is fixed regardless: the policy
- * slot first, because the policy hook must be in place before a tool runs,
- * then the slots in declaration order.
+ * The core declares the slots every harness has. A **deployment** may add its
+ * own — the overlay's external-action lane and its cross-session lane both do
+ * — so the type is open. The order is fixed regardless: the policy slot
+ * first, because a tool must never run before the policy hook that governs
+ * it is in place, then the slots in declaration order.
  */
 export type ExtensionSlot = (typeof EXTENSION_SLOTS)[number] | (string & {});
 
@@ -104,8 +104,8 @@ const slotOrder = new Map<string, number>(EXTENSION_SLOTS.map((slot, index) => [
  * The order the slots install in.
  *
  * The policy slot leads, because a tool must never run before the policy
- * hook that governs it is in place. A slot the core does not declare — a
- * deployment's own — keeps its declaration order, after the core's.
+ * hook that governs it is in place. A slot the core does not declare - a
+ * deployment's own - keeps its declaration order, after the core's.
  */
 function compareSlots(left: ExtensionSlot, right: ExtensionSlot): number {
   const leftIndex = slotOrder.get(left);

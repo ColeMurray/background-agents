@@ -326,7 +326,7 @@ const nonArtifactSandboxEventSchemas = [
         action: z.enum([
           "send",
           "follow_up",
-          "follow_up",
+
           "cancel_exact",
           "retry_parked",
           "fork",

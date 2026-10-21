@@ -205,61 +205,6 @@ npx wrangler d1 execute oi-local --local \
 contiguous from `0001`. The core's harness discriminator is `0090`; the overlay's migrations are in
 the `9xxx` block.
 
-### 3.2a The migrations, applied to a clean local D1
-
-The repository's own `scripts/d1-migrate.sh` is the **deploy** path: it applies to a _remote_ D1,
-and it refuses a version already recorded under another name. The local path is `wrangler`'s own
-migrator, over the same directory:
-
-```bash
-# A clean local D1, from the repository root.
-rm -rf .wrangler/state
-
-npx wrangler d1 migrations apply open-inspect-test --local \
-  --config ./wrangler.d1.local.jsonc
-```
-
-`wrangler.d1.local.jsonc` is the local-only configuration, checked in:
-
-```jsonc
-{
-  "name": "open-inspect-local",
-  "compatibility_date": "2024-09-23",
-  "compatibility_flags": ["nodejs_compat"],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "open-inspect-test",
-      "database_id": "00000000-0000-0000-0000-000000000000",
-      "migrations_dir": "terraform/d1/migrations",
-    },
-  ],
-}
-```
-
-**What passing looks like.** Every file in `terraform/d1/migrations/` is listed as applied, in
-order, with no gaps and no duplicates:
-
-```bash
-npx wrangler d1 execute open-inspect-test --local --config ./wrangler.d1.local.jsonc \
-  --command "SELECT COUNT(*) AS applied FROM d1_migrations"
-# => applied: 96
-
-npx wrangler d1 execute open-inspect-test --local --config ./wrangler.d1.local.jsonc \
-  --command "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'mcp_%' ORDER BY name"
-# => mcp_connection_tool_snapshots, mcp_connections, mcp_oauth_keyring, mcp_oauth_storage,
-#    mcp_reviewed_tools, mcp_servers, mcp_session_pins
-```
-
-**The order matters and it works.** The core's migrations take `0090`–`0093` and the overlay's take
-the `9xxx` block. Lexicographic file order puts the core's first and the `9xxx` block last, so the
-overlay's tables land on top of the core's.
-
-**The trap the numbering rule exists for.** If a file's number is changed _after_ it has been
-applied anywhere, the migration runner **refuses to continue** — it does not skip and it does not
-rewrite the ledger. That is why the overlay's numbers are frozen in the `9xxx` block and the core's
-are renumbered at PR time.
-
 ### 3.3 The end-to-end Pi session
 
 One session, end to end, against a real Durable Object in Miniflare:

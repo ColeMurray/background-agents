@@ -178,6 +178,14 @@
       "import": "./dist/types/session-inbox.js",
       "types": "./dist/types/session-inbox.d.ts"
     },
+    "./types/external-actions": {
+      "import": "./dist/types/external-actions.js",
+      "types": "./dist/types/external-actions.d.ts"
+    },
+    "./types/cross-session": {
+      "import": "./dist/types/cross-session.js",
+      "types": "./dist/types/cross-session.d.ts"
+    },
     "./types/mcp-read": {
       "import": "./dist/types/mcp-read.js",
       "types": "./dist/types/mcp-read.d.ts"
@@ -261,14 +269,6 @@
     "./tool-effects": {
       "import": "./dist/tool-effects.js",
       "types": "./dist/tool-effects.d.ts"
-    },
-    "./types/external-actions": {
-      "import": "./dist/types/external-actions.js",
-      "types": "./dist/types/external-actions.d.ts"
-    },
-    "./types/cross-session": {
-      "import": "./dist/types/cross-session.js",
-      "types": "./dist/types/cross-session.d.ts"
     }
   },
   "scripts": {

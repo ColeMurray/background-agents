@@ -40,10 +40,8 @@ export const PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION = 7 as const;
  * The snapshot version the core writes: the same capabilities, without the
  * overlay's two.
  *
- * The overlay's reader for it is deliberately not strict, for the same reason
- * every other legacy reader is not: a snapshot this version wrote may carry a
- * capability the reader no longer has, and a strict reader would reject the
- * whole snapshot instead of closing the capability it no longer knows.
+ * The overlay reads it with the overlay's two features closed, so a session
+ * created by the core keeps the capabilities it was created with.
  */
 export const PI_FEATURE_CAPABILITY_SNAPSHOT_CORE_VERSION = 6 as const;
 

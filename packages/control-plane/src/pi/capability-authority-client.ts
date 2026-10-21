@@ -1,20 +1,20 @@
 import { SessionInternalPaths } from "../session/contracts";
 import {
-  piCapabilityAuthorityResponseSchema,
-  type PiCapabilityAuthorityResponse,
+  executionPrincipalResponseSchema,
+  type ExecutionPrincipalResponse,
 } from "./capability-authority";
 
-export const PI_EMERGENCY_POLICY_LOOKUP_TIMEOUT_MS = 1_000;
+export const EMERGENCY_POLICY_LOOKUP_TIMEOUT_MS = 1_000;
 
 interface PiCapabilityAuthorityFetcher {
   fetch(request: Request): Promise<Response>;
 }
 
 /** Bounded SessionDO authority lookup, cancelled with the invoking tool when it stops. */
-export async function fetchPiCapabilityAuthority(
+export async function fetchExecutionPrincipal(
   fetcher: PiCapabilityAuthorityFetcher,
   callerSignal?: AbortSignal
-): Promise<PiCapabilityAuthorityResponse> {
+): Promise<ExecutionPrincipalResponse> {
   const timeout = new AbortController();
   const timeoutReason = new DOMException(
     "Pi capability authority lookup timed out",
@@ -22,7 +22,7 @@ export async function fetchPiCapabilityAuthority(
   );
   const timeoutId = setTimeout(
     () => timeout.abort(timeoutReason),
-    PI_EMERGENCY_POLICY_LOOKUP_TIMEOUT_MS
+    EMERGENCY_POLICY_LOOKUP_TIMEOUT_MS
   );
   const signal = callerSignal ? AbortSignal.any([callerSignal, timeout.signal]) : timeout.signal;
   try {
@@ -30,7 +30,7 @@ export async function fetchPiCapabilityAuthority(
       new Request(`http://session${SessionInternalPaths.piCapabilityAuthority}`, { signal })
     );
     if (!response.ok) throw new Error(`Pi capability authority unavailable (${response.status})`);
-    return piCapabilityAuthorityResponseSchema.parse(await response.json());
+    return executionPrincipalResponseSchema.parse(await response.json());
   } finally {
     clearTimeout(timeoutId);
   }

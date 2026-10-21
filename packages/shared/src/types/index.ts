@@ -6,6 +6,25 @@
  */
 
 export {
+  mcpToolReviewInputSchema,
+  mcpServerReviewInputSchema,
+  mcpServerReviewViewSchema,
+  mcpReadRequestSchema,
+  mcpReadResultSchema,
+  mcpSharedServerSchema,
+  mcpSharedServerListSchema,
+  MAX_MCP_READ_RESULT_BYTES,
+} from "./mcp-read";
+export type {
+  McpServerReviewInput,
+  McpServerReviewView,
+  McpReadRequest,
+  McpReadResult,
+  McpSharedServer,
+  McpSharedServerList,
+} from "./mcp-read";
+
+export {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
@@ -229,25 +248,11 @@ export {
   crossSessionDeliveryResultSchema,
 } from "./cross-session";
 export {
-  mcpToolReviewInputSchema,
-  mcpServerReviewInputSchema,
-  mcpServerReviewViewSchema,
   mcpSessionGrantInputSchema,
   mcpSessionPinSchema,
   mcpSessionPinListSchema,
-  mcpReadRequestSchema,
-  mcpReadResultSchema,
-  MAX_MCP_READ_RESULT_BYTES,
 } from "./mcp-read";
-export type {
-  McpServerReviewInput,
-  McpServerReviewView,
-  McpSessionGrantInput,
-  McpSessionPin,
-  McpSessionPinList,
-  McpReadRequest,
-  McpReadResult,
-} from "./mcp-read";
+export type { McpSessionGrantInput, McpSessionPin, McpSessionPinList } from "./mcp-read";
 export type {
   CrossSessionMessageRequest,
   CrossSessionReceipt,

@@ -806,7 +806,11 @@ describe("session runtime proxy routes", () => {
         new Request("https://test.local/sessions/session-1/pi/control", {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ requestId: "collaborator-steer", action: "steer", content: "go" }),
+          body: JSON.stringify({
+            requestId: "collaborator-follow-up",
+            action: "follow_up",
+            content: "go",
+          }),
         }),
         env
       );
@@ -881,7 +885,7 @@ describe("session runtime proxy routes", () => {
         new Request("https://test.local/sessions/session-1/pi/control", {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ requestId: "web-control", action: "steer", content: "focus" }),
+          body: JSON.stringify({ requestId: "web-control", action: "follow_up", content: "focus" }),
         }),
         createEnv(fetch)
       );

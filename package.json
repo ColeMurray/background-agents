@@ -34,7 +34,8 @@
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "rbac:bootstrap-owner": "node scripts/bootstrap-workspace-owner.ts",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky",
-    "test:trace-export-schema": "node scripts/trace-export-schema-drift.test.mjs"
+    "test:trace-export-schema": "node scripts/trace-export-schema-drift.test.mjs",
+    "test:migration-block-guard": "node scripts/migration-block-guard.test.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

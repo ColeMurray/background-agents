@@ -5,10 +5,6 @@
  * migration that claims a slot another feature owns is refused before it is
  * applied.
  */
-export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 9001;
-export const PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION = 9003;
-export const PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION = 9004;
-
 export type MigrationOwner =
   | "scratchWorkspace"
   | "repositoryEditing"
@@ -58,6 +54,19 @@ export const PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID = 65;
 export const PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID = 66;
 export const IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID = 67;
 export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 90;
+
+/**
+ * The overlay's migration numbers.
+ *
+ * The overlay's migrations live in the `9xxx` block, which upstream will not
+ * reach for thousands of migrations. The block is claimed here, in the one
+ * ledger that says which numbers are taken, and the CI guard
+ * (`scripts/migration-block-guard.test.mjs`) fails the build if upstream
+ * ever takes it.
+ */
+export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 9001;
+export const PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION = 9003;
+export const PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION = 9004;
 export const PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION = 91;
 export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
 export const PI_D1_SLACK_MAPPING_MIGRATION_VERSION = 93;

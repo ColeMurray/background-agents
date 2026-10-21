@@ -388,9 +388,6 @@ ${HARNESS_RESULT_RECEIPTS_TABLE_SQL}
 -- Durable Pi dispatch CAS and one acknowledged projection sequence.
 ${PI_PROJECTION_RELIABILITY_TABLES_SQL}
 
--- SessionDO-authoritative approvals, dispatch leases, and external-effect history.
-${EXTERNAL_ACTIONS_TABLES_SQL}
-
 -- Durable, provider-neutral command execution ledger. It is dormant until the
 -- Pi sandbox execution gate and an authorized caller both admit a command.
 ${SANDBOX_COMMANDS_TABLE_SQL}
@@ -444,9 +441,9 @@ import { createLogger } from "../logger";
 import {
   IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
-  PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
-  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
+  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
+  PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,

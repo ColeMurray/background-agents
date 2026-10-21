@@ -644,10 +644,6 @@ enable_durable_object_bindings = true
 enable_service_bindings        = true
 ```
 
-The private Pi Code Mode sandbox is not part of this Terraform phase. Its protected Wrangler
-workflow is the sole owner of its Worker, WASM, and migration; follow the explicit verification flow
-below before Terraform receives permission to add the external binding.
-
 Then run:
 
 ```bash
@@ -1067,7 +1063,6 @@ Set these in `terraform.tfvars`, then run `terraform apply` from
 
 ```hcl
 enable_slack_bot                 = true
-pi_slack_durable_ingress_enabled = false # Enable only after the durable-ingress canary
 slack_bot_token                  = "xoxb-..."
 slack_signing_secret             = "your-signing-secret"
 classification_anthropic_api_key = "sk-ant-..." # Classifier-only; or set anthropic_api_key
@@ -1309,7 +1304,6 @@ R2_MEDIA_BUCKET_NAME
 SANDBOX_INACTIVITY_TIMEOUT_MS
 SANDBOX_BOOT_TIMEOUT_MS
 ENABLE_DURABLE_OBJECT_BINDINGS
-PI_DURABLE_ENABLED
 ENABLE_SERVICE_BINDINGS
 
 # Vercel web app
@@ -2005,9 +1999,6 @@ ls packages/slack-bot/dist/index.js
 ls packages/github-bot/dist/index.js  # Only if enable_github_bot = true
 ls packages/linear-bot/dist/index.js  # Only if enable_linear_bot = true
 ```
-
-The Pi Code Mode sandbox is deliberately absent from this list. Its Wrangler-owned workflow builds
-and deploys that package independently; Terraform must not consume its bundle.
 
 ### Slack bot not responding
 

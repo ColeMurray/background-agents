@@ -786,7 +786,7 @@ describe("MessageRepository", () => {
         messageId: message.id,
         timestamp: 0.1,
         author: { participantId: "author", userId: "user-1", name: "User" },
-        piControl: { action: "steer" as const, conversationId: 1 },
+        piControl: { action: "follow_up" as const, conversationId: 1 },
       };
 
       expect(realRepository.recordCompletedControlMessage(message, event)).toBe("created");

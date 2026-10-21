@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createMcpExtension } from "./mcp-extension";
 
 type McpReadRequest = {
-  connectionId?: string;
-  serverId?: string;
+  serverId: string;
   toolName: string;
   arguments: Record<string, unknown>;
 };
@@ -76,34 +75,23 @@ describe("mcp extension", () => {
     expect(output.details).toMatchObject({ truncated: true });
   });
 
-  it("keeps the shared lane and the personal lane in separate tools", async () => {
-    const h = harness({ content: { hits: ["one"] }, truncated: false });
-
-    await h.shared.execute({ serverId: "srv_1", toolName: "search" }, api, context);
-
-    expect(h.read).toHaveBeenCalledWith(
-      { serverId: "srv_1", toolName: "search", arguments: {} },
-      undefined
-    );
-    // The shared lane never names a connection, and the personal lane never
-    // names a server: exactly one target, at the tool boundary.
-    expect(h.read.mock.calls[0]?.[0]).not.toHaveProperty("connectionId");
-  });
-
-  it("names exactly one target in each tool's parameters", () => {
+  it("names exactly one target in its parameters", () => {
     const h = harness({ content: {}, truncated: false });
 
     const shared = h.shared.parameters as unknown as {
       properties: Record<string, unknown>;
       required: string[];
     };
-    const connection = h.connection.parameters as unknown as {
-      properties: Record<string, unknown>;
-      required: string[];
-    };
     expect(Object.keys(shared.properties)).toEqual(["serverId", "toolName", "arguments"]);
     expect(shared.required).toEqual(["serverId", "toolName"]);
-    expect(Object.keys(connection.properties)).toEqual(["connectionId", "toolName", "arguments"]);
-    expect(connection.required).toEqual(["connectionId", "toolName"]);
+  });
+
+  it("contributes no personal-connection tool", () => {
+    const h = harness({ content: {}, truncated: false });
+
+    expect((h.shared as { name: string }).name).toBe("mcp_read_shared");
+    const properties = (h.shared.parameters as unknown as { properties: Record<string, unknown> })
+      .properties;
+    expect(Object.keys(properties)).not.toContain("connectionId");
   });
 });

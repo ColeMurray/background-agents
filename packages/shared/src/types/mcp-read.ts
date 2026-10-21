@@ -21,7 +21,7 @@ export const mcpToolReviewInputSchema = z
     outputSchema: z.record(z.string(), z.json()).optional(),
     /**
      * The reviewer's classification. A mutation may be recorded so the
-     * decision is auditable, but it never reaches a connection snapshot.
+     * decision is auditable, but it never reaches the executable catalogue.
      */
     effect: z.enum(["external_read", "external_mutation"]),
   })
@@ -157,3 +157,21 @@ export type McpReadResult = z.infer<typeof mcpReadResultSchema>;
 
 /** The largest MCP result the SessionDO will store and return to the agent. */
 export const MAX_MCP_READ_RESULT_BYTES = 64 * 1024;
+
+/** One shared server, as the session resolved it. */
+export const mcpSharedServerSchema = z.object({
+  serverId: z.string().min(1),
+  serverName: z.string().min(1),
+  endpointHost: z.string().min(1),
+  /** The reviewed read-only tools this server exposes to the session. */
+  toolNames: z.array(z.string().min(1)),
+});
+
+export type McpSharedServer = z.infer<typeof mcpSharedServerSchema>;
+
+/** The shared servers a session may read. */
+export const mcpSharedServerListSchema = z.object({
+  shared: z.array(mcpSharedServerSchema).default([]),
+});
+
+export type McpSharedServerList = z.infer<typeof mcpSharedServerListSchema>;

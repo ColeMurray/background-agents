@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { piFeatureCapabilitySnapshotSchema } from "@open-inspect/shared/pi-feature-capabilities";
 
-export const piCapabilityAuthorityResponseSchema = z
+export const executionPrincipalResponseSchema = z
   .object({
     snapshot: piFeatureCapabilitySnapshotSchema.nullable(),
     current: piFeatureCapabilitySnapshotSchema,
   })
   .strict();
 
-export type PiCapabilityAuthorityResponse = z.infer<typeof piCapabilityAuthorityResponseSchema>;
+export type ExecutionPrincipalResponse = z.infer<typeof executionPrincipalResponseSchema>;
