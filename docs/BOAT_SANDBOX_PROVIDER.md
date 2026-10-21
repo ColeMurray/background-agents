@@ -46,6 +46,16 @@ app configuration. See [GETTING_STARTED.md](./GETTING_STARTED.md) for the full d
 `<prefix>-<16 hex characters of the build-input hash>`, and Boat names allow 63 lowercase letters,
 digits and dashes in total, so keep the prefix to 46 characters or fewer.
 
+### What a stop keeps
+
+A Boat snapshot saves `/home`, new top-level directories and your changes under `/etc`, `/usr`,
+`/opt`, `/var`, `/root` and `/srv`. It never saves `/tmp` or `~/.cache`, and a resume lands on a new
+machine. The launcher therefore points the runtime's cross-boot state (`OPENINSPECT_STATE_DIR`, the
+harness session id and the repository manifest with the session-start commits) at
+`/home/user/.openinspect/state`, so the agent's conversation and the Changes baseline survive a
+resume. Files the agent writes under `/tmp` do not, and tool caches under `~/.cache` are rebuilt on
+the next machine.
+
 ### Billing to an organization
 
 When sandboxes are billed to a Boat organization (`boat_org`, or an organization set as the

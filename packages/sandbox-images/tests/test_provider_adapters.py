@@ -526,6 +526,10 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert "export OI_BOOT_COMPLETE_MARKER" in launcher
     assert 'if [[ -e "$OI_BOOT_COMPLETE_MARKER" ]]' in launcher
     assert ': >"$OI_' not in launcher
+    # Cross-boot runtime state lives under the home directory: Boat saves /home, not /tmp.
+    assert 'STATE_DIR_ENV_VAR = "OPENINSPECT_STATE_DIR"' in constants
+    assert "OI_RUNTIME_STATE_DIR=$OI_STATE_DIR/state" in launcher
+    assert 'export OPENINSPECT_STATE_DIR="$OI_RUNTIME_STATE_DIR"' in launcher
     assert 'exec "$OI_PYTHON" -m sandbox_runtime.entrypoint' in launcher
     assert "--prepare-only" in launcher
     assert (

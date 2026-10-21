@@ -103,6 +103,7 @@ flowchart TB
 - Prebuilt images are not available; every session starts from the base snapshot and runs `setup.sh` on its first boot.
 - Ports 22, 6080, 8090, 8911, and 47984–48010 belong to Boat; the VNC port defaults to 6081 on Boat, and a service or tunnel configured on a Boat port fails the spawn.
 - Tunnel URLs carry an access token in their query string; treat them like passwords.
+- A stop keeps `/home` and system changes, not `/tmp` or `~/.cache`. Files an agent writes under `/tmp` are gone after a resume on a new machine and tool caches are rebuilt; the runtime keeps its own state under the home directory, so the conversation and the Changes baseline survive.
 - Sandboxes billed to a Boat organization start shared with every organization member, and the provider makes them private right after they are created. Boat's create call has no visibility option, so the sandbox is shared for that one request; set the organization's default visibility for new sandboxes to private to close the window.
 - Boat sandboxes take every model API key from Settings › Secrets; there is no deployment-wide key.
 

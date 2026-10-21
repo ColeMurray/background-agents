@@ -16,14 +16,18 @@
 #      machine copies in shortly after it reports ready;
 #   3. takes the single-instance lock, exiting EXIT_ALREADY_RUNNING when a
 #      runtime already holds it;
-#   4. decides the boot mode from the completed-boot marker: the runtime
+#   4. points the runtime's cross-boot state (OPENINSPECT_STATE_DIR: the
+#      harness session id, the repository manifest with the session-start
+#      commits) at the home directory, because a Boat snapshot keeps /home but
+#      never /tmp, where that state lives on other providers;
+#   5. decides the boot mode from the completed-boot marker: the runtime
 #      creates it (OI_BOOT_COMPLETE_MARKER) once a boot has synced the
 #      checkout, run setup.sh and started the harness. A later boot that finds
 #      it exports RESTORED_FROM_SNAPSHOT=true, so the runtime keeps its
 #      checkout and skips setup.sh exactly as for a restored snapshot on any
 #      other provider; a boot that was interrupted before then leaves no
 #      marker and the next start boots fresh again;
-#   5. execs the runtime entrypoint with its output in the supervisor log.
+#   6. execs the runtime entrypoint with its output in the supervisor log.
 #
 # `--prepare-only` performs steps 1 and 2 and exits; the image build uses it to
 # verify a fresh deploy without starting a session runtime.
@@ -34,6 +38,7 @@ OI_INSTALL_HOME=$OI_USER_HOME/openinspect
 OI_STATE_DIR=$OI_USER_HOME/.openinspect
 OI_LOCK_FILE=$OI_STATE_DIR/runtime.lock
 OI_BOOT_COMPLETE_MARKER=$OI_STATE_DIR/boot-complete
+OI_RUNTIME_STATE_DIR=$OI_STATE_DIR/state
 OI_SUPERVISOR_LOG=$OI_STATE_DIR/supervisor.log
 OI_PYTHON=/opt/openinspect/python/bin/python
 OI_RUNTIME_ENVIRONMENT=/app/openinspect-runtime-environment.json
@@ -63,8 +68,8 @@ ensure_link() {
 }
 
 prepare() {
-  mkdir -p "$OI_STATE_DIR" "$OI_USER_HOME/workspace" "$OI_INSTALL_HOME/app" \
-    "$OI_USER_HOME/.cache/openinspect/scm" /tmp/opencode
+  mkdir -p "$OI_STATE_DIR" "$OI_RUNTIME_STATE_DIR" "$OI_USER_HOME/workspace" \
+    "$OI_INSTALL_HOME/app" "$OI_USER_HOME/.cache/openinspect/scm" /tmp/opencode
   ensure_link /workspace "$OI_USER_HOME/workspace"
   ensure_link /app "$OI_INSTALL_HOME/app"
   local waited=0
@@ -95,6 +100,7 @@ main() {
     exit "$EXIT_ALREADY_RUNNING"
   fi
   export OI_BOOT_COMPLETE_MARKER
+  export OPENINSPECT_STATE_DIR="$OI_RUNTIME_STATE_DIR"
   if [[ -e "$OI_BOOT_COMPLETE_MARKER" ]]; then
     export RESTORED_FROM_SNAPSHOT=true
     log "an earlier boot completed; starting the runtime in restored mode"

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .boot_events import BootPhaseError, BootPhaseName, PhaseScope
 from .constants import REPO_MANIFEST_FILE_PATH
-from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
+from .repo_config import (
+    RepoConfigError,
+    RepoEntry,
+    dump_repo_manifest,
+    load_repo_manifest,
+    parse_repositories,
+)
 from .repository_sync import RepositorySyncStatus
 from .runtime_config import BootMode, RepositoryConfig
 
@@ -85,6 +91,29 @@ class RepositoryBoot:
         ):
             return self.repo_path
         return self.workspace_path
+
+    def _adopt_persisted_base_shas(self) -> None:
+        """Keep the session-start commits an earlier boot of this disk discovered.
+
+        A restored checkout skips baseline discovery (HEAD may have moved), and
+        a provider that resumes with the create-time env hands over no base SHA
+        at all. The manifest the previous boot wrote carries the SHAs it found
+        after cloning; a repository that arrives without one takes it from
+        there. One it arrives with is kept.
+        """
+        persisted = {
+            (entry.owner.lower(), entry.name.lower()): entry.base_sha
+            for entry in load_repo_manifest(REPO_MANIFEST_FILE_PATH)
+            if entry.base_sha
+        }
+        if not persisted:
+            return
+        self.repositories = [
+            replace(entry, base_sha=persisted.get((entry.owner.lower(), entry.name.lower())))
+            if entry.base_sha is None
+            else entry
+            for entry in self.repositories
+        ]
 
     def _write_repo_manifest(self) -> None:
         try:
@@ -166,6 +195,8 @@ class RepositoryBoot:
     ) -> RepositoryBootResult:
         if self.repo_config_error:
             raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
+        if boot_mode is BootMode.SNAPSHOT_RESTORE:
+            self._adopt_persisted_base_shas()
         self._write_repo_manifest()
         with self._phase(boot_mode, "sync") as sync_phase:
             if self.repositories:
