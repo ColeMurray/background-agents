@@ -20,6 +20,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
   TRACE_EXPORT_SCHEMA_VERSION,
+  PI_HARNESS_STATE_NOT_EXPORTED,
   type TraceExportLine,
 } from "@open-inspect/shared/types/trace-export";
 import {
@@ -123,6 +124,10 @@ function sessionLine(row: SessionExportRow, trace?: SessionTrace): SessionExport
     schemaVersion: EXPORT_SCHEMA_VERSION,
     type: "session",
     ...row,
+    // An export that omits the agent's own durable record says so, instead of
+    // looking complete. Pi Durable keeps that record in its own Durable
+    // Object; the export carries the session's projection of it.
+    ...(row.harness === "pi" ? { harnessState: PI_HARNESS_STATE_NOT_EXPORTED } : {}),
     ...trace,
   };
 }

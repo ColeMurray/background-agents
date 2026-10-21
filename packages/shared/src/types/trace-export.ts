@@ -28,6 +28,35 @@ const exportPullRequestSchema = z.object({
 
 const lineBase = { schemaVersion: z.literal(TRACE_EXPORT_SCHEMA_VERSION) };
 
+/**
+ * What the harness's own durable state contributed to a session line.
+ *
+ * A session line is never the whole agent's record: the export carries the
+ * session index projection and the collections the session runtime read. When
+ * the harness keeps durable state that the export cannot carry, the line
+ * says so instead of looking complete.
+ */
+export const traceExportHarnessStateSchema = z.object({
+  /** False: the harness's own durable state is not in this export. */
+  included: z.literal(false),
+  /** What is missing, in the words of the harness that owns it. */
+  reason: z.string(),
+});
+export type TraceExportHarnessState = z.infer<typeof traceExportHarnessStateSchema>;
+
+/**
+ * Pi Durable keeps the agent's own record — the native transcript, the task
+ * graph, the compaction boundaries and the workspace files — in its own
+ * Durable Object. The export reads the session's index projection and the
+ * session runtime's own collections, so that record stays behind, and the
+ * line says so rather than looking complete.
+ */
+export const PI_HARNESS_STATE_NOT_EXPORTED = {
+  included: false,
+  reason:
+    "Pi Durable's native transcript, task graph, compaction boundaries and workspace files are not part of this export; the messages and events are the session's projection of them.",
+} satisfies TraceExportHarnessState;
+
 export const traceExportSessionSchema = z.object({
   ...lineBase,
   type: z.literal("session"),
@@ -64,6 +93,8 @@ export const traceExportSessionSchema = z.object({
   pullRequests: z.array(exportPullRequestSchema),
   createdAt: z.number(),
   updatedAt: z.number(),
+  /** What the harness's own durable state contributed, when it is not all here. */
+  harnessState: traceExportHarnessStateSchema.optional(),
   messages: z.array(sessionMessageSchema).optional(),
   events: z.array(sessionEventSchema).optional(),
   usage: z.array(stepUsageSchema).optional(),
