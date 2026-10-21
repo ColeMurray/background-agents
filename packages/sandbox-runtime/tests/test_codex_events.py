@@ -383,3 +383,75 @@ def test_large_tool_arguments_are_left_to_the_event_forwarder():
 )
 def test_malformed_native_fields_are_ignored(params):
     assert _turn().accept({"method": "item/completed", "params": params}) == []
+
+
+def _plan_frame(plan, *, thread_id="thread", turn_id="turn", **extra):
+    return {
+        "method": "turn/plan/updated",
+        "params": {"threadId": thread_id, "turnId": turn_id, "plan": plan, **extra},
+    }
+
+
+def test_plan_update_projects_to_todowrite_with_web_statuses():
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+
+    events = state.accept(
+        _plan_frame(
+            [
+                {"step": "Read code", "status": "completed"},
+                {"step": "Write fix", "status": "inProgress"},
+                {"step": "Run tests", "status": "pending"},
+                {"step": "Future status", "status": "blocked"},
+                "not a step",
+            ],
+            explanation="Fixing the bug",
+        )
+    )
+
+    assert events == [
+        {
+            "type": "tool_call",
+            "messageId": "m",
+            "callId": "codex:turn:plan:1",
+            "tool": "todowrite",
+            "args": {
+                "todos": [
+                    {"content": "Read code", "status": "completed"},
+                    {"content": "Write fix", "status": "in_progress"},
+                    {"content": "Run tests", "status": "pending"},
+                    {"content": "Future status", "status": "pending"},
+                ]
+            },
+            "status": "completed",
+            "output": "Fixing the bug",
+        }
+    ]
+
+
+def test_each_plan_update_is_a_distinct_call():
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+    plan = [{"step": "Work", "status": "pending"}]
+
+    first = state.accept(_plan_frame(plan))[0]
+    second = state.accept(_plan_frame(plan, explanation=None))[0]
+
+    assert (first["callId"], second["callId"]) == ("codex:turn:plan:1", "codex:turn:plan:2")
+    assert second["output"] == ""
+
+
+@pytest.mark.parametrize("plan", [[], None])
+def test_empty_plan_clears_tasks(plan):
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+
+    [event] = state.accept(_plan_frame(plan))
+
+    assert event["tool"] == "todowrite"
+    assert event["args"] == {"todos": []}
+
+
+@pytest.mark.parametrize("ids", [{"thread_id": "other"}, {"turn_id": "other"}])
+def test_plan_updates_for_other_threads_or_turns_are_ignored(ids):
+    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {})
+
+    assert state.accept(_plan_frame([{"step": "Work", "status": "pending"}], **ids)) == []
+    assert state.accept(_plan_frame([]))[0]["callId"] == "codex:turn:plan:1"
