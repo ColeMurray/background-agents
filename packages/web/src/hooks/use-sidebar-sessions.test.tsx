@@ -753,6 +753,55 @@ describe("useSidebarSessions", () => {
     ]);
   });
 
+  it("refetches instead of reconciling when the scope changes mid-write", async () => {
+    localStorage.setItem("open-inspect-sidebar-session-creator-filter", "mine");
+    const response = deferred<Response>();
+    vi.mocked(browserApiFetch).mockReturnValue(response.promise);
+    const child = { ...unreadItem("child").rootSession, parentSessionId: "parent" };
+    const theirChild = { ...unreadItem("their-child").rootSession, parentSessionId: "parent" };
+    let written = false;
+    const fetcher = vi.fn((key: string) =>
+      written
+        ? new Promise(() => undefined)
+        : Promise.resolve(
+            snapshot({
+              needs_attention: {
+                items: [
+                  {
+                    ...unreadItem("parent"),
+                    descendantSessions: key.includes("mine=true") ? [child] : [child, theirChild],
+                  },
+                ],
+                hasMore: false,
+                nextCursor: null,
+              },
+            })
+          )
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.sessionCreatorFilter).toBe("mine"));
+    await waitFor(() => expect(result.current.childrenMap.get("parent")).toHaveLength(1));
+
+    let marking!: Promise<void>;
+    act(() => {
+      marking = result.current.handleMarkHierarchyRead("parent");
+    });
+    act(() => result.current.setSessionCreatorFilter("all"));
+    await waitFor(() => expect(result.current.childrenMap.get("parent")).toHaveLength(2));
+    const fetchesBefore = fetcher.mock.calls.length;
+    written = true;
+    await act(async () => {
+      response.resolve(Response.json({ markedCount: 2 }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    // The server marked the Mine hierarchy; All lists a child it left unread.
+    const theirs = result.current.childrenMap.get("parent")?.find(({ id }) => id === "their-child");
+    expect(theirs?.readState.unread).toBe(true);
+    expect(fetcher.mock.calls.length).toBeGreaterThan(fetchesBefore);
+    void marking;
+  });
+
   it("reconciles read state on retained pages when a session is marked read", async () => {
     const fetcher = vi.fn(async (key: string) =>
       key.includes("category=")
