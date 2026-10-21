@@ -103,6 +103,8 @@ npx vitest run --config vitest.integration.config.ts     # the workerd lane
 
 npm run lint:sql-portability
 node scripts/terraform-workflow-contract.test.mjs
+node scripts/trace-export-schema-drift.test.mjs
+npm run test:migration-block-guard          # the 9xxx block: upstream may not take it
 cd terraform/environments/production && terraform test
 ```
 
