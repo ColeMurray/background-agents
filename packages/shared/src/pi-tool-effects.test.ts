@@ -56,25 +56,17 @@ describe("Pi tool effect registry", () => {
     ).toThrow('Duplicate Pi tool effect registration: "publish"');
   });
 
-  it("declares Code Mode and its reserved internal model tools before exposure", () => {
+  it("declares Code Mode and no model surface at all", () => {
+    // A script gets no model catalog and no model-call tools: sending
+    // model-written context to the provider with the session's credential is
+    // what a capability must never do. The tools are therefore not declared
+    // here either.
     expect(PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS).toEqual([
       {
         name: "codemode",
         effect: "sandbox_execution",
         callers: ["model"],
         replay: "safe",
-      },
-      {
-        name: "pi.codemode.models.classify",
-        effect: "external_read",
-        callers: ["tools"],
-        replay: "unsafe",
-      },
-      {
-        name: "pi.codemode.models.generateImages",
-        effect: "external_read",
-        callers: ["tools"],
-        replay: "unsafe",
       },
     ]);
   });
