@@ -55,6 +55,7 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
 import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
+import { callSharedMcpTool } from "./mcp-shared-client";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
@@ -725,6 +726,16 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
   });
   const autofixHandler = new AutofixHandler(messageQueue);
+  // The shared MCP lane's resolver: the core's own, so the session's
+  // repositories decide which shared servers exist for it.
+
+  // The shared MCP lane's resolver: the core's own, so the session's
+  // repositories decide which shared servers exist for it.
+  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
+  const mcpServerLookup: McpServerLookup = {
+    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+  };
+
   const mcpSessionHandler = new McpSessionHandler({
     mcp: {
       liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.mcp,
@@ -799,6 +810,58 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           });
         }
         return grants;
+      },
+      sharedServers: async () => {
+        const repositories = sessionCoreRepository.getSessionRepositories();
+        const servers = await mcpServerLookup.getDecryptedForSession(
+          repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
+        );
+        const views = [];
+        for (const server of servers) {
+          const metadata = await mcpStore.get(server.id);
+          if (!metadata) continue;
+          const toolNames = await reviewedReadOnlyToolNames(db, server.id, metadata.revision);
+          if (toolNames.length === 0) continue;
+          views.push({
+            serverId: server.id,
+            serverName: server.name,
+            endpointHost: new URL(server.url ?? "https://mcp.invalid").host,
+            toolNames,
+          });
+        }
+        return views;
+      },
+      callSharedTool: async (request) => {
+        // The session's own repositories decide which servers exist here, so
+        // the shared lane is scoped exactly like the sandbox's.
+        const repositories = sessionCoreRepository.getSessionRepositories();
+        const servers = await mcpServerLookup.getDecryptedForSession(
+          repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
+        );
+        const server = servers.find((entry) => entry.id === request.serverId);
+        if (!server) {
+          throw new Error("This MCP server is not available to this session");
+        }
+        const metadata = await mcpStore.get(server.id);
+        if (!metadata) {
+          throw new Error("This MCP server is not available to this session");
+        }
+        const toolNames = await reviewedReadOnlyToolNames(db, server.id, metadata.revision);
+        if (!toolNames.includes(request.toolName)) {
+          throw new Error("This MCP tool is not part of the reviewed catalog");
+        }
+        return callSharedMcpTool(
+          {
+            id: server.id,
+            name: server.name,
+            type: server.type,
+            url: server.url,
+            headers: server.headers,
+            env: server.env,
+          },
+          request.toolName,
+          request.arguments
+        );
       },
       callTool: async (request) => {
         const broker = env.MCP_CONNECTION;
@@ -1649,6 +1712,28 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   };
 }
 
+/**
+ * The reviewed read-only tools of one server revision.
+ *
+ * A tool that is not in this list is not reachable: a mutation is
+ * unrepresentable, and an unreviewed tool never reaches the agent.
+ */
+async function reviewedReadOnlyToolNames(
+  db: SqlDatabase,
+  serverId: string,
+  serverRevision: number
+): Promise<string[]> {
+  const rows = await db
+    .prepare(
+      `SELECT tool_name FROM mcp_reviewed_tools
+       WHERE server_id = ? AND server_revision = ? AND effect = 'external_read'
+       ORDER BY tool_name`
+    )
+    .bind(serverId, serverRevision)
+    .all<{ tool_name: string }>();
+  return (rows.results ?? []).map((row) => row.tool_name);
+}
+
 interface LifecycleManagerDeps {
   recordWarning: (message: string, eventId: string) => void;
   resumeQueuedWork: () => Promise<void>;
@@ -1686,6 +1771,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     alarmScheduler,
     backgroundTasks,
   } = deps;
+  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
+  const mcpServerLookup: McpServerLookup = {
+    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+  };
+
   // ID generator adapter
   const idGenerator: IdGenerator = {
     generateId: () => generateId(),
@@ -1695,11 +1785,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const controlPlaneUrl =
     env.WORKER_URL ||
     `https://open-inspect-control-plane.${env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
-
-  const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
-  const mcpServerLookup: McpServerLookup = {
-    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
-  };
 
   // Session-scoped gate: resolved from the primary member (the scalar mirror
   // this lookup is called with) — see resolveSessionScopedSettings for the
@@ -1749,7 +1834,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
     },
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
-    mcpServerLookup,
+    mcpServerLookup: mcpServerLookup,
     slackAgentNotifyLookup,
     recordWarning: deps.recordWarning,
     resumeQueuedWork: deps.resumeQueuedWork,

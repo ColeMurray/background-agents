@@ -6,6 +6,8 @@ function harness(
     sessionCapability?: "off" | "read_only" | "enabled";
     liveMode?: "off" | "read_only" | "enabled";
     actorId?: string | null;
+    sharedServers?: Array<{ serverId: string; serverName: string; toolNames: string[] }>;
+    sharedResult?: unknown;
     grants?: Array<{
       id: string;
       connectionId: string;
@@ -44,6 +46,17 @@ function harness(
     callTool,
     audit,
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
+    sharedServers: vi.fn(async () =>
+      options.sharedServers === undefined
+        ? []
+        : options.sharedServers.map((server) => ({
+            serverId: server.serverId,
+            serverName: server.serverName,
+            endpointHost: "mcp.example.com",
+            toolNames: server.toolNames,
+          }))
+    ),
+    callSharedTool: vi.fn(async () => options.sharedResult ?? { shared: true }),
     grantPin: vi.fn(async () => ({
       id: "pin-1",
       sessionId: "session-1",
@@ -207,6 +220,83 @@ describe("McpSessionHandler", () => {
     const response = await h.handler.list(new Request("http://session/internal/pi-mcp/list"));
 
     expect(response.status).toBe(409);
+  });
+
+  it("reads a reviewed tool on a shared server the session may use", async () => {
+    const h = harness({
+      sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
+    });
+
+    const response = await h.handler.read(
+      new Request("http://session/internal/pi-mcp/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "operation-1" },
+        body: JSON.stringify({ serverId: "mcp_1", toolName: "search", arguments: {} }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      serverId: "mcp_1",
+      toolName: "search",
+      content: { shared: true },
+    });
+  });
+
+  it("refuses a shared server the session may not use", async () => {
+    const h = harness({
+      sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
+    });
+
+    const response = await h.handler.read(
+      new Request("http://session/internal/pi-mcp/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "operation-1" },
+        body: JSON.stringify({ serverId: "mcp_2", toolName: "search", arguments: {} }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "mcp_server_not_available",
+    });
+  });
+
+  it("refuses a shared tool that is not in the reviewed catalog", async () => {
+    const h = harness({
+      sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
+    });
+
+    const response = await h.handler.read(
+      new Request("http://session/internal/pi-mcp/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "operation-1" },
+        body: JSON.stringify({ serverId: "mcp_1", toolName: "delete_everything", arguments: {} }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "mcp_tool_not_reviewed" });
+  });
+
+  it("refuses a shared answer that carries a credential", async () => {
+    const h = harness({
+      sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
+      sharedResult: { account: { accessToken: "gho_secret" } },
+    });
+
+    const response = await h.handler.read(
+      new Request("http://session/internal/pi-mcp/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "operation-1" },
+        body: JSON.stringify({ serverId: "mcp_1", toolName: "search", arguments: {} }),
+      })
+    );
+
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body).toMatchObject({ code: "mcp_result_not_credential_free" });
+    expect(JSON.stringify(body)).not.toContain("gho_secret");
   });
 
   it("lists the session's authorized attachments without a credential", async () => {

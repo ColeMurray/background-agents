@@ -11,7 +11,7 @@ function harness(result: { content: unknown; truncated: boolean }) {
   const extension = createMcpExtension({
     client: {
       read,
-      list: async () => ({ grants: [] }),
+      list: async () => ({ grants: [], shared: [] }),
     },
   });
   const tool = extension.tools?.[0];

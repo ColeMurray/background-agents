@@ -13,12 +13,21 @@ export interface McpReadClient {
    * provider.
    */
   read(
-    request: { connectionId: string; toolName: string; arguments: Record<string, unknown> },
+    request: {
+      /** A personal connection the owner granted to this session. */
+      connectionId?: string;
+      /** A shared server the deployment owns. */
+      serverId?: string;
+      toolName: string;
+      arguments: Record<string, unknown>;
+    },
     signal?: AbortSignal
   ): Promise<McpReadResult>;
   /** The session's authorized attachments, for the agent's own reference. */
   list(signal?: AbortSignal): Promise<{
     grants: Array<{ connectionId: string; serverName: string; toolNames: string[] }>;
+    /** The deployment's shared servers this session may read. */
+    shared: Array<{ serverId: string; serverName: string; toolNames: string[] }>;
   }>;
 }
 
@@ -42,7 +51,7 @@ export function createMcpExtension(options: McpExtensionOptions) {
       section(
         "mcp",
         () =>
-          "Read from a reviewed MCP server this session was granted. Only reviewed read tools are available, and the connection owner keeps their identity.",
+          "Read from a reviewed MCP server this session may use: a shared server the deployment owns, or a personal connection its owner granted here. Only reviewed read tools are available, and a personal connection keeps its owner's identity.",
         { tag: false }
       ),
     ],
@@ -52,7 +61,15 @@ export function createMcpExtension(options: McpExtensionOptions) {
         description:
           "Read from a reviewed MCP server. The connection must have been granted to this session by its owner.",
         parameters: Type.Object({
-          connectionId: Type.String({ minLength: 1, maxLength: 256 }),
+          /**
+           * A personal connection the owner granted to this session.
+           *
+           * Exactly one target is named: a personal connection, or a shared
+           * server the deployment owns.
+           */
+          connectionId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+          /** A shared server the deployment owns. */
+          serverId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
           toolName: Type.String({ minLength: 1, maxLength: 256 }),
           arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
         }),
@@ -60,9 +77,22 @@ export function createMcpExtension(options: McpExtensionOptions) {
         replay: declaration.replay,
         callers: declaration.callers,
         execute: async (args, api, context) => {
+          if (!args.connectionId && !args.serverId) {
+            return {
+              isError: true,
+              output: [
+                {
+                  type: "text" as const,
+                  text: "Name either a granted connection or a shared server",
+                },
+              ],
+              details: {} as Record<string, JsonValue>,
+            };
+          }
           const result = await options.client.read(
             {
-              connectionId: args.connectionId,
+              ...(args.connectionId ? { connectionId: args.connectionId } : {}),
+              ...(args.serverId ? { serverId: args.serverId } : {}),
               toolName: args.toolName,
               arguments: (args.arguments ?? {}) as Record<string, unknown>,
             },
@@ -78,7 +108,8 @@ export function createMcpExtension(options: McpExtensionOptions) {
             ],
             structuredOutput: result.content as JsonValue,
             details: {
-              connectionId: result.connectionId,
+              ...(result.connectionId ? { connectionId: result.connectionId } : {}),
+              ...(result.serverId ? { serverId: result.serverId } : {}),
               toolName: result.toolName,
               truncated: result.truncated,
             },

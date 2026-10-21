@@ -1767,7 +1767,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
    * identity. The agent never holds a credential and never names one.
    */
   private async readMcpTool(
-    request: { connectionId: string; toolName: string; arguments: Record<string, unknown> },
+    request: {
+      connectionId?: string;
+      serverId?: string;
+      toolName: string;
+      arguments: Record<string, unknown>;
+    },
     signal?: AbortSignal
   ): Promise<McpReadResult> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
@@ -1800,6 +1805,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   /** The session's authorized MCP attachments. */
   private async listMcpGrants(signal?: AbortSignal): Promise<{
     grants: Array<{ connectionId: string; serverName: string; toolNames: string[] }>;
+    shared: Array<{ serverId: string; serverName: string; toolNames: string[] }>;
   }> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
@@ -1813,7 +1819,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       })
     );
     const body = await response.json().catch(() => null);
-    if (!response.ok) return { grants: [] };
+    if (!response.ok) return { grants: [], shared: [] };
     const parsed = mcpSessionPinListSchema.safeParse(body);
     return parsed.success
       ? {
@@ -1822,8 +1828,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             serverName: pin.serverName,
             toolNames: pin.toolNames,
           })),
+          shared: parsed.data.shared.map((server) => ({
+            serverId: server.serverId,
+            serverName: server.serverName,
+            toolNames: server.toolNames,
+          })),
         }
-      : { grants: [] };
+      : { grants: [], shared: [] };
   }
 
   /**

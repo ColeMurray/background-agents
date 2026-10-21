@@ -87,6 +87,17 @@ export type McpSessionPin = z.infer<typeof mcpSessionPinSchema>;
 
 export const mcpSessionPinListSchema = z.object({
   pins: z.array(mcpSessionPinSchema),
+  /** The deployment's shared servers this session may read. */
+  shared: z
+    .array(
+      z.object({
+        serverId: z.string().min(1),
+        serverName: z.string().min(1),
+        endpointHost: z.string().min(1),
+        toolNames: z.array(z.string().min(1)),
+      })
+    )
+    .default([]),
 });
 
 export type McpSessionPinList = z.infer<typeof mcpSessionPinListSchema>;
@@ -99,18 +110,35 @@ export type McpSessionPinList = z.infer<typeof mcpSessionPinListSchema>;
  */
 export const mcpReadRequestSchema = z
   .object({
-    connectionId: z.string().min(1).max(256),
+    /**
+     * The personal connection to read through.
+     *
+     * Exactly one target is named: a personal connection, or a shared
+     * server the deployment owns.
+     */
+    connectionId: z.string().min(1).max(256).optional(),
+    /**
+     * The shared server to read through.
+     *
+     * A shared server belongs to the deployment, so the session's own
+     * repositories decide whether it exists here at all.
+     */
+    serverId: z.string().min(1).max(256).optional(),
     toolName: z.string().min(1).max(256),
     arguments: z.record(z.string(), z.json()).default({}),
   })
-  .strict();
+  .strict()
+  .refine((request) => Boolean(request.connectionId) !== Boolean(request.serverId), {
+    message: "A read names exactly one target: a personal connection or a shared server",
+  });
 
 export type McpReadRequest = z.infer<typeof mcpReadRequestSchema>;
 
 /** The bounded, credential-free result of one reviewed read. */
 export const mcpReadResultSchema = z
   .object({
-    connectionId: z.string().min(1),
+    connectionId: z.string().min(1).optional(),
+    serverId: z.string().min(1).optional(),
     toolName: z.string().min(1),
     /**
      * The provider's own result, bounded by the SessionDO before it is
