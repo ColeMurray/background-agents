@@ -104,6 +104,7 @@ beforeEach(() => {
     inProgress: [running],
     finished: [recent],
     childrenMap: new Map([[running.id, [child]]]),
+    unreadDescendantRootIds: new Set<string>(),
     loading: false,
     sessionsError: undefined,
     refreshSnapshot: vi.fn(async () => undefined),

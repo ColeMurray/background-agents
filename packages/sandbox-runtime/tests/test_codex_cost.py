@@ -238,6 +238,29 @@ async def test_transport_failure_reports_the_cost_observed_before_it(tmp_path):
     assert finishes(events)[-1]["messageCostUsd"] == 0.002
 
 
+async def test_recorded_native_failure_reports_the_cost_observed_before_it(tmp_path):
+    fatal = {
+        "method": "error",
+        "params": {
+            "threadId": "thread",
+            "turnId": "turn-1",
+            "willRetry": False,
+            "error": {"message": "upstream closed"},
+        },
+    }
+    harness = build(
+        tmp_path,
+        [
+            usage("turn-1", tokens(1_000), tokens(1_000)),
+            fatal,
+            CodexTransportError("gone"),
+        ],
+    )
+    outcome, _ = await run(harness)
+    assert outcome.error == "upstream closed"
+    assert outcome.message_cost_usd == 0.002
+
+
 async def test_failure_before_the_turn_starts_costs_nothing(tmp_path):
     harness = build(tmp_path, [])
     harness._factory.return_value.open.side_effect = CodexTransportError("no process")

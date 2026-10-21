@@ -274,4 +274,6 @@ async def test_native_builtin_provider_routes_each_auth_mode(
     if subscription:
         assert any("accounts/check" in request[2] for request in observed)
     else:
+        # API keys stay on the OpenAI API, never the ChatGPT backend.
+        assert set(connections) == {"api.openai.com:443"}
         broker.fetch.assert_not_called()

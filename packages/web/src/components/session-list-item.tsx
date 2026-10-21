@@ -30,20 +30,31 @@ export function SessionListItem({
   environmentName,
   isActive,
   isMobile,
+  hasUnreadDescendants = false,
   onArchive,
   onSessionSelect,
   onMarkLatestMessageRead,
+  onMarkHierarchyRead,
 }: {
   session: SessionItem;
   environmentName?: string;
   isActive: boolean;
   isMobile: boolean;
+  /** Whether any session nested under this one in the list is unread. */
+  hasUnreadDescendants?: boolean;
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
+  /** Marks this session and every session nested under it as read. */
+  onMarkHierarchyRead?: (rootSessionId: string) => Promise<void>;
 }) {
   const canManageLifecycle = session.capabilities?.canManageLifecycle ?? false;
-  const canMarkRead = session.capabilities?.canRead === true && session.readState.unread;
+  const canRead = session.capabilities?.canRead === true;
+  const canMarkRead = canRead && session.readState.unread;
+  // Only offered when it reaches beyond what "Mark as read" covers.
+  const canMarkHierarchyRead = canRead && onMarkHierarchyRead !== undefined && hasUnreadDescendants;
+  const hasUnread = session.readState.unread || canMarkHierarchyRead;
+  const hasActions = canManageLifecycle || canMarkRead || canMarkHierarchyRead;
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const repoInfo = formatSessionRepositoriesLabel(
@@ -63,7 +74,7 @@ export function SessionListItem({
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
-  const [isMarkingLatestRead, setIsMarkingLatestRead] = useState(false);
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
   const [title, setTitle] = useState(displayTitle);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const isStartingRenameRef = useRef(false);
@@ -107,16 +118,16 @@ export function SessionListItem({
     setShowArchiveDialog(true);
   };
 
-  const handleMarkLatestMessageRead = async () => {
-    if (!canMarkRead || isMarkingLatestRead) return;
+  const handleMarkRead = async (markRead: (sessionId: string) => Promise<void>) => {
+    if (isMarkingRead) return;
     setIsActionsOpen(false);
-    setIsMarkingLatestRead(true);
+    setIsMarkingRead(true);
     try {
-      await onMarkLatestMessageRead(session.id);
+      await markRead(session.id);
     } catch (error) {
       console.error("Failed to mark session read", error);
     } finally {
-      setIsMarkingLatestRead(false);
+      setIsMarkingRead(false);
     }
   };
 
@@ -168,12 +179,12 @@ export function SessionListItem({
       touchStartRef.current = { x: touch.clientX, y: touch.clientY };
       clearLongPressTimer();
       longPressTimerRef.current = window.setTimeout(() => {
-        if (!canManageLifecycle && !canMarkRead) return;
+        if (!hasActions) return;
         longPressTriggeredRef.current = true;
         setIsActionsOpen(true);
       }, MOBILE_LONG_PRESS_MS);
     },
-    [canManageLifecycle, canMarkRead, clearLongPressTimer, isMobile]
+    [clearLongPressTimer, hasActions, isMobile]
   );
 
   const handleTouchMove = useCallback(
@@ -311,18 +322,18 @@ export function SessionListItem({
           </Link>
         )}
 
-        {(canManageLifecycle || canMarkRead) && (
+        {hasActions && (
           <div className="absolute inset-y-0 right-2 flex items-center">
             <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
                   aria-label="Session actions"
-                  aria-hidden={isMobile && !session.readState.unread ? "true" : undefined}
-                  tabIndex={isMobile && !session.readState.unread ? -1 : undefined}
+                  aria-hidden={isMobile && !hasUnread ? "true" : undefined}
+                  tabIndex={isMobile && !hasUnread ? -1 : undefined}
                   className={`items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                     isMobile
-                      ? session.readState.unread
+                      ? hasUnread
                         ? "flex h-10 w-10"
                         : "pointer-events-none flex h-6 w-6 opacity-0"
                       : "flex h-6 w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -345,10 +356,18 @@ export function SessionListItem({
                 )}
                 {canMarkRead && (
                   <DropdownMenuItem
-                    onSelect={handleMarkLatestMessageRead}
-                    disabled={isMarkingLatestRead}
+                    onSelect={() => void handleMarkRead(onMarkLatestMessageRead)}
+                    disabled={isMarkingRead}
                   >
                     Mark as read
+                  </DropdownMenuItem>
+                )}
+                {canMarkHierarchyRead && (
+                  <DropdownMenuItem
+                    onSelect={() => void handleMarkRead(onMarkHierarchyRead)}
+                    disabled={isMarkingRead}
+                  >
+                    Mark all as read
                   </DropdownMenuItem>
                 )}
                 {canManageLifecycle && (

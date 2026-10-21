@@ -57,6 +57,8 @@ export const sessionInboxMarkReadRequestSchema = z.strictObject({
   ownerFilter: z.enum(["started", "participating", "anyone"]).optional(),
   visibility: sessionVisibilitySchema.optional(),
   scope: z.enum(["workspace", "all"]).optional(),
+  /** Limits marking to the inbox hierarchy rooted here: the session and its listed descendants. */
+  rootSessionId: z.string().min(1).optional(),
 });
 export type SessionInboxMarkReadRequest = z.infer<typeof sessionInboxMarkReadRequestSchema>;
 
