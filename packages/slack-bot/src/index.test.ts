@@ -1601,6 +1601,133 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  describe("first-contact actor enrollment", () => {
+    function controlPlaneRequests(env: ReturnType<typeof makeEnv>) {
+      return env.CONTROL_PLANE.fetch.mock.calls.map(([input, init]) => ({
+        path: new URL(String(input)).pathname,
+        actor: new Headers(init?.headers).get("X-OpenInspect-Actor"),
+        body: init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined,
+      }));
+    }
+
+    function firstIndex(paths: string[], matches: (path: string) => boolean): number {
+      const index = paths.findIndex(matches);
+      if (index === -1) throw new Error(`no matching request in ${paths.join(", ")}`);
+      return index;
+    }
+
+    function mentionNewThread(env: ReturnType<typeof makeEnv>, ctx: ReturnType<typeof makeCtx>) {
+      return app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          text: "<@B123> fix the auth tests",
+          user: "U123",
+          channel: "C123",
+          ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+    }
+
+    beforeEach(() => {
+      mockGetUserInfo.mockImplementation(async (_token: string, user: string) => ({
+        ok: true,
+        user: { id: user, name: user, profile: { display_name: "Ada", email: "ada@example.com" } },
+      }));
+    });
+
+    it("enrolls the mentioning user with their Slack email before reading the catalog", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const ctx = makeCtx();
+
+      expect((await mentionNewThread(env, ctx)).status).toBe(200);
+      await flushWaitUntil(ctx);
+
+      const requests = controlPlaneRequests(env);
+      const paths = requests.map((request) => request.path);
+      const enrollment = firstIndex(paths, (path) => path === "/actors/me");
+      expect(enrollment).toBeLessThan(
+        firstIndex(paths, (path) => path === "/repos" || path === "/environments")
+      );
+      expect(requests[enrollment]).toEqual({
+        path: "/actors/me",
+        actor: "slack:U123",
+        body: { displayName: "Ada", email: "ada@example.com" },
+      });
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ actorEmail: "ada@example.com" }),
+      ]);
+
+      slackFetch.mockRestore();
+    });
+
+    it("enrolls a new person in an existing thread before delivering their prompt", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv();
+      await env.SLACK_KV.put(
+        "thread:C123:111.222",
+        JSON.stringify({
+          sessionId: "session-1",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        })
+      );
+      const ctx = makeCtx();
+
+      await app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          text: "<@B123> also check the logout path",
+          user: "U456",
+          channel: "C123",
+          ts: "333.444",
+          thread_ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const requests = controlPlaneRequests(env);
+      const paths = requests.map((request) => request.path);
+      const enrollment = firstIndex(paths, (path) => path === "/actors/me");
+      expect(enrollment).toBeLessThan(
+        firstIndex(paths, (path) => path.endsWith("/attachments") || path.endsWith("/prompt"))
+      );
+      expect(requests[enrollment]).toEqual({
+        path: "/actors/me",
+        actor: "slack:U456",
+        body: { displayName: "Ada", email: "ada@example.com" },
+      });
+
+      slackFetch.mockRestore();
+    });
+
+    it("still starts the session when enrollment fails", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+      env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) =>
+        new URL(String(input)).pathname === "/actors/me"
+          ? new Response("unavailable", { status: 500 })
+          : dispatch(input, init)
+      );
+      const ctx = makeCtx();
+
+      await mentionNewThread(env, ctx);
+      await flushWaitUntil(ctx);
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+
+      slackFetch.mockRestore();
+    });
+  });
+
   it("sets Starting status for follow-up prompts in existing threads", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
