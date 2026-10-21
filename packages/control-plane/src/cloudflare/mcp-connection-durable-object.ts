@@ -34,14 +34,16 @@ interface BrokerTombstone {
 }
 
 /**
- * Dormant per-connection MCP broker foundation.
+ * The per-connection MCP broker.
  *
- * The manager deliberately is not installed on a Lifecycle yet: no persisted
- * registration is restored, no callback is accepted, and no network
- * connection or tool call can start in this slice. Installing the capability
- * is a separate live-transport canary gate. D1 remains authoritative; the
- * Agents `cf_agents_mcp_servers` table may later cache reconstructable
- * transport registrations only.
+ * The manager is a capability of this object's Lifecycle: the Lifecycle restores
+ * the persisted connection on a cold start and serves the server's OAuth
+ * callback, and the manager itself holds the credential. The transport is
+ * installed but the *binding* stays disabled by default, so this object is not
+ * deployed at all until an operator stages it and the canary passes.
+ *
+ * D1 remains authoritative: the broker re-reads the connection's owner and
+ * status, and the reviewed read-only catalog, on every call.
  */
 export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
   private connectionId: string | undefined;
