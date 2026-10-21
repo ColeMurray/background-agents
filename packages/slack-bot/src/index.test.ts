@@ -702,7 +702,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("resolves the actor once across clarification and selection", async () => {
+  it("resolves the actor once per event across clarification and selection", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
     const env = makeEnv();
@@ -818,7 +818,7 @@ describe("POST /events", () => {
     const pickerBlockId = String(pickerBlock.block_id);
     const requestId = pickerBlockId.slice("target_picker:".length);
 
-    expect(mockGetUserInfo).not.toHaveBeenCalled();
+    expect(mockGetUserInfo).toHaveBeenCalledOnce();
     await expect(
       (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
         `pending:${requestId}`,
@@ -871,7 +871,7 @@ describe("POST /events", () => {
 
     expect(selectionResponse.status).toBe(200);
     await flushWaitUntil(selectionCtx);
-    expect(mockGetUserInfo).toHaveBeenCalledOnce();
+    expect(mockGetUserInfo).toHaveBeenCalledTimes(2);
     expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
       expect.objectContaining({ teamId: "team-a" }),
     ]);
@@ -1335,7 +1335,11 @@ describe("POST /events", () => {
         await flushWaitUntil(recoveredCtx);
         expect(
           env.CONTROL_PLANE.fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)
-        ).toEqual([`/channel-bindings/slack/${channel}`, `/sessions/${session.sessionId}/prompt`]);
+        ).toEqual([
+          `/channel-bindings/slack/${channel}`,
+          "/actors/me",
+          `/sessions/${session.sessionId}/prompt`,
+        ]);
         expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
         expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
         expect(

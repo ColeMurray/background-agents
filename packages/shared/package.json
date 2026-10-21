@@ -226,6 +226,10 @@
       "import": "./dist/types/memories.js",
       "types": "./dist/types/memories.d.ts"
     },
+    "./types/actors": {
+      "import": "./dist/types/actors.js",
+      "types": "./dist/types/actors.d.ts"
+    },
     "./memory-tools": {
       "import": "./dist/memory-tools.js",
       "types": "./dist/memory-tools.d.ts"
