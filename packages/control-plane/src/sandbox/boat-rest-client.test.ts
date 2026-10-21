@@ -152,6 +152,41 @@ describe("BoatRestClient", () => {
     expect(apiError.message).toContain("[redacted]");
   });
 
+  it("redacts an echoed secret that straddles the message cutoff", async () => {
+    const client = new BoatRestClient(defaultConfig);
+    const secret = `tok-"q"-${"s".repeat(40)}`;
+    const padding = "p".repeat(280);
+    for (const echoed of [secret, JSON.stringify(secret).slice(1, -1)]) {
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            ok: false,
+            type: "sandbox.error",
+            status: 400,
+            code: "invalid_env",
+            message: `${padding}${echoed} is not allowed`,
+          },
+          400
+        )
+      );
+      const error = await client
+        .createSandbox({
+          type: "small",
+          ttlSeconds: 60,
+          env: { API_TOKEN: secret },
+          from: "snap",
+          idempotencyKey: "k",
+          monitoring: false,
+        })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(BoatApiError);
+      const message = (error as BoatApiError).message;
+      expect(message).not.toContain("tok-");
+      expect(message).toContain("[redacted]");
+      expect(message.length).toBeLessThan(400);
+    }
+  });
+
   it("maps 404 and 409 to typed errors that keep the Boat code", async () => {
     const client = new BoatRestClient(defaultConfig);
     fetchSpy.mockResolvedValueOnce(
@@ -203,6 +238,17 @@ describe("BoatRestClient", () => {
     expect(JSON.parse(String(lastRequest().init.body))).toEqual({ name: "openinspect-test-sb" });
     await client.updateSandbox("bx_abcdefgh", { ttlSeconds: 60 });
     expect(JSON.parse(String(lastRequest().init.body))).toEqual({ ttlSeconds: 60 });
+  });
+
+  it("unshare posts to the sandbox and returns its new visibility", async () => {
+    const client = new BoatRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse(sandboxBody({ visibility: "private" })));
+    const sandbox = await client.unshareSandbox("bx_abcdefgh");
+    expect(sandbox.visibility).toBe("private");
+    const { url, init } = lastRequest();
+    expect(url).toBe("https://boat.dev/api/v1/sandboxes/bx_abcdefgh/unshare");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
   });
 
   it("stop is never forced and returns the action's sandbox", async () => {

@@ -57,6 +57,13 @@ EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
 # longer so deferred Queue finalization can snapshot it after this budget ends.
 IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"
 
+# Path of a file the supervisor creates once a session boot has completed
+# (checkout synced, setup run, harness up). Set by a provider that restarts the
+# runtime on the same disk (Boat's launcher), so its next start can tell a
+# completed first boot, which resumes in restored mode, from one that was
+# interrupted, which boots fresh again. Unset on every other provider.
+BOOT_COMPLETE_MARKER_ENV_VAR = "OI_BOOT_COMPLETE_MARKER"
+
 # Boot events appended by the supervisor (which has no control-plane event
 # channel) and relayed by the bridge: phase lines become `boot_progress`
 # sandbox events, warning lines become `warning` events. JSONL, one object per

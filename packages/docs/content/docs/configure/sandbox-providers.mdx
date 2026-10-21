@@ -103,6 +103,7 @@ flowchart TB
 - Prebuilt images are not available; every session starts from the base snapshot and runs `setup.sh` on its first boot.
 - Ports 22, 6080, 8090, 8911, and 47984–48010 belong to Boat; the VNC port defaults to 6081 on Boat, and a service or tunnel configured on a Boat port fails the spawn.
 - Tunnel URLs carry an access token in their query string; treat them like passwords.
+- Sandboxes billed to a Boat organization are made private before use; the operator should set the organization's default visibility for new sandboxes to private.
 - Boat sandboxes take every model API key from Settings › Secrets; there is no deployment-wide key.
 
 ## Provider setup

@@ -239,24 +239,27 @@ def test_daytona_config_loads_snapshot_memory(monkeypatch):
 class FakeBoatApi:
     """Records the Boat calls an image build makes, in order."""
 
-    def __init__(self, *, retained: bool = False, verify_fails: bool = False) -> None:
+    def __init__(
+        self, *, retained: bool = False, verify_fails: bool = False, retained_status: str = "ready"
+    ) -> None:
         self.retained = retained
+        self.retained_status = retained_status
         self.verify_fails = verify_fails
         self.calls: list[tuple] = []
         self.created: list[tuple[str, dict]] = []
 
     def get_named_snapshot(self, name):
         self.calls.append(("get_named_snapshot", name))
-        return {"name": name, "status": "ready"} if self.retained else None
+        return {"name": name, "status": self.retained_status} if self.retained else None
 
     def wait_named_snapshot(self, name, timeout=0):
         self.calls.append(("wait_named_snapshot", name))
         return {"name": name, "status": "ready"}
 
-    def create_sandbox(self, body):
+    def create_sandbox(self, purpose, body):
         sandbox_id = f"bx_{len(self.created) + 1:08d}"
         self.created.append((sandbox_id, body))
-        self.calls.append(("create_sandbox", sandbox_id, body))
+        self.calls.append(("create_sandbox", sandbox_id, purpose, body))
         return {"id": sandbox_id, "state": "provisioning"}
 
     def wait_ready(self, sandbox_id, timeout=0):
@@ -330,12 +333,26 @@ def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed
     assert verification[2].endswith("/app/verify/smoke_test.py verify")
 
 
+def test_boat_refuses_to_rebuild_over_a_failed_named_snapshot(monkeypatch, build_mocks):
+    api = FakeBoatApi(retained=True, retained_status="failed")
+    main = load_boat_builder(monkeypatch, api)["main"]
+
+    with pytest.raises(RuntimeError, match="exists with status 'failed'"):
+        main()
+
+    # Nothing was started or published: no build sandbox, no save, no result.
+    assert api.created == []
+    assert [call[0] for call in api.calls] == ["get_named_snapshot"]
+    build_mocks.assert_not_called()
+
+
 def test_boat_build_installs_the_bundle_under_the_home_directory(monkeypatch, build_mocks):
     api = FakeBoatApi()
     load_boat_builder(monkeypatch, api)["main"]()
 
     build_id, build_body = api.created[0]
     assert build_body["type"] == "default" and "from" not in build_body
+    assert [call[2] for call in api.calls if call[0] == "create_sandbox"] == ["build", "verify"]
     uploads = [call for call in api.calls if call[0] == "write_file" and call[1] == build_id]
     assert [call[2] for call in uploads] == [
         "/home/user/openinspect-image.tar.gz",
@@ -369,6 +386,99 @@ def test_boat_candidate_name_must_be_a_valid_named_snapshot(monkeypatch):
     assert namespace["candidate_name"]("prefix", "a" * 64) == "open-inspect-0123456789abcdef"
 
 
+class RecordingTransport:
+    """Stands in for BoatApi.request: scripted answers, every call recorded."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.calls = []
+
+    def __call__(self, method, path, body=None, *, headers=None, timeout=None):
+        self.calls.append((method, path, body, headers or {}))
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def boat_api(monkeypatch, answers):
+    namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    api = namespace["BoatApi"]("https://boat.dev/api/v1", "boat_test")
+    transport = RecordingTransport(answers)
+    api.request = transport
+    return namespace, api, transport
+
+
+def test_boat_builder_repeats_a_lost_create_under_the_same_key(monkeypatch):
+    import urllib.error
+
+    namespace, api, transport = boat_api(monkeypatch, [])
+    transport.answers = [
+        urllib.error.URLError("timed out"),
+        namespace["BoatApiError"](409, "idempotency_in_progress", "minting"),
+        {"sandbox": {"id": "bx_00000001", "state": "provisioning", "visibility": None}},
+    ]
+
+    sandbox = api.create_sandbox("build", {"type": "small", "ttlSeconds": 60})
+
+    assert sandbox["id"] == "bx_00000001"
+    keys = {call[3]["Idempotency-Key"] for call in transport.calls}
+    assert len(transport.calls) == 3 and len(keys) == 1
+    assert keys.pop() == f"openinspect-image-build-{api.run_id}"
+    assert all(call[2]["noEnv"] is True for call in transport.calls)
+
+
+def test_boat_builder_does_not_repeat_a_rejected_create(monkeypatch):
+    namespace, api, transport = boat_api(monkeypatch, [])
+    transport.answers = [namespace["BoatApiError"](402, "billing_required", "no plan")]
+
+    with pytest.raises(namespace["BoatApiError"], match="billing_required"):
+        api.create_sandbox("build", {"type": "small"})
+    assert len(transport.calls) == 1
+
+
+def test_boat_builder_makes_an_organization_sandbox_private(monkeypatch):
+    _namespace, api, transport = boat_api(
+        monkeypatch,
+        [
+            {"sandbox": {"id": "bx_00000002", "state": "provisioning", "visibility": "shared"}},
+            {"sandbox": {"id": "bx_00000002", "state": "provisioning", "visibility": "private"}},
+        ],
+    )
+
+    sandbox = api.create_sandbox("verify", {"from": "snap"})
+
+    assert sandbox["visibility"] == "private"
+    assert transport.calls[1][:2] == ("POST", "/sandboxes/bx_00000002/unshare")
+
+
+def test_boat_builder_fails_when_a_sandbox_stays_shared(monkeypatch):
+    _namespace, api, _transport = boat_api(
+        monkeypatch,
+        [
+            {"sandbox": {"id": "bx_00000003", "state": "provisioning", "visibility": "shared"}},
+            {"sandbox": {"id": "bx_00000003", "state": "provisioning", "visibility": "shared"}},
+        ],
+    )
+    with pytest.raises(RuntimeError, match="stayed shared"):
+        api.create_sandbox("build", {"type": "small"})
+
+
+def test_boat_builder_refuses_redirects_and_plain_http():
+    namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
+    handler = namespace["RefuseRedirects"]()
+    assert (
+        handler.redirect_request(None, None, 302, "Found", {}, "https://elsewhere.example/") is None
+    )
+    assert namespace["validate_api_url"]("https://boat.dev/api/v1/") == "https://boat.dev/api/v1"
+    assert namespace["validate_api_url"]("http://localhost:8788") == "http://localhost:8788"
+    with pytest.raises(RuntimeError, match="https"):
+        namespace["validate_api_url"]("http://boat.dev/api/v1")
+    with pytest.raises(RuntimeError, match="valid URL"):
+        namespace["validate_api_url"]("boat.dev")
+
+
 def test_boat_launcher_matches_the_control_plane_contract():
     """The launcher, the build and the control plane pin the same paths and exit code."""
     launcher = (ROOT / "packages/boat-infra/launcher.sh").read_text()
@@ -386,6 +496,12 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
     assert "flock -n 9" in launcher
     assert "export RESTORED_FROM_SNAPSHOT=true" in launcher
+    # The runtime, not the launcher, records a completed boot (constants.py).
+    constants = (ROOT / "packages/sandbox-runtime/src/sandbox_runtime/constants.py").read_text()
+    assert 'BOOT_COMPLETE_MARKER_ENV_VAR = "OI_BOOT_COMPLETE_MARKER"' in constants
+    assert "export OI_BOOT_COMPLETE_MARKER" in launcher
+    assert 'if [[ -e "$OI_BOOT_COMPLETE_MARKER" ]]' in launcher
+    assert ': >"$OI_' not in launcher
     assert 'exec "$OI_PYTHON" -m sandbox_runtime.entrypoint' in launcher
     assert "--prepare-only" in launcher
     assert (

@@ -13,6 +13,7 @@ import httpx
 
 from .boot_events import BootPhaseError
 from .constants import (
+    BOOT_COMPLETE_MARKER_ENV_VAR,
     BRIDGE_FATAL_ERROR_FILE_PATH,
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
 )
@@ -23,7 +24,7 @@ from .runtime_config import BootMode, RuntimeConfig
 
 if TYPE_CHECKING:
     import signal
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from .agent_bridge_process import AgentBridgeProcess
     from .boot_events import BootEventLog
@@ -51,6 +52,27 @@ OPENCODE_MODELS_REFRESH_TIMEOUT_SECONDS = 120.0
 
 class BootExecutionCancelled(Exception):
     """A handled process signal interrupted boot work."""
+
+
+def record_boot_complete(environment: Mapping[str, str], log: Any) -> None:
+    """Create the provider's completed-boot marker, when one was asked for.
+
+    Only a boot that reached the harness counts; a boot that fails earlier
+    leaves no marker, so the provider's next start repeats the clone and
+    setup instead of treating a partial checkout as a restored one. A boot
+    that continued past a failed setup.sh (a warning, by policy) does count:
+    a session ran on this disk, and a fresh boot would check out over its
+    work.
+    """
+    path = environment.get(BOOT_COMPLETE_MARKER_ENV_VAR)
+    if not path:
+        return
+    try:
+        marker = Path(path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError as error:
+        log.warn("supervisor.boot_marker_write_failed", path=path, exc=error)
 
 
 class SandboxSupervisor:
@@ -755,6 +777,7 @@ class SandboxSupervisor:
                 duration_ms=int((time.time() - startup_start) * 1000),
                 outcome="success",
             )
+            record_boot_complete(os.environ, self.log)
             # One owner of the bridge's exit code at a time: the boot watcher
             # hands over to the process monitor here. A failure the watcher
             # recorded during that handover (a bridge it could not respawn)

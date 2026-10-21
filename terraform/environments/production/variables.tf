@@ -726,8 +726,8 @@ variable "boat_sandbox_type" {
   default     = "default"
 
   validation {
-    condition     = contains(["small", "default", "large", "xlarge"], var.boat_sandbox_type)
-    error_message = "boat_sandbox_type must be 'small', 'default', 'large', or 'xlarge'."
+    condition     = var.sandbox_provider != "boat" || contains(["small", "default", "large", "xlarge"], var.boat_sandbox_type)
+    error_message = "boat_sandbox_type must be 'small', 'default', 'large', or 'xlarge' when sandbox_provider = 'boat'."
   }
 }
 

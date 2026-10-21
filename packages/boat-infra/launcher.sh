@@ -16,21 +16,24 @@
 #      machine copies in shortly after it reports ready;
 #   3. takes the single-instance lock, exiting EXIT_ALREADY_RUNNING when a
 #      runtime already holds it;
-#   4. decides the boot mode: the first boot writes a marker, every later boot
-#      finds it and exports RESTORED_FROM_SNAPSHOT=true, so the runtime keeps
-#      its checkout and skips setup.sh exactly as for a restored snapshot on
-#      any other provider;
+#   4. decides the boot mode from the completed-boot marker: the runtime
+#      creates it (OI_BOOT_COMPLETE_MARKER) once a boot has synced the
+#      checkout, run setup.sh and started the harness. A later boot that finds
+#      it exports RESTORED_FROM_SNAPSHOT=true, so the runtime keeps its
+#      checkout and skips setup.sh exactly as for a restored snapshot on any
+#      other provider; a boot that was interrupted before then leaves no
+#      marker and the next start boots fresh again;
 #   5. execs the runtime entrypoint with its output in the supervisor log.
 #
 # `--prepare-only` performs steps 1 and 2 and exits; the image build uses it to
-# verify a fresh deploy without starting (or marking) a session runtime.
+# verify a fresh deploy without starting a session runtime.
 set -euo pipefail
 
 OI_USER_HOME=/home/user
 OI_INSTALL_HOME=$OI_USER_HOME/openinspect
 OI_STATE_DIR=$OI_USER_HOME/.openinspect
 OI_LOCK_FILE=$OI_STATE_DIR/runtime.lock
-OI_STARTED_MARKER=$OI_STATE_DIR/runtime-started
+OI_BOOT_COMPLETE_MARKER=$OI_STATE_DIR/boot-complete
 OI_SUPERVISOR_LOG=$OI_STATE_DIR/supervisor.log
 OI_PYTHON=/opt/openinspect/python/bin/python
 OI_RUNTIME_ENVIRONMENT=/app/openinspect-runtime-environment.json
@@ -91,12 +94,12 @@ main() {
     log "runtime already running"
     exit "$EXIT_ALREADY_RUNNING"
   fi
-  if [[ -e "$OI_STARTED_MARKER" ]]; then
+  export OI_BOOT_COMPLETE_MARKER
+  if [[ -e "$OI_BOOT_COMPLETE_MARKER" ]]; then
     export RESTORED_FROM_SNAPSHOT=true
-    log "earlier boot recorded; starting the runtime in restored mode"
+    log "an earlier boot completed; starting the runtime in restored mode"
   else
-    : >"$OI_STARTED_MARKER"
-    log "first boot; starting the runtime fresh"
+    log "no completed boot on this disk; starting the runtime fresh"
   fi
   if [[ -f "$OI_SUPERVISOR_LOG" ]]; then
     mv -f "$OI_SUPERVISOR_LOG" "$OI_SUPERVISOR_LOG.1"

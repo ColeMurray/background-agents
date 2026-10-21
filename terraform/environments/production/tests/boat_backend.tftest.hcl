@@ -112,6 +112,26 @@ run "rejects_an_unknown_machine_type" {
   expect_failures = [var.boat_sandbox_type]
 }
 
+run "ignores_the_machine_type_on_other_backends" {
+  command = plan
+
+  variables {
+    sandbox_provider   = "modal"
+    modal_token_id     = "test-modal-token-id"
+    modal_token_secret = "test-modal-token-secret"
+    modal_workspace    = "test-workspace"
+    modal_api_secret   = "test-modal-api-secret"
+    boat_api_key       = ""
+    boat_base_snapshot = ""
+    boat_sandbox_type  = "huge"
+  }
+
+  assert {
+    condition     = length(module.boat_infra) == 0
+    error_message = "A Boat-only setting must not block a deployment on another backend."
+  }
+}
+
 run "other_backends_build_and_bind_nothing_boat" {
   command = plan
 

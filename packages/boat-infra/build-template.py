@@ -25,7 +25,10 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from http.client import HTTPResponse
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages/sandbox-images/src"))
@@ -60,6 +63,10 @@ TERMINAL_STATES = {"error", "cancelled"}
 
 POLL_SECONDS = 5
 REQUEST_TIMEOUT_SECONDS = 60
+# A create whose response was lost is repeated under the same idempotency key,
+# so a retry never starts a second sandbox.
+CREATE_ATTEMPTS = 3
+CREATE_RETRY_DELAY_SECONDS = 5
 READY_TIMEOUT_SECONDS = 300
 PREPARE_TIMEOUT_SECONDS = 300
 INSTALL_TIMEOUT_SECONDS = 45 * 60
@@ -79,13 +86,44 @@ class BoatApiError(RuntimeError):
         self.code = code
 
 
+class RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would carry the bearer key to the new host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+OPENER = urllib.request.build_opener(RefuseRedirects())
+
+
+def validate_api_url(api_url: str) -> str:
+    """Only HTTPS (or HTTP to a loopback stand-in) may carry the API key."""
+    parsed = urllib.parse.urlsplit(api_url)
+    loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    if not parsed.hostname or parsed.scheme not in {"https", "http"}:
+        raise RuntimeError(f"BOAT_API_URL is not a valid URL: {api_url!r}")
+    if parsed.scheme == "http" and not loopback:
+        raise RuntimeError("BOAT_API_URL must use https (http is allowed for loopback only)")
+    return api_url.rstrip("/")
+
+
+def is_retryable_create_failure(error: Exception) -> bool:
+    """A lost response or a server-side failure; the same key makes the repeat safe."""
+    if isinstance(error, BoatApiError):
+        return error.status >= 500 or error.code == "idempotency_in_progress"
+    return isinstance(error, (urllib.error.URLError, TimeoutError, OSError))
+
+
 class BoatApi:
     """The handful of Boat calls an image build needs."""
 
     def __init__(self, api_url: str, api_key: str, org: str | None = None) -> None:
-        self.api_url = api_url.rstrip("/")
+        self.api_url = validate_api_url(api_url)
         self.api_key = api_key
         self.org = org
+        # One key per create of this run: a repeat after a lost response gets
+        # the same sandbox back, a later run never collides with a deleted one.
+        self.run_id = uuid.uuid4().hex
 
     def request(
         self,
@@ -106,8 +144,8 @@ class BoatApi:
             f"{self.api_url}{path}", data=data, method=method, headers=request_headers
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = response.read()
+            with OPENER.open(request, timeout=timeout) as response:
+                payload = read_response(response)
         except urllib.error.HTTPError as error:
             raw = error.read()
             code = None
@@ -121,14 +159,39 @@ class BoatApi:
             raise BoatApiError(error.code, code, message) from None
         return json.loads(payload) if payload else {}
 
-    def create_sandbox(self, body: dict[str, Any]) -> dict[str, Any]:
-        response = self.request(
-            "POST",
-            "/sandboxes",
-            {"noEnv": True, "snapshots": True, **body},
-            headers={"Idempotency-Key": f"openinspect-image-{uuid.uuid4()}"},
-        )
-        return response["sandbox"]
+    def create_sandbox(self, purpose: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Create with none of the account's secrets, under one key per purpose and run."""
+        key = f"openinspect-image-{purpose}-{self.run_id}"
+        for attempt in range(1, CREATE_ATTEMPTS + 1):
+            try:
+                response = self.request(
+                    "POST",
+                    "/sandboxes",
+                    {"noEnv": True, "snapshots": True, **body},
+                    headers={"Idempotency-Key": key},
+                )
+                break
+            except Exception as error:
+                if attempt == CREATE_ATTEMPTS or not is_retryable_create_failure(error):
+                    raise
+                print(
+                    f"Boat create ({purpose}) attempt {attempt} failed: {error}; retrying",
+                    flush=True,
+                )
+                time.sleep(CREATE_RETRY_DELAY_SECONDS * attempt)
+        sandbox = response["sandbox"]
+        return self.ensure_private(sandbox)
+
+    def ensure_private(self, sandbox: dict[str, Any]) -> dict[str, Any]:
+        """An organization-billed sandbox starts shared; nobody else may touch the image."""
+        if sandbox.get("visibility") != "shared":
+            return sandbox
+        updated = self.request("POST", f"/sandboxes/{sandbox['id']}/unshare")["sandbox"]
+        if updated.get("visibility") != "private":
+            raise RuntimeError(
+                f"Boat sandbox {sandbox['id']} stayed {updated.get('visibility')} after unshare"
+            )
+        return updated
 
     def get_sandbox(self, sandbox_id: str) -> dict[str, Any]:
         return self.request("GET", f"/sandboxes/{sandbox_id}")["sandbox"]
@@ -255,6 +318,10 @@ class BoatApi:
             time.sleep(POLL_SECONDS)
 
 
+def read_response(response: HTTPResponse) -> bytes:
+    return response.read()
+
+
 def tail(text: Any) -> str:
     return str(text or "")[-LOG_TAIL_CHARS:]
 
@@ -318,11 +385,7 @@ def build_snapshot(api: BoatApi, name: str, bundle_directory: Path, build_type: 
     archive = pack_archive(bundle_directory)
     launcher = (Path(__file__).resolve().parent / "launcher.sh").read_bytes()
     sandbox = api.create_sandbox(
-        {
-            "type": build_type,
-            "ttlSeconds": BUILD_SANDBOX_TTL_SECONDS,
-            "name": f"openinspect-image-build-{name}"[:120],
-        }
+        "build", {"type": build_type, "ttlSeconds": BUILD_SANDBOX_TTL_SECONDS}
     )
     sandbox_id = sandbox["id"]
     print(f"Boat image build sandbox {sandbox_id} ({build_type})", flush=True)
@@ -343,13 +406,7 @@ def build_snapshot(api: BoatApi, name: str, bundle_directory: Path, build_type: 
 
 def verify_snapshot(api: BoatApi, name: str) -> None:
     """A fresh deploy both verifies the final artifact and exercises the launcher's preparation."""
-    sandbox = api.create_sandbox(
-        {
-            "from": name,
-            "ttlSeconds": VERIFY_SANDBOX_TTL_SECONDS,
-            "name": f"openinspect-image-verify-{name}"[:120],
-        }
-    )
+    sandbox = api.create_sandbox("verify", {"from": name, "ttlSeconds": VERIFY_SANDBOX_TTL_SECONDS})
     sandbox_id = sandbox["id"]
     print(f"Boat image verification sandbox {sandbox_id}", flush=True)
     try:
@@ -381,11 +438,20 @@ def main() -> None:
     existing = api.get_named_snapshot(name)
     if existing is not None and existing.get("status") == "saving":
         existing = api.wait_named_snapshot(name)
-    if existing is not None and existing.get("status") == "ready":
+    if existing is None:
+        build_snapshot(api, name, bundle.directory, build_type)
+    elif existing.get("status") == "ready":
         # A retry re-verifies the retained artifact instead of rebuilding it.
         print(f"Boat named snapshot {name} already exists; verifying it", flush=True)
     else:
-        build_snapshot(api, name, bundle.directory, build_type)
+        # A failed save keeps its name, and the name is fixed by the inputs: a
+        # build under it would run the whole install and then fail at the save.
+        # Stop before anything is billed; the artifact is the operator's to
+        # remove.
+        raise RuntimeError(
+            f"Boat named snapshot {name} exists with status {existing.get('status')!r}; "
+            "delete it before rebuilding"
+        )
     verify_snapshot(api, name)
     write_build_result(name)
 

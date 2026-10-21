@@ -12,13 +12,20 @@
  * Stop is a resumable archive (Boat snapshots the disk and releases the
  * machine), so the shared lifecycle manager's persistent-resume path drives
  * idle-stop and resume, as it does for Daytona and E2B. A resume lands on a
- * machine whose disk is restored from the snapshot: the launcher sees the
- * marker it wrote on the first boot and starts the runtime in
- * `RESTORED_FROM_SNAPSHOT` mode, so the checkout is kept and `setup.sh` does
- * not run again. There is no session snapshot/restore pair here, and no
- * prebuilt-image support: `evaluateSpawnDecision` consults
+ * machine whose disk is restored from the snapshot: the launcher finds the
+ * marker the runtime wrote when an earlier boot completed and starts the
+ * runtime in `RESTORED_FROM_SNAPSHOT` mode, so the checkout is kept and
+ * `setup.sh` does not run again. There is no session snapshot/restore pair
+ * here, and no prebuilt-image support: `evaluateSpawnDecision` consults
  * `supportsPersistentResume` before any snapshot id, so a stopped sandbox
  * always resumes in place.
+ *
+ * A sandbox an organization pays for starts `shared` unless the organization's
+ * default says otherwise, and every member of a shared sandbox can run
+ * commands in it. The session env holds the sandbox auth token and user
+ * secrets, so a sandbox that reports itself shared is made private before
+ * anything else happens to it, and the create fails closed if that cannot be
+ * done.
  */
 
 import {
@@ -117,10 +124,10 @@ const BOAT_MAX_NAME_CHARS = 120;
 /**
  * The launcher the image build bakes into the snapshot. It recreates the
  * boot-time filesystem links, holds a lock so a second start exits with
- * LAUNCHER_ALREADY_RUNNING_EXIT_CODE, decides the boot mode from its marker
- * file and execs the runtime entrypoint with its output in the launcher log.
- * It takes no arguments on a session boot, so no value ever rides the command
- * line.
+ * LAUNCHER_ALREADY_RUNNING_EXIT_CODE, decides the boot mode from the marker
+ * the runtime writes once a boot has completed, and execs the runtime
+ * entrypoint with its output in the launcher log. It takes no arguments on a
+ * session boot, so no value ever rides the command line.
  */
 export const BOAT_LAUNCHER_PATH = "/home/user/openinspect/launcher.sh";
 const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
@@ -275,14 +282,21 @@ export function assertBoatEnvWithinLimits(envVars: Record<string, string>): void
   }
 }
 
-/** Deterministic, account-unique create key: a retry of the same launch reuses the same sandbox. */
+/**
+ * Deterministic create key: a retry of the same launch reuses the same
+ * sandbox. The session is part of the identity because a logical sandbox id
+ * is not unique on its own (a repository-backed id is the repository plus a
+ * timestamp), and Boat answers a reused key carrying a different body with
+ * `idempotency_key_reused`.
+ */
 export async function boatIdempotencyKey(
   deploymentName: string,
+  sessionId: string,
   sandboxId: string
 ): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(`${deploymentName}:${sandboxId}`)
+    new TextEncoder().encode(`${deploymentName}:${sessionId}:${sandboxId}`)
   );
   return `openinspect-${bytesToHex(new Uint8Array(digest))}`;
 }
@@ -353,6 +367,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         from: this.providerConfig.baseSnapshot,
         idempotencyKey: await boatIdempotencyKey(
           this.providerConfig.deploymentName,
+          config.sessionId,
           config.sandboxId
         ),
         // Session output stays inside the sandbox: Boat keeps no command or
@@ -360,6 +375,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         monitoring: false,
       });
       boatSandboxId = created.id;
+      await this.ensurePrivate(created);
 
       const ready = await this.waitForReady(boatSandboxId);
       await this.nameSandbox(boatSandboxId, config.sandboxId);
@@ -412,53 +428,67 @@ export class BoatSandboxProvider implements SandboxProvider {
       if (sandbox.dataExpiredAt) {
         return spawnFresh("Boat deleted the stopped sandbox's snapshot data (14-day retention)");
       }
+      await this.ensurePrivate(sandbox);
 
-      if (BOAT_LIVE_STATES.has(sandbox.state)) {
-        // Already on a machine (a stale heartbeat, or a stop that never
-        // happened): give it a fresh deadline and make sure the runtime runs.
-        await this.client.updateSandbox(config.providerObjectId, { ttlSeconds });
-      } else if (!BOAT_STARTING_STATES.has(sandbox.state)) {
-        // archived, archiving or error: ask for a machine. A resume during
-        // archiving supersedes the stop and takes the same machine back.
-        try {
-          await this.client.resumeSandbox(config.providerObjectId, { ttlSeconds });
-        } catch (error) {
-          if (error instanceof BoatNotFoundError) {
-            return spawnFresh("Sandbox no longer exists in Boat");
+      // Boat can remove the sandbox at any point from here on (a resume that
+      // finds no machine ends in `cancelled`, which answers 404 once); every
+      // such disappearance takes the fresh-spawn path, as the first 404 does.
+      try {
+        if (BOAT_LIVE_STATES.has(sandbox.state)) {
+          // Already on a machine (a stale heartbeat, or a stop that never
+          // happened): give it a fresh deadline and make sure the runtime runs.
+          await this.client.updateSandbox(config.providerObjectId, { ttlSeconds });
+        } else if (!BOAT_STARTING_STATES.has(sandbox.state)) {
+          // archived, archiving or error: ask for a machine. A resume during
+          // archiving supersedes the stop and takes the same machine back.
+          try {
+            await this.client.resumeSandbox(config.providerObjectId, { ttlSeconds });
+          } catch (error) {
+            if (error instanceof BoatConflictError && error.code === "snapshot_data_expired") {
+              return spawnFresh(
+                "Boat deleted the stopped sandbox's snapshot data (14-day retention)"
+              );
+            }
+            throw error;
           }
-          if (error instanceof BoatConflictError && error.code === "snapshot_data_expired") {
-            return spawnFresh(
-              "Boat deleted the stopped sandbox's snapshot data (14-day retention)"
-            );
-          }
-          throw error;
         }
+
+        const ready = await this.waitForReady(config.providerObjectId);
+        const codeServerPassword = config.codeServerEnabled
+          ? await deriveCodeServerPassword(
+              config.sandboxId,
+              this.providerConfig.sandboxAccessPasswordSecret
+            )
+          : undefined;
+        const vncPassword = config.vncEnabled
+          ? await deriveVncPassword(
+              config.sandboxId,
+              this.providerConfig.sandboxAccessPasswordSecret
+            )
+          : undefined;
+        const access = await this.exposeAccess(
+          config.providerObjectId,
+          config.sandboxId,
+          portPlan,
+          { codeServerPassword, vncPassword }
+        );
+        // A resumed machine runs nothing: the launcher starts the runtime
+        // again and, finding the completed-boot marker, boots it in restored
+        // mode.
+        await this.launchRuntime(config.providerObjectId);
+
+        return {
+          success: true,
+          providerObjectId: config.providerObjectId,
+          lifetime: lifetimeFromSandbox(ready),
+          ...access,
+        };
+      } catch (error) {
+        if (error instanceof BoatNotFoundError) {
+          return spawnFresh("Sandbox no longer exists in Boat");
+        }
+        throw error;
       }
-
-      const ready = await this.waitForReady(config.providerObjectId);
-      const codeServerPassword = config.codeServerEnabled
-        ? await deriveCodeServerPassword(
-            config.sandboxId,
-            this.providerConfig.sandboxAccessPasswordSecret
-          )
-        : undefined;
-      const vncPassword = config.vncEnabled
-        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
-        : undefined;
-      const access = await this.exposeAccess(config.providerObjectId, config.sandboxId, portPlan, {
-        codeServerPassword,
-        vncPassword,
-      });
-      // A resumed machine runs nothing: the launcher starts the runtime again
-      // and, finding its first-boot marker, boots it in restored mode.
-      await this.launchRuntime(config.providerObjectId);
-
-      return {
-        success: true,
-        providerObjectId: config.providerObjectId,
-        lifetime: lifetimeFromSandbox(ready),
-        ...access,
-      };
     } catch (error) {
       throw this.classifyError("Failed to resume Boat sandbox", error);
     }
@@ -670,9 +700,16 @@ export class BoatSandboxProvider implements SandboxProvider {
     for (;;) {
       const sandbox = await this.client.getSandbox(boatSandboxId);
       if (BOAT_LIVE_STATES.has(sandbox.state)) return sandbox;
-      if (sandbox.state === "error" || sandbox.state === "cancelled") {
+      if (sandbox.state === "cancelled") {
+        // Boat removed a sandbox it could not place; the next read answers 404.
+        throw new BoatNotFoundError(
+          `Boat cancelled sandbox ${boatSandboxId}${sandbox.error ? `: ${sandbox.error}` : ""}`,
+          "sandbox_cancelled"
+        );
+      }
+      if (sandbox.state === "error") {
         throw new SandboxProviderError(
-          `Boat sandbox entered ${sandbox.state}${sandbox.error ? `: ${sandbox.error}` : ""}`,
+          `Boat sandbox entered error${sandbox.error ? `: ${sandbox.error}` : ""}`,
           "permanent"
         );
       }
@@ -826,13 +863,43 @@ export class BoatSandboxProvider implements SandboxProvider {
         );
       }
       if (status.status === "lost") {
-        throw new SandboxProviderError("Boat lost track of the runtime launcher", "permanent");
+        // Boat's agent restarted and forgot the process; the process itself
+        // runs on under the user's systemd manager, and `running` is only a
+        // best-effort probe from here. This is no verdict on the launcher:
+        // readiness stays with the bridge's phone-home and the connecting
+        // timeout, exactly as when the launcher is still running.
+        log.warn("boat.runtime_launcher_lost", {
+          sandbox_id: boatSandboxId,
+          process_id: processId,
+          running: status.running,
+        });
+        return;
       }
       if (Date.now() >= settleUntilMs) {
         log.info("boat.runtime_started", { sandbox_id: boatSandboxId, process_id: processId });
         return;
       }
     }
+  }
+
+  /**
+   * Make a sandbox an organization pays for private before it is used. Boat
+   * starts such sandboxes `shared` unless the organization's default is
+   * private, and a shared sandbox lets every member run commands in it, which
+   * would hand them the session env. A personal sandbox (no visibility) needs
+   * nothing. Failing closed is the point: a sandbox that cannot be made
+   * private must not boot the session.
+   */
+  private async ensurePrivate(sandbox: BoatSandbox): Promise<void> {
+    if (sandbox.visibility !== "shared") return;
+    const updated = await this.client.unshareSandbox(sandbox.id);
+    if (updated.visibility !== "private") {
+      throw new SandboxProviderError(
+        `Boat sandbox ${sandbox.id} stayed ${updated.visibility ?? "unknown"} after unshare; set the organization's new-sandbox visibility to private`,
+        "permanent"
+      );
+    }
+    log.info("boat.sandbox_made_private", { sandbox_id: sandbox.id });
   }
 
   /**

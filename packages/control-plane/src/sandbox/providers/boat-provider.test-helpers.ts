@@ -36,6 +36,7 @@ export function mockClient(overrides: Partial<BoatRestClient> = {}): BoatRestCli
     updateSandbox: vi.fn(async () => boatSandbox()),
     stopSandbox: vi.fn(async () => boatSandbox({ state: "archiving" })),
     resumeSandbox: vi.fn(async () => {}),
+    unshareSandbox: vi.fn(async () => boatSandbox({ visibility: "private" })),
     deleteSandbox: vi.fn(async () => {}),
     startDetachedCommand: vi.fn(async () => ({ processId: 4242 })),
     runCommand: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false })),

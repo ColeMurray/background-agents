@@ -62,7 +62,11 @@ describe("BoatSandboxProvider", () => {
         type: "default",
         ttlSeconds: 7200,
         from: "open-inspect-abc123",
-        idempotencyKey: await boatIdempotencyKey("test", "sandbox-logical"),
+        idempotencyKey: await boatIdempotencyKey(
+          "test",
+          baseCreateConfig.sessionId,
+          "sandbox-logical"
+        ),
         monitoring: false,
       });
       expect(params).not.toHaveProperty("name");
@@ -156,6 +160,42 @@ describe("BoatSandboxProvider", () => {
       const writeOrder = vi.mocked(client.writeFile).mock.invocationCallOrder[0];
       const launchOrder = vi.mocked(client.startDetachedCommand).mock.invocationCallOrder[0];
       expect(writeOrder).toBeLessThan(launchOrder);
+    });
+
+    it("leaves a personal sandbox alone and makes a shared organization sandbox private first", async () => {
+      const personal = mockClient();
+      await createProvider(personal).createSandbox(baseCreateConfig);
+      expect(personal.unshareSandbox).not.toHaveBeenCalled();
+
+      const shared = mockClient({
+        createSandbox: vi.fn(async () =>
+          boatSandbox({ state: "provisioning", visibility: "shared" })
+        ),
+      });
+      const result = await createProvider(shared).createSandbox(baseCreateConfig);
+      expect(result.providerObjectId).toBe("bx_abcdefgh");
+      expect(shared.unshareSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+      // Private before anything else happens to the sandbox.
+      const unshareOrder = vi.mocked(shared.unshareSandbox).mock.invocationCallOrder[0];
+      expect(unshareOrder).toBeLessThan(vi.mocked(shared.getSandbox).mock.invocationCallOrder[0]);
+      expect(unshareOrder).toBeLessThan(vi.mocked(shared.hostPort).mock.invocationCallOrder[0]);
+    });
+
+    it("deletes a shared organization sandbox it cannot make private", async () => {
+      const client = mockClient({
+        createSandbox: vi.fn(async () =>
+          boatSandbox({ state: "provisioning", visibility: "shared" })
+        ),
+        unshareSandbox: vi.fn(async () => boatSandbox({ visibility: "shared" })),
+      });
+      const error = await createProvider(client)
+        .createSandbox(baseCreateConfig)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect((error as SandboxProviderError).errorType).toBe("permanent");
+      expect((error as SandboxProviderError).message).toContain("stayed shared");
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+      expect(client.startDetachedCommand).not.toHaveBeenCalled();
     });
 
     it("keeps a failed dashboard label from failing the create", async () => {
@@ -257,6 +297,21 @@ describe("BoatSandboxProvider", () => {
       expect((error as SandboxProviderError).message).toContain("exited with code 1");
       expect((error as SandboxProviderError).message).toContain("runtime toolchain missing");
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+    });
+
+    it("does not fail a boot on a launcher Boat's agent lost track of", async () => {
+      const client = mockClient({
+        getCommandStatus: vi.fn(async () => ({
+          status: "lost" as const,
+          running: false,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+        })),
+      });
+      const result = await createProvider(client).createSandbox(baseCreateConfig);
+      expect(result.providerObjectId).toBe("bx_abcdefgh");
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
     });
 
     it("treats a launcher that found the runtime already running as started", async () => {
@@ -370,6 +425,47 @@ describe("BoatSandboxProvider", () => {
       await expect(
         createProvider(conflict, providerConfig).resumeSandbox(resumeConfig)
       ).resolves.toMatchObject({ success: false, shouldSpawnFresh: true });
+    });
+
+    it("spawns fresh when the sandbox disappears while it is being brought back", async () => {
+      const vanished = mockClient({
+        getSandbox: vi
+          .fn()
+          .mockResolvedValueOnce(boatSandbox({ state: "archived" }))
+          .mockRejectedValue(new BoatNotFoundError("gone")),
+      });
+      await expect(createProvider(vanished).resumeSandbox(resumeConfig)).resolves.toMatchObject({
+        success: false,
+        shouldSpawnFresh: true,
+      });
+      expect(vanished.resumeSandbox).toHaveBeenCalled();
+      expect(vanished.startDetachedCommand).not.toHaveBeenCalled();
+
+      const cancelled = mockClient({
+        getSandbox: vi
+          .fn()
+          .mockResolvedValueOnce(boatSandbox({ state: "archived" }))
+          .mockResolvedValue(boatSandbox({ state: "cancelled", error: "no machine" })),
+      });
+      await expect(createProvider(cancelled).resumeSandbox(resumeConfig)).resolves.toMatchObject({
+        success: false,
+        shouldSpawnFresh: true,
+      });
+    });
+
+    it("makes a shared organization sandbox private before resuming it", async () => {
+      const client = mockClient({
+        getSandbox: vi
+          .fn()
+          .mockResolvedValueOnce(boatSandbox({ state: "archived", visibility: "shared" }))
+          .mockResolvedValue(boatSandbox({ state: "ready", visibility: "private" })),
+      });
+      const result = await createProvider(client).resumeSandbox(resumeConfig);
+      expect(result.success).toBe(true);
+      expect(client.unshareSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+      expect(vi.mocked(client.unshareSandbox).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(client.resumeSandbox).mock.invocationCallOrder[0]
+      );
     });
 
     it("spawns fresh for a cancelled sandbox and surfaces other conflicts", async () => {
@@ -588,11 +684,12 @@ describe("assertBoatEnvWithinLimits", () => {
 });
 
 describe("boatIdempotencyKey", () => {
-  it("is deterministic per deployment and sandbox, and distinct across them", async () => {
-    const key = await boatIdempotencyKey("prod", "sb-1");
+  it("is deterministic per deployment, session and sandbox, and distinct across them", async () => {
+    const key = await boatIdempotencyKey("prod", "sess-a", "sb-1");
     expect(key).toMatch(/^openinspect-[a-f0-9]{64}$/);
-    expect(await boatIdempotencyKey("prod", "sb-1")).toBe(key);
-    expect(await boatIdempotencyKey("staging", "sb-1")).not.toBe(key);
-    expect(await boatIdempotencyKey("prod", "sb-2")).not.toBe(key);
+    expect(await boatIdempotencyKey("prod", "sess-a", "sb-1")).toBe(key);
+    expect(await boatIdempotencyKey("staging", "sess-a", "sb-1")).not.toBe(key);
+    expect(await boatIdempotencyKey("prod", "sess-a", "sb-2")).not.toBe(key);
+    expect(await boatIdempotencyKey("prod", "sess-b", "sb-1")).not.toBe(key);
   });
 });

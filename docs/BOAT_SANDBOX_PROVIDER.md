@@ -46,6 +46,23 @@ app configuration. See [GETTING_STARTED.md](./GETTING_STARTED.md) for the full d
 `<prefix>-<16 hex characters of the build-input hash>`, and Boat names allow 63 lowercase letters,
 digits and dashes in total, so keep the prefix to 46 characters or fewer.
 
+### Billing to an organization
+
+When sandboxes are billed to a Boat organization (`boat_org`, or an organization set as the
+account's active wallet), every member of the organization can see them, and a sandbox that starts
+`shared` can be used by every member: commands, files, ports. A session sandbox's env holds the
+sandbox auth token and the user's secrets, so the provider makes a sandbox that reports itself
+`shared` private (`POST /sandboxes/{id}/unshare`) before it waits for it, and the snapshot build
+does the same for its build and verification sandboxes. A sandbox that cannot be made private fails
+the spawn and is deleted. Set the organization's default for new sandboxes to private first, so no
+sandbox is ever shared for even a moment:
+
+```bash
+boat org default-visibility private
+```
+
+Personal accounts need nothing: their sandboxes are visible to the owner only.
+
 ## Snapshot Build
 
 Boat sandboxes deploy from a **named snapshot** that contains:
@@ -111,7 +128,9 @@ runtime the same way Open-Inspect does on every other provider:
 3. the control plane starts the baked launcher, detached; it links `/workspace` and `/app` into the
    home directory, waits for the restored toolchain, takes a single-instance lock, and execs the
    supervisor (`python -m sandbox_runtime.entrypoint`) with its output in
-   `/home/user/.openinspect/supervisor.log`
+   `/home/user/.openinspect/supervisor.log`. The supervisor records a completed boot in
+   `/home/user/.openinspect/boot-complete`; a later launch that finds that file boots in restored
+   mode, one that does not boots fresh again
 4. the supervisor clones or syncs the selected repositories, starts OpenCode and code-server, and
    connects the Open-Inspect bridge back to the control plane; readiness is the bridge phoning home,
    and the shared connecting timeout fails the session otherwise
@@ -151,8 +170,12 @@ Open-Inspect drives the lifecycle through the shared lifecycle manager, treating
 - Before the TTL lapses, the control plane drains the session and stops the sandbox itself; a
   sandbox that reaches its TTL is archived by Boat the same way.
 - The next prompt **resumes** the archived sandbox on a new machine (or the same one within about
-  ten minutes of the stop) and starts the runtime again in restored mode, so the checkout is kept
-  and `setup.sh` does not run twice. The hosted URLs stay the same across a stop and resume.
+  ten minutes of the stop) and starts the runtime again. A sandbox whose earlier boot completed
+  resumes in restored mode, so the checkout is kept and `setup.sh` does not run twice; one whose
+  boot was interrupted before the harness came up boots fresh again. The hosted URLs stay the same
+  across a stop and resume, and so do the code-server and VNC passwords: the control plane keeps the
+  create-time credentials of a retained sandbox, so rotating `BOAT_API_KEY` does not lock existing
+  sessions out.
 - Boat keeps a stopped sandbox's disk for **14 days**. After that, and when Boat has lost the
   sandbox, the next prompt spawns a fresh sandbox instead.
 - Only sandboxes that fail before becoming usable, or are being replaced, are **deleted**.
@@ -166,8 +189,8 @@ plane's normal recovery.
 
 Terraform passes these provider-level values to the control plane:
 
-- `BOAT_API_KEY` — used for the Boat REST API **and** the code-server/VNC password HMAC, and to
-  authenticate the snapshot build
+- `BOAT_API_KEY` — used for the Boat REST API **and** the code-server/VNC password HMAC at create
+  time, and to authenticate the snapshot build
 - `BOAT_BASE_SNAPSHOT`
 - `BOAT_API_URL`, `BOAT_ORG`, `BOAT_SANDBOX_TYPE` (optional)
 

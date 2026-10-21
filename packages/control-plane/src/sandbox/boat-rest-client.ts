@@ -52,6 +52,7 @@ const TIMEOUT_CREATE_MS = 60_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_UPDATE_MS = 15_000;
 const TIMEOUT_STOP_MS = 30_000;
+const TIMEOUT_UNSHARE_MS = 15_000;
 const TIMEOUT_RESUME_MS = 60_000;
 const TIMEOUT_DELETE_MS = 30_000;
 const TIMEOUT_COMMAND_START_MS = 30_000;
@@ -89,6 +90,11 @@ const boatSandboxSchema = z.object({
   /** Set once Boat deleted a stopped sandbox's snapshot data (14 days after the stop). */
   dataExpiredAt: z.string().nullable().optional(),
   subdomain: z.string().nullable().optional(),
+  /**
+   * `shared` or `private` for a sandbox an organization pays for (every
+   * member can use a shared one); null for a personal sandbox.
+   */
+  visibility: z.string().nullable().optional(),
   stop: boatStopOperationSchema.nullable().optional(),
 });
 
@@ -250,6 +256,8 @@ interface RequestOptions {
   headers?: Record<string, string>;
   query?: Record<string, string>;
   signal?: AbortSignal;
+  /** Runs over a provider error message before it is shortened and kept on the thrown error. */
+  redact?: (message: string) => string;
 }
 
 export class BoatRestClient {
@@ -287,16 +295,12 @@ export class BoatRestClient {
           },
           headers: { "Idempotency-Key": params.idempotencyKey },
           signal,
+          // The request body carries secrets (env): a provider error echoing
+          // request values must not reach failure reasons, whole or in part.
+          redact: (message) => scrubEnvValues(message, params.env),
         }
       );
       return response.sandbox;
-    } catch (error) {
-      // The request body carries secrets (env): a provider error echoing request
-      // values must not reach failure reasons verbatim.
-      if (error instanceof BoatApiError) {
-        throw scrubbedApiError(error, params.env);
-      }
-      throw error;
     } finally {
       log.info("boat.create_sandbox", {
         duration_ms: Date.now() - startMs,
@@ -376,6 +380,22 @@ export class BoatRestClient {
       TIMEOUT_RESUME_MS,
       { body: { ttlSeconds: options.ttlSeconds }, signal }
     );
+  }
+
+  /**
+   * `POST /sandboxes/{id}/unshare`: make an organization-billed sandbox
+   * private, so only its creator (this API key) can use it. A no-op on a
+   * sandbox that is already private; Boat refuses it for a personal sandbox.
+   */
+  async unshareSandbox(id: string, signal?: AbortSignal): Promise<BoatSandbox> {
+    const response = await this.requestJson(
+      "POST",
+      `/sandboxes/${encodeURIComponent(id)}/unshare`,
+      TIMEOUT_UNSHARE_MS,
+      sandboxEnvelopeSchema,
+      { signal }
+    );
+    return response.sandbox;
   }
 
   /** `DELETE /sandboxes/{id}`: irreversible; the confirm header must repeat the id. */
@@ -566,7 +586,7 @@ export class BoatRestClient {
           }
           const response = await fetch(url, init);
           if (!response.ok) {
-            throw await toApiError(method, path, response);
+            throw await toApiError(method, path, response, options?.redact);
           }
           return await consume(response);
         }
@@ -584,8 +604,17 @@ export class BoatRestClient {
   }
 }
 
-/** Read Boat's error envelope into a typed error; the body text itself never travels. */
-async function toApiError(method: string, path: string, response: Response): Promise<BoatApiError> {
+/**
+ * Read Boat's error envelope into a typed error; the body text itself never
+ * travels. `redact` sees the whole provider message before it is shortened,
+ * so a request value the message echoes cannot survive the cut in part.
+ */
+async function toApiError(
+  method: string,
+  path: string,
+  response: Response,
+  redact: (message: string) => string = (message) => message
+): Promise<BoatApiError> {
   let code: string | undefined;
   let message: string | undefined;
   let requestId: string | undefined;
@@ -598,24 +627,13 @@ async function toApiError(method: string, path: string, response: Response): Pro
       // A malformed error body still describes the failure by status alone.
     }
   }
-  const detail = message ? `: ${message.slice(0, MAX_ERROR_MESSAGE_CHARS)}` : "";
+  const detail = message ? `: ${redact(message).slice(0, MAX_ERROR_MESSAGE_CHARS)}` : "";
   const summary = `Boat API ${method} ${path} failed with HTTP ${response.status}${
     code ? ` (${code})` : ""
   }${detail}`;
   if (response.status === 404) return new BoatNotFoundError(summary, code, requestId);
   if (response.status === 409) return new BoatConflictError(summary, code, requestId);
   return new BoatApiError(summary, response.status, code, requestId);
-}
-
-function scrubbedApiError(error: BoatApiError, envVars: Record<string, string>): BoatApiError {
-  const message = scrubEnvValues(error.message, envVars);
-  if (error instanceof BoatNotFoundError) {
-    return new BoatNotFoundError(message, error.code, error.requestId);
-  }
-  if (error instanceof BoatConflictError) {
-    return new BoatConflictError(message, error.code, error.requestId);
-  }
-  return new BoatApiError(message, error.status, error.code, error.requestId);
 }
 
 export function createBoatRestClient(config: BoatRestConfig): BoatRestClient {

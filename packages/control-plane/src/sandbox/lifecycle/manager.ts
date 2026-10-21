@@ -1371,15 +1371,28 @@ export class SandboxLifecycleManager
         result.ttydUrl,
         finalProviderObjectId
       );
+      // A retained sandbox keeps the service passwords it was created with
+      // (its env is fixed at create), and the storage keeps them across a stop
+      // for that reason. They outrank what the provider derives now, which can
+      // differ once the provider credential they derive from has rotated.
+      const codeServerPassword = result.codeServerUrl
+        ? ((await this.storage.getSandboxAccessSecret("codeServer")) ?? result.codeServerPassword)
+        : undefined;
+      const vncPassword = result.vncAccess
+        ? ((await this.storage.getSandboxAccessSecret("vnc")) ?? result.vncAccess.password)
+        : undefined;
       let completed: boolean;
       try {
         completed = await this.storage.completeProviderResume(generation, {
           providerObjectId: finalProviderObjectId,
           codeServer:
-            result.codeServerUrl && result.codeServerPassword
-              ? { url: result.codeServerUrl, password: result.codeServerPassword }
+            result.codeServerUrl && codeServerPassword
+              ? { url: result.codeServerUrl, password: codeServerPassword }
               : null,
-          vnc: result.vncAccess ?? null,
+          vnc:
+            result.vncAccess && vncPassword
+              ? { url: result.vncAccess.url, password: vncPassword }
+              : null,
           ttyd: validTtydToken ? { url: result.ttydUrl ?? null, token: validTtydToken } : null,
           tunnelUrls: result.tunnelUrls ?? null,
         });
