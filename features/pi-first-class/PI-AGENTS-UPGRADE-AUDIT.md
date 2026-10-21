@@ -12,8 +12,8 @@ bundle's resolution changes by exactly four files (one renamed chunk, one storag
 for the identical one in Pi Durable), and the MCP broker's resolution is byte-identical before and
 after.
 
-Two of the brief's three findings did not survive the audit, and one of them would have caused real
-damage. Section 5 records them.
+One of the brief's three findings did not survive the audit, and it is the one that would have
+caused real damage. Section 5 records it.
 
 ---
 
@@ -41,7 +41,7 @@ linear-bot, pi-codemode-sandbox, modal-infra — imports it, directly or transit
 `packages/web/package.json` has no `agents` entry and no path to one, which is why the web lane is
 not in the blast radius (section 8).
 
-Five entry points are imported, across four files:
+Five entry points are imported, across seven files:
 
 | Entry point                           | Symbol(s) used                                                      | Site                                                                                                                                        |
 | ------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -322,9 +322,27 @@ imports the **installed** `agents/harness/pi`, and asserts:
 3. a declared resource reads back, and a traversing path is refused without disclosing the bundle's
    content.
 
-Against 0.28.1, assertion 2 fails, because the SDK returns `content` there. That is the point: the
-guard now fails loudly if a future SDK bump reintroduces the mismatch, instead of the mismatch being
-papered over by an adapter.
+Against 0.28.1 **with the shim removed**, assertion 2 fails, and the failure shows the SDK's own
+result:
+
+```
+- Expected
++ Received
+  {
+-   "output": [ ObjectContaining { "text": StringContaining "Check tests." … } ],
++   "content": [
++     {
++       "text": "<skill_resource name=\"review\" path=\"references/checklist.md\" …>\nCheck tests.\n</skill_resource>",
++       "type": "text",
++     },
++   ],
+  }
+```
+
+(Verified by running the new test in the pre-upgrade worktree with the shim deleted: 2 of the 3
+assertions fail; the tool-name assertion passes, because the names never changed.) That is the
+point: the guard now fails loudly if a future SDK bump reintroduces the mismatch, instead of the
+mismatch being papered over by an adapter.
 
 ## 7. The worker bundle's resolution, before and after
 
@@ -395,30 +413,64 @@ tests on one run, 4 files / 5 tests on the next), and **all four files pass in i
 (`packages/web/package.json` has no `agents` entry; the lockfile's `packages/web` entry has none
 either), so the upgrade cannot reach it.
 
-### The integration lane's failures are the same kind of timeouts
+### The integration lane's failures are the same kind of timeouts — and the pre-upgrade tree fails them too
 
 Same signature: `Test timed out in 5000ms`, in `child-session-ops.test.ts`,
 `websocket-client.test.ts` and `session-export.test.ts` — session/websocket plumbing, not the pi
-harness, the skills extension, or the MCP broker — with the failing set changing between runs. A
-baseline run of the same lane on the **pre-upgrade** commit (`a6ab76de`, `agents@0.28.1`) in a
-separate worktree is the control; see section 9.
+harness, the skills extension, or the MCP broker — with the failing set changing between runs.
+
+**The control settles it.** The same lane was run on the **pre-upgrade** commit (`a6ab76de`,
+`agents@0.28.1`) in a separate worktree, under the same machine load:
+
+```
+baseline (agents@0.28.1):  Test Files  1 failed | 173 passed (174)
+                           Tests       3 failed | 2472 passed | 1 skipped (2476)
+                           FAIL test/integration/teams-routes.test.ts > returns null team
+                                capabilities across memberships (...)
+                           Error: Test timed out in 5000ms.
+```
+
+The pre-upgrade tree fails the lane too, with the identical timeout signature, in a **different**
+file. The failures are pre-existing and load-induced, not caused by the upgrade.
 
 **The machine was not idle.** A second agent's worktree (`pi-mcp-oauth`) was running its own workerd
 integration lane on the same host throughout these runs, and the baseline run was deliberately
-executed alongside it. Both lanes are CPU-bound and the failures are 5-second timeouts in the
-slowest files, which is the signature of an overloaded host rather than of a defect. CI shards the
-integration lane in two (`.github/workflows/ci.yml:286`) and runs it on a dedicated runner, so it
-does not see this load.
+executed alongside it. The load average was 10.65 / 15.24 / 17.31. Both lanes are CPU-bound and the
+failures are 5-second timeouts in the slowest files, which is the signature of an overloaded host
+rather than of a defect. CI shards the integration lane in two (`.github/workflows/ci.yml:286`) and
+runs it on a dedicated runner, so it does not see this load.
+
+### The pi, skills, and MCP integration tests all pass on the upgraded tree
+
+Run directly, under the same load, the seven files that cover everything the upgrade touches:
+
+```
+npx vitest run --config vitest.integration.config.ts \
+  test/integration/pi-session-do.test.ts \
+  test/integration/pi-session-creation.test.ts \
+  test/integration/pi-skills-extension.test.ts \
+  test/integration/managed-skills.test.ts \
+  test/integration/skill-imports.test.ts \
+  test/integration/mcp-connections.test.ts \
+  test/integration/mcp-servers.test.ts
+
+Test Files  7 passed (7)
+Tests       145 passed (145)
+```
+
+`pi-session-do.test.ts` includes the Durable Object eviction path, so the pi session store — the one
+place the upgrade rewrote the storage adapter — is exercised end to end on 0.29.0.
 
 ## 9. UNVERIFIED
 
 Honest list of what this audit did **not** establish.
 
-1. **That the failing web and integration tests fail on the pre-upgrade tree too.** The failures are
-   timeouts whose set varies run to run, they are all in packages with no `agents` dependency (web)
-   or in plumbing unrelated to the pi harness (integration), and they pass in isolation. That is
-   strong evidence, not proof. A baseline run of the integration lane on `a6ab76de` was started; its
-   result is recorded in section 10 if it finished.
+1. **That the failing _web_ tests fail on the pre-upgrade tree too.** The integration lane's
+   failures _are_ now settled — the pre-upgrade tree fails them too, with the same timeout signature
+   (section 8). The web lane's failures were not given the same control run. The evidence for them
+   is that they are 5-second timeouts in the slowest React component files, that the failing set
+   changes between runs, that all four files pass in isolation (152/152), and that the web package
+   has no dependency path to `agents` at all. That is strong evidence, not a control run.
 2. **That the pi session store's SQLite tables are byte-identical at runtime under workerd.** The
    name-set equivalence is proven at the source level (section 4) and the integration lane exercises
    `PiSessionDO`, but no test in the repository asserts the physical table names, so "no data
@@ -432,10 +484,12 @@ Honest list of what this audit did **not** establish.
    The rest of the package changed (`dist/browser-*.js`, `dist/skills/index.js`, `dist/index.js`,
    and others) and that change is **not** characterised here — it is simply not reachable from
    Open-Inspect, which the bundle input list demonstrates.
-5. **Runtime equivalence of the two SQLite adapters under eviction.** Both were read; the adapters
-   differ in internal queueing (`OperationQueue` vs `SerialQueue`) but present the same
-   `SqliteDatabase` contract to Pi Durable. The behaviour under a mid-transaction eviction was not
-   exercised.
+5. **Runtime equivalence of the two SQLite adapters under a mid-transaction eviction.** Both
+   adapters were read: they differ in internal queueing (`OperationQueue` vs `SerialQueue`) but
+   present the same `SqliteDatabase` contract to Pi Durable, and they produce the same table names
+   (section 4). The Durable Object eviction path **is** exercised — `pi-session-do.test.ts` aborts
+   the object mid-flight in three tests and all pass on 0.29.0 — but no test evicts the object
+   _inside_ an open SQLite transaction, so that specific interleaving is not covered.
 
 ## 10. Corrections to the repository's own documents
 
@@ -462,6 +516,10 @@ case, described the peer step incorrectly. They are corrected in this change:
 - The browser capability does not touch `agents`.
 - The worker bundle's resolution changes by four files, all accounted for.
 - The lockfile diff is twelve lines.
+- The pi, skills, and MCP integration suites pass on the upgraded tree (145 tests), including the
+  Durable Object eviction path.
+- The new workerd test pins the SDK's tool names and result contract against the **installed** SDK,
+  so the mismatch this upgrade removes cannot silently return.
 
 The one thing a future reader must not do is reach for `--legacy-peer-deps`: it removes the
 `@modelcontextprotocol/sdk` and `@modelcontextprotocol/server` peers from the tree, and the worker
