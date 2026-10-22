@@ -373,6 +373,8 @@ reason it is gone. Nothing is dropped silently.
 
 The remaining thin hooks also include:
 
+- `.github/workflows/terraform.yml` — carries the overlay's off-by-default variables through both
+  plan and apply jobs.
 - `packages/shared/src/types/sandbox-execution.ts` — selects the overlay's extended tool-effect
   catalog at the package boundary.
 - `packages/shared/src/types/server-messages.ts` — selects the overlay's extended capability
