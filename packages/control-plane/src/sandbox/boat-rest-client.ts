@@ -146,15 +146,12 @@ const fileWrittenSchema = z.object({
   size: z.number().int(),
 });
 
-/** Statuses a named snapshot reports; `GET /named-snapshots/{name}` is the source of truth. */
-export const BOAT_NAMED_SNAPSHOT_STATUSES = ["saving", "ready", "failed"] as const;
-export type BoatNamedSnapshotStatus = (typeof BOAT_NAMED_SNAPSHOT_STATUSES)[number];
-
 /**
  * The subset of Boat's `NamedSnapshot` the control plane acts on. A named
  * snapshot is a full, standalone copy of a sandbox's disk under a name of the
- * caller's choosing; it outlives its source sandbox and never expires. `status`
- * stays a plain string for the same reason the sandbox state does.
+ * caller's choosing; it outlives its source sandbox and never expires. Boat
+ * reports `status` as `saving`, `ready` or `failed`; it stays a plain string
+ * here for the same reason the sandbox state does.
  */
 const boatNamedSnapshotSchema = z.object({
   name: z.string(),

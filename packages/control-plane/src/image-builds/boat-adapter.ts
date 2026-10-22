@@ -37,7 +37,7 @@ export interface BoatImageBuildAdapterTimings {
   savePollIntervalMs: number;
 }
 
-export const DEFAULT_BOAT_IMAGE_BUILD_ADAPTER_TIMINGS: BoatImageBuildAdapterTimings = {
+const DEFAULT_BOAT_IMAGE_BUILD_ADAPTER_TIMINGS: BoatImageBuildAdapterTimings = {
   saveObservationMs: 90_000,
   savePollIntervalMs: 5_000,
 };

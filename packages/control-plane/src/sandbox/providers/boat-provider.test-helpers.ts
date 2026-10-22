@@ -28,7 +28,7 @@ export function boatSandbox(overrides: Partial<BoatSandbox> = {}): BoatSandbox {
   };
 }
 
-export function boatNamedSnapshot(overrides: Partial<BoatNamedSnapshot> = {}): BoatNamedSnapshot {
+function boatNamedSnapshot(overrides: Partial<BoatNamedSnapshot> = {}): BoatNamedSnapshot {
   return {
     name: "oi-img-acme-repo-0123456789abcdef",
     status: "ready",

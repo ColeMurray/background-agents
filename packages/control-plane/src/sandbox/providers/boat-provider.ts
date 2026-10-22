@@ -154,7 +154,7 @@ const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
  * Prefix of the named snapshot an image build is saved under; the rest is a
  * legible slug of the build id and a digest (see boatImageSnapshotName).
  */
-export const BOAT_IMAGE_SNAPSHOT_NAME_PREFIX = "oi-img-";
+const BOAT_IMAGE_SNAPSHOT_NAME_PREFIX = "oi-img-";
 const BOAT_IMAGE_SNAPSHOT_SLUG_MAX_CHARS = 28;
 
 /**
