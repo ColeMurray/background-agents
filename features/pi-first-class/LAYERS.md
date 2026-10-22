@@ -380,6 +380,15 @@ The remaining thin hooks also include:
 - `packages/web/src/components/settings/settings-registry.ts` — selects the overlay-owned MCP
   settings composition.
 
+The overlay's test-only package selections are also explicit:
+
+- `packages/control-plane/test/integration/cleanup.ts`
+- `packages/shared/src/pi-runtime-feature-capabilities.test.ts`
+- `packages/shared/src/pi-runtime-tool-effects.test.ts`
+- `packages/shared/src/types/integrations.test.ts`
+- `packages/shared/src/types/mcp-read.test.ts`
+- `packages/web/src/app/(app)/settings/page.test.tsx`
+
 The overlay is additive. It edits a core file only to add an extension point the core declares, and
 every one of them is named here.
 
