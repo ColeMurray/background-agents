@@ -42,7 +42,7 @@ variables {
 
   # Each run enables the bot itself so the suite also covers the real default.
   discord_application_id      = "123"
-  discord_public_key          = "abcdef"
+  discord_public_key          = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   discord_bot_token           = "test-discord-token"
   discord_allowed_role_ids    = "456"
   discord_allowed_channel_ids = "789"
@@ -100,6 +100,17 @@ run "requires_a_non_empty_role_id" {
   }
 
   expect_failures = [var.enable_discord_bot]
+}
+
+run "rejects_a_malformed_public_key" {
+  command = plan
+
+  variables {
+    enable_discord_bot = true
+    discord_public_key = "abcdef"
+  }
+
+  expect_failures = [var.discord_public_key]
 }
 
 run "rejects_an_unknown_harness" {

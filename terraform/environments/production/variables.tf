@@ -369,6 +369,12 @@ variable "discord_public_key" {
   description = "Discord application public key, hex (Developer Portal → General Information)"
   type        = string
   default     = ""
+
+  # Anything but a 32-byte Ed25519 key fails every signature check at runtime.
+  validation {
+    condition     = var.discord_public_key == "" || can(regex("^[0-9a-fA-F]{64}$", var.discord_public_key))
+    error_message = "discord_public_key must be the application's 64-character hex public key."
+  }
 }
 
 variable "discord_bot_token" {
