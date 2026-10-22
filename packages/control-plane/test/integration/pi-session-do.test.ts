@@ -14,7 +14,7 @@ import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snap
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
 import { SessionInternalPaths } from "../../src/session/contracts";
-import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
 import type {
   PiRuntimeControl,

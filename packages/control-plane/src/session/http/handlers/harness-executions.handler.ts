@@ -1,7 +1,7 @@
 import type { SandboxCommandRecord, SandboxCommandState } from "../../sandbox-command-repository";
-import { publicCommand } from "./pi-sandbox-execution.handler";
+import { publicCommand } from "./harness-sandbox-execution.handler";
 
-interface PiExecutionsHandlerDependencies {
+interface HarnessExecutionsHandlerDependencies {
   commands: {
     get(commandId: string): SandboxCommandRecord | null;
     listRecent(limit?: number): SandboxCommandRecord[];
@@ -14,8 +14,8 @@ interface PiExecutionsHandlerDependencies {
   execution: { cancel(commandId: string): SandboxCommandState };
 }
 
-export class PiExecutionsHandler {
-  constructor(private readonly deps: PiExecutionsHandlerDependencies) {}
+export class HarnessExecutionsHandler {
+  constructor(private readonly deps: HarnessExecutionsHandlerDependencies) {}
 
   list(request: Request): Response {
     const requested = Number(new URL(request.url).searchParams.get("limit") ?? "50");

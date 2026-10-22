@@ -1,5 +1,8 @@
 import type { Context } from "@earendil-works/chord";
-import type { ToolEffectKind, ToolEffectRegistration } from "@open-inspect/shared/pi-tool-effects";
+import type {
+  ToolEffectKind,
+  ToolEffectRegistration,
+} from "@open-inspect/shared/pi-runtime-tool-effects";
 import type { HookApi, ToolExecutionResult, ToolHookCall } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import {

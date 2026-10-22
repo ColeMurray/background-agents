@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SandboxCommandRecord } from "../../sandbox-command-repository";
-import { PiSandboxExecutionHandler } from "./pi-sandbox-execution.handler";
+import { HarnessSandboxExecutionHandler } from "./harness-sandbox-execution.handler";
 
 const execute = {
   type: "command_execute" as const,
@@ -60,7 +60,8 @@ function fixture(
     outputPage: vi.fn(() => ({ chunks: [], nextSequence: null })),
   };
   return {
-    handler: new PiSandboxExecutionHandler({
+    handler: new HarnessSandboxExecutionHandler({
+      operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
       execution,
       commands,
       getProcessingMessageId: () => processingId,
@@ -91,7 +92,7 @@ const submit = {
   approvalRevision: 1,
 };
 
-describe("PiSandboxExecutionHandler", () => {
+describe("HarnessSandboxExecutionHandler", () => {
   it("submits immutable authority for the currently processing Pi operation", async () => {
     const h = fixture();
 

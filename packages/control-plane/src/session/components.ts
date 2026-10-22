@@ -83,7 +83,7 @@ import { SessionCoreRepository } from "./session-core-repository";
 // eslint-disable-next-line no-restricted-imports
 import { SandboxRepository } from "./sandbox-repository";
 import { SandboxCommandRepository } from "./sandbox-command-repository";
-import { PiSandboxExecutionCoordinator } from "./pi-sandbox-execution";
+import { HarnessSandboxExecutionCoordinator } from "./harness-sandbox-execution";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -141,8 +141,8 @@ import { AttachmentsHandler } from "./http/handlers/attachments.handler";
 import { WsTokenHandler } from "./http/handlers/ws-token.handler";
 import { SessionLifecycleHandler } from "./http/handlers/session-lifecycle.handler";
 import { SessionBudgetHandler } from "./http/handlers/session-budget.handler";
-import { PiSandboxExecutionHandler } from "./http/handlers/pi-sandbox-execution.handler";
-import { PiExecutionsHandler } from "./http/handlers/pi-executions.handler";
+import { HarnessSandboxExecutionHandler } from "./http/handlers/harness-sandbox-execution.handler";
+import { HarnessExecutionsHandler } from "./http/handlers/harness-executions.handler";
 import { PullRequestHandler } from "./http/handlers/pull-request.handler";
 import { ParticipantsHandler } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
@@ -184,12 +184,13 @@ import {
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
 import type { SandboxEvent, SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
-import { PiCredentialService } from "./pi-credential-service";
+import { ProviderCredentialService } from "./provider-credential-service";
 import { PiResultHandler } from "./http/handlers/pi-result.handler";
 import { PiControlHandler } from "./http/handlers/pi-control.handler";
 import { PiControlRepository } from "./pi-control-repository";
-import { PiEventHandler } from "./http/handlers/pi-event.handler";
-import { PiResultReceiptRepository } from "./pi-result-receipt-repository";
+import { piControlRequestIdFromMessageId } from "./pi-control-message-id";
+import { HarnessEventHandler } from "./http/handlers/harness-event.handler";
+import { HarnessResultReceiptRepository } from "./harness-result-receipt-repository";
 import { PiOperationRepository } from "./pi-operation-repository";
 import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
@@ -198,7 +199,7 @@ import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 import { McpSessionHandler } from "./http/handlers/mcp-session.handler";
 import { McpServerReviewStore } from "../db/mcp-server-reviews";
 import { PiMemoryHandler } from "./http/handlers/pi-memory.handler";
-import { createPiOperationFence } from "./http/handlers/pi-operation-fence";
+import { createHarnessOperationFence } from "./http/handlers/harness-operation-fence";
 import { evaluateTurnAuthor } from "../harness/turn-authority";
 import { BrowserGateway } from "./http/handlers/browser-gateway.handler";
 
@@ -254,7 +255,7 @@ export interface SessionComponents {
   pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
   callbackService: CallbackNotificationService;
-  piSandboxExecution: PiSandboxExecutionCoordinator;
+  piSandboxExecution: HarnessSandboxExecutionCoordinator;
 }
 
 /**
@@ -820,7 +821,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     },
     isPiSession
   );
-  const piSandboxExecution = new PiSandboxExecutionCoordinator({
+  const piSandboxExecution = new HarnessSandboxExecutionCoordinator({
     commands: sandboxCommandRepository,
     sandboxes: sandboxRepository,
     lifecycle: lifecycleManager,
@@ -882,7 +883,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const piResultHandler = new PiResultHandler(
     messageRepository,
     processPiEvent,
-    new PiResultReceiptRepository(sql),
+    new HarnessResultReceiptRepository(sql),
     async (result) => {
       await terminalMessageProjection.flushPending();
       await statusService.reconcileAfterExecution(result.success);
@@ -928,10 +929,21 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piOperations
   );
   const visiblePiTokens = new Set<string>();
-  const piEventHandler = new PiEventHandler(
+  const piEventHandler = new HarnessEventHandler(
     piOperations,
     processPiEvent,
     isPiSession,
+    (request) => {
+      const operationId = request.headers.get("X-Pi-Operation-ID");
+      const displayId = request.headers.get("X-Pi-Projection-ID");
+      const rawSequence = request.headers.get("X-Pi-Projection-Sequence");
+      if (!operationId || !displayId || !rawSequence || !/^[1-9]\d*$/.test(rawSequence)) {
+        return null;
+      }
+      const sequence = Number(rawSequence);
+      return Number.isSafeInteger(sequence) ? { operationId, displayId, sequence } : null;
+    },
+    (displayId) => `pi-projection:${displayId}`,
     Date.now,
     (event) => {
       if (event.type !== "token" || visiblePiTokens.has(event.operationId)) return;
@@ -1044,7 +1056,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     new ScmCredentialsService(sourceControlProvider(), requestLog, () =>
       resolveCredentialScope(getPublicSessionId())
     ).getCredentials();
-  const piCredentialService = new PiCredentialService(db, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY);
+  const piCredentialService = new ProviderCredentialService(
+    db,
+    env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY
+  );
   const piRepositoryTools = new PiRepositoryTools({
     repositories: () => sessionCoreRepository.getSessionRepositories(),
     resolveCredentialScope: () => resolveCredentialScope(getPublicSessionId()),
@@ -1112,13 +1127,16 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const piMemoryHandler = new PiMemoryHandler({
     getSessionId: getPublicSessionId,
     service: piMemoryService,
-    activeOperation: createPiOperationFence({
-      sessions: sessionCoreRepository,
+    activeOperation: createHarnessOperationFence({
+      isHarnessSession: isPiSession,
       messages: messageRepository,
       controls: piControlRepository,
+      operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
+      controlRequestId: piControlRequestIdFromMessageId,
     }),
   });
-  const piSandboxExecutionHandler = new PiSandboxExecutionHandler({
+  const piSandboxExecutionHandler = new HarnessSandboxExecutionHandler({
+    operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
     execution: piSandboxExecution,
     commands: sandboxCommandRepository,
     getProcessingMessageId: () => messageRepository.getProcessingMessage()?.id ?? null,
@@ -1128,7 +1146,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       "off",
     liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.sandboxExecution,
   });
-  const piExecutionsHandler = new PiExecutionsHandler({
+  const piExecutionsHandler = new HarnessExecutionsHandler({
     commands: sandboxCommandRepository,
     execution: piSandboxExecution,
   });

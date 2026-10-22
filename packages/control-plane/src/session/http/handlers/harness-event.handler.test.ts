@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PiEventHandler } from "./pi-event.handler";
+import { HarnessEventHandler } from "./harness-event.handler";
 
 function request(operationId = "message-1", sequence = 1, displayId = "message-1:token") {
   return new Request("http://session/internal/pi-event", {
@@ -21,7 +21,17 @@ function request(operationId = "message-1", sequence = 1, displayId = "message-1
   });
 }
 
-describe("PiEventHandler", () => {
+const readEnvelope = (input: Request) => {
+  const operationId = input.headers.get("X-Pi-Operation-ID");
+  const displayId = input.headers.get("X-Pi-Projection-ID");
+  const sequence = Number(input.headers.get("X-Pi-Projection-Sequence"));
+  return operationId && displayId && Number.isSafeInteger(sequence)
+    ? { operationId, displayId, sequence }
+    : null;
+};
+const projectionAckId = (displayId: string) => `pi-projection:${displayId}`;
+
+describe("HarnessEventHandler", () => {
   it("acknowledges each immutable sequence once", async () => {
     let lastProjectionSequence = 0;
     const operations = {
@@ -38,10 +48,12 @@ describe("PiEventHandler", () => {
     };
     const processEvent = vi.fn(async () => {});
     const observeVisible = vi.fn();
-    const handler = new PiEventHandler(
+    const handler = new HarnessEventHandler(
       operations,
       processEvent,
       () => true,
+      readEnvelope,
+      projectionAckId,
       () => 456,
       observeVisible
     );
@@ -78,7 +90,13 @@ describe("PiEventHandler", () => {
       advanceProjection: vi.fn(() => true),
     };
     const processEvent = vi.fn(async () => {});
-    const handler = new PiEventHandler(operations, processEvent, () => true);
+    const handler = new HarnessEventHandler(
+      operations,
+      processEvent,
+      () => true,
+      readEnvelope,
+      projectionAckId
+    );
 
     const response = await handler.handle(request("message-a", 1, "message-a:tool:final"));
 
@@ -88,14 +106,16 @@ describe("PiEventHandler", () => {
 
   it("rejects an unknown operation and an out-of-order sequence deterministically", async () => {
     const processEvent = vi.fn(async () => {});
-    const unknown = new PiEventHandler(
+    const unknown = new HarnessEventHandler(
       { get: () => null, advanceProjection: vi.fn(() => false) },
       processEvent,
-      () => true
+      () => true,
+      readEnvelope,
+      projectionAckId
     );
     expect((await unknown.handle(request())).status).toBe(409);
 
-    const gap = new PiEventHandler(
+    const gap = new HarnessEventHandler(
       {
         get: () => ({
           operationId: "message-1",
@@ -105,7 +125,9 @@ describe("PiEventHandler", () => {
         advanceProjection: vi.fn(() => false),
       },
       processEvent,
-      () => true
+      () => true,
+      readEnvelope,
+      projectionAckId
     );
     expect((await gap.handle(request("message-1", 3))).status).toBe(409);
     expect(processEvent).not.toHaveBeenCalled();

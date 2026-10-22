@@ -1,7 +1,7 @@
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
   createToolEffectRegistry,
-} from "@open-inspect/shared/pi-tool-effects";
+} from "@open-inspect/shared/pi-runtime-tool-effects";
 import type { HookApi, ToolHookCall } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import {

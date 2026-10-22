@@ -63,7 +63,7 @@ interface SandboxStore {
   }): void;
 }
 
-interface PiSandboxExecutionDependencies {
+interface HarnessSandboxExecutionDependencies {
   commands: CommandLedger;
   sandboxes: SandboxStore;
   lifecycle: {
@@ -93,12 +93,12 @@ interface PiSandboxExecutionDependencies {
  * (`sandbox/execution-isolation.ts`). That is what re-contains the
  * arbitrary exec the sandbox harness would have contained.
  *
- * New-session admission belongs to PiSessionDO's durable capability snapshot;
+ * New-session admission belongs to the adapter's durable capability snapshot;
  * this coordinator deliberately has no live deployment-flag gate so admitted
  * command recovery continues after a feature rollback.
  */
-export class PiSandboxExecutionCoordinator {
-  constructor(private readonly deps: PiSandboxExecutionDependencies) {}
+export class HarnessSandboxExecutionCoordinator {
+  constructor(private readonly deps: HarnessSandboxExecutionDependencies) {}
 
   async submit(
     command: ExecuteCommand,

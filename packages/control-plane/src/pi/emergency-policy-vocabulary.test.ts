@@ -1,6 +1,6 @@
 import type { HookApi, ToolHookCall } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
-import { resolvePiFeatureCapabilities } from "@open-inspect/shared/pi-feature-capabilities";
+import { resolvePiFeatureCapabilities } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import type { ToolEffectRegistration } from "@open-inspect/shared/tool-effects";
 import { createDeploymentEmergencyPolicy } from "../harness/emergency-policy";
 import { piEmergencyRequirement } from "./emergency-policy-vocabulary";

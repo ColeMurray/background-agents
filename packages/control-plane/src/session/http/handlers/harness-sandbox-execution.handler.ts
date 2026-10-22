@@ -37,7 +37,8 @@ const requestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("cancel_operation") }).strict(),
 ]);
 
-interface PiSandboxExecutionHandlerDependencies {
+interface HarnessSandboxExecutionHandlerDependencies {
+  operationId(request: Request): string | null;
   execution: {
     submit(
       command: Extract<z.infer<typeof sandboxExecutionCommandSchema>, { type: "command_execute" }>,
@@ -74,20 +75,22 @@ interface PiSandboxExecutionHandlerDependencies {
   liveMode(): "off" | "read_only" | "enabled";
 }
 
-/** SessionDO-owned execution authority. Reachable only from the private Pi bridge. */
-export class PiSandboxExecutionHandler {
-  constructor(private readonly deps: PiSandboxExecutionHandlerDependencies) {}
+/** Session-owned execution authority, reachable only from an adapter's private bridge. */
+export class HarnessSandboxExecutionHandler {
+  constructor(private readonly deps: HarnessSandboxExecutionHandlerDependencies) {}
 
   async handle(request: Request): Promise<Response> {
-    const operationId = request.headers.get("X-Pi-Operation-ID");
-    if (!operationId) return Response.json({ error: "Pi operation is required" }, { status: 400 });
+    const operationId = this.deps.operationId(request);
+    if (!operationId) {
+      return Response.json({ error: "Harness operation is required" }, { status: 400 });
+    }
     const parsed = requestSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success)
       return Response.json({ error: "Invalid command request" }, { status: 400 });
     const input = parsed.data;
     const active = this.deps.getProcessingMessageId() === operationId;
     if (!active && input.action !== "cancel_operation" && input.action !== "cancel") {
-      return Response.json({ error: "Pi operation is not active" }, { status: 409 });
+      return Response.json({ error: "Harness operation is not active" }, { status: 409 });
     }
 
     try {

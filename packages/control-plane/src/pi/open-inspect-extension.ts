@@ -1,7 +1,7 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
-import { PI_TOOL_EFFECT_REGISTRY } from "@open-inspect/shared/pi-tool-effects";
+import { PI_TOOL_EFFECT_REGISTRY } from "@open-inspect/shared/pi-runtime-tool-effects";
 import { sha256Hex } from "@open-inspect/shared/service-auth";
 import {
   AssistantEntry,

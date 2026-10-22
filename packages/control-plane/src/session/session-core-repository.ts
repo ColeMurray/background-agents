@@ -13,7 +13,7 @@ import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
 import {
   piFeatureCapabilitySnapshotSchema,
   type PiFeatureCapabilitySnapshot,
-} from "@open-inspect/shared/pi-feature-capabilities";
+} from "@open-inspect/shared/pi-runtime-feature-capabilities";
 
 const sessionCostRowSchema = sessionRowSchema.pick({ total_cost: true });
 

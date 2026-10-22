@@ -106,7 +106,9 @@ export function minCompatibleRuntimeVersionFor(harness: HarnessId): number {
 
 export const MIN_PI_SANDBOX_EXECUTION_RUNTIME_VERSION = MIN_PI_SANDBOX_EXECUTION_RUNTIME_GENERATION;
 
-export function supportsPiSandboxExecution(runtimeVersion: string | null | undefined): boolean {
+export function supportsHarnessSandboxExecution(
+  runtimeVersion: string | null | undefined
+): boolean {
   if (!runtimeVersion) return false;
   const generation = parseRuntimeVersionNumber(runtimeVersion);
   return generation !== null && generation >= MIN_PI_SANDBOX_EXECUTION_RUNTIME_VERSION;

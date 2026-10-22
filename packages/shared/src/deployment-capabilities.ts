@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { harnessIdSchema } from "./harnesses";
-import { piFeatureCapabilityMatrixSchema } from "./pi-feature-capabilities";
+import { piFeatureCapabilityMatrixSchema } from "./pi-runtime-feature-capabilities";
 
 export const OPEN_INSPECT_RUNTIME_VERSIONS = Object.freeze({
   piDurable: "1.3.0",

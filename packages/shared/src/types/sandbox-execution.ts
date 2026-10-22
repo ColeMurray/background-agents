@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SANDBOX_EXECUTION_TOOL_EFFECT } from "../pi-tool-effects";
+import { SANDBOX_EXECUTION_TOOL_EFFECT } from "../pi-runtime-tool-effects";
 
 export const DEFAULT_SANDBOX_COMMAND_TIMEOUT_MS = 15 * 60 * 1_000;
 export const MAX_SANDBOX_COMMAND_TIMEOUT_MS = 2 * 60 * 60 * 1_000;

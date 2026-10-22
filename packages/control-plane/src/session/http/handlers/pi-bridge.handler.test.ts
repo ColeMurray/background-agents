@@ -87,7 +87,7 @@ function harness(
     controls: { isActiveOperation: () => options.activeControl === true },
     agentControls,
     credentials: {
-      getOpenAIAccess: vi.fn(async () => ({
+      getProviderAccess: vi.fn(async () => ({
         accessToken: "secret-token",
         expiresAt: Date.now() + 60_000,
         credentialVersion: 1,

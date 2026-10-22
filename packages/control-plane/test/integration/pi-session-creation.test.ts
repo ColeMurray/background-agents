@@ -1,6 +1,6 @@
 import { createExecutionContext, env, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import type { WorkerBindings } from "../../src/cloudflare/platform";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import type { PiRuntimeDispatch } from "../../src/pi/runtime-contract";

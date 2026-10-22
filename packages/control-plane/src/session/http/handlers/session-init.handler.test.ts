@@ -4,7 +4,7 @@ import { SessionInitHandler } from "./session-init.handler";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 
 const ENABLED_PI_SNAPSHOT = createPiFeatureCapabilitySnapshot({
   scratchWorkspace: "writable",

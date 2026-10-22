@@ -2,7 +2,7 @@ import { createPiTools, type PiToolResult } from "@cloudflare/computer/tools/pi-
 import {
   PI_TOOL_EFFECT_REGISTRY,
   type ToolEffectRegistration,
-} from "@open-inspect/shared/pi-tool-effects";
+} from "@open-inspect/shared/pi-runtime-tool-effects";
 import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
 import {
   defineExtension,

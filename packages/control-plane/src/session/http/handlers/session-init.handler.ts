@@ -12,7 +12,7 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxInitializer } from "../../sandbox-ports";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { PiRuntimeDispatch } from "../../../pi/runtime-contract";
-import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 
 const repositoryRefSchema = z.object({
   repoOwner: z.string(),

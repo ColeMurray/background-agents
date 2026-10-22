@@ -2,7 +2,7 @@ import {
   createPiFeatureCapabilitySnapshot,
   resolvePiFeatureCapabilities,
   type PiFeatureCapabilitySnapshot,
-} from "@open-inspect/shared/pi-feature-capabilities";
+} from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import type { EnvConfig } from "../types";
 import {
   resolveSandboxExecutionCapability,

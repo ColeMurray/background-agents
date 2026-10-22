@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PiSandboxExecutionCoordinator } from "./pi-sandbox-execution";
+import { HarnessSandboxExecutionCoordinator } from "./harness-sandbox-execution";
 import type { SandboxCommandAuthority, SandboxCommandRecord } from "./sandbox-command-repository";
 
 const command = {
@@ -99,7 +99,7 @@ function fixture(options: { fenced?: boolean; sandbox?: Record<string, unknown> 
   };
   const sockets = { sendToSandbox: vi.fn(() => true) };
   const alarmScheduler = { schedule: vi.fn(async () => undefined) };
-  const coordinator = new PiSandboxExecutionCoordinator({
+  const coordinator = new HarnessSandboxExecutionCoordinator({
     commands,
     sandboxes,
     lifecycle,
@@ -113,7 +113,7 @@ function fixture(options: { fenced?: boolean; sandbox?: Record<string, unknown> 
   return { coordinator, commands, sandboxes, lifecycle, sockets, alarmScheduler };
 }
 
-describe("PiSandboxExecutionCoordinator", () => {
+describe("HarnessSandboxExecutionCoordinator", () => {
   it("does not admit commands after preservation fences the sandbox", async () => {
     const h = fixture({ fenced: true });
 

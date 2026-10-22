@@ -1,4 +1,4 @@
-import { createToolEffectRegistry } from "@open-inspect/shared/pi-tool-effects";
+import { createToolEffectRegistry } from "@open-inspect/shared/pi-runtime-tool-effects";
 import {
   type HookApi,
   type ToolExecutionResult,

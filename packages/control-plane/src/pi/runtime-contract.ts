@@ -1,7 +1,7 @@
 import type { HarnessUsage } from "../harness/pricing";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { z } from "zod";
-import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type { JsonValue } from "@earendil-works/chord";
 

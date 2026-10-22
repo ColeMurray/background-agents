@@ -11,15 +11,16 @@ import {
   piRepositoryMaterializationRequestSchema,
 } from "../../../pi/repository-materialization-contract";
 import type { MessageRepository } from "../../message-repository";
-import type { PiCredentialService } from "../../pi-credential-service";
+import type { ProviderCredentialService } from "../../provider-credential-service";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
+import { piControlRequestIdFromMessageId } from "../../pi-control-message-id";
 import type { SessionAttachmentRepository } from "../../session-attachment-repository";
 import type { ObjectStorage } from "../../../storage/object-storage";
 import { sessionAttachmentIdSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
 import { piRuntimeControlSchema } from "../../../pi/runtime-contract";
-import { createPiOperationFence } from "./pi-operation-fence";
+import { createHarnessOperationFence } from "./harness-operation-fence";
 import { MemoryError } from "../../../memory/errors";
 import type { RenderedSessionMemory } from "@open-inspect/shared/types/memories";
 
@@ -67,7 +68,7 @@ interface PiBridgeHandlerOptions {
   }) => void;
   controls: Pick<PiControlRepository, "isActiveOperation">;
   agentControls: { handle(request: Request): Promise<Response> };
-  credentials: Pick<PiCredentialService, "getOpenAIAccess">;
+  credentials: Pick<ProviderCredentialService, "getProviderAccess">;
   skills: Pick<SessionSkillStore, "getSandboxInstallation">;
   /** The session's attachment records, including the claim a turn holds. */
   attachments: Pick<SessionAttachmentRepository, "getClaimedByMessage">;
@@ -98,10 +99,12 @@ export class PiBridgeHandler {
   private readonly fence: (request: Request) => boolean;
 
   constructor(private readonly options: PiBridgeHandlerOptions) {
-    this.fence = createPiOperationFence({
-      sessions: options.sessions,
+    this.fence = createHarnessOperationFence({
+      isHarnessSession: () => options.sessions.getSession()?.harness === "pi",
       messages: options.messages,
       controls: options.controls,
+      operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
+      controlRequestId: piControlRequestIdFromMessageId,
     });
   }
 
@@ -118,8 +121,9 @@ export class PiBridgeHandler {
       return Response.json({ error: "Invalid rejected credential version" }, { status: 400 });
     }
     try {
-      const access = await this.options.credentials.getOpenAIAccess(
+      const access = await this.options.credentials.getProviderAccess(
         this.options.getSessionId(),
+        "openai",
         rejectedCredentialVersion
       );
       return Response.json(

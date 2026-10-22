@@ -242,13 +242,13 @@
       "import": "./dist/child-status-tool.js",
       "types": "./dist/child-status-tool.d.ts"
     },
-    "./pi-tool-effects": {
-      "import": "./dist/pi-tool-effects.js",
-      "types": "./dist/pi-tool-effects.d.ts"
+    "./pi-runtime-tool-effects": {
+      "import": "./dist/pi-runtime-tool-effects.js",
+      "types": "./dist/pi-runtime-tool-effects.d.ts"
     },
-    "./pi-feature-capabilities": {
-      "import": "./dist/pi-feature-capabilities.js",
-      "types": "./dist/pi-feature-capabilities.d.ts"
+    "./pi-runtime-feature-capabilities": {
+      "import": "./dist/pi-runtime-feature-capabilities.js",
+      "types": "./dist/pi-runtime-feature-capabilities.d.ts"
     },
     "./migration-reservations": {
       "import": "./dist/migration-reservations.js",

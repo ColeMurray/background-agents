@@ -1,6 +1,6 @@
 import type { Workspace } from "@cloudflare/computer";
 import type { Context } from "@earendil-works/chord";
-import type { ToolEffectRegistration } from "@open-inspect/shared/pi-tool-effects";
+import type { ToolEffectRegistration } from "@open-inspect/shared/pi-runtime-tool-effects";
 import type {
   HookApi,
   ToolExecutionApi,

@@ -6,21 +6,26 @@ import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import { ProviderCredentialStore } from "../db/provider-account-credentials";
 import { SessionIndexStore } from "../db/session-index";
 import type { SqlDatabase } from "../db/sql-database";
+import type { ModelProviderId } from "../model-provider-accounts/provider-auth-contracts";
 
-/** Broker the immutable connected OpenAI account bound to one session. */
-export class PiCredentialService {
+/** Broker the immutable connected provider account bound to one session. */
+export class ProviderCredentialService {
   constructor(
     private readonly db: SqlDatabase,
     private readonly encryptionKey: string
   ) {}
 
-  async getOpenAIAccess(sessionId: string, rejectedCredentialVersion?: number) {
+  async getProviderAccess(
+    sessionId: string,
+    provider: ModelProviderId,
+    rejectedCredentialVersion?: number
+  ) {
     const binding = await new SessionIndexStore(this.db).getProviderAuthForProvider(
       sessionId,
-      "openai"
+      provider
     );
     if (!binding || binding.authMode !== "provider_account") {
-      throw new Error("Pi Durable requires a connected OpenAI provider account");
+      throw new Error("The session requires a connected provider account");
     }
     const broker = new ModelProviderAccountBroker(
       {
@@ -31,6 +36,6 @@ export class PiCredentialService {
       modelProviderAccountAdapterRegistry,
       { now: Date.now, createOwner: () => generateId() }
     );
-    return broker.getAccess(binding.providerAccountId, "openai", { rejectedCredentialVersion });
+    return broker.getAccess(binding.providerAccountId, provider, { rejectedCredentialVersion });
   }
 }

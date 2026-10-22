@@ -2,7 +2,7 @@ import {
   createPiFeatureCapabilitySnapshot,
   piFeatureCapabilitySnapshotSchema,
   type PiFeatureCapabilitySnapshot,
-} from "@open-inspect/shared/pi-feature-capabilities";
+} from "@open-inspect/shared/pi-runtime-feature-capabilities";
 
 export const PI_FEATURE_CAPABILITY_SNAPSHOT_KEY = "open-inspect:feature-capabilities";
 

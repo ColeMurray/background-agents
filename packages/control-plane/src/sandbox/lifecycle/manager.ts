@@ -61,7 +61,7 @@ import {
 import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
 import { formatBootBudgetFailure } from "./boot-failure-message";
 import { createLogger, type Logger } from "../../logger";
-import { supportsPiSandboxExecution } from "../../image-builds/model";
+import { supportsHarnessSandboxExecution } from "../../image-builds/model";
 import { hashToken } from "../../auth/crypto";
 import { parseStoredSandboxBootPhase, sandboxBootPhaseLogFields } from "../boot-phase";
 import type { ImageBuildLookup } from "./image-selection";
@@ -2044,7 +2044,7 @@ export class SandboxLifecycleManager
       if (
         runtimeMode !== "execution" ||
         !bridgeInstanceId ||
-        !supportsPiSandboxExecution(runtimeVersion)
+        !supportsHarnessSandboxExecution(runtimeVersion)
       ) {
         const reason = "Execution sandbox runtime is missing or below the required generation";
         this.storage.transitionSandboxStatus(generation, row.status, "failed");

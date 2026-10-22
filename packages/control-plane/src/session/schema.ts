@@ -57,7 +57,7 @@ const TERMINAL_MESSAGE_PROJECTION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS termin
   next_attempt_at INTEGER NOT NULL
 );`;
 
-const PI_RESULT_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS pi_result_receipts (
+const HARNESS_RESULT_RECEIPTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS harness_result_receipts (
   operation_id TEXT PRIMARY KEY,
   projected_at INTEGER NOT NULL
 );`;
@@ -311,7 +311,7 @@ ${SESSION_ALARM_STATE_TABLE_SQL}
 ${TERMINAL_MESSAGE_PROJECTION_TABLE_SQL}
 
 -- Acknowledges a Pi result only after all SessionDO projection work finishes.
-${PI_RESULT_RECEIPTS_TABLE_SQL}
+${HARNESS_RESULT_RECEIPTS_TABLE_SQL}
 
 -- Durable Pi dispatch CAS and one acknowledged projection sequence.
 ${PI_PROJECTION_RELIABILITY_TABLES_SQL}
@@ -849,7 +849,7 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID,
     description: "Persist completed Pi result projections",
     feature: "piProjection",
-    run: PI_RESULT_RECEIPTS_TABLE_SQL,
+    run: HARNESS_RESULT_RECEIPTS_TABLE_SQL,
   },
   {
     id: PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
