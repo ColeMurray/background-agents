@@ -23,6 +23,7 @@ variables {
   repo_secrets_encryption_key = "test-repo-key"
   nextauth_secret             = "test-browser-auth-secret-with-32-characters"
   deployment_name             = "pi-workspace-test"
+  web_platform                = "cloudflare"
 
   sandbox_provider   = "modal"
   modal_token_id     = "test-token"
