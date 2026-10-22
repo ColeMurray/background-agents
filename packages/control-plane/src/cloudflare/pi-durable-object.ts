@@ -9,7 +9,9 @@ import {
   PI_MEMORY_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
   normalizeTokenUsage,
+  createPiFeatureCapabilitySnapshot,
   piFeatureCapabilitySnapshotSchema,
+  type PiFeatureCapabilityInput,
   type PiFeatureCapabilitySnapshot,
   type ToolEffectRegistration,
 } from "@open-inspect/shared";
@@ -159,6 +161,13 @@ import {
 } from "../harness/action-ceiling";
 import { createPiPriceTable } from "../pi/price-table";
 import {
+  createFixedActionCeiling,
+  HARNESS_ACTION_CEILING,
+  type HarnessActionCeiling,
+} from "../harness/action-ceiling";
+import { createBudgetGateProvider, type HarnessBudgetState } from "../harness/budget-gate";
+import { armTurnDeadline, type HarnessTurnDeadline } from "../harness/turn-deadline";
+import {
   accountingDelta,
   summarizeUsage,
   type HarnessUsageState,
@@ -295,10 +304,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     this.fetchCodexCredential(version, signal)
   );
   private readonly models = createModels({ credentials: this.credentials });
+  /** The deadline of every turn this object is running. */
+  private readonly turnDeadlines = new Map<string, HarnessTurnDeadline>();
   /** The ceiling on what this turn may do; a fresh one for every turn. */
-  private turnActionCeiling: HarnessActionCeiling = createFixedActionCeiling(
-    HARNESS_ACTION_CEILING
-  );
+  private turnActionCeiling: HarnessActionCeiling =
+    createFixedActionCeiling(HARNESS_ACTION_CEILING);
   private readonly prices = createPiPriceTable(this.models);
   private readonly registry = createRegistry();
   private workspace: WorkspaceToolFacade | undefined;
@@ -573,7 +583,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
       const assembly = assembleExtensions(extensions, capabilities);
       for (const extension of assembly.extensions) this.registry.install(extension);
-      this.models.setProvider(openaiCodexProvider());
+      // The provider is wrapped so the budget is checked before *every*
+      // model call, not only after a step is priced.
+      this.models.setProvider(
+        createBudgetGateProvider(openaiCodexProvider(), () => this.readBudgetState())
+      );
       const openStartedAt = Date.now();
       const opened = await Harness.open(
         storage,
@@ -633,6 +647,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     drain: (operationId) => this.projectionOutbox.drain(operationId),
     result: (operationId) => this.waitForResult(operationId),
     deliver: async (sessionId, result) => {
+      this.turnDeadlines.get(result.operationId)?.clear();
+      this.turnDeadlines.delete(result.operationId);
       await this.stopEventRelay(result.operationId);
       // Stopping waits for the final live listener batch, which may have
       // enqueued after the projector's pre-terminal drain.
@@ -645,10 +661,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     recordRejection: (operationId, error) =>
       this.projectionOutbox.markResultRejected(operationId, error.message),
     reject: async (operationId) => {
+      this.turnDeadlines.get(operationId)?.clear();
+      this.turnDeadlines.delete(operationId);
       this.projectionOutbox.complete(operationId);
       await this.settleOperationMetadata(operationId);
     },
     fail: async (sessionId, operationId, error) => {
+      this.turnDeadlines.get(operationId)?.clear();
+      this.turnDeadlines.delete(operationId);
       await this.stopEventRelay(operationId);
       await this.harness.abort({ session: ROOT_SESSION, operationId }).catch(() => false);
       const accounting = await this.observeOperationAccounting(operationId);
@@ -815,6 +835,14 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       session: ROOT_SESSION,
       operationId: input.messageId,
     });
+    // The turn's deadline is armed inside the object. A turn that never
+    // finishes would otherwise hold the object, its storage, and the
+    // session's money for as long as it liked.
+    this.armTurnDeadline(input.messageId, input.executionDeadlineMs);
+    // The turn's deadline is armed inside the object. A turn that never
+    // finishes would otherwise hold the object, its storage, and the
+    // session's money for as long as it liked.
+    this.armTurnDeadline(input.messageId, input.executionDeadlineMs);
     this.log.info("pi.latency", {
       event: "pi.latency",
       milestone: "pi_admitted",
@@ -840,6 +868,55 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
     );
     return { operationId: receipt.operationId, accepted: receipt.accepted };
+  }
+
+  /**
+   * The session's budget, read now.
+   *
+   * The budget gate asks for this before every model call, so the limit is
+   * checked before the money is spent, not after.
+   */
+  private async readBudgetState(): Promise<HarnessBudgetState> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    if (!sessionId) return { exhausted: false, spentUsd: 0, capUsd: null };
+    try {
+      const response = await this.env.SESSION.getByName(sessionId).fetch(
+        new Request(`http://session${SessionInternalPaths.budgetState}`)
+      );
+      if (!response.ok) return { exhausted: false, spentUsd: 0, capUsd: null };
+      const state = (await response.json()) as HarnessBudgetState;
+      return {
+        exhausted: state.exhausted === true,
+        spentUsd: typeof state.spentUsd === "number" ? state.spentUsd : 0,
+        capUsd: typeof state.capUsd === "number" ? state.capUsd : null,
+      };
+    } catch {
+      // A budget that cannot be read is not a budget that is reached.
+      return { exhausted: false, spentUsd: 0, capUsd: null };
+    }
+  }
+
+  /**
+   * Arm the turn's deadline, and stop the turn when it passes.
+   *
+   * The stop is the harness's own abort, so the turn ends the way a cancelled
+   * turn ends: with a recorded outcome, not a vanished object.
+   */
+  private armTurnDeadline(operationId: string, deadlineMs: number | undefined): void {
+    if (deadlineMs === undefined) return;
+    this.turnDeadlines.get(operationId)?.clear();
+    const deadline = armTurnDeadline({
+      deadlineMs,
+      onExpire: async () => {
+        this.log.warn("pi.turn.deadline", {
+          event: "pi.turn.deadline",
+          operation_id: operationId,
+          deadline_ms: deadlineMs,
+        });
+        await this.harness.abort({ session: ROOT_SESSION, operationId }).catch(() => false);
+      },
+    });
+    this.turnDeadlines.set(operationId, deadline);
   }
 
   /**
@@ -1193,7 +1270,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         {
           type: "input",
           content: input.content,
-          requestId: nativeControlSubmissionRequestId(input.requestId),
+          requestId: nativeControlSubmissionRequestId(input.operationId ?? input.requestId),
           whenBusy,
         },
         BACKGROUND_CONTEXT
@@ -1710,7 +1787,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
 
     const authority = await this.fetchCapabilityAuthority(sessionId);
-    const authoritativeSnapshot = authority.snapshot ?? PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT;
+    // The principal answers with the capability *map*; the versioned
+    // snapshot is written here, where the version belongs.
+    const authoritativeSnapshot = authority.snapshot
+      ? createPiFeatureCapabilitySnapshot(authority.snapshot as PiFeatureCapabilityInput)
+      : PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT;
     await this.ctx.storage.transaction(async (transaction) => {
       if ((await transaction.get<string>(DELETION_STATE_KEY)) !== undefined) {
         throw new Error("Pi Durable session was deleted");

@@ -911,7 +911,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     piControlRepository,
     env.PI_SESSION,
     log,
-    (input) => messageQueue.recordPiControlMessage(input)
+    (input) => messageQueue.recordPiControlMessage(input),
+    piOperations
   );
   const visiblePiTokens = new Set<string>();
   const piEventHandler = new PiEventHandler(
@@ -1340,6 +1341,21 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
     piCredential: (request) => piBridgeHandler.credential(request),
+    budgetState: () => {
+      const session = sessionCoreRepository.getSession();
+      if (!session) return Response.json({ error: "Session is not initialized" }, { status: 404 });
+      if (session.harness !== "pi") {
+        return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
+      }
+      return Response.json(
+        {
+          exhausted: session.budget_exhausted === 1,
+          spentUsd: session.total_cost,
+          capUsd: session.max_cost_usd,
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    },
     piCapabilityAuthority: () => {
       const session = sessionCoreRepository.getSession();
       if (!session) return Response.json({ error: "Session is not initialized" }, { status: 404 });

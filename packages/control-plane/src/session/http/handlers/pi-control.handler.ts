@@ -11,6 +11,7 @@ import { isSessionPromptable } from "@open-inspect/shared/types/session-activity
 import { sha256Hex } from "@open-inspect/shared/service-auth";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
+import type { PiOperationRepository } from "../../pi-operation-repository";
 
 const CONTROL_TIMEOUT_MS = 15_000;
 const envelopeSchema = z.strictObject({
@@ -53,7 +54,15 @@ export class PiControlHandler {
       requestId: string;
       requestFingerprint: string;
       control: PiHumanControl;
-    }) => { conflict: boolean; deduplicated: boolean }
+    }) => { conflict: boolean; deduplicated: boolean; messageId?: string },
+    /**
+     * The session's record of the turns the runtime is running.
+     *
+     * A turn that arrives through a control is recorded here before the
+     * runtime is called, so the session knows the operation the runtime's
+     * events will name.
+     */
+    private readonly operations?: Pick<PiOperationRepository, "begin" | "transition" | "get">
   ) {}
   async handle(request: Request): Promise<Response> {
     const parsed = envelopeSchema.safeParse(await request.json().catch(() => null));
@@ -99,7 +108,7 @@ export class PiControlHandler {
       return Response.json({ error: "Pi control request id conflict" }, { status: 409 });
     }
     const receipt = admission.receipt;
-    let projection: { conflict: boolean; deduplicated: boolean } | undefined;
+    let projection: { conflict: boolean; deduplicated: boolean; messageId?: string } | undefined;
     if ((source === "web" || source === "slack") && isHumanControl(control)) {
       try {
         projection = this.recordHumanControl({
@@ -171,8 +180,32 @@ export class PiControlHandler {
       actor_id: actorId,
       source,
     });
+    // The turn the runtime is about to run belongs to the message the
+    // session just recorded, so the session records the operation first and
+    // names it to the runtime. Without that, the runtime's turn belongs to
+    // an id the session has no message for, and every capability call that
+    // names the operation is refused.
+    // A control that names no model runs on the session's model.
+    const sessionModel = session.model ?? undefined;
+    const controlWithModel =
+      sessionModel !== undefined && !("model" in control)
+        ? { ...control, model: sessionModel }
+        : control;
+    const operationId = projection?.messageId;
+    if (operationId && this.operations) {
+      const now = Date.now();
+      this.operations.begin(operationId, now);
+      this.operations.transition(operationId, ["dispatching"], "dispatching", now);
+    }
     try {
-      const result = await withTimeout(this.runtime.control(control), CONTROL_TIMEOUT_MS);
+      const result = await withTimeout(
+        this.runtime.control(
+          (operationId
+            ? { ...controlWithModel, operationId }
+            : controlWithModel) as PiRuntimeControl
+        ),
+        CONTROL_TIMEOUT_MS
+      );
       this.receipts.settle(control.requestId, result.state, result.result, undefined, Date.now());
       this.receipts.prune();
       return Response.json(result, { status: result.state === "accepted" ? 202 : 200 });

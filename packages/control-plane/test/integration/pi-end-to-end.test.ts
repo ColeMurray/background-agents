@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import type { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
-import { initSession, queryDO, serviceFetch } from "./helpers";
+import { initSession, queryDO, serviceFetch, seedActiveUser } from "./helpers";
 import { cleanD1Tables } from "./cleanup";
 import { SessionInternalPaths } from "../../src/session/contracts";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
@@ -48,14 +48,17 @@ describe("a Pi session, end to end", () => {
       provider: "openai",
       credentialSchemaVersion: 1,
       payload: {
-        kind: "setup_token",
-        token: "sk-openai-integration-secret",
-        expiresAt: now + 365 * 24 * 60 * 60 * 1000,
-        scopes: ["user:inference"],
+        refreshToken: "openai-refresh-secret",
+        accessToken: "openai-access-secret",
+        accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1000,
       },
       accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1000,
       now,
     });
+    // The turn's author must be a user the workspace knows: the turn
+    // authority reads D1 again at every action.
+    await seedActiveUser("user-1");
+
     const session = await initSession({
       title: "pi-e2e",
       harness: "pi",
@@ -138,8 +141,10 @@ describe("a Pi session, end to end", () => {
     );
     expect(archived.status).toBeLessThan(300);
     await expect(
-      queryDO(sessionStub, "SELECT status FROM sessions WHERE id = ?", session.sessionName)
-    ).resolves.toEqual([{ status: "archived" }]);
+      env.DB.prepare("SELECT status FROM sessions WHERE id = ?")
+        .bind(session.sessionName)
+        .first<{ status: string }>()
+    ).resolves.toEqual({ status: "archived" });
 
     // 6. Export. The session's own record is declared, not silently omitted,
     // and the steps the turn produced are in it.
@@ -156,11 +161,10 @@ describe("a Pi session, end to end", () => {
       harness: "pi",
       harnessState: { included: false },
     });
-    const eventsLine = lines.find(
-      (line) => line.type === "events" && line.id === session.sessionName
-    );
-    expect(eventsLine).toBeDefined();
-    const exportedEvents = (eventsLine?.events ?? []) as { type: string }[];
+    // The export carries the session's events inside the session's line.
+    const exportedEvents = (sessionLine?.events ?? []) as { type: string }[];
     expect(exportedEvents.map((event) => event.type)).toContain("execution_complete");
+    // And the tool call the model made: the step is visible in the export.
+    expect(exportedEvents.map((event) => event.type)).toContain("tool_call");
   }, 30_000);
 });

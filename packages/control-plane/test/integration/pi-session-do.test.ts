@@ -219,7 +219,7 @@ describe("PiSessionDO", () => {
       "SELECT pi_feature_capability_snapshot FROM session"
     );
     expect(JSON.parse(rows[0]!.pi_feature_capability_snapshot)).toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -386,7 +386,6 @@ describe("PiSessionDO", () => {
       "list_agents",
       "send_agent_message",
       "get_last_message",
-      "follow_up_agent",
       "follow_up_agent",
       "cancel_agent",
       "inspect_agents",
@@ -1153,7 +1152,7 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -1828,7 +1827,6 @@ describe("PiSessionDO", () => {
       "send_agent_message",
       "get_last_message",
       "follow_up_agent",
-      "follow_up_agent",
       "cancel_agent",
       "inspect_agents",
       "read",
@@ -1853,7 +1851,7 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",

@@ -16,6 +16,15 @@ export interface PiRuntimePrompt {
   /** Refuse admission when the pinned server catalog cannot price this model. */
   requirePricing?: boolean;
   /**
+   * When this turn is late.
+   *
+   * Absolute, in milliseconds since the epoch. The session sets it to its own
+   * execution budget plus the grace the recovery sweep gets, and the Durable
+   * Object stops the turn when it passes — inside the object, not by waiting
+   * for the sweep.
+   */
+  executionDeadlineMs?: number;
+  /**
    * The turn's images, as metadata only.
    *
    * The bytes stay in the session's media bucket: the Pi Durable Object asks
@@ -100,6 +109,16 @@ export const piRuntimeControlSchema = z
         content: z.string().min(1).max(20_000),
         model: z.string().min(1).optional(),
         reasoningEffort: z.string().nullable().optional(),
+        /**
+         * The operation the turn belongs to.
+         *
+         * The session records the turn as a message before the runtime is
+         * called, so the turn's operation id is that message's id. The
+         * runtime uses it for the turn, so every capability call that names
+         * the operation — the credential, the projection, the events —
+         * names the same one the session knows.
+         */
+        operationId: operationId.optional(),
       })
     ),
     controlBase.extend({

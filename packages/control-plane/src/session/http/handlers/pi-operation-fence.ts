@@ -1,4 +1,5 @@
 import type { MessageRepository } from "../../message-repository";
+import { piControlRequestIdFromMessageId } from "../../pi-control-message-id";
 import type { PiControlRepository } from "../../pi-control-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
 
@@ -25,11 +26,11 @@ export function createPiOperationFence(
 ): (request: Request) => boolean {
   return (request: Request) => {
     const operationId = request.headers.get("X-Pi-Operation-ID");
-    return (
-      options.sessions.getSession()?.harness === "pi" &&
-      !!operationId &&
-      (options.messages.getProcessingMessage()?.id === operationId ||
-        options.controls.isActiveOperation(operationId))
-    );
+    if (options.sessions.getSession()?.harness !== "pi" || !operationId) return false;
+    if (options.messages.getProcessingMessage()?.id === operationId) return true;
+    // A control's turn is the session's message "pi-control:<requestId>", so
+    // the operation id names the control it belongs to.
+    const controlRequestId = piControlRequestIdFromMessageId(operationId);
+    return options.controls.isActiveOperation(controlRequestId ?? operationId);
   };
 }

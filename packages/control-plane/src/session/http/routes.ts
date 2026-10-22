@@ -51,6 +51,7 @@ export interface SessionInternalRouteHandlers {
   openaiTokenRefresh: SessionInternalRouteHandler;
   piCredential: SessionInternalRouteHandler;
   piCapabilityAuthority: SessionInternalRouteHandler;
+  budgetState: SessionInternalRouteHandler;
   piContext: SessionInternalRouteHandler;
   piControl: SessionInternalRouteHandler;
   piControlCompletion: SessionInternalRouteHandler;

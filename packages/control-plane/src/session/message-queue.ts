@@ -6,6 +6,8 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { inheritReasoningEffort } from "../harness-admission";
+import { EXECUTION_DEADLINE_GRACE_MS } from "../scheduler/scheduler";
+import { piControlMessageId } from "./pi-control-message-id";
 import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
@@ -446,7 +448,7 @@ export class SessionMessageQueue {
       input.canonicalUserId ?? undefined
     );
     const now = Date.now();
-    const messageId = `pi-control:${input.requestId}`;
+    const messageId = piControlMessageId(input.requestId);
     const content = piControlTimelineContent(input.control);
     const event = {
       ...this.createUserMessageEvent(participant, content, messageId, now),
@@ -841,6 +843,10 @@ export class SessionMessageQueue {
           model: resolvedModel,
           reasoningEffort,
           requirePricing: session.max_cost_usd !== null,
+          // The turn's deadline, inside the Durable Object: the session's
+          // own execution budget plus the grace the recovery sweep gets.
+          executionDeadlineMs:
+            Date.now() + this.getExecutionTimeoutMs() + EXECUTION_DEADLINE_GRACE_MS,
           // Metadata only: the Pi Durable Object fetches the bytes from the
           // session that owns them, the way a sandbox harness does.
           ...(attachments ? { attachments } : {}),
