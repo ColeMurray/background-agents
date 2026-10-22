@@ -212,6 +212,23 @@ export class CallbackNotificationService {
     return slackPostGate(session, binding);
   }
 
+  /**
+   * Publication check for bots that post into shared chat channels. Discord has
+   * no channel bindings, so it publishes only workspace sessions without a team.
+   * Linear owns its destinations and is not gated.
+   */
+  private async channelPostDenial(
+    destination: CallbackDestination,
+    sessionId: string,
+    context: unknown
+  ): Promise<string | null> {
+    if (destination === "slack-bot") return this.slackPostDenial(sessionId, context);
+    if (destination === "discord-bot") {
+      return slackPostGate(await this.slackPostScope.getSession(sessionId), null);
+    }
+    return null;
+  }
+
   /** Closure carries coordinates only, never session content or tool arguments. */
   private async notifySlackThreadClosed(
     sessionId: string,
@@ -407,14 +424,12 @@ export class CallbackNotificationService {
         return;
       }
       const payloadData = parsedCallback?.data ?? callbackData;
-      // Only Slack posts are gated on channel bindings; other bots own their destinations.
-      const gated = route.destination === "slack-bot";
       let rejectReason: string | undefined;
       const delivery = await retryDelivery<Response | null, Response>(
         async (signal) => {
           const denial =
             rejectReason ??
-            (gated ? await this.slackPostDenial(callbackSessionId, rawContext) : null);
+            (await this.channelPostDenial(route.destination, callbackSessionId, rawContext));
           // D1 reads cannot be canceled; an expired attempt must not reach the wire.
           signal.throwIfAborted();
           // The bot can tombstone the thread even when closure delivery fails.
@@ -829,9 +844,9 @@ export class CallbackNotificationService {
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
 
-    if (route.destination === "slack-bot") {
+    if (route.destination === "slack-bot" || route.destination === "discord-bot") {
       try {
-        const denial = await this.slackPostDenial(sessionId, rawContext);
+        const denial = await this.channelPostDenial(route.destination, sessionId, rawContext);
         if (denial) {
           await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret);
           this.log.info("callback.tool_call", {
