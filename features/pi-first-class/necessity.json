@@ -2230,6 +2230,11 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
+    "packages/sandbox-runtime/tests/test_docker_service.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
     "packages/sandbox-runtime/tests/test_entrypoint_build_mode.py": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -2424,11 +2429,6 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
-    },
-    "packages/shared/src/types/overlay-index.ts": {
-      "layer": "overlay",
-      "need": ["DEV:overlay-integration"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
     "packages/shared/src/types/overlay-integrations.ts": {
       "layer": "overlay",
@@ -3110,6 +3110,11 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
+    "scripts/sql-portability-baseline.json": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
+    },
     "scripts/stage-mcp-connection-do.sh": {
       "layer": "overlay",
       "need": ["DEV:personal-mcp"],
@@ -3245,6 +3250,11 @@
       "need": ["SUPPORT:deploy"],
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
+    "terraform/modules/cloudflare-worker/.terraform.lock.hcl": {
+      "layer": "overlay",
+      "need": ["SUPPORT:deploy"],
+      "why": "This deployment file provisions an off-by-default Compound overlay capability and its isolated storage or bindings."
+    },
     "terraform/modules/cloudflare-worker/main.tf": {
       "layer": "core-support",
       "need": ["SUPPORT:deploy"],
@@ -3279,6 +3289,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:deploy"],
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/modal-app/.terraform.lock.hcl": {
+      "layer": "overlay",
+      "need": ["SUPPORT:deploy"],
+      "why": "This deployment file provisions an off-by-default Compound overlay capability and its isolated storage or bindings."
     },
     "wrangler.d1.local.jsonc": {
       "layer": "core-support",
