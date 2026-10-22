@@ -8,6 +8,8 @@
 import { isWorkspaceAdmin, WORKSPACE_ADMIN_ROLE_KEYS } from "@open-inspect/shared/rbac";
 import {
   DEFAULT_HARNESS,
+  HARNESS_IDS,
+  getHarnessCapabilities,
   getValidHarnessOrDefault,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
@@ -41,6 +43,25 @@ import { rolePermissionPredicate } from "../authorization/permission-sql";
 import { automationExecutionPredicate } from "../automation/authorization-guard";
 import type { SessionViewer } from "@open-inspect/shared";
 import type { BoundAppliedAuditEvent } from "./team-audit";
+
+const ROLLBACK_SAFE_ENABLED_MARKER = 2;
+export const ENABLED_AUTOMATION_SQL = `1, ${ROLLBACK_SAFE_ENABLED_MARKER}`;
+const IN_PROCESS_AUTOMATION_HARNESS_SQL = HARNESS_IDS.filter(
+  (harness) => getHarnessCapabilities(harness).execution === "in_process"
+)
+  .map((harness) => `'${harness}'`)
+  .join(", ");
+
+export function isAutomationEnabled(enabled: number): boolean {
+  return enabled === 1 || enabled === ROLLBACK_SAFE_ENABLED_MARKER;
+}
+
+function encodeAutomationEnabled(harness: HarnessId, enabled: number): number {
+  if (!isAutomationEnabled(enabled)) return 0;
+  return getHarnessCapabilities(harness).execution === "in_process"
+    ? ROLLBACK_SAFE_ENABLED_MARKER
+    : 1;
+}
 
 /** Legacy rows predate canonical executors; their GitHub creator may now map to a user. */
 function needsCanonicalOwner(row: AutomationRow): boolean {
@@ -315,7 +336,7 @@ export function toAutomation(
     harness: getValidHarnessOrDefault(row.harness),
     model: row.model,
     reasoningEffort: row.reasoning_effort,
-    enabled: row.enabled === 1,
+    enabled: isAutomationEnabled(row.enabled),
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
     createdBy: row.created_by,
@@ -479,7 +500,7 @@ export class AutomationStore {
         row.harness ?? DEFAULT_HARNESS,
         row.model,
         row.reasoning_effort,
-        row.enabled,
+        encodeAutomationEnabled(row.harness ?? DEFAULT_HARNESS, row.enabled),
         row.next_run_at,
         row.consecutive_failures,
         row.created_by,
@@ -812,7 +833,13 @@ export class AutomationStore {
   bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
     return this.db
       .prepare(
-        "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+        `UPDATE automations
+         SET enabled = CASE
+           WHEN harness IN (${IN_PROCESS_AUTOMATION_HARNESS_SQL}) THEN ${ROLLBACK_SAFE_ENABLED_MARKER}
+           ELSE 1
+         END,
+         next_run_at = ?, consecutive_failures = 0, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL`
       )
       .bind(nextRunAt, now, id);
   }
@@ -1000,7 +1027,7 @@ export class AutomationStore {
     const result = await this.db
       .prepare(
         `SELECT COUNT(*) as count FROM automations
-         WHERE enabled = 1 AND deleted_at IS NULL AND trigger_type = 'schedule'
+         WHERE enabled IN (${ENABLED_AUTOMATION_SQL}) AND deleted_at IS NULL AND trigger_type = 'schedule'
          AND next_run_at IS NOT NULL AND next_run_at <= ?`
       )
       .bind(now)
@@ -1012,7 +1039,7 @@ export class AutomationStore {
     const result = await this.db
       .prepare(
         `SELECT * FROM automations
-         WHERE enabled = 1 AND deleted_at IS NULL AND trigger_type = 'schedule'
+         WHERE enabled IN (${ENABLED_AUTOMATION_SQL}) AND deleted_at IS NULL AND trigger_type = 'schedule'
          AND next_run_at IS NOT NULL AND next_run_at <= ?
          ORDER BY next_run_at ASC
          LIMIT ?`
@@ -1424,7 +1451,7 @@ export class AutomationStore {
         .prepare(
           `UPDATE automations
            SET enabled = 0, next_run_at = NULL, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?`
+            WHERE id = ? AND deleted_at IS NULL AND enabled IN (${ENABLED_AUTOMATION_SQL}) AND next_run_at = ?`
         )
         .bind(Date.now(), invocation.automation_id, fromSlot),
     ]);
@@ -1767,7 +1794,7 @@ export class AutomationStore {
          JOIN automation_repositories ar ON ar.automation_id = a.id
          WHERE ar.repo_owner = ? AND ar.repo_name = ?
            AND a.trigger_type = ? AND a.event_type = ?
-           AND a.enabled = 1 AND a.deleted_at IS NULL`
+            AND a.enabled IN (${ENABLED_AUTOMATION_SQL}) AND a.deleted_at IS NULL`
       )
       .bind(repoOwner.toLowerCase(), repoName.toLowerCase(), triggerType, eventType)
       .all<AutomationRow>();

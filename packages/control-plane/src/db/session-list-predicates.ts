@@ -174,6 +174,5 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
 }
 
 function durableStatus(status: string): string | null {
-  if (status === "created" || status === "active") return `durable_${status}`;
-  return null;
+  return `durable_${status}`;
 }

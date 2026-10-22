@@ -41,6 +41,7 @@ import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
   allRunsUnauthorized,
+  isAutomationEnabled,
   EXECUTION_TIMEOUT_FAILURE_REASON,
   parseAutomationTriggerFields,
   toAutomationRun,
@@ -1233,14 +1234,16 @@ export class Scheduler {
       case "webhook": {
         const automation = await store.getById(event.automationId);
         candidates =
-          automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
+          automation && isAutomationEnabled(automation.enabled) && !automation.deleted_at
+            ? [automation]
+            : [];
         break;
       }
       case "sentry": {
         const automation = await store.getById(event.automationId);
         candidates =
           automation &&
-          automation.enabled === 1 &&
+          isAutomationEnabled(automation.enabled) &&
           !automation.deleted_at &&
           automation.event_type === event.eventType
             ? [automation]

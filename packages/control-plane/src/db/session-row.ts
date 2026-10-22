@@ -1,4 +1,5 @@
 import {
+  HARNESS_IDS,
   getHarnessCapabilities,
   harnessIdSchema,
   type HarnessId,
@@ -16,7 +17,17 @@ const persistedSessionStatusSchema = z.union([
   sessionStatusSchema,
   z.literal("durable_created"),
   z.literal("durable_active"),
+  z.literal("durable_completed"),
+  z.literal("durable_failed"),
+  z.literal("durable_archived"),
+  z.literal("durable_cancelled"),
 ]);
+
+export const IN_PROCESS_HARNESS_SQL = HARNESS_IDS.filter(
+  (harness) => getHarnessCapabilities(harness).execution === "in_process"
+)
+  .map((harness) => `'${harness}'`)
+  .join(", ");
 
 export const sessionRowSchema = z.object({
   id: z.string(),
@@ -97,15 +108,15 @@ export function toSessionFields(row: SessionRow) {
   };
 }
 
-/** Encode active in-process rows so older binaries reject them instead of falling back. */
+/** Encode every in-process lifecycle state so older binaries reject it instead of falling back. */
 export function encodeSessionStatus(harness: HarnessId, status: SessionStatus): string {
   if (getHarnessCapabilities(harness).execution !== "in_process") return status;
-  if (status === "created" || status === "active") return `durable_${status}`;
-  return status;
+  return `durable_${status}`;
 }
 
 function decodeSessionStatus(status: z.infer<typeof persistedSessionStatusSchema>): SessionStatus {
-  if (status === "durable_created") return "created";
-  if (status === "durable_active") return "active";
-  return status;
+  if (status.startsWith("durable_")) {
+    return sessionStatusSchema.parse(status.slice("durable_".length));
+  }
+  return sessionStatusSchema.parse(status);
 }

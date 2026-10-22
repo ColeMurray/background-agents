@@ -33,7 +33,7 @@ export interface BrowserGatewayBridge {
   /** The operation must belong to this session. */
   operationBelongsToSession(operationId: string): boolean;
   /** Re-read the turn author's current workspace and session authority. */
-  authorMayAct(actorId: string): Promise<boolean>;
+  authorMayAct(operationId: string): Promise<boolean>;
   /** Whether this deployment stages a browser at all. */
   browserAvailable(): boolean;
   /**
@@ -143,7 +143,7 @@ export class BrowserGateway {
         reason: "The originating turn has no workspace actor",
       };
     }
-    if (!(await bridge.authorMayAct(actorId))) {
+    if (!(await bridge.authorMayAct(operationId))) {
       return {
         kind: "denied",
         code: "browser_author_no_longer_allowed",

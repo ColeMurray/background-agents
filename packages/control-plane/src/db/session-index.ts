@@ -64,6 +64,7 @@ export interface ChildAdmissionLease {
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
+const PERSISTED_INACTIVE_SESSION_STATUS_SQL = `${INACTIVE_SESSION_STATUS_SQL}, 'durable_completed', 'durable_failed', 'durable_archived', 'durable_cancelled'`;
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -876,7 +877,7 @@ export class SessionIndexStore {
            WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
          )
          SELECT id FROM descendants
-         WHERE status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
+         WHERE status NOT IN (${PERSISTED_INACTIVE_SESSION_STATUS_SQL})
          ORDER BY depth DESC`
       )
       .bind(parentSessionId)
@@ -908,7 +909,7 @@ export class SessionIndexStore {
          WHERE (
            SELECT COUNT(*) FROM (
              SELECT id AS child_session_id FROM sessions
-             WHERE parent_session_id = ? AND status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
+              WHERE parent_session_id = ? AND status NOT IN (${PERSISTED_INACTIVE_SESSION_STATUS_SQL})
              UNION
              SELECT child_session_id FROM child_admission_leases
              WHERE parent_session_id = ? AND expires_at > ?

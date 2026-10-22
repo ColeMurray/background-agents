@@ -1,7 +1,11 @@
 import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { z } from "zod";
 import { generateId } from "../auth/crypto";
-import { withValidatedOwnerTeam, type AutomationRow } from "./automation-store";
+import {
+  ENABLED_AUTOMATION_SQL,
+  withValidatedOwnerTeam,
+  type AutomationRow,
+} from "./automation-store";
 import type { SqlDatabase } from "./sql-database";
 
 const githubGrantRowSchema = z.object({ repo_granted: z.union([z.literal(0), z.literal(1)]) });
@@ -25,7 +29,7 @@ export class GitHubAutomationStore {
            AND (g.grant_kind = 'installation' OR
                 (g.grant_kind = 'repository' AND g.repo_external_id = ar.repo_id))
          WHERE ar.repo_id = ? AND a.trigger_type = 'github_event' AND a.event_type = ?
-           AND a.enabled = 1 AND a.deleted_at IS NULL`
+            AND a.enabled IN (${ENABLED_AUTOMATION_SQL}) AND a.deleted_at IS NULL`
       )
       .bind(repositoryId, eventType)
       .all<AutomationRow & { repo_granted: number }>();

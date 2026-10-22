@@ -15,6 +15,7 @@ function harness(
   } = {}
 ) {
   const recordActivity = vi.fn();
+  const authorMayAct = vi.fn(async () => options.authorMayAct ?? true);
   const read = vi.fn(async (): Promise<PiBrowserOutcome> => {
     if (options.readFails) throw new Error("browser-rendering internal detail");
     return { action: "read", url: "https://example.com/docs", text: "the page", truncated: false };
@@ -25,13 +26,13 @@ function harness(
     allowedDomains: () => options.allowedDomains ?? ["example.com", "*.docs.example.com"],
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
     operationBelongsToSession: () => options.belongsToSession ?? true,
-    authorMayAct: async () => options.authorMayAct ?? true,
+    authorMayAct,
     browserAvailable: () => options.browserAvailable ?? true,
     read,
     recordActivity,
   };
   const gateway = new BrowserGateway({ browser: bridge, getSessionId: () => "session-1" });
-  return { gateway, recordActivity, read };
+  return { gateway, recordActivity, read, authorMayAct };
 }
 
 describe("BrowserGateway", async () => {
@@ -42,6 +43,7 @@ describe("BrowserGateway", async () => {
       kind: "allowed",
       actorId: "user-1",
     });
+    expect(h.authorMayAct).toHaveBeenCalledWith("message-1");
   });
 
   it("refuses an action that needs a human approval, by name", async () => {
