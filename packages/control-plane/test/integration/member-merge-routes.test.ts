@@ -416,6 +416,24 @@ describe("member merge routes", () => {
     });
   });
 
+  it("withholds Owner identities from an Administrator previewing their own account", async () => {
+    await seedSplit();
+    await setRole(GITHUB_ROW, "owner");
+
+    // Administrators lack ownership transfer; `source_is_actor` still takes precedence.
+    const preview = await post("/members/merge/preview", {
+      sourceUserId: ADMIN,
+      targetUserId: GITHUB_ROW,
+    });
+
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      source: { member: { userId: ADMIN, role: { key: "administrator" } }, identities: null },
+      target: { member: { userId: GITHUB_ROW, role: { key: "owner" } }, identities: null },
+      blocker: "source_is_actor",
+    });
+  });
+
   it("treats a replay of a completed merge as done, but not a merge into another member", async () => {
     await seedSplit();
 
