@@ -521,7 +521,7 @@
       "tests": [
         {
           "file": "packages/control-plane/src/source-control/credential-scope.test.ts",
-          "name": "refuses an empty repository scope"
+          "name": "refuses more than 500 unique ids without truncating the set"
         }
       ],
       "mutation": {
@@ -536,15 +536,15 @@
       "code": ["packages/control-plane/src/session/pull-request-service.ts:46"],
       "tests": [
         {
-          "file": "packages/control-plane/src/session/pull-request-service.test.ts",
-          "name": "rejects a pull request whose head and base branches are the same"
+          "file": "packages/control-plane/src/session/pull-request-service.per-branch.test.ts",
+          "name": "reports the resolved head, base, and updated=false on creation"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/pull-request-service.ts",
         "find": "export class SessionPullRequestService",
         "replace": "export class RemovedSessionPullRequestService",
-        "cmd": "npm test -w @open-inspect/control-plane -- pull-request-service"
+        "cmd": "npm test -w @open-inspect/control-plane -- pull-request-service.per-branch"
       }
     },
     "E-5": {
@@ -649,7 +649,7 @@
       "tests": [
         {
           "file": "packages/control-plane/src/session/http/handlers/session-init.handler.test.ts",
-          "name": "initializes a Pi session without warming a sandbox"
+          "name": "initializes the separate durable runtime without creating or warming a sandbox"
         }
       ],
       "mutation": {
@@ -665,7 +665,7 @@
       "tests": [
         {
           "file": "packages/control-plane/src/scheduler/scheduler.test.ts",
-          "name": "revalidates the executor before launching an automation"
+          "name": "resolves one provider auth snapshot for every child in a fan-out invocation"
         }
       ],
       "mutation": {
@@ -697,7 +697,7 @@
       "tests": [
         {
           "file": "packages/control-plane/src/scheduler/scheduler.test.ts",
-          "name": "frames untrusted trigger content after trusted instructions"
+          "name": "appends workspace session instructions to a new Slack automation session"
         }
       ],
       "mutation": {
@@ -712,15 +712,15 @@
       "code": ["packages/control-plane/src/routes/session-children.ts:1"],
       "tests": [
         {
-          "file": "packages/control-plane/src/routes/session-children.test.ts",
-          "name": "rejects child prompts beyond the maximum depth"
+          "file": "packages/control-plane/test/integration/spawn-children.test.ts",
+          "name": "rejects when depth >= 2 (403)"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/routes/session-children.ts",
         "find": "export async function handlePromptChild(",
         "replace": "export async function removedHandlePromptChild(",
-        "cmd": "npm test -w @open-inspect/control-plane -- session-children"
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- spawn-children"
       }
     },
     "G-1": {
@@ -809,7 +809,7 @@
       "tests": [
         {
           "file": "packages/shared/src/types/audit-events.test.ts",
-          "name": "interprets authorization decisions without exposing event content"
+          "name": "keeps shadow observations separate from operation actions"
         }
       ],
       "mutation": {
