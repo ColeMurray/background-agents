@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import { createBudgetGateProvider } from "./budget-gate";
-import { armTurnDeadline } from "./turn-deadline";
+import { createBudgetGateProvider } from "../harness/budget-gate";
+import { armTurnDeadline } from "../harness/turn-deadline";
 
 interface ReferenceProvider {
   stream(): Promise<string>;
