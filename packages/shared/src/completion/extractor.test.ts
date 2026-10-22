@@ -8,6 +8,7 @@ import {
   ProtectedReadError,
   summarizeToolCall,
   toArtifactType,
+  toolCallFilePath,
   toEventArtifactInfo,
   type ControlPlaneFetcher,
 } from "./extractor";
@@ -50,6 +51,23 @@ describe("completion artifact type narrowing", () => {
       });
     }
   );
+
+  it("reads both harnesses' tool spellings and file argument names", () => {
+    expect(summarizeToolCall({ tool: "Edit", args: { file_path: "src/a.ts" } })).toEqual({
+      tool: "Edit",
+      summary: "Edited src/a.ts",
+    });
+    expect(summarizeToolCall({ tool: "read", args: { filePath: "src/b.ts" } })).toEqual({
+      tool: "read",
+      summary: "Read src/b.ts",
+    });
+    expect(summarizeToolCall({ tool: "bash", args: { command: "npm test" } })).toEqual({
+      tool: "bash",
+      summary: "Ran: npm test",
+    });
+    expect(toolCallFilePath({ path: "", file: "c.ts" })).toBe("c.ts");
+    expect(toolCallFilePath({ file_path: 42 })).toBeUndefined();
+  });
 });
 
 describe("buildAgentResponseFromEvents", () => {

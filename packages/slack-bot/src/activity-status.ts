@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { toolCallFilePath } from "@open-inspect/shared/completion/extractor";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
 import { isThreadSessionClosed, lookupThreadSession } from "./sessions/thread-session-store";
@@ -7,7 +8,6 @@ const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus"
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
 const DEFAULT_STATUS_TEXT_MAX_LENGTH = 80;
 const LOADING_MESSAGE_MAX_LENGTH = 50;
-const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
 /** The indicator Slack shows while a turn is in flight, whatever the turn is doing. */
 export const ASSISTANT_WORKING_STATUS = "Working...";
 
@@ -119,11 +119,7 @@ function compactPathPart(value: unknown, maxLength: number): string {
 
 function fileArg(args: Record<string, unknown>, prefix: string, fallback: string): string {
   const maxLength = LOADING_MESSAGE_MAX_LENGTH - prefix.length - 1;
-  for (const key of FILE_ARG_KEYS) {
-    const text = compactPathPart(args[key], maxLength);
-    if (text) return text;
-  }
-  return fallback;
+  return compactPathPart(toolCallFilePath(args), maxLength) || fallback;
 }
 
 export function formatToolStatus(tool: string, args: Record<string, unknown> = {}): string {
