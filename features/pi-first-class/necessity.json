@@ -3251,9 +3251,9 @@
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "terraform/modules/cloudflare-worker/.terraform.lock.hcl": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:deploy"],
-      "why": "This deployment file provisions an off-by-default Compound overlay capability and its isolated storage or bindings."
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "terraform/modules/cloudflare-worker/main.tf": {
       "layer": "core-support",
@@ -3291,9 +3291,9 @@
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "terraform/modules/modal-app/.terraform.lock.hcl": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:deploy"],
-      "why": "This deployment file provisions an off-by-default Compound overlay capability and its isolated storage or bindings."
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "wrangler.d1.local.jsonc": {
       "layer": "core-support",

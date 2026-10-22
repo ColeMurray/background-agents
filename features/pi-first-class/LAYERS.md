@@ -379,6 +379,12 @@ The remaining thin hooks also include:
   snapshot reader at the package boundary.
 - `packages/web/src/components/settings/settings-registry.ts` — selects the overlay-owned MCP
   settings composition.
+- `scripts/sql-portability-baseline.json` — records the time-bounded rollback trigger required by
+  the external-action compatibility window.
+- `terraform/environments/production/variables.tf` — declares the overlay's off-by-default modes and
+  provider allow-list.
+- `terraform/environments/production/workers-control-plane.tf` — binds those overlay modes into the
+  control-plane Worker.
 
 The overlay's test-only package selections are also explicit:
 
