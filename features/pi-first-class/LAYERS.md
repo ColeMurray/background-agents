@@ -1,7 +1,7 @@
 # LAYERS.md — the two layers, and the rules that keep them apart
 
-**Status:** Phase 0 (ground) recorded. Phase 2 (the split) in progress. **Branch:**
-`feat/pi-go-live-integration-v2` @ `221cef41` — the oracle. It is not restructured.
+**Status:** Core/overlay split implemented and independently checked. **Branch:**
+`compound/pi-overlay`; `oi-core-end` is the upstream-compatible boundary.
 
 Two layers, per `PI-AGENT-BRIEF.md` §3:
 
@@ -474,6 +474,20 @@ every one of them is named here.
 
 ## The warnings the judge reads
 
+### Reference tests replaced by stricter reviewer fixes (KEEP-1)
+
+These six titles tested behavior that is intentionally no longer permitted. They were not removed to
+hide failures; each was replaced by a stricter regression test for the new boundary.
+
+| Removed reference title                                                                    | Why it no longer describes permitted behavior                                                          | Replacement                                                                 |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `reads a page as markdown`                                                                 | Browser Rendering cannot constrain redirects and subresources, so it must never fetch.                 | `fails closed when the binding cannot constrain redirects and subresources` |
+| `cuts a page that is longer than the bound`                                                | The transport rejects before receiving page bytes; bounding a forbidden response is unreachable.       | `fails closed when the binding cannot constrain redirects and subresources` |
+| `cuts a screenshot that is longer than the bound`                                          | The transport rejects before receiving screenshot bytes; bounding a forbidden response is unreachable. | `fails closed when the binding cannot constrain redirects and subresources` |
+| `never carries the provider's own error to the model`                                      | The Browser Rendering provider is never called, so it cannot return an error to sanitize.              | `fails closed when the binding cannot constrain redirects and subresources` |
+| `uses Pi's accumulated per-request costs across models, child work, compaction, and tools` | Runtime-supplied prices are no longer trusted or used for accounting.                                  | `prices measured usage only through the server-held price table`            |
+| `rejects malformed provider cost totals instead of guessing`                               | Runtime-provided cost totals are ignored rather than validated as authority.                           | `prices measured usage only through the server-held price table`            |
+
 ### The other local branches (SHAPE-3)
 
 The judge finds two local branches besides this one: `docs/opencode-v2-migration-plan` and
@@ -484,8 +498,8 @@ here is cherry-picked from either. This branch is `compound/pi-overlay`, its his
 
 ### The type and lint escapes (TEST-3)
 
-The branch adds 153 type or lint escapes across 43 files. Every one of them is listed here with the
-reason it is there.
+The branch adds 151 type or lint escapes. Every one of them is listed here with the reason it is
+there.
 
 | The file                                                                         | The escapes | Why they are there                                                                                                                                                                                                                                                  |
 | -------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

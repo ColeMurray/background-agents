@@ -23,20 +23,21 @@
     "A2": {
       "status": "PASS",
       "code": [
+        "packages/control-plane/src/db/session-row.ts:1",
         "packages/shared/src/harnesses.ts:95",
         "packages/control-plane/src/harness-admission.ts:40"
       ],
       "tests": [
         {
-          "file": "packages/shared/src/stored-harness.test.ts",
-          "name": "refuses a harness this binary does not know, rather than falling back"
+          "file": "packages/control-plane/test/integration/d1-session-index.test.ts",
+          "name": "persists promptable in-process rows with a rollback-safe status marker"
         }
       ],
       "mutation": {
-        "file": "packages/shared/src/harnesses.ts",
-        "find": "export function getStoredHarnessOrRefuse(",
-        "replace": "export function removedGetStoredHarnessOrRefuse(",
-        "cmd": "npm test -w @open-inspect/shared -- stored-harness"
+        "file": "packages/control-plane/src/db/session-row.ts",
+        "find": "  if (status === \"created\" || status === \"active\") return `durable_${status}`;",
+        "replace": "  if (status === \"created\" || status === \"active\") return status;",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- d1-session-index"
       }
     },
     "A3": {
@@ -172,34 +173,40 @@
     },
     "B-5": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/harness/turn-authority.ts:1"],
+      "code": [
+        "packages/control-plane/src/session/http/handlers/browser-gateway.handler.ts:1",
+        "packages/control-plane/src/harness/turn-authority.ts:1"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/turn-authority.test.ts",
-          "name": "denies an author who has been suspended"
+          "file": "packages/control-plane/src/session/http/handlers/browser-gateway.handler.test.ts",
+          "name": "refuses a request after the turn author loses current authority"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/harness/turn-authority.ts",
-        "find": "  if (viewer.suspended) {\n    return { kind: \"denied\", reason: \"The turn's author is suspended\" };\n  }",
-        "replace": "  if (viewer.suspended) {\n    return { kind: \"allowed\" };\n  }",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- turn-authority"
+        "file": "packages/control-plane/src/session/http/handlers/browser-gateway.handler.ts",
+        "find": "    if (!(await bridge.authorMayAct(actorId))) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- browser-gateway.handler"
       }
     },
     "B-6": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/harness/turn-authority.ts:1"],
+      "code": [
+        "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts:1",
+        "packages/control-plane/src/harness/turn-authority.ts:1"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/turn-authority.test.ts",
-          "name": "denies an author who is not on the session"
+          "file": "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.test.ts",
+          "name": "refuses a command after the turn author loses current authority"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/harness/turn-authority.ts",
-        "find": "  if (!decision.allowed) {",
-        "replace": "  if (false) {",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- turn-authority"
+        "file": "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts",
+        "find": "    if (!(await this.deps.authorMayAct(operationId))) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- harness-sandbox-execution.handler"
       }
     },
     "B-7": {
@@ -258,18 +265,21 @@
     },
     "C1": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/harness/turn-authority.ts:1"],
+      "code": [
+        "packages/control-plane/src/session/http/handlers/personal-mcp-session.handler.ts:1",
+        "packages/control-plane/src/harness/turn-authority.ts:1"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/turn-authority.test.ts",
-          "name": "denies an author with no workspace role at all"
+          "file": "packages/control-plane/src/session/http/handlers/mcp-session.handler.test.ts",
+          "name": "refuses a read after the turn author loses current authority"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/harness/turn-authority.ts",
-        "find": "  if (!viewer) {\n    return { kind: \"denied\", reason: \"The turn's author has no active workspace role\" };\n  }",
-        "replace": "  if (!viewer) {\n    return { kind: \"allowed\" };\n  }",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- turn-authority"
+        "file": "packages/control-plane/src/session/http/handlers/personal-mcp-session.handler.ts",
+        "find": "    return this.options.mcp.authorMayAct(operationId);",
+        "replace": "    return Promise.resolve(true);",
+        "cmd": "npm test -w @open-inspect/control-plane -- mcp-session.handler"
       }
     },
     "C2": {
@@ -322,18 +332,21 @@
     },
     "C5": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/session/contracts.ts:110"],
+      "code": [
+        "packages/control-plane/src/session/message-queue.ts:1",
+        "packages/control-plane/src/session/contracts.ts:110"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/src/session/http/routes.combined.test.ts",
-          "name": "retains sandbox execution and every external-action internal route"
+          "file": "packages/control-plane/src/session/message-queue.test.ts",
+          "name": "dispatches Pi prompts without consulting, spawning, or sending to a sandbox"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/session/contracts.ts",
-        "find": "export const SessionInternalPaths =",
-        "replace": "export const RemovedSessionInternalPaths =",
-        "cmd": "npm test -w @open-inspect/control-plane -- routes.combined"
+        "file": "packages/control-plane/src/session/message-queue.ts",
+        "find": "    if (this.inProcessRuntime?.harness === harness) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- message-queue"
       }
     },
     "C6": {
@@ -451,20 +464,21 @@
     "D-5": {
       "status": "PASS",
       "code": [
+        "packages/control-plane/src/cloudflare/browser-rendering-transport.ts:1",
         "packages/control-plane/src/mcp/egress-policy.ts:53",
         "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63"
       ],
       "tests": [
         {
-          "file": "packages/control-plane/src/mcp/egress-policy.test.ts",
-          "name": "refuses a redirect to another host"
+          "file": "packages/control-plane/src/pi/browser-transport.test.ts",
+          "name": "fails closed when the binding cannot constrain redirects and subresources"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/mcp/egress-policy.ts",
-        "find": "  assertExactMcpHost(candidateUrl, policy.endpointHost);",
-        "replace": "  void candidateUrl;",
-        "cmd": "npm test -w @open-inspect/control-plane -- src/mcp/egress-policy.test.ts"
+        "file": "packages/control-plane/src/cloudflare/browser-rendering-transport.ts",
+        "find": "    return false;",
+        "replace": "    return true;",
+        "cmd": "npm test -w @open-inspect/control-plane -- browser-transport"
       }
     },
     "D-6": {
@@ -485,18 +499,21 @@
     },
     "E-1": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/session/provider-account-resolution.ts:100"],
+      "code": [
+        "packages/control-plane/src/pi/codex-credential-store.ts:1",
+        "packages/control-plane/src/session/provider-account-resolution.ts:100"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/src/session/provider-account-resolution.test.ts",
-          "name": "binds a connected Settings default and preserves unattended API policy"
+          "file": "packages/control-plane/src/pi/codex-credential-store.test.ts",
+          "name": "rechecks broker authority even while the cached token remains valid"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/session/provider-account-resolution.ts",
-        "find": "  if (input.unattended && providerDefault.unattendedMode === \"api_key\") {",
-        "replace": "  if (false && input.unattended && providerDefault.unattendedMode === \"api_key\") {",
-        "cmd": "npm test -w @open-inspect/control-plane -- provider-account-resolution"
+        "file": "packages/control-plane/src/pi/codex-credential-store.ts",
+        "find": "    return { ...(await this.loadOnce(undefined, options?.signal)) };",
+        "replace": "    return this.credential ? { ...this.credential } : { ...(await this.loadOnce(undefined, options?.signal)) };",
+        "cmd": "npm test -w @open-inspect/control-plane -- codex-credential-store"
       }
     },
     "E-2": {
@@ -654,8 +671,8 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/http/handlers/session-init.handler.ts",
-        "find": "export class SessionInitHandler",
-        "replace": "export class RemovedSessionInitHandler",
+        "find": "      if (!inProcessRuntimeForSession) {",
+        "replace": "      if (true) {",
         "cmd": "npm test -w @open-inspect/control-plane -- session-init.handler"
       }
     },
@@ -763,18 +780,21 @@
     },
     "G-3": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/session/batch-archive.ts:35"],
+      "code": [
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:1",
+        "packages/control-plane/src/session/batch-archive.ts:35"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/src/session/batch-archive.test.ts",
-          "name": "continues past failures and preserves target order with typed outcomes"
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "preserves its durable record for an archive without deleting it"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/session/batch-archive.ts",
-        "find": "export async function archiveSessionBatch(",
-        "replace": "export async function removedArchiveSessionBatch(",
-        "cmd": "npm test -w @open-inspect/control-plane -- batch-archive"
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "    await this.ctx.storage.put(ARCHIVE_STATE_KEY, \"archived\");",
+        "replace": "    await Promise.resolve();",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do"
       }
     },
     "G-4": {
@@ -795,18 +815,21 @@
     },
     "G-5": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/pi/projection-outbox.ts:1"],
+      "code": [
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:1",
+        "packages/control-plane/src/pi/projection-outbox.ts:1"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/pi-export-projection.test.ts",
-          "name": "puts a Pi turn's tool call and its completion in the session's events"
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "refuses to confirm an archive while a transcript event is undelivered"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/pi/projection-outbox.ts",
-        "find": "  async drain(",
-        "replace": "  async removedDrain(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection"
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "      await this.projectionOutbox.drain(operationId);",
+        "replace": "      void operationId;",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do"
       }
     },
     "G-6": {
@@ -839,7 +862,7 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/budget-service.ts",
-        "find": "    if (this.pi?.isPiSession()) {",
+        "find": "    if (this.inProcess?.isInProcessSession()) {",
         "replace": "    if (false) {",
         "cmd": "npm test -w @open-inspect/control-plane -- src/session/budget-service.pi.test.ts"
       }
@@ -847,20 +870,21 @@
     "H-2": {
       "status": "PASS",
       "code": [
+        "packages/control-plane/src/harness/trusted-usage-meter.ts:1",
         "packages/control-plane/src/harness/pricing.ts:18",
         "packages/control-plane/src/harness/accounting.ts:1"
       ],
       "tests": [
         {
-          "file": "packages/control-plane/src/harness/accounting.test.ts",
-          "name": "rejects an aggregate cost that overflows instead of returning it"
+          "file": "packages/control-plane/src/harness/trusted-usage-meter.test.ts",
+          "name": "prices measured usage only through the server-held price table"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/harness/accounting.ts",
-        "find": "  if (!Number.isFinite(costUsd) || costUsd < 0) throw new Error(\"Invalid usage cost\");",
-        "replace": "  void costUsd;",
-        "cmd": "npm test -w @open-inspect/control-plane -- src/harness/accounting.test.ts"
+        "file": "packages/control-plane/src/harness/trusted-usage-meter.ts",
+        "find": "      state.costUsd += this.prices.costOf(modelId, usage);",
+        "replace": "      state.costUsd += 0;",
+        "cmd": "npm test -w @open-inspect/control-plane -- trusted-usage-meter"
       }
     },
     "H-3": {

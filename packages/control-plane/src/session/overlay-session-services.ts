@@ -70,7 +70,8 @@ export interface OverlaySessionServicesContext {
   messageService: MessageService;
   alarmScheduler: RehydratableAlarmScheduler;
   piControlRepository: PiControlRepository;
-  isPiSession(): boolean;
+  isInProcessSession(): boolean;
+  turnAuthorMayAct(operationId: string): Promise<boolean>;
 }
 
 export function createOverlaySessionServices(context: OverlaySessionServicesContext) {
@@ -91,7 +92,8 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
     messageService,
     alarmScheduler,
     piControlRepository,
-    isPiSession,
+    isInProcessSession,
+    turnAuthorMayAct,
   } = context;
   const externalActionGateway = new ExternalActionGateway(sql, transaction);
   const externalActionAuditOutbox = new ExternalActionAuditOutbox(sql, transaction);
@@ -322,6 +324,7 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
         await new McpReadAuditStore(db).write({ ...input, sessionId: getPublicSessionId() });
       },
       operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
+      authorMayAct: turnAuthorMayAct,
     },
     getSessionId: getPublicSessionId,
   });
@@ -398,7 +401,7 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
     },
     getPublicSessionId,
     createHarnessOperationFence({
-      isHarnessSession: isPiSession,
+      isHarnessSession: isInProcessSession,
       messages: messageRepository,
       controls: piControlRepository,
       operationId: (request) => request.headers.get("X-Pi-Operation-ID"),

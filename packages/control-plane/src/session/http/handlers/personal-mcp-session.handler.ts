@@ -83,6 +83,8 @@ export interface McpSessionBridge {
   }): Promise<void>;
   /** The human actor whose turn the current operation belongs to. */
   operationActor(operationId: string): string | null;
+  /** Re-read the turn author's current authority before every operation. */
+  authorMayAct(operationId: string): Promise<boolean>;
   /**
    * Attach one of the owner's connections to this session.
    *
@@ -155,10 +157,17 @@ export class McpSessionHandler {
     }
     // The grant roster is the session's capability surface. It names the
     // turn it belongs to, exactly as the read does.
-    if (!request.headers.get("X-Pi-Operation-ID")) {
+    const operationId = request.headers.get("X-Pi-Operation-ID");
+    if (!operationId) {
       return Response.json(
         { error: "An MCP grant list requires an active operation" },
         { status: 409 }
+      );
+    }
+    if (!(await this.authorMayAct(operationId))) {
+      return Response.json(
+        { error: "The originating turn's author may no longer act on this session" },
+        { status: 403 }
       );
     }
     const grants = await bridge.grants();
@@ -214,6 +223,12 @@ export class McpSessionHandler {
     const actorId = bridge.operationActor(operationId);
     if (!actorId) {
       return Response.json({ error: "The originating turn has no human actor" }, { status: 403 });
+    }
+    if (!(await this.authorMayAct(operationId))) {
+      return Response.json(
+        { error: "The originating turn's author may no longer act on this session" },
+        { status: 403 }
+      );
     }
 
     // The shared lane: the deployment's own server, resolved by the
@@ -438,6 +453,10 @@ export class McpSessionHandler {
       } satisfies McpReadResult,
       { headers: { "Cache-Control": "no-store" } }
     );
+  }
+
+  private authorMayAct(operationId: string): Promise<boolean> {
+    return this.options.mcp.authorMayAct(operationId);
   }
 }
 

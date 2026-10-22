@@ -105,6 +105,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/db/analytics-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
     "packages/control-plane/src/db/automation-executor-reassignment.ts": {
       "layer": "overlay",
       "need": ["DEV:overlay-integration"],
@@ -189,6 +194,41 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/session-inbox-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-index.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-list-predicates.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-memory-write-guard.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-row.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves persisted in-process session rows fail closed across binary rollback while current code decodes them."
+    },
+    "packages/control-plane/src/db/session-row.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-status-projection-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
     },
     "packages/control-plane/src/db/slack-ingress.ts": {
       "layer": "core-seam",
@@ -275,6 +315,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/harness/in-process-runtime.ts": {
+      "layer": "core-seam",
+      "need": ["C5", "F-2", "G-3"],
+      "why": "Defines the harness-neutral lifecycle and dispatch port for runtimes that execute outside a sandbox."
+    },
     "packages/control-plane/src/harness/pricing.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
@@ -289,6 +334,16 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/trusted-usage-meter.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "H-2"],
+      "why": "Proves durable usage is priced by the server table and restored across runtime activation."
+    },
+    "packages/control-plane/src/harness/trusted-usage-meter.ts": {
+      "layer": "core-seam",
+      "need": ["H-2"],
+      "why": "Persists measured provider usage and prices it only through a server-held harness price table."
     },
     "packages/control-plane/src/harness/turn-authority.ts": {
       "layer": "core-seam",
@@ -404,6 +459,16 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/accounting-provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "H-2"],
+      "why": "Proves Pi terminal model events cannot pass until trusted server accounting succeeds."
+    },
+    "packages/control-plane/src/pi/accounting-provider.ts": {
+      "layer": "core-adapter",
+      "need": ["H-2"],
+      "why": "Adapts Pi provider streams to the neutral trusted meter before terminal model events reach the harness."
     },
     "packages/control-plane/src/pi/browser-extension.test.ts": {
       "layer": "core-support",
@@ -559,6 +624,11 @@
       "layer": "overlay",
       "need": ["SUPPORT:test"],
       "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/pi/in-process-runtime-adapter.ts": {
+      "layer": "core-adapter",
+      "need": ["C5", "F-2"],
+      "why": "Maps the Pi runtime contract onto the harness-neutral in-process lifecycle and dispatch port."
     },
     "packages/control-plane/src/pi/inspection-sanitizer.test.ts": {
       "layer": "core-support",
@@ -1899,6 +1969,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/d1-session-index.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves promptable in-process rows persist a rollback-safe marker while current readers expose the canonical status."
     },
     "packages/control-plane/test/integration/external-action-reconciliation.test.ts": {
       "layer": "overlay",
