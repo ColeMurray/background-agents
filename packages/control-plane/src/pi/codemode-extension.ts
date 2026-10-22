@@ -4,7 +4,7 @@ import { defineExtension, type TaskId, type ToolExecutionApi } from "@earendil-w
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { z } from "zod";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 export const CODEMODE_DEFAULT_TIMEOUT_MS = 60_000;
 export const CODEMODE_MAX_TIMEOUT_MS = 300_000;
@@ -220,7 +220,7 @@ export function createPiCodeModePolicyState(
 }
 
 /** Code Mode decisions composed through the one canonical policy extension. */
-export function createPiCodeModePolicyDelegate(state: PiCodeModePolicyState): ToolPolicyDelegate {
+export function createPiCodeModePolicyDelegate(state: PiCodeModePolicyState): PiToolPolicyDelegate {
   return {
     beforeTool: async (call, declaration) => {
       if (!call.parent) return undefined;

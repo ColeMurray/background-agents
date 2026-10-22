@@ -718,16 +718,6 @@ function BrowserActivityEvent({ event }: EventRendererProps) {
   );
 }
 
-function CrossSessionMessageEvent({ event }: EventRendererProps) {
-  if (event.type !== "cross_session_message") return null;
-  return (
-    <StatusRow tone="success" time={formatEventTime(event)}>
-      Cross-session message {event.status} to session {event.targetSessionId}
-      {event.reason ? ` — ${event.reason}` : ""}
-    </StatusRow>
-  );
-}
-
 function ContextCompactedEvent({ event }: EventRendererProps) {
   if (event.type !== "context_compacted") return null;
 
@@ -755,7 +745,6 @@ const eventRenderers = {
   execution_complete: ExecutionCompleteEvent,
   context_compacted: ContextCompactedEvent,
   browser_activity: BrowserActivityEvent,
-  cross_session_message: CrossSessionMessageEvent,
 } satisfies Record<DirectTimelineEventType, (props: EventRendererProps) => ReactNode>;
 
 export const EventItem = memo(function EventItem({

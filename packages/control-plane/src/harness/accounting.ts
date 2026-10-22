@@ -1,12 +1,43 @@
-import type { UsageState } from "@earendil-works/pi-durable";
 import type { HarnessUsage } from "./pricing";
+
+/**
+ * Usage, as a runtime reports it.
+ *
+ * The seam sums what a turn used and what it cost. It does not know which
+ * runtime reported it, so it reads its own shape and the adapter maps the
+ * runtime's shape onto it.
+ */
+
+/** What one model or tool call used. */
+export interface HarnessUsageEntry {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly totalTokens: number;
+  readonly reasoning?: number;
+  readonly cost?: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+    readonly total: number;
+  };
+}
+
+/** What a turn used, by model and by tool. */
+export interface HarnessUsageState {
+  readonly models: Readonly<Record<string, HarnessUsageEntry>>;
+  readonly tools: Readonly<Record<string, HarnessUsageEntry>>;
+}
 
 export interface UsageAccountingSnapshot {
   readonly usage: HarnessUsage;
   readonly costUsd: number;
 }
 
-export function summarizeUsage(state: Readonly<UsageState>): UsageAccountingSnapshot {
+/** The cost and the usage of a turn, from what it used. */
+export function summarizeUsage(state: Readonly<HarnessUsageState>): UsageAccountingSnapshot {
   const usage = {
     input: 0,
     output: 0,

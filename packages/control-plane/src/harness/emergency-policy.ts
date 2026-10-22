@@ -1,7 +1,6 @@
-import type { ToolHookCall } from "@earendil-works/pi-durable";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/capability-modes";
 import type { ToolEffectRegistration } from "@open-inspect/shared/tool-effects";
-import type { ToolEmergencyPolicy } from "./tool-policy";
+import type { HarnessToolContext, ToolEmergencyPolicy } from "./tool-policy";
 
 /**
  * The kill switch: current-deployment denial for new risky work.
@@ -15,7 +14,7 @@ import type { ToolEmergencyPolicy } from "./tool-policy";
  * now, and a rule that says which feature each risky call needs. The
  * vocabulary — which feature a call belongs to — belongs to the harness.
  */
-export interface DeploymentEmergencyPolicyOptions {
+export interface DeploymentEmergencyPolicyOptions<Call = unknown> {
   /** The current capability of every feature, read now. */
   currentCapabilities(
     signal: AbortSignal | undefined
@@ -26,7 +25,7 @@ export interface DeploymentEmergencyPolicyOptions {
    * `undefined` means the call is not one this policy governs.
    */
   requirementFor(
-    call: ToolHookCall,
+    call: Call,
     declaration: ToolEffectRegistration
   ): { readonly feature: string; readonly reason: string } | undefined;
 }
@@ -37,15 +36,18 @@ export interface DeploymentEmergencyPolicyOptions {
  * Latched extensions stay installed so that status, cancellation, revocation,
  * and already-admitted replay remain available.
  */
-export function createDeploymentEmergencyPolicy(
-  options: DeploymentEmergencyPolicyOptions
-): ToolEmergencyPolicy {
+export function createDeploymentEmergencyPolicy<
+  Call = unknown,
+  Context extends HarnessToolContext = HarnessToolContext,
+>(
+  options: DeploymentEmergencyPolicyOptions<Call>
+): ToolEmergencyPolicy<Call, unknown, Context> {
   return {
     async beforeFeatureDelegates(call, declaration, _api, context) {
       const requirement = options.requirementFor(call, declaration);
-      if (!requirement) return;
+      if (!requirement) return undefined;
       const current = await options.currentCapabilities(context.abortSignal);
-      if (current[requirement.feature] === "enabled") return;
+      if (current[requirement.feature] === "enabled") return undefined;
       return { block: requirement.reason };
     },
   };

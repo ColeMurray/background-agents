@@ -2,15 +2,12 @@ import {
   TOOL_CALLERS,
   createToolEffectRegistry,
   type FeatureCapabilityMode,
-  type PiFeatureCapabilityMatrix,
-  type PiFeatureId,
   type ToolEffectKind,
   type ToolEffectRegistration,
 } from "@open-inspect/shared";
-import type { Extension, ToolRegistration } from "@earendil-works/pi-durable";
 
 /**
- * The only supported installation order for first-class Pi extensions.
+ * The only supported installation order for first-class extensions.
  * Policy hooks lead; feature tools follow the existing core extensions.
  */
 export const EXTENSION_SLOTS = [
@@ -30,24 +27,49 @@ export const EXTENSION_SLOTS = [
 
 export type ExtensionSlot = (typeof EXTENSION_SLOTS)[number];
 
-type PiExtensionGate =
+type ExtensionGate =
   | { readonly feature?: never; readonly minimumCapability?: never }
   | {
-      readonly feature: PiFeatureId;
+      readonly feature: string;
       readonly minimumCapability: Exclude<FeatureCapabilityMode, "off">;
     };
 
-type PiExtensionSource =
-  | {
-      readonly extension: Extension;
-      readonly createExtension?: never;
-    }
-  | {
-      readonly extension?: never;
-      readonly createExtension: (effects: ReadonlyMap<string, ToolEffectRegistration>) => Extension;
-    };
+/**
+ * Where a contribution's extension comes from.
+ *
+ * A contribution carries the extension itself, or a factory that builds it
+ * once the effect registry is known. Exactly one of the two is set.
+ */
+interface ExtensionSource<T extends HarnessExtension> {
+  readonly extension?: T;
+  readonly createExtension?: (effects: ReadonlyMap<string, ToolEffectRegistration>) => T;
+}
 
-export type ExtensionContribution = {
+/**
+ * A tool, as the seam sees it.
+ *
+ * The seam checks a tool's own declaration against the effect registry. It
+ * does not build the tool, so it reads only what the check needs.
+ */
+export interface HarnessTool {
+  readonly name: string;
+  readonly callers?: readonly string[];
+  readonly replay?: string;
+}
+
+/**
+ * An extension, as the seam sees it.
+ *
+ * The seam orders and checks extensions; it does not build them. The adapter
+ * supplies the runtime's own extension, and the seam reads the name and the
+ * tools.
+ */
+export interface HarnessExtension {
+  readonly name: string;
+  readonly tools?: readonly HarnessTool[];
+}
+
+export type ExtensionContribution<T extends HarnessExtension = HarnessExtension> = {
   readonly slot: ExtensionSlot;
   readonly effects: readonly ToolEffectRegistration[];
   /**
@@ -59,11 +81,11 @@ export type ExtensionContribution = {
    * to install one.
    */
   readonly ownedToolNames?: readonly string[];
-} & PiExtensionGate &
-  PiExtensionSource;
+} & ExtensionGate &
+  ExtensionSource<T>;
 
-export interface ExtensionAssembly {
-  readonly extensions: readonly Extension[];
+export interface ExtensionAssembly<T extends HarnessExtension = HarnessExtension> {
+  readonly extensions: readonly T[];
   readonly effects: ReadonlyMap<string, ToolEffectRegistration>;
 }
 
@@ -75,10 +97,10 @@ const mutatingEffects = new Set<ToolEffectKind>([
 ]);
 
 /** Validate and order every active declaration before any extension is installed. */
-export function assembleExtensions(
-  contributions: readonly ExtensionContribution[],
-  capabilities: PiFeatureCapabilityMatrix
-): ExtensionAssembly {
+export function assembleExtensions<T extends HarnessExtension>(
+  contributions: readonly ExtensionContribution<T>[],
+  capabilities: Readonly<Record<string, FeatureCapabilityMode>>
+): ExtensionAssembly<T> {
   const active = contributions.filter((contribution) =>
     isContributionEnabled(contribution, capabilities)
   );
@@ -87,17 +109,17 @@ export function assembleExtensions(
   const effects = createToolEffectRegistry(...active.map(({ effects }) => effects));
   const resolved = active.map((contribution) => ({
     contribution,
-    extension: contribution.extension ?? contribution.createExtension(effects),
+    extension: resolveExtension(contribution, effects),
   }));
   validateExtensions(resolved, effects);
 
   const hasPolicy = active.some(({ slot }) => slot === "policy");
   const hasMutation = [...effects.values()].some(({ effect }) => mutatingEffects.has(effect));
   if (hasMutation && !hasPolicy) {
-    throw new Error("Mutating Pi tool contributions require the policy extension");
+    throw new Error("Mutating tool contributions require the policy extension");
   }
   if (effects.size > 0 && !hasPolicy) {
-    throw new Error("Pi tool contributions require the composite policy extension");
+    throw new Error("Tool contributions require the composite policy extension");
   }
   validateMutationOwnership(active, effects);
 
@@ -113,6 +135,21 @@ export function assembleExtensions(
 }
 
 /**
+ * The extension a contribution brings.
+ *
+ * A contribution carries the extension itself, or a factory that builds it
+ * once the effect registry is known.
+ */
+function resolveExtension<T extends HarnessExtension>(
+  source: ExtensionSource<T>,
+  effects: ReadonlyMap<string, ToolEffectRegistration>
+): T {
+  if (source.createExtension !== undefined) return source.createExtension(effects);
+  if (source.extension !== undefined) return source.extension;
+  throw new Error("A contribution must carry an extension or a factory for one");
+}
+
+/**
  * Every tool that changes something outside the model needs an owner.
  *
  * The owner's policy delegate is what authorizes the call, so a mutation tool
@@ -125,8 +162,8 @@ export function assembleExtensions(
  * authorized by the delegates inside the policy extension, which is always
  * installed.
  */
-function validateMutationOwnership(
-  contributions: readonly ExtensionContribution[],
+function validateMutationOwnership<T extends HarnessExtension>(
+  contributions: readonly ExtensionContribution<T>[],
   effects: ReadonlyMap<string, ToolEffectRegistration>
 ): void {
   const owned = new Set<string>();
@@ -136,14 +173,14 @@ function validateMutationOwnership(
   for (const [name, registration] of effects) {
     if (registration.effect !== "external_mutation") continue;
     if (!owned.has(name)) {
-      throw new Error(`Pi tool effect declaration has no owning policy delegate: "${name}"`);
+      throw new Error(`Tool effect declaration has no owning policy delegate: "${name}"`);
     }
   }
 }
 
-function isContributionEnabled(
-  contribution: ExtensionContribution,
-  capabilities: PiFeatureCapabilityMatrix
+function isContributionEnabled<T extends HarnessExtension>(
+  contribution: ExtensionContribution<T>,
+  capabilities: Readonly<Record<string, FeatureCapabilityMode>>
 ): boolean {
   if (contribution.feature === undefined) return true;
   const available = capabilities[contribution.feature];
@@ -153,46 +190,48 @@ function isContributionEnabled(
   );
 }
 
-function validateUniqueSlots(contributions: readonly ExtensionContribution[]): void {
+function validateUniqueSlots<T extends HarnessExtension>(
+  contributions: readonly ExtensionContribution<T>[]
+): void {
   const slots = new Set<ExtensionSlot>();
   for (const { slot } of contributions) {
-    if (slots.has(slot)) throw new Error(`Duplicate Pi extension slot: "${slot}"`);
+    if (slots.has(slot)) throw new Error(`Duplicate extension slot: "${slot}"`);
     slots.add(slot);
   }
 }
 
-function validateExtensions(
+function validateExtensions<T extends HarnessExtension>(
   resolved: readonly {
-    readonly contribution: ExtensionContribution;
-    readonly extension: Extension;
+    readonly contribution: ExtensionContribution<T>;
+    readonly extension: T;
   }[],
   effects: ReadonlyMap<string, ToolEffectRegistration>
 ): void {
   const extensionNames = new Set<string>();
-  const tools = new Map<string, ToolRegistration>();
+  const tools = new Map<string, HarnessTool>();
   for (const { extension } of resolved) {
     if (extensionNames.has(extension.name)) {
-      throw new Error(`Duplicate Pi extension name: "${extension.name}"`);
+      throw new Error(`Duplicate extension name: "${extension.name}"`);
     }
     extensionNames.add(extension.name);
     for (const tool of extension.tools ?? []) {
-      if (tools.has(tool.name)) throw new Error(`Duplicate Pi tool name: "${tool.name}"`);
+      if (tools.has(tool.name)) throw new Error(`Duplicate tool name: "${tool.name}"`);
       tools.set(tool.name, tool);
     }
   }
 
   for (const [name, tool] of tools) {
     const declaration = effects.get(name);
-    if (!declaration) throw new Error(`Pi tool has no effect declaration: "${name}"`);
+    if (!declaration) throw new Error(`Tool has no effect declaration: "${name}"`);
     if (!sameCallers(tool.callers ?? TOOL_CALLERS, declaration.callers)) {
-      throw new Error(`Pi tool callers do not match declaration: "${name}"`);
+      throw new Error(`Tool callers do not match declaration: "${name}"`);
     }
     if ((tool.replay ?? "unsafe") !== declaration.replay) {
-      throw new Error(`Pi tool replay does not match declaration: "${name}"`);
+      throw new Error(`Tool replay does not match declaration: "${name}"`);
     }
   }
   for (const name of effects.keys()) {
-    if (!tools.has(name)) throw new Error(`Pi tool effect declaration has no tool: "${name}"`);
+    if (!tools.has(name)) throw new Error(`Tool effect declaration has no tool: "${name}"`);
   }
 }
 

@@ -6,8 +6,8 @@ import {
   type ToolHooks,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
-import { createToolPolicyExtension, type ToolPolicyDelegate } from "../harness/tool-policy";
-import type { ToolEmergencyPolicy } from "../harness/tool-policy";
+import { createToolPolicyExtension } from "./tool-policy-extension";
+import type { PiToolEmergencyPolicy, PiToolPolicyDelegate } from "./tool-policy-types";
 
 const effects = createToolEffectRegistry([
   { name: "model_tool", effect: "control", callers: ["model"], replay: "safe" },
@@ -18,7 +18,7 @@ const context = { abortSignal: undefined, value: () => undefined, toString: () =
 const api = {} as HookApi;
 
 function beforeTool() {
-  const extension = createToolPolicyExtension(effects);
+  const extension = createToolPolicyExtension({ effects });
   const registration = extension.hooks?.[0];
   expect(registration?.task).toBe("pi.tool");
   const handler = (registration?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
@@ -26,15 +26,15 @@ function beforeTool() {
   return handler;
 }
 
-function beforeToolWithDelegates(delegates: readonly ToolPolicyDelegate[]) {
-  const extension = createToolPolicyExtension(effects, delegates);
+function beforeToolWithDelegates(delegates: readonly PiToolPolicyDelegate[]) {
+  const extension = createToolPolicyExtension({ effects, delegates });
   const handler = (extension.hooks?.[0]?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
   if (!handler) throw new Error("Expected Pi tool policy beforeTool hook");
   return handler;
 }
 
-function afterTool(delegates: readonly ToolPolicyDelegate[], hookApi: HookApi = api) {
-  const extension = createToolPolicyExtension(effects, delegates);
+function afterTool(delegates: readonly PiToolPolicyDelegate[], hookApi: HookApi = api) {
+  const extension = createToolPolicyExtension({ effects, delegates });
   const registration = extension.hooks?.[0];
   const handler = (registration?.handlers as Partial<ToolHooks> | undefined)?.afterTool;
   if (!handler) throw new Error("Expected Pi tool policy afterTool hook");
@@ -57,7 +57,7 @@ describe("createToolPolicyExtension", () => {
 
     await expect(hook(call("model_tool"), api, context)).resolves.toBeUndefined();
     await expect(hook(call("nested_tool"), api, context)).resolves.toEqual({
-      block: "Pi tool caller is not allowed: model -> nested_tool",
+      block: "Tool caller is not allowed: model -> nested_tool",
     });
   });
 
@@ -66,7 +66,7 @@ describe("createToolPolicyExtension", () => {
 
     await expect(hook(call("nested_tool", true), api, context)).resolves.toBeUndefined();
     await expect(hook(call("model_tool", true), api, context)).resolves.toEqual({
-      block: "Pi tool caller is not allowed: tools -> model_tool",
+      block: "Tool caller is not allowed: tools -> model_tool",
     });
   });
 
@@ -74,10 +74,10 @@ describe("createToolPolicyExtension", () => {
     const hook = beforeTool();
 
     await expect(hook(call("unknown"), api, context)).resolves.toEqual({
-      block: "Pi tool is not declared: unknown",
+      block: "Tool is not declared: unknown",
     });
     await expect(hook(call("unknown", true), api, context)).resolves.toEqual({
-      block: "Pi tool is not declared: unknown",
+      block: "Tool is not declared: unknown",
     });
   });
 
@@ -96,19 +96,23 @@ describe("createToolPolicyExtension", () => {
 
   it("runs broad emergency denial before delegates and memos only the final allow", async () => {
     const order: string[] = [];
-    const emergency: ToolEmergencyPolicy = {
+    const emergency: PiToolEmergencyPolicy = {
       beforeFeatureDelegates: vi.fn(async () => {
         order.push("emergency");
         return undefined;
       }),
     };
-    const delegate: ToolPolicyDelegate = {
+    const delegate: PiToolPolicyDelegate = {
       beforeTool: vi.fn(async () => {
         order.push("delegate");
         return undefined;
       }),
     };
-    const extension = createToolPolicyExtension(effects, [delegate], emergency);
+    const extension = createToolPolicyExtension({
+      effects,
+      delegates: [delegate],
+      emergencyPolicy: emergency,
+    });
     const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
 
     await expect(hook(call("model_tool"), api, context)).resolves.toBeUndefined();
@@ -117,10 +121,13 @@ describe("createToolPolicyExtension", () => {
 
   it("does not write a feature allow memo when a later delegate denies", async () => {
     const memoFinalAllow = vi.fn(async () => undefined);
-    const extension = createToolPolicyExtension(effects, [
-      { beforeTool: async () => undefined, memoFinalAllow },
-      { beforeTool: async () => ({ block: "later denial" }) },
-    ]);
+    const extension = createToolPolicyExtension({
+      effects,
+      delegates: [
+        { beforeTool: async () => undefined, memoFinalAllow },
+        { beforeTool: async () => ({ block: "later denial" }) },
+      ],
+    });
     const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
 
     await expect(hook(call("model_tool"), api, context)).resolves.toEqual({
@@ -141,7 +148,7 @@ describe("createToolPolicyExtension", () => {
 
     await expect(handler(call("model_tool"), original, hookApi, context)).resolves.toEqual({
       isError: true,
-      output: [{ type: "text", text: "Pi tool policy failed closed" }],
+      output: [{ type: "text", text: "Tool policy failed closed" }],
     });
   });
 
@@ -166,7 +173,7 @@ describe("createToolPolicyExtension", () => {
 
     await expect(handler(call("model_tool"), original, rejectingApi, context)).resolves.toEqual({
       isError: true,
-      output: [{ type: "text", text: "Pi tool policy failed closed" }],
+      output: [{ type: "text", text: "Tool policy failed closed" }],
     });
   });
 

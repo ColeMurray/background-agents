@@ -1,6 +1,6 @@
 import type { JsonValue } from "@earendil-works/chord";
 import type { ToolHookCall } from "@earendil-works/pi-durable";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 import {
   COMPUTER_SCRATCH_ROOT,
   isProtectedWorkspaceRoot,
@@ -20,7 +20,7 @@ type MutationDecision =
   | { allowed: false; reason: string; metadata: Record<string, JsonValue> };
 
 /** Scratch-only policy contributor for the canonical composite Pi tool policy. */
-export function createWorkspaceMutationPolicyDelegate(): ToolPolicyDelegate {
+export function createWorkspaceMutationPolicyDelegate(): PiToolPolicyDelegate {
   return {
     async beforeTool(call, declaration, api, context) {
       if (declaration.effect !== "local_mutation") return;
@@ -69,8 +69,8 @@ function mutationOutcome(result: { isError?: boolean; details?: unknown }): Json
 }
 
 async function memoDecision(
-  api: Parameters<NonNullable<ToolPolicyDelegate["beforeTool"]>>[2],
-  context: Parameters<NonNullable<ToolPolicyDelegate["beforeTool"]>>[3],
+  api: Parameters<NonNullable<PiToolPolicyDelegate["beforeTool"]>>[2],
+  context: Parameters<NonNullable<PiToolPolicyDelegate["beforeTool"]>>[3],
   call: ToolHookCall,
   decision: MutationDecision
 ): Promise<void> {

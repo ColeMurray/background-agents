@@ -34,7 +34,7 @@ function declaredEffect(name: string) {
   const registration = PI_MEMORY_TOOL_EFFECT_REGISTRATIONS.find(
     (candidate) => candidate.name === name
   );
-  if (!registration) throw new Error(`Pi tool has no effect declaration: ${name}`);
+  if (!registration) throw new Error(`Tool has no effect declaration: ${name}`);
   return registration;
 }
 

@@ -37,7 +37,6 @@ const directTimelineEventEligibility = {
   execution_complete: () => true,
   context_compacted: () => true,
   browser_activity: () => true,
-  cross_session_message: () => true,
 } satisfies Partial<Record<SandboxEvent["type"], (event: SandboxEvent) => boolean>>;
 
 export type DirectTimelineEventType = keyof typeof directTimelineEventEligibility;

@@ -22,7 +22,7 @@ import {
   WORKSPACE_MUTATION_MAX_BYTES,
   createWorkspaceMutationPolicyDelegate,
 } from "./computer-workspace-policy";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 import type { PiRepositoryWorkspace, RepositoryMutationName } from "./repository-workspace";
 import { validateWorkspaceToolInput } from "./workspace-input-limits";
 
@@ -245,7 +245,7 @@ function targetsRepository(args: Record<string, unknown>): boolean {
   return normalized === REPOSITORY_ROOT || normalized.startsWith(`${REPOSITORY_ROOT}/`);
 }
 
-function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): ToolPolicyDelegate {
+function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): PiToolPolicyDelegate {
   return {
     async beforeTool(call, declaration) {
       if (declaration.effect !== "local_mutation") return;
@@ -313,7 +313,7 @@ function createRepositoryMutationPolicyDelegate(scratchWritable: boolean): ToolP
   };
 }
 
-function combinePolicies(...delegates: ToolPolicyDelegate[]): ToolPolicyDelegate {
+function combinePolicies(...delegates: PiToolPolicyDelegate[]): PiToolPolicyDelegate {
   return {
     async beforeTool(call, declaration, api, context) {
       for (const delegate of delegates) {

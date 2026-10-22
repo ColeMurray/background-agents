@@ -13,7 +13,7 @@ import {
   assembleExtensions,
   type ExtensionContribution,
 } from "../harness/extension-assembler";
-import { createToolPolicyExtension } from "../harness/tool-policy";
+import { createToolPolicyExtension } from "../pi/tool-policy-extension";
 
 const capabilities = resolvePiFeatureCapabilities({
   scratchWorkspace: "enabled",
@@ -59,7 +59,7 @@ function policy(capture?: (effects: ReadonlyMap<string, ToolEffectRegistration>)
     effects: [],
     createExtension: (effects: ReadonlyMap<string, ToolEffectRegistration>) => {
       capture?.(effects);
-      return createToolPolicyExtension(effects);
+      return createToolPolicyExtension({ effects });
     },
   } as const satisfies ExtensionContribution;
 }
@@ -116,7 +116,7 @@ describe("assembleExtensions", () => {
         [contribution("mcp", "mcp-static"), contribution("mcp", "mcp-oauth")],
         capabilities
       )
-    ).toThrow('Duplicate Pi extension slot: "mcp"');
+    ).toThrow('Duplicate extension slot: "mcp"');
   });
 
   it("rejects duplicate extension names across different slots", () => {
@@ -125,7 +125,7 @@ describe("assembleExtensions", () => {
         [contribution("core", "open-inspect"), contribution("policy", "open-inspect")],
         capabilities
       )
-    ).toThrow('Duplicate Pi extension name: "open-inspect"');
+    ).toThrow('Duplicate extension name: "open-inspect"');
   });
 
   it("rejects duplicate tool names across slots before exposure", () => {
@@ -145,7 +145,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow('Duplicate Pi tool name: "duplicate"');
+    ).toThrow('Duplicate tool name: "duplicate"');
   });
 
   it("rejects undeclared tools and declarations without tools", () => {
@@ -160,7 +160,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow('Pi tool has no effect declaration: "undeclared"');
+    ).toThrow('Tool has no effect declaration: "undeclared"');
 
     expect(() =>
       assembleExtensions(
@@ -173,7 +173,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow('Pi tool effect declaration has no tool: "missing"');
+    ).toThrow('Tool effect declaration has no tool: "missing"');
   });
 
   it("rejects caller and replay declarations that differ from the actual tool", () => {
@@ -191,7 +191,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow('Pi tool callers do not match declaration: "wrong_callers"');
+    ).toThrow('Tool callers do not match declaration: "wrong_callers"');
 
     expect(() =>
       assembleExtensions(
@@ -207,7 +207,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow('Pi tool replay does not match declaration: "wrong_replay"');
+    ).toThrow('Tool replay does not match declaration: "wrong_replay"');
   });
 
   it("accepts discovered stable MCP tools only when declared before exposure", () => {
@@ -271,7 +271,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow("Mutating Pi tool contributions require the policy extension");
+    ).toThrow("Mutating tool contributions require the policy extension");
   });
 
   it("requires the one composite policy slot before read-only tools too", () => {
@@ -289,7 +289,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow("Pi tool contributions require the composite policy extension");
+    ).toThrow("Tool contributions require the composite policy extension");
   });
 
   it("accepts Code Mode with only the codemode tool", () => {
@@ -332,7 +332,7 @@ describe("assembleExtensions", () => {
         ],
         capabilities
       )
-    ).toThrow('Pi tool effect declaration has no owning policy delegate: "publish_comment"');
+    ).toThrow('Tool effect declaration has no owning policy delegate: "publish_comment"');
   });
 
   it("accepts an external mutation whose delegate names it", () => {

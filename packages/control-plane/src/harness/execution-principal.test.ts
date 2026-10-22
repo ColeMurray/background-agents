@@ -9,6 +9,9 @@ const authority = {
   current: { scratchWorkspace: "off" },
 };
 
+/** The session's own route for the authority; the caller names it. */
+const path = "/internal/capability-authority";
+
 function hangingFetcher(onAbort?: (reason: unknown) => void) {
   return {
     fetch: vi.fn(
@@ -35,13 +38,16 @@ describe("the execution principal", () => {
   it("parses the SessionDO creation snapshot and current emergency policy", async () => {
     const fetcher = { fetch: vi.fn(async () => Response.json(authority)) };
 
-    await expect(fetchExecutionPrincipal(fetcher)).resolves.toEqual(authority);
+    await expect(fetchExecutionPrincipal(fetcher, { path })).resolves.toEqual(authority);
   });
 
   it("combines the tool abort signal with the lookup request", async () => {
     const abort = new AbortController();
     const observed = vi.fn();
-    const pending = fetchExecutionPrincipal(hangingFetcher(observed), abort.signal);
+    const pending = fetchExecutionPrincipal(hangingFetcher(observed), {
+      path,
+      signal: abort.signal,
+    });
 
     abort.abort(new DOMException("tool stopped", "AbortError"));
 
@@ -52,7 +58,7 @@ describe("the execution principal", () => {
   it("times out a hung cross-DO lookup instead of blocking cancellation", async () => {
     vi.useFakeTimers();
     const observed = vi.fn();
-    const pending = fetchExecutionPrincipal(hangingFetcher(observed));
+    const pending = fetchExecutionPrincipal(hangingFetcher(observed), { path });
     const rejected = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
 
     await vi.advanceTimersByTimeAsync(EMERGENCY_POLICY_LOOKUP_TIMEOUT_MS);

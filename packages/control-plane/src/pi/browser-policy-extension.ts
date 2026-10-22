@@ -1,4 +1,4 @@
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 /** The browser tool's stable name. */
 export const BROWSER_TOOL_NAME = "browser";
@@ -33,7 +33,7 @@ export interface BrowserPolicyOptions {
  * whether this turn may use it. The decision is per call, and it is refused
  * the moment the deployment or the session says no.
  */
-export function createBrowserPolicyDelegate(options: BrowserPolicyOptions): ToolPolicyDelegate {
+export function createBrowserPolicyDelegate(options: BrowserPolicyOptions): PiToolPolicyDelegate {
   return {
     async beforeTool(call, declaration, _api, context) {
       if (call.name !== BROWSER_TOOL_NAME) return undefined;

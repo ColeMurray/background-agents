@@ -15,7 +15,7 @@ import {
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import { sha256Hex } from "@open-inspect/shared/service-auth";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 const APPROVAL_MEMO = "sandbox-execution-approval-v1";
 const COMMAND_MEMO = "sandbox-execution-command-v1";
@@ -69,7 +69,7 @@ const effects: ReadonlyMap<string, ToolEffectRegistration> = new Map(
   ])
 );
 
-export function createSandboxExecutionPolicyDelegate(): ToolPolicyDelegate {
+export function createSandboxExecutionPolicyDelegate(): PiToolPolicyDelegate {
   return {
     async memoFinalAllow(call, declaration, api, context) {
       if (declaration.effect !== "sandbox_execution" || !effects.has(call.name)) return;

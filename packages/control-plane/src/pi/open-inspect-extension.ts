@@ -50,7 +50,7 @@ const repositoryTarget = {
 
 function declaredToolEffect(name: string) {
   const effect = PI_TOOL_EFFECT_REGISTRY.get(name);
-  if (!effect) throw new Error(`Pi tool has no effect declaration: ${name}`);
+  if (!effect) throw new Error(`Tool has no effect declaration: ${name}`);
   return effect;
 }
 

@@ -23,11 +23,11 @@ import {
   type AgentEvent,
   type AgentEventStream,
   type EntryRecord,
+  type Extension,
   type ConversationId,
   type EntryId,
   type TaskId,
   type SubmissionId,
-  type UsageState,
   type UserInput,
 } from "@earendil-works/pi-durable";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -95,7 +95,8 @@ import {
 } from "../pi/computer-workspace-quota";
 import { createRepositoryEditingWorkspaceCapability } from "../pi/repository-editing-capability";
 import { assembleExtensions, type ExtensionContribution } from "../harness/extension-assembler";
-import { createToolPolicyExtension, type ToolPolicyDelegate } from "../harness/tool-policy";
+import { createToolPolicyExtension } from "../pi/tool-policy-extension";
+import type { PiToolPolicyDelegate } from "../pi/tool-policy-types";
 import {
   PI_FEATURE_CAPABILITY_SNAPSHOT_KEY,
   PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT,
@@ -151,10 +152,16 @@ import { fetchExecutionPrincipal } from "../harness/execution-principal";
 import { PermanentPiProjectionError, PiProjectionOutbox } from "../pi/projection-outbox";
 import { piAgentEventIdentity, piProjectionIdentity } from "../pi/projection-identity";
 import { hasTrustedPrice } from "../harness/pricing";
+import {
+  createFixedActionCeiling,
+  HARNESS_ACTION_CEILING,
+  type HarnessActionCeiling,
+} from "../harness/action-ceiling";
 import { createPiPriceTable } from "../pi/price-table";
 import {
   accountingDelta,
   summarizeUsage,
+  type HarnessUsageState,
   type UsageAccountingSnapshot,
 } from "../harness/accounting";
 import {
@@ -288,6 +295,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     this.fetchCodexCredential(version, signal)
   );
   private readonly models = createModels({ credentials: this.credentials });
+  /** The ceiling on what this turn may do; a fresh one for every turn. */
+  private turnActionCeiling: HarnessActionCeiling = createFixedActionCeiling(
+    HARNESS_ACTION_CEILING
+  );
   private readonly prices = createPiPriceTable(this.models);
   private readonly registry = createRegistry();
   private workspace: WorkspaceToolFacade | undefined;
@@ -358,9 +369,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         invoke: (control, callerConversationId, signal) =>
           this.invokeAgentControl(control, callerConversationId as ConversationId, signal),
       });
-      let workspacePolicyDelegate: ToolPolicyDelegate | undefined;
+      let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const workspaceMutations = new WorkspaceMutationFifo();
-      const extensions: ExtensionContribution[] = [
+      const extensions: ExtensionContribution<Extension>[] = [
         {
           slot: "policy",
           effects: [],
@@ -378,9 +389,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                 authorize: async (request, signal) => this.authorizeMemoryWrite(request, signal),
               },
             });
-            return createToolPolicyExtension(
+            return createToolPolicyExtension({
               effects,
-              workspacePolicyDelegate
+              // The ceiling is per turn; the policy is installed once.
+              ceiling: () => this.turnActionCeiling,
+              delegates: workspacePolicyDelegate
                 ? [
                     browserDelegate,
                     memoryDelegate,
@@ -394,8 +407,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                     codeModePolicyDelegate,
                     sandboxExecutionPolicyDelegate,
                   ],
-              emergencyPolicy
-            );
+              emergencyPolicy,
+            });
           },
         },
         { slot: "core", extension: core, effects: declaredEffects(core) },
@@ -770,6 +783,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       // The turn's images are fetched before anything is recorded or
       // scheduled: a turn that cannot carry its image is refused outright,
       // never admitted and quietly run without one.
+      // A fresh ceiling for this turn.
+      this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
       const hydrated = await this.buildUserInput(input);
       if (!hydrated.ok) {
         await this.stopEventRelay(input.messageId).catch(() => {});
@@ -1318,7 +1333,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             (submission) =>
               submission.conversationId === record.id && submission.status === "placed"
           ).length;
-          const usage = summarizeUsage(view.value.docs["pi.usage"] as unknown as UsageState);
+          const usage = summarizeUsage(view.value.docs["pi.usage"] as unknown as HarnessUsageState);
           return {
             conversationId: record.id,
             ...(record.parent
@@ -1735,7 +1750,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private fetchCapabilityAuthority(sessionId: string, signal?: AbortSignal) {
-    return fetchExecutionPrincipal(this.env.SESSION.getByName(sessionId), signal);
+    return fetchExecutionPrincipal(this.env.SESSION.getByName(sessionId), {
+      path: SessionInternalPaths.piCapabilityAuthority,
+      signal,
+    });
   }
 
   private async fetchCodexCredential(rejectedCredentialVersion?: number, signal?: AbortSignal) {
@@ -2835,7 +2853,7 @@ function declaredEffects(extension: {
 }): ToolEffectRegistration[] {
   return (extension.tools ?? []).map(({ name }) => {
     const declaration = PI_TOOL_EFFECT_REGISTRY.get(name);
-    if (!declaration) throw new Error(`Pi tool has no effect declaration: ${name}`);
+    if (!declaration) throw new Error(`Tool has no effect declaration: ${name}`);
     return declaration;
   });
 }

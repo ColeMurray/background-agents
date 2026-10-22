@@ -4,7 +4,7 @@ import {
 } from "@open-inspect/shared/types/memories";
 import { PI_MEMORY_TOOL_EFFECT_REGISTRATIONS } from "@open-inspect/shared";
 import { PI_MEMORY_TOOL_NAMES } from "./memory-extension";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 /**
  * The session's answer to "may this turn write this memory?".
@@ -38,7 +38,7 @@ export interface MemoryPolicyOptions {
  * and refuses the call with a clear reason when it is not, so the model is
  * not left guessing. The write itself re-checks at commit.
  */
-export function createMemoryPolicyDelegate(options: MemoryPolicyOptions): ToolPolicyDelegate {
+export function createMemoryPolicyDelegate(options: MemoryPolicyOptions): PiToolPolicyDelegate {
   return {
     async beforeTool(call, declaration, _api, context) {
       if (call.name !== PI_MEMORY_TOOL_NAMES.write) return undefined;

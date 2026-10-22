@@ -33,7 +33,7 @@ import {
   createPiCodeModePolicyState,
 } from "./codemode-extension";
 import { assembleExtensions } from "../harness/extension-assembler";
-import { createToolPolicyExtension } from "../harness/tool-policy";
+import { createToolPolicyExtension } from "./tool-policy-extension";
 import { createDeploymentEmergencyPolicy } from "../harness/emergency-policy";
 import { piEmergencyRequirement } from "./emergency-policy-vocabulary";
 
@@ -74,17 +74,17 @@ function registryWith(
         slot: "policy",
         effects: [],
         createExtension: (effects) =>
-          createToolPolicyExtension(
+          createToolPolicyExtension({
             effects,
-            [createPiCodeModePolicyDelegate(codeModePolicy)],
-            createDeploymentEmergencyPolicy({
+            delegates: [createPiCodeModePolicyDelegate(codeModePolicy)],
+            emergencyPolicy: createDeploymentEmergencyPolicy({
               currentCapabilities: async (signal) => {
                 const admit = await resolveAdmission(signal);
                 return resolvePiFeatureCapabilities({ codeMode: admit ? "enabled" : "off" });
               },
               requirementFor: piEmergencyRequirement,
-            })
-          ),
+            }),
+          }),
       },
       {
         slot: "core",

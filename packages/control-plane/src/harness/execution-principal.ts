@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { featureCapabilityModeSchema } from "@open-inspect/shared/capability-modes";
-import { SessionInternalPaths } from "../session/contracts";
 
 /**
  * The execution principal: the authority a harness acts under.
@@ -33,10 +32,18 @@ interface ExecutionPrincipalFetcher {
   fetch(request: Request): Promise<Response>;
 }
 
+/** Where the authority is read from, and when to stop reading it. */
+export interface ExecutionPrincipalRequest {
+  /** The session's own route for the authority. */
+  readonly path: string;
+  /** The signal of the invoking tool, when there is one. */
+  readonly signal?: AbortSignal;
+}
+
 /** Bounded SessionDO authority lookup, cancelled with the invoking tool when it stops. */
 export async function fetchExecutionPrincipal(
   fetcher: ExecutionPrincipalFetcher,
-  callerSignal?: AbortSignal
+  request: ExecutionPrincipalRequest
 ): Promise<ExecutionPrincipalResponse> {
   const timeout = new AbortController();
   const timeoutReason = new DOMException(
@@ -47,10 +54,12 @@ export async function fetchExecutionPrincipal(
     () => timeout.abort(timeoutReason),
     EMERGENCY_POLICY_LOOKUP_TIMEOUT_MS
   );
-  const signal = callerSignal ? AbortSignal.any([callerSignal, timeout.signal]) : timeout.signal;
+  const signal = request.signal
+    ? AbortSignal.any([request.signal, timeout.signal])
+    : timeout.signal;
   try {
     const response = await fetcher.fetch(
-      new Request(`http://session${SessionInternalPaths.piCapabilityAuthority}`, { signal })
+      new Request(`http://session${request.path}`, { signal })
     );
     if (!response.ok)
       throw new Error(`The execution principal is unavailable (${response.status})`);
