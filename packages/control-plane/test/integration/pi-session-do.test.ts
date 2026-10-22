@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
-import { collectMessages, initSession, openClientWs, queryDO } from "./helpers";
+import { collectMessages, initSession, openClientWs, queryDO, seedActiveUser } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
@@ -33,6 +33,12 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { createFauxCodexProvider } from "./faux-codex-provider";
+import { PI_MODEL_PROVIDER_ID, piProviderFactories } from "../../src/pi/provider-factories";
+import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
+
+const defaultPiProviderFactory = piProviderFactories.factoryFor(PI_MODEL_PROVIDER_ID)!;
+afterEach(() => piProviderFactories.register(PI_MODEL_PROVIDER_ID, defaultPiProviderFactory));
 
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
@@ -219,7 +225,7 @@ describe("PiSessionDO", () => {
       "SELECT pi_feature_capability_snapshot FROM session"
     );
     expect(JSON.parse(rows[0]!.pi_feature_capability_snapshot)).toEqual({
-      version: 7,
+      version: 6,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -907,14 +913,66 @@ describe("PiSessionDO", () => {
   });
 
   it("projects a human control once into SessionDO while keeping Pi assistant state subordinate", async () => {
-    const { sessionName, stub } = await initializedPiStub("pi-control-completion");
+    const now = Date.now();
+    const accountId = crypto.randomUUID().replaceAll("-", "");
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+         (id, provider, display_name, external_account_id, status, created_at, updated_at)
+       VALUES (?, 'openai', 'OpenAI', 'acct', 'active', ?, ?)`
+    )
+      .bind(accountId, now, now)
+      .run();
+    await new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!).create({
+      providerAccountId: accountId,
+      provider: "openai",
+      credentialSchemaVersion: 1,
+      payload: {
+        refreshToken: "openai-refresh-secret",
+        accessToken: "openai-access-secret",
+        accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
+      },
+      accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
+      now,
+    });
+    await seedActiveUser("user-1");
+    const { sessionName } = await initSession({
+      sessionName: `pi-control-completion-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      providerAuth: [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: accountId,
+          selectionSource: "explicit",
+        },
+        { provider: "xai", authMode: "api_key", selectionSource: "explicit" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "explicit" },
+      ],
+    });
+    const stub = piStub(sessionName);
     await stub.status(sessionName);
     await runInPiSessionDO(stub, async (instance) => {
-      const faux = fauxProvider();
+      const faux = createFauxCodexProvider({
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            name: "Faux gpt-5.6-sol",
+            cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+          },
+        ],
+        responses: [fauxAssistantMessage("native answer")],
+      });
+      piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
       (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
-      faux.setResponses([fauxAssistantMessage("native answer")]);
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
-      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      await root.configure(
+        { model: { provider: "openai-codex", modelId: "gpt-5.6-sol" } },
+        BACKGROUND_CONTEXT
+      );
       const totals = vi
         .fn()
         .mockResolvedValueOnce({
@@ -942,6 +1000,7 @@ describe("PiSessionDO", () => {
             requestId: "native-submit-1",
             action: "send",
             content: "native input",
+            model: "openai/gpt-5.6-sol",
           },
         }),
       })
@@ -995,6 +1054,7 @@ describe("PiSessionDO", () => {
                 requestId: "native-submit-1",
                 action: "send",
                 content: "native input",
+                model: "openai/gpt-5.6-sol",
               },
             }),
           })
@@ -1152,7 +1212,7 @@ describe("PiSessionDO", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 7,
+      version: 6,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -1844,14 +1904,13 @@ describe("PiSessionDO", () => {
       "open-inspect.agent-messaging",
       "open-inspect.workspace",
       "open-inspect.repository-overlay",
-      "open-inspect.external-actions",
     ]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 7,
+      version: 6,
       capabilities: {
         scratchWorkspace: "enabled",
         repositoryEditing: "enabled",
@@ -1921,20 +1980,19 @@ describe("PiSessionDO", () => {
     );
 
     expect(result).toMatchObject({ isError: false });
-    await runInPiSessionDO(stub, (instance) =>
-      (instance as unknown as { alarm(): Promise<void> }).alarm()
-    );
-    const rows = await queryDO<{ bundle_json: string }>(
-      sessionStub,
-      "SELECT bundle_json FROM session_diff WHERE singleton = 1"
-    );
-    expect(JSON.parse(rows[0]?.bundle_json ?? "null")).toMatchObject({
-      repositories: [
-        {
-          baseSha: "a".repeat(40),
-          files: [expect.objectContaining({ path: "src/app.ts", status: "modified" })],
-        },
-      ],
+    await vi.waitFor(async () => {
+      const rows = await queryDO<{ bundle_json: string }>(
+        sessionStub,
+        "SELECT bundle_json FROM session_diff WHERE singleton = 1"
+      );
+      expect(JSON.parse(rows[0]?.bundle_json ?? "null")).toMatchObject({
+        repositories: [
+          {
+            baseSha: "a".repeat(40),
+            files: [expect.objectContaining({ path: "src/app.ts", status: "modified" })],
+          },
+        ],
+      });
     });
 
     const retry = await sessionStub.fetch(
