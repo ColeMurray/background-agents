@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { piFeatureCapabilitySnapshotSchema } from "@open-inspect/shared/pi-feature-capabilities";
+import { piFeatureCapabilitySnapshotSchema } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 
 export const executionPrincipalResponseSchema = z
   .object({

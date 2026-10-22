@@ -3,7 +3,7 @@ import type {
   McpConnectionStatus,
   McpReviewedReadOnlyTool,
 } from "@open-inspect/shared/types/integrations";
-import type { ToolEffectKind } from "@open-inspect/shared/pi-tool-effects";
+import type { ToolEffectKind } from "@open-inspect/shared/pi-runtime-tool-effects";
 import { generateId } from "../auth/crypto";
 import { validateMcpRemoteUrl, McpRemoteUrlPolicyError } from "../mcp/remote-url-policy";
 import { isUniqueConstraintError } from "./errors";

@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { externalActionStatusResponseSchema } from "@open-inspect/shared";
-import { resolvePiFeatureCapabilities } from "@open-inspect/shared/pi-feature-capabilities";
+import { resolvePiFeatureCapabilities } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { ExternalActionGateway } from "../session/external-action-gateway";
 import { PiBridgeHandler } from "../session/http/handlers/pi-bridge.handler";
@@ -64,7 +64,7 @@ describe("Pi external action approval integration", () => {
       },
       controls: { isActiveOperation: () => false },
       agentControls: { handle: vi.fn() },
-      credentials: { getOpenAIAccess: vi.fn() },
+      credentials: { getProviderAccess: vi.fn() },
       skills: { getSandboxInstallation: vi.fn(async () => null) },
       attachments: { getClaimedByMessage: vi.fn(() => null) },
       media: {

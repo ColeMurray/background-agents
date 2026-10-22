@@ -24,7 +24,7 @@ export * from "./slack";
 export * from "./pull-request-tool";
 export * from "./rbac";
 export * from "./trace/compaction";
-export * from "./pi-tool-effects";
+export * from "./pi-runtime-tool-effects";
 export {
   PI_FEATURE_IDS,
   PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
@@ -35,7 +35,7 @@ export {
   type PiFeatureCapabilityMatrix,
   type PiFeatureCapabilitySnapshot,
   type PiFeatureId,
-} from "./pi-feature-capabilities";
+} from "./pi-runtime-feature-capabilities";
 export * from "./migration-reservations";
 export * from "./capability-modes";
 export * from "./tool-effects";

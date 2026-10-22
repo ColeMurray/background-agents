@@ -547,6 +547,39 @@ describe("personal MCP connections API", () => {
     );
   });
 
+  it("refuses to open a transport for an endpoint that is not the reviewed one", async () => {
+    const server = await createRemoteServer();
+    const created = await serviceFetch("https://test.local/mcp-connections", {
+      method: "POST",
+      body: JSON.stringify({ serverId: server.id }),
+    });
+    const connection = await created.json<McpConnectionMetadata>();
+
+    // The stored endpoint no longer matches the host the operator reviewed.
+    // Nothing in the product rewrites that column, so this is what a
+    // restored or tampered row looks like: a reviewed host with a different
+    // endpoint under it.
+    await env.DB.prepare(`UPDATE mcp_connections SET endpoint_url = ? WHERE id = ?`)
+      .bind("https://internal.example.net/mcp", connection.id)
+      .run();
+
+    const response = await serviceFetch(
+      `https://test.local/mcp-connections/${connection.id}/authorize`,
+      { method: "POST", body: JSON.stringify({}) }
+    );
+
+    // The transport is never opened against an endpoint that is not the
+    // reviewed one.
+    expect(response.status).toBe(400);
+    const body = await response.text();
+    expect(body).toMatch(/exact configured host|private/);
+    // The transport was never opened: the connection is still staged.
+    const status = await env.DB.prepare("SELECT status FROM mcp_connections WHERE id = ?")
+      .bind(connection.id)
+      .first<{ status: string }>();
+    expect(status?.status).toBe("foundation_staged");
+  });
+
   it("refuses to let anybody but the owner authorize a connection", async () => {
     const server = await createRemoteServer();
     const created = await serviceFetch("https://test.local/mcp-connections", {

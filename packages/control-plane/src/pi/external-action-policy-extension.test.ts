@@ -4,7 +4,7 @@ import {
   createToolEffectRegistry,
   type ToolEffectKind,
   type ToolEffectRegistration,
-} from "@open-inspect/shared/pi-tool-effects";
+} from "@open-inspect/shared/pi-runtime-tool-effects";
 import { createExternalActionPolicyDelegate } from "./external-action-policy-extension";
 import { createToolPolicyExtension } from "./tool-policy-extension";
 

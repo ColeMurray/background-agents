@@ -9,7 +9,7 @@ import type {
   ExternalActionPrepareRequest,
   ExternalActionStatusResponse,
 } from "@open-inspect/shared";
-import type { ToolEffectRegistration } from "@open-inspect/shared/pi-tool-effects";
+import type { ToolEffectRegistration } from "@open-inspect/shared/pi-runtime-tool-effects";
 import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 const POLICY_MEMO_SCHEMA = "open-inspect.external-action-policy.v1";

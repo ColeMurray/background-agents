@@ -125,10 +125,22 @@ async function authorizeConnection(
   }
   const body = mcpConnectionAuthorizeInputSchema.safeParse(parsed);
   if (!body.success) return error("Invalid MCP connection", 400);
-  const authorization = await new McpConnectionSaga(
-    new McpConnectionStore(ctx.db),
-    env.MCP_CONNECTION
-  ).authorize(ctx.principal.userId, params.id, { reconnect: body.data.reconnect === true });
+  let authorization: Awaited<ReturnType<McpConnectionSaga["authorize"]>>;
+  try {
+    authorization = await new McpConnectionSaga(
+      new McpConnectionStore(ctx.db),
+      env.MCP_CONNECTION
+    ).authorize(ctx.principal.userId, params.id, { reconnect: body.data.reconnect === true });
+  } catch (errorValue) {
+    // The endpoint policy refuses an endpoint that is not the reviewed one.
+    // That is a refusal the owner can act on, so it is a 400 with the
+    // reason, not a crash.
+    const message = errorValue instanceof Error ? errorValue.message : "";
+    if (message.includes("MCP endpoint") || message.includes("MCP transport")) {
+      return error(message, 400);
+    }
+    throw errorValue;
+  }
   if (!authorization) return error("MCP connection not found", 404);
   return json(authorization);
 }
