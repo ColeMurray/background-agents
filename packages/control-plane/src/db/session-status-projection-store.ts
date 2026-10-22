@@ -14,10 +14,26 @@ export class SessionStatusProjectionStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = ?, status_revision = ?, updated_at = MAX(updated_at, ?)
-       WHERE id = ? AND (status_revision < ? OR (status_revision = ? AND status = ?))`
+        `UPDATE sessions
+         SET status = ${persistedStatusSql()}, status_revision = ?, updated_at = MAX(updated_at, ?)
+         WHERE id = ? AND (
+           status_revision < ? OR
+           (status_revision = ? AND status = ${persistedStatusSql()})
+         )`
       )
-      .bind(status, revision, updatedAt, id, revision, revision, status)
+      .bind(
+        status,
+        status,
+        status,
+        revision,
+        updatedAt,
+        id,
+        revision,
+        revision,
+        status,
+        status,
+        status
+      )
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -26,9 +42,10 @@ export class SessionStatusProjectionStore {
   async updateUnclaimed(id: string, status: SessionStatus, updatedAt: number): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND updated_at <= ? AND status_revision = 0`
+        `UPDATE sessions SET status = ${persistedStatusSql()}, updated_at = ?
+         WHERE id = ? AND updated_at <= ? AND status_revision = 0`
       )
-      .bind(status, updatedAt, id, updatedAt)
+      .bind(status, status, status, updatedAt, id, updatedAt)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -37,10 +54,20 @@ export class SessionStatusProjectionStore {
   async archiveOrphanedDraft(id: string): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'created' AND status_revision = 0`
+        `UPDATE sessions SET status = 'archived', updated_at = ?
+         WHERE id = ? AND status IN ('created', 'durable_created') AND status_revision = 0`
       )
       .bind(Date.now(), id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
+}
+
+/** Preserve the fail-closed marker while an in-process session remains promptable. */
+function persistedStatusSql(): string {
+  return `CASE
+    WHEN status LIKE 'durable_%' AND ? = 'created' THEN 'durable_created'
+    WHEN status LIKE 'durable_%' AND ? = 'active' THEN 'durable_active'
+    ELSE ?
+  END`;
 }

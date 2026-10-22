@@ -27,7 +27,7 @@ function createHandler(options: { existing?: boolean; snapshot?: unknown } = {})
   const generateId = vi.fn();
   const now = vi.fn(() => 1234);
   const scheduleWarmSandbox = vi.fn();
-  const piRuntime = { initialize: vi.fn(async () => undefined) };
+  const piRuntime = { harness: "pi" as const, initialize: vi.fn(async () => undefined) };
   const log = {
     debug: vi.fn(),
     info: vi.fn(),

@@ -13,8 +13,8 @@ function usage(input: number, output: number, cost: number) {
   };
 }
 
-describe("the harness authoritative accounting", () => {
-  it("uses Pi's accumulated per-request costs across models, child work, compaction, and tools", () => {
+describe("the harness usage diagnostics", () => {
+  it("preserves counters but ignores runtime-provided prices", () => {
     const baseline = summarizeUsage({
       models: { "openai-codex/gpt": usage(10, 1, 0.4) },
       tools: {},
@@ -36,20 +36,20 @@ describe("the harness authoritative accounting", () => {
         cacheWrite: 0,
         total: 340_034,
       },
-      costUsd: 2.5,
+      costUsd: 0,
     });
   });
 
-  it("rejects malformed provider cost totals instead of guessing", () => {
+  it("does not trust a malformed provider cost total", () => {
     const malformed = {
       models: { "openai-codex/gpt": usage(1, 1, Number.NaN) },
       tools: {},
     } satisfies UsageState;
 
-    expect(() => summarizeUsage(malformed)).toThrow("Invalid usage cost");
+    expect(summarizeUsage(malformed).costUsd).toBe(0);
   });
 
-  it("rejects an aggregate cost that overflows instead of returning it", () => {
+  it("does not trust an overflowing aggregate provider cost", () => {
     const malformed = {
       models: {
         "openai-codex/gpt": usage(1, 1, Number.MAX_VALUE),
@@ -58,6 +58,6 @@ describe("the harness authoritative accounting", () => {
       tools: {},
     } satisfies UsageState;
 
-    expect(() => summarizeUsage(malformed)).toThrow("Invalid usage cost");
+    expect(summarizeUsage(malformed).costUsd).toBe(0);
   });
 });

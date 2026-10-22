@@ -26,6 +26,7 @@ export function createDurableObjectPiRuntimeDispatch(
     control,
     refreshDiff: (sessionId) => stub(sessionId).refreshDiff(sessionId),
     preserveForArchive: (sessionId) => stub(sessionId).preserveForArchive(sessionId),
+    restoreFromArchive: (sessionId) => stub(sessionId).restoreFromArchive(sessionId),
     destroy: (sessionId) => stub(sessionId).destroy(sessionId),
   };
 }

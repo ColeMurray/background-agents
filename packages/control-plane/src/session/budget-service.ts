@@ -12,14 +12,14 @@ interface BudgetTransition {
   warningEvent: Extract<SandboxEvent, { type: "warning" }> | null;
   stopPreparation: ExecutionStopPreparation | null;
   statusChanged: boolean;
-  piStopReason: string | null;
+  inProcessStopReason: string | null;
 }
 
 const NO_BUDGET_TRANSITION: BudgetTransition = {
   warningEvent: null,
   stopPreparation: null,
   statusChanged: false,
-  piStopReason: null,
+  inProcessStopReason: null,
 };
 
 type StepFinishEvent = Extract<SandboxEvent, { type: "step_finish" }>;
@@ -44,9 +44,9 @@ export class SessionBudgetService {
     private readonly executionStop: Pick<ExecutionStopCoordinator, "prepare" | "deliver">,
     private readonly processMessageQueue: () => Promise<void>,
     private readonly generateId: () => string,
-    private readonly pi?: {
-      isPiSession(): boolean;
-      stopPiExecution(reason: string): Promise<void>;
+    private readonly inProcess?: {
+      isInProcessSession(): boolean;
+      stopInProcessExecution(reason: string): Promise<void>;
     }
   ) {}
 
@@ -151,12 +151,12 @@ export class SessionBudgetService {
     now: number
   ): BudgetTransition {
     const reason = `Session cost limit reached: ${formatCost(totalCost)} of ${formatCost(limit)}`;
-    if (this.pi?.isPiSession()) {
+    if (this.inProcess?.isInProcessSession()) {
       return {
         warningEvent: this.persistWarning(`${reason}. Execution stopping.`, messageId, now),
         stopPreparation: null,
         statusChanged: true,
-        piStopReason: reason,
+        inProcessStopReason: reason,
       };
     }
     const stopPreparation = this.executionStop.prepare(reason, now);
@@ -168,7 +168,7 @@ export class SessionBudgetService {
       ),
       stopPreparation,
       statusChanged: true,
-      piStopReason: null,
+      inProcessStopReason: null,
     };
   }
 
@@ -181,7 +181,8 @@ export class SessionBudgetService {
     if (transition.stopPreparation) {
       await this.executionStop.deliver(transition.stopPreparation);
     }
-    if (transition.piStopReason) await this.pi?.stopPiExecution(transition.piStopReason);
+    if (transition.inProcessStopReason)
+      await this.inProcess?.stopInProcessExecution(transition.inProcessStopReason);
   }
 
   private persistWarning(

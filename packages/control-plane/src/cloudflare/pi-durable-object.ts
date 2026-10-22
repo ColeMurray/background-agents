@@ -160,6 +160,8 @@ import {
   type HarnessActionCeiling,
 } from "../harness/action-ceiling";
 import { createPiPriceTable } from "../pi/price-table";
+import { createAccountingProvider } from "../pi/accounting-provider";
+import { TrustedUsageMeter } from "../harness/trusted-usage-meter";
 import { createBudgetGateProvider, type HarnessBudgetState } from "../harness/budget-gate";
 import { armTurnDeadline, type HarnessTurnDeadline } from "../harness/turn-deadline";
 import {
@@ -208,6 +210,7 @@ type BrowserReadBody = { allowed?: boolean; reason?: string; outcome?: PiBrowser
 
 const SESSION_ID_KEY = "open-inspect:session-id";
 const DELETION_STATE_KEY = "open-inspect:deletion-state";
+const ARCHIVE_STATE_KEY = "open-inspect:archive-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
 const sandboxExecutionToolResponseSchema = z
@@ -305,6 +308,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private turnActionCeiling: HarnessActionCeiling =
     createFixedActionCeiling(HARNESS_ACTION_CEILING);
   private readonly prices = createPiPriceTable(this.models);
+  private readonly trustedUsage = new TrustedUsageMeter(this.ctx.storage, this.prices);
   private readonly registry = createRegistry();
   private workspace: WorkspaceToolFacade | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
@@ -585,7 +589,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         throw new Error(`Pi Durable requires a provider for ${PI_MODEL_PROVIDER_ID}`);
       }
       this.models.setProvider(
-        createBudgetGateProvider(providerFactory(), () => this.readBudgetState())
+        createBudgetGateProvider(
+          createAccountingProvider(providerFactory(), (modelId, usage) =>
+            this.trustedUsage.record(modelId, usage)
+          ),
+          () => this.readBudgetState()
+        )
       );
       const openStartedAt = Date.now();
       const opened = await Harness.open(
@@ -746,6 +755,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   async onStart(): Promise<void> {
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) return;
+    if ((await this.ctx.storage.get<string>(ARCHIVE_STATE_KEY)) !== undefined) return;
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) return;
     await this.ensureSession(sessionId);
@@ -798,6 +808,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     let userInput: UserInput;
     try {
       await this.ensureSession(input.sessionId);
+      if ((await this.ctx.storage.get<string>(ARCHIVE_STATE_KEY)) !== undefined) {
+        return {
+          operationId: input.messageId,
+          accepted: false,
+          rejected: "The session is archived",
+        };
+      }
       await this.configure(input);
       await this.ensureSession(input.sessionId);
       // The turn's images are fetched before anything is recorded or
@@ -1049,6 +1066,19 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   async control(input: PiRuntimeControl): Promise<PiRuntimeControlResult> {
     await this.ensureSession(input.sessionId);
+    if (
+      (await this.ctx.storage.get<string>(ARCHIVE_STATE_KEY)) !== undefined &&
+      ![
+        "list_conversations",
+        "get_conversation",
+        "get_last_message",
+        "inspect_agents",
+        "task_graph",
+        "inspect",
+      ].includes(input.action)
+    ) {
+      throw new Error("The session is archived");
+    }
     const pi = await this.harness.pi();
     if (input.action === "list_conversations") {
       const page = await pi.commit((tx) => tx.scanConversations({}, 33), BACKGROUND_CONTEXT);
@@ -1490,24 +1520,32 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
    */
   async preserveForArchive(sessionId: string): Promise<void> {
     await this.ensureSession(sessionId);
+    // Fence new submissions before the first await below. If preservation
+    // fails, leaving this marker in place is deliberate: an incomplete
+    // archive remains quiescent until an explicit restore or archive retry.
+    await this.ctx.storage.put(ARCHIVE_STATE_KEY, "archiving");
     // The agent stops working on an archived session: the archive says the
     // record is finished, not that the run may continue. A cold object has
     // no live code to abort, and opening its harness here would make the
     // archive depend on repository rematerialization and on a provider that
     // may be unavailable or revoked.
     if (this.harnessOpened) await this.harness.abort({ session: ROOT_SESSION }).catch(() => false);
-    // Every event the agent produced reaches the owning session. A delivery
-    // that fails stays in the outbox, where the projector's job retries it,
-    // so the archive is never blocked by a provider that is down.
-    for (const operationId of this.projectionOutbox.undeliveredOperations()) {
-      await this.projectionOutbox.drain(operationId).catch((error) => {
-        this.log.warn("pi.archive_projection_incomplete", {
-          event: "pi.archive_projection_incomplete",
-          operation_id: operationId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+    // Every event the agent produced must reach the owning session before the
+    // archive is acknowledged. A failed delivery stays in the outbox and the
+    // archive request fails; its retry drains the same immutable events.
+    for (;;) {
+      const undelivered = this.projectionOutbox.undeliveredOperations();
+      if (undelivered.length === 0) break;
+      for (const operationId of undelivered) {
+        await this.projectionOutbox.drain(operationId);
+      }
     }
+    await this.ctx.storage.put(ARCHIVE_STATE_KEY, "archived");
+  }
+
+  async restoreFromArchive(sessionId: string): Promise<void> {
+    await this.ensureSession(sessionId);
+    await this.ctx.storage.delete(ARCHIVE_STATE_KEY);
   }
 
   async destroy(sessionId: string): Promise<void> {
@@ -1770,7 +1808,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async accountingTotals(): Promise<UsageAccountingSnapshot> {
-    return summarizeUsage(await (await this.harness.pi()).usage(BACKGROUND_CONTEXT));
+    return this.trustedUsage.snapshot();
   }
 
   private async observeOperationAccounting(

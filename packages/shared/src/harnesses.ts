@@ -42,6 +42,8 @@ export interface HarnessCapabilities {
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
   /** How a sandbox restore resumes the conversation. */
   readonly resume: "session_id";
+  /** Where the harness executes; in-process rows use fail-closed persisted statuses. */
+  readonly execution: "sandbox" | "in_process";
 }
 
 export const HARNESS_CATALOG = {
@@ -55,6 +57,7 @@ export const HARNESS_CATALOG = {
       xai: ["api_key", "provider_account"],
     },
     resume: "session_id",
+    execution: "sandbox",
   },
   claude: {
     label: "Claude Agent",
@@ -64,6 +67,7 @@ export const HARNESS_CATALOG = {
       anthropic: ["api_key", "provider_account"],
     },
     resume: "session_id",
+    execution: "sandbox",
   },
   codex: {
     label: "Codex",
@@ -71,6 +75,7 @@ export const HARNESS_CATALOG = {
     modelFamilies: ["openai"],
     providerAuth: { openai: ["api_key", "provider_account"] },
     resume: "session_id",
+    execution: "sandbox",
   },
   pi: {
     label: "Pi Durable",
@@ -78,6 +83,7 @@ export const HARNESS_CATALOG = {
     modelFamilies: ["openai"],
     providerAuth: { openai: ["provider_account"] },
     resume: "session_id",
+    execution: "in_process",
   },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;
 

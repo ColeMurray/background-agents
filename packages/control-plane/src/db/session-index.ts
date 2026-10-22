@@ -42,7 +42,12 @@ import {
 } from "./session-inbox-store";
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
-import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
+import {
+  encodeSessionStatus,
+  parseSessionRow,
+  toSessionFields as toEntry,
+  type SessionRow,
+} from "./session-row";
 import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -247,7 +252,7 @@ export class SessionIndexStore {
         session.model,
         session.reasoningEffort,
         repository.baseBranch,
-        session.status,
+        encodeSessionStatus(session.harness ?? DEFAULT_HARNESS, session.status),
         session.parentSessionId ?? null,
         session.parentSessionId ?? null,
         session.id,
@@ -798,7 +803,7 @@ export class SessionIndexStore {
     const result = await this.db
       .prepare(
         `SELECT id FROM sessions
-         WHERE status = 'created' AND updated_at < ?
+         WHERE status IN ('created', 'durable_created') AND updated_at < ?
          ORDER BY updated_at ASC
          LIMIT ?`
       )

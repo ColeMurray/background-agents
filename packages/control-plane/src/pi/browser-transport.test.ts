@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   browserOutcomeDetails,
   browserOutcomeToModelText,
-  MAX_PI_BROWSER_SCREENSHOT_BYTES,
-  MAX_PI_BROWSER_TEXT_BYTES,
   wrapUntrustedPageContent,
   type PiBrowserOutcome,
 } from "./browser-transport";
@@ -62,64 +60,15 @@ describe("the browser outcome the model sees", () => {
 });
 
 describe("the browser rendering transport", () => {
-  it("reads a page as markdown", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response("# the page", { status: 200 })
-    );
+  it("fails closed when the binding cannot constrain redirects and subresources", async () => {
+    const fetchMock = vi.fn(async () => new Response("# the page", { status: 200 }));
     const transport = new BrowserRenderingTransport({ fetch: fetchMock as never });
 
-    const outcome = await transport.run({
-      action: "read",
-      url: "https://example.test/page",
-    });
-
-    expect(outcome.text).toBe("# the page");
-    expect(outcome.truncated).toBe(false);
-    const target = String(fetchMock.mock.calls[0]?.[0]);
-    expect(target).toContain("/markdown?url=");
-    expect(target).toContain(encodeURIComponent("https://example.test/page"));
-  });
-
-  it("cuts a page that is longer than the bound", async () => {
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response("x".repeat(MAX_PI_BROWSER_TEXT_BYTES + 100))
-    );
-    const transport = new BrowserRenderingTransport({ fetch: fetchMock as never });
-
-    const outcome = await transport.run({ action: "read", url: "https://example.test/page" });
-
-    expect(outcome.truncated).toBe(true);
-    expect(outcome.text).toHaveLength(MAX_PI_BROWSER_TEXT_BYTES);
-  });
-
-  it("cuts a screenshot that is longer than the bound", async () => {
-    const bytes = new Uint8Array(MAX_PI_BROWSER_SCREENSHOT_BYTES + 100);
-    const fetchMock = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(bytes, { status: 200 })
-    );
-    const transport = new BrowserRenderingTransport({ fetch: fetchMock as never });
-
-    const outcome = await transport.run({
-      action: "screenshot",
-      url: "https://example.test/page",
-    });
-
-    expect(outcome.truncated).toBe(true);
-    expect(outcome.screenshot?.mimeType).toBe("image/png");
-  });
-
-  it("never carries the provider's own error to the model", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response("browser-rendering internal failure: /var/secret/path", { status: 500 })
-    );
-    const transport = new BrowserRenderingTransport({ fetch: fetchMock as never });
-
+    expect(transport.available()).toBe(false);
     await expect(
       transport.run({ action: "read", url: "https://example.test/page" })
-    ).rejects.toThrow("The page could not be loaded");
+    ).rejects.toThrow("cannot enforce redirect and subresource host policy");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("has no browser when the deployment stages no binding", () => {

@@ -75,13 +75,15 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
   const params: unknown[] = [];
 
   if (status) {
-    conditions.push("status = ?");
-    params.push(status);
+    const durable = durableStatus(status);
+    conditions.push(durable ? "status IN (?, ?)" : "status = ?");
+    params.push(status, ...(durable ? [durable] : []));
   }
 
   if (excludeStatus) {
-    conditions.push("status != ?");
-    params.push(excludeStatus);
+    const durable = durableStatus(excludeStatus);
+    conditions.push(durable ? "status NOT IN (?, ?)" : "status != ?");
+    params.push(excludeStatus, ...(durable ? [durable] : []));
   }
 
   if (excludeAutomationLineage) {
@@ -169,4 +171,9 @@ export function buildSessionListPredicates(filters: SessionListFilters): Session
     where: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
     params,
   };
+}
+
+function durableStatus(status: string): string | null {
+  if (status === "created" || status === "active") return `durable_${status}`;
+  return null;
 }

@@ -58,6 +58,7 @@ interface HarnessSandboxExecutionHandlerDependencies {
   };
   getProcessingMessageId(): string | null;
   getOperationActor(operationId: string): { kind: "user" | "service"; id: string } | null;
+  authorMayAct(operationId: string): Promise<boolean>;
   /**
    * The session's own capability for sandbox execution.
    *
@@ -91,6 +92,12 @@ export class HarnessSandboxExecutionHandler {
     const active = this.deps.getProcessingMessageId() === operationId;
     if (!active && input.action !== "cancel_operation" && input.action !== "cancel") {
       return Response.json({ error: "Harness operation is not active" }, { status: 409 });
+    }
+    if (!(await this.deps.authorMayAct(operationId))) {
+      return Response.json(
+        { error: "The operation author may no longer act on this session" },
+        { status: 403 }
+      );
     }
 
     try {

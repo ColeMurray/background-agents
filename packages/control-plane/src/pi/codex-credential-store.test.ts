@@ -32,6 +32,18 @@ describe("CodexBrokerCredentialStore", () => {
     expect(fetchCredential).not.toHaveBeenCalled();
   });
 
+  it("rechecks broker authority even while the cached token remains valid", async () => {
+    const fetchCredential = vi
+      .fn()
+      .mockResolvedValueOnce({ accessToken: "first", expiresIn: 3_600, credentialVersion: 1 })
+      .mockResolvedValueOnce({ accessToken: "second", expiresIn: 3_600, credentialVersion: 1 });
+    const store = new CodexBrokerCredentialStore(fetchCredential, () => 1_000);
+
+    await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "first" });
+    await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "second" });
+    expect(fetchCredential).toHaveBeenCalledTimes(2);
+  });
+
   it("single-flights concurrent broker reads and replaces generic OAuth refreshes through the broker", async () => {
     let release!: (value: {
       accessToken: string;
@@ -65,7 +77,10 @@ describe("CodexBrokerCredentialStore", () => {
     await expect(refreshed).resolves.toMatchObject({ access: "broker-refreshed" });
     expect(genericRefresh).not.toHaveBeenCalled();
     expect(fetchCredential).toHaveBeenLastCalledWith(1, undefined);
-    await expect(store.read("openai-codex")).resolves.toMatchObject({ access: "broker-refreshed" });
+    const authorizedAgain = store.read("openai-codex");
+    release({ accessToken: "broker-reauthorized", expiresIn: 120, credentialVersion: 2 });
+    await expect(authorizedAgain).resolves.toMatchObject({ access: "broker-reauthorized" });
+    expect(fetchCredential).toHaveBeenCalledTimes(3);
   });
 
   it("does not allow logout to turn broker denial into an API-key fallback", async () => {

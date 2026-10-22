@@ -1,7 +1,4 @@
 import {
-  MAX_PI_BROWSER_SCREENSHOT_BYTES,
-  MAX_PI_BROWSER_TEXT_BYTES,
-  PI_BROWSER_TIMEOUT_MS,
   type PiBrowserOutcome,
   type PiBrowserRequest,
   type PiBrowserTransport,
@@ -31,9 +28,6 @@ export interface BrowserRenderingBinding {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }
 
-/** The Browser Rendering service endpoint the binding serves. */
-const BROWSER_RENDERING_ENDPOINT = "https://browser-rendering-endpoint";
-
 /**
  * The browser transport over the Workers Browser Rendering binding.
  *
@@ -42,60 +36,20 @@ const BROWSER_RENDERING_ENDPOINT = "https://browser-rendering-endpoint";
  * state. The deployment decides which hosts the session may name, and this
  * transport only carries out what the session already authorized.
  *
- * The named host is the only host the session's list covers: a Quick Action
- * has no hostname guardrails, so what the page itself loads is not bounded
- * by that list. See `PI-BROWSER-CONTEXT-AUDIT.md` §5.2.
+ * Browser Rendering currently exposes no request interception capable of
+ * enforcing the reviewed host across redirects and subresources. The
+ * transport therefore advertises itself as unavailable and fails closed even
+ * when the deployment flag is enabled. It may become available only when the
+ * platform supplies enforceable per-request host guardrails.
  */
 export class BrowserRenderingTransport implements PiBrowserTransport {
-  constructor(private readonly binding: BrowserRenderingBinding | undefined) {}
+  constructor(_binding: BrowserRenderingBinding | undefined) {}
 
   available(): boolean {
-    return this.binding !== undefined;
+    return false;
   }
 
-  async run(request: PiBrowserRequest, signal?: AbortSignal): Promise<PiBrowserOutcome> {
-    const binding = this.binding;
-    if (!binding) throw new Error("The browser is not available in this deployment");
-    const timeout = AbortSignal.timeout(PI_BROWSER_TIMEOUT_MS);
-    const composite = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    const target = `${BROWSER_RENDERING_ENDPOINT}/${request.action === "screenshot" ? "screenshot" : "markdown"}?url=${encodeURIComponent(request.url)}`;
-    const response = await binding.fetch(target, {
-      headers: { Accept: request.action === "screenshot" ? "image/png" : "text/markdown" },
-      signal: composite,
-    });
-    if (!response.ok) {
-      // The provider's own string stays inside the platform. The model only
-      // learns that the page did not load.
-      throw new Error("The page could not be loaded");
-    }
-    if (request.action === "screenshot") {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const truncated = bytes.byteLength > MAX_PI_BROWSER_SCREENSHOT_BYTES;
-      const bounded = truncated ? bytes.slice(0, MAX_PI_BROWSER_SCREENSHOT_BYTES) : bytes;
-      return {
-        action: request.action,
-        url: request.url,
-        truncated,
-        screenshot: { data: toBase64(bounded), mimeType: "image/png" },
-      };
-    }
-    const text = await response.text();
-    const truncated = text.length > MAX_PI_BROWSER_TEXT_BYTES;
-    return {
-      action: request.action,
-      url: request.url,
-      truncated,
-      text: truncated ? text.slice(0, MAX_PI_BROWSER_TEXT_BYTES) : text,
-    };
+  async run(_request: PiBrowserRequest, _signal?: AbortSignal): Promise<PiBrowserOutcome> {
+    throw new Error("Browser Rendering cannot enforce redirect and subresource host policy");
   }
-}
-
-/** The base64 form of a screenshot, without depending on a runtime helper. */
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
-  }
-  return btoa(binary);
 }

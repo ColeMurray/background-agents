@@ -1,7 +1,12 @@
 import { z } from "zod";
 import type { Logger } from "../../../logger";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
-import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
+import {
+  getValidHarnessOrDefault,
+  getHarnessCapabilities,
+  harnessIdSchema,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { isValidModel } from "@open-inspect/shared/models";
 import { HarnessAdmissionError, resolveHarnessInitialization } from "../../../harness-admission";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
@@ -11,8 +16,10 @@ import { validateReasoningEffort } from "../../reasoning-effort";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxInitializer } from "../../sandbox-ports";
 import type { ParticipantRepository } from "../../participant-repository";
-import type { PiRuntimeDispatch } from "../../../pi/runtime-contract";
-import type { PiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
+import type {
+  InProcessHarnessCapabilitySnapshot,
+  InProcessHarnessRuntime,
+} from "../../../harness/in-process-runtime";
 
 const repositoryRefSchema = z.object({
   repoOwner: z.string(),
@@ -30,7 +37,7 @@ const spawnSourceSchema = z.enum([
   "slack-bot",
 ] satisfies [SpawnSource, ...SpawnSource[]]);
 
-const PI_INITIALIZE_MAX_ATTEMPTS = 2;
+const IN_PROCESS_INITIALIZE_MAX_ATTEMPTS = 2;
 
 /**
  * Request body for the /internal/init endpoint.
@@ -95,9 +102,9 @@ export class SessionInitHandler {
     private readonly scheduleWarmSandbox: () => void,
     private readonly generateId: (bytes?: number) => string,
     private readonly now: () => number = Date.now,
-    private readonly piRuntime?: Pick<PiRuntimeDispatch, "initialize">,
-    private readonly currentPiCapabilitySnapshot: () => PiFeatureCapabilitySnapshot = () => {
-      throw new Error("Pi capability snapshot resolver is unavailable");
+    private readonly inProcessRuntime?: Pick<InProcessHarnessRuntime, "harness" | "initialize">,
+    private readonly currentInProcessCapabilitySnapshot: () => InProcessHarnessCapabilitySnapshot = () => {
+      throw new Error("In-process capability snapshot resolver is unavailable");
     }
   ) {}
 
@@ -139,16 +146,19 @@ export class SessionInitHandler {
     // spawn, the first prompt spawns through processMessageQueue.
     const existingSession = this.sessionCoreRepository.getSession();
     if (existingSession) {
-      if (existingSession.harness === "pi" && this.piRuntime) {
+      if (this.runtimeMatches(existingSession.harness)) {
         const snapshot = this.sessionCoreRepository.getPiFeatureCapabilitySnapshot();
         if (snapshot) {
-          const initialized = await this.initializePi(
+          const initialized = await this.initializeInProcessRuntime(
             existingSession.session_name || sessionName,
             snapshot,
             log
           );
           if (!initialized) {
-            return Response.json({ error: "Pi Durable is unavailable" }, { status: 503 });
+            return Response.json(
+              { error: "In-process harness runtime is unavailable" },
+              { status: 503 }
+            );
           }
         }
       }
@@ -156,9 +166,14 @@ export class SessionInitHandler {
     }
 
     const harness = getValidHarnessOrDefault(body.harness);
-    const piRuntimeForSession = harness === "pi" ? this.piRuntime : undefined;
-    if (harness === "pi" && !piRuntimeForSession) {
-      return Response.json({ error: "Pi Durable is not available" }, { status: 503 });
+    const inProcessRuntimeForSession = this.runtimeMatches(harness)
+      ? this.inProcessRuntime
+      : undefined;
+    if (this.isInProcessHarness(harness) && !inProcessRuntimeForSession) {
+      return Response.json(
+        { error: "In-process harness runtime is not available" },
+        { status: 503 }
+      );
     }
     let selection;
     try {
@@ -208,8 +223,9 @@ export class SessionInitHandler {
     const normalizedSandboxSettings = body.sandboxSettings
       ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
       : null;
-    const piFeatureCapabilitySnapshot =
-      harness === "pi" ? this.currentPiCapabilitySnapshot() : null;
+    const inProcessCapabilitySnapshot = inProcessRuntimeForSession
+      ? this.currentInProcessCapabilitySnapshot()
+      : null;
 
     this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
@@ -234,7 +250,7 @@ export class SessionInitHandler {
           : null,
         maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
-        piFeatureCapabilitySnapshot,
+        piFeatureCapabilitySnapshot: inProcessCapabilitySnapshot,
         createdAt: now,
         updatedAt: now,
       });
@@ -256,7 +272,7 @@ export class SessionInitHandler {
           baseBranch: repo.baseBranch,
         }))
       );
-      if (harness !== "pi") {
+      if (!inProcessRuntimeForSession) {
         const sandboxId = this.generateId();
         this.sandboxRepository.createSandbox({
           id: sandboxId,
@@ -280,32 +296,35 @@ export class SessionInitHandler {
       });
     });
 
-    if (harness === "pi" && piRuntimeForSession) {
-      const piInitializeStartedAt = this.now();
-      log.info("pi.latency", {
-        event: "pi.latency",
+    if (inProcessRuntimeForSession && inProcessCapabilitySnapshot) {
+      const initializeStartedAt = this.now();
+      log.info("harness.latency", {
+        event: "harness.latency",
         milestone: "session_do_init",
-        timestamp_ms: piInitializeStartedAt,
-        harness: "pi",
-        execution_backend: "durable_object",
+        timestamp_ms: initializeStartedAt,
+        harness,
+        execution_backend: "in_process",
         repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
         sandbox_avoided: 1,
       });
-      if (!(await this.initializePi(sessionName, piFeatureCapabilitySnapshot!, log))) {
-        return Response.json({ error: "Pi Durable is unavailable" }, { status: 503 });
+      if (!(await this.initializeInProcessRuntime(sessionName, inProcessCapabilitySnapshot, log))) {
+        return Response.json(
+          { error: "In-process harness runtime is unavailable" },
+          { status: 503 }
+        );
       }
       const initializedAt = this.now();
-      log.info("pi.latency", {
-        event: "pi.latency",
-        milestone: "pi_init",
+      log.info("harness.latency", {
+        event: "harness.latency",
+        milestone: "in_process_init",
         timestamp_ms: initializedAt,
-        duration_ms: initializedAt - piInitializeStartedAt,
-        harness: "pi",
-        execution_backend: "durable_object",
+        duration_ms: initializedAt - initializeStartedAt,
+        harness,
+        execution_backend: "in_process",
         repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
         sandbox_avoided: 1,
       });
-      log.info("Created sandbox-free Pi Durable session");
+      log.info("Created sandbox-free in-process harness session");
     } else {
       log.info("Triggering sandbox spawn for new session");
       this.scheduleWarmSandbox();
@@ -314,30 +333,38 @@ export class SessionInitHandler {
     return Response.json({ sessionId, status: "created" });
   }
 
-  private async initializePi(
+  private async initializeInProcessRuntime(
     sessionId: string,
-    snapshot: PiFeatureCapabilitySnapshot,
+    snapshot: InProcessHarnessCapabilitySnapshot,
     log: Logger
   ): Promise<boolean> {
-    if (!this.piRuntime) return false;
-    for (let attempt = 1; attempt <= PI_INITIALIZE_MAX_ATTEMPTS; attempt++) {
+    if (!this.inProcessRuntime) return false;
+    for (let attempt = 1; attempt <= IN_PROCESS_INITIALIZE_MAX_ATTEMPTS; attempt++) {
       try {
-        await this.piRuntime.initialize(sessionId, snapshot);
+        await this.inProcessRuntime.initialize(sessionId, snapshot);
         return true;
       } catch (error) {
         const fields = {
           session_id: sessionId,
           attempt,
-          max_attempts: PI_INITIALIZE_MAX_ATTEMPTS,
+          max_attempts: IN_PROCESS_INITIALIZE_MAX_ATTEMPTS,
           error: error instanceof Error ? error : String(error),
         };
-        if (attempt < PI_INITIALIZE_MAX_ATTEMPTS) {
-          log.warn("Retrying Pi Durable initialization after an unavailable response", fields);
+        if (attempt < IN_PROCESS_INITIALIZE_MAX_ATTEMPTS) {
+          log.warn("Retrying in-process harness initialization", fields);
         } else {
-          log.error("Pi Durable initialization failed", fields);
+          log.error("In-process harness initialization failed", fields);
         }
       }
     }
     return false;
+  }
+
+  private runtimeMatches(harness: HarnessId | undefined): boolean {
+    return harness !== undefined && this.inProcessRuntime?.harness === harness;
+  }
+
+  private isInProcessHarness(harness: HarnessId): boolean {
+    return getHarnessCapabilities(harness).execution === "in_process";
   }
 }

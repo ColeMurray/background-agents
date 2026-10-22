@@ -14,6 +14,7 @@ import {
   piFeatureCapabilitySnapshotSchema,
   type PiFeatureCapabilitySnapshot,
 } from "@open-inspect/shared/pi-runtime-feature-capabilities";
+import type { InProcessHarnessCapabilitySnapshot } from "../harness/in-process-runtime";
 
 const sessionCostRowSchema = sessionRowSchema.pick({ total_cost: true });
 
@@ -40,7 +41,7 @@ export interface UpsertSessionData {
   maxCostUsd?: number | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
-  piFeatureCapabilitySnapshot?: PiFeatureCapabilitySnapshot | null;
+  piFeatureCapabilitySnapshot?: InProcessHarnessCapabilitySnapshot | null;
   createdAt: number;
   updatedAt: number;
 }

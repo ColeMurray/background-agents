@@ -274,6 +274,7 @@ function buildQueue(
     async (_model: string, _canonicalUserId?: string | null) => null as string | null
   );
   const piRuntime = {
+    harness: "pi" as const,
     initialize: vi.fn(async () => {}),
     submit: vi.fn<PiRuntimeDispatch["submit"]>(async () => ({
       operationId: "msg-1",
@@ -286,6 +287,7 @@ function buildQueue(
     control: vi.fn(),
     refreshDiff: vi.fn(async () => {}),
     preserveForArchive: vi.fn(async () => {}),
+    restoreFromArchive: vi.fn(async () => {}),
     destroy: vi.fn(async () => {}),
   };
   const piOperations = {
@@ -449,7 +451,7 @@ describe("SessionMessageQueue", () => {
         event: "pi.latency",
         milestone: "prompt_claimed",
         harness: "pi",
-        execution_backend: "durable_object",
+        execution_backend: "in_process",
         source: "web",
         sandbox_avoided: 1,
         timestamp_ms: expect.any(Number),
@@ -520,7 +522,7 @@ describe("SessionMessageQueue", () => {
 
     const dispatch = h.queue.processMessageQueue();
     await vi.waitFor(() => expect(h.piRuntime.submit).toHaveBeenCalledOnce());
-    const stopping = h.queue.stopPiExecution();
+    const stopping = h.queue.stopInProcessExecution();
     await Promise.resolve();
     expect(h.piRuntime.lookup).not.toHaveBeenCalled();
     expect(h.piRuntime.abort).not.toHaveBeenCalled();
@@ -582,7 +584,7 @@ describe("SessionMessageQueue", () => {
     const dispatchA = h.queue.processMessageQueue();
     await vi.waitFor(() => expect(h.setAlarm).toHaveBeenCalled());
     expect(h.piRuntime.submit).not.toHaveBeenCalled();
-    const stoppingA = h.queue.stopPiExecution();
+    const stoppingA = h.queue.stopInProcessExecution();
     await Promise.resolve();
     expect(h.piRuntime.abort).not.toHaveBeenCalled();
     expect(h.piRuntime.lookup).not.toHaveBeenCalled();
@@ -612,7 +614,7 @@ describe("SessionMessageQueue", () => {
 
     const dispatch = h.queue.processMessageQueue();
     await vi.waitFor(() => expect(h.piRuntime.submit).toHaveBeenCalledOnce());
-    const stopping = h.queue.stopPiExecution();
+    const stopping = h.queue.stopInProcessExecution();
     submission.resolve({ operationId: "msg-1", accepted: true, rejected: undefined });
     await Promise.all([dispatch, stopping]);
 
@@ -642,7 +644,7 @@ describe("SessionMessageQueue", () => {
 
     const dispatch = h.queue.processMessageQueue();
     await vi.waitFor(() => expect(h.piRuntime.submit).toHaveBeenCalledOnce());
-    const stopping = h.queue.stopPiExecution();
+    const stopping = h.queue.stopInProcessExecution();
     submission.reject(new Error("submit RPC failed"));
     await Promise.all([dispatch, stopping]);
 
@@ -707,7 +709,7 @@ describe("SessionMessageQueue", () => {
       },
     });
 
-    await h.queue.stopPiExecution();
+    await h.queue.stopInProcessExecution();
 
     expect(state()).toBe("stopping");
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
@@ -803,7 +805,7 @@ describe("SessionMessageQueue", () => {
         source: "agent",
         attachments: [{ name: "shot.png", attachmentId: "upload-1" }],
       })
-    ).rejects.toThrow("too large for one Pi Durable turn");
+    ).rejects.toThrow("too large for one in-process turn");
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
   });
 
@@ -957,7 +959,7 @@ describe("SessionMessageQueue", () => {
       lastProjectionSequence: 0,
     });
 
-    await h.queue.stopPiExecution();
+    await h.queue.stopInProcessExecution();
 
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalled();
@@ -998,7 +1000,7 @@ describe("SessionMessageQueue", () => {
       };
     });
 
-    await h.queue.stopPiExecution();
+    await h.queue.stopInProcessExecution();
 
     expect(h.piRuntime.abort).toHaveBeenCalledWith("s1", "msg-1");
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
@@ -1107,7 +1109,7 @@ describe("SessionMessageQueue", () => {
           warningEvent: null,
           stopPreparation: null,
           statusChanged: true,
-          piStopReason: null,
+          inProcessStopReason: null,
         };
       }),
       deliverTransition: vi.fn(async () => {}),

@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
-import { collectMessages, initSession, openClientWs, queryDO, seedActiveUser } from "./helpers";
+import { collectMessages, initSession, openClientWs, queryDO } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
@@ -36,9 +36,22 @@ import {
 import { createFauxCodexProvider } from "./faux-codex-provider";
 import { PI_MODEL_PROVIDER_ID, piProviderFactories } from "../../src/pi/provider-factories";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
+import { ProviderCredentialService } from "../../src/session/provider-credential-service";
 
 const defaultPiProviderFactory = piProviderFactories.factoryFor(PI_MODEL_PROVIDER_ID)!;
 afterEach(() => piProviderFactories.register(PI_MODEL_PROVIDER_ID, defaultPiProviderFactory));
+
+async function ensureActiveUser(userId: string): Promise<void> {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO users (id, display_name, created_at, updated_at) VALUES (?, 'Pi User', ?, ?)"
+    ).bind(userId, now, now),
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO user_role_assignments (user_id, role_id) SELECT ?, id FROM roles WHERE key = 'member'"
+    ).bind(userId),
+  ]);
+}
 
 function piStub(name: string): DurableObjectStub<PiSessionDO> {
   if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
@@ -689,6 +702,12 @@ describe("PiSessionDO", () => {
   it("preserves its durable record for an archive without deleting it", async () => {
     const { sessionName, stub } = await initializedPiStub("pi-archive");
     await stub.status(sessionName);
+    await queryDO(
+      env.SESSION.getByName(sessionName),
+      `INSERT INTO pi_operation_dispatch
+         (operation_id, state, last_projection_sequence, created_at, updated_at)
+       VALUES ('message-1', 'admitted', 0, 1, 1)`
+    );
     await runInPiSessionDO(stub, async (instance) => {
       instance.projectionOutbox.enqueue(
         "message-1:token",
@@ -705,7 +724,7 @@ describe("PiSessionDO", () => {
       );
     });
 
-    await stub.preserveForArchive(sessionName);
+    await runInPiSessionDO(stub, (instance) => instance.preserveForArchive(sessionName));
 
     // The archive stops the agent and delivers what it produced, but it
     // deletes nothing: the conversation, the task graph and the workspace
@@ -713,6 +732,17 @@ describe("PiSessionDO", () => {
     await runInPiSessionDO(stub, async (instance, state) => {
       expect(instance.projectionOutbox.undeliveredOperations()).toEqual([]);
       await expect(state.storage.get("open-inspect:session-id")).resolves.toBe(sessionName);
+      await expect(state.storage.get("open-inspect:archive-state")).resolves.toBe("archived");
+      await expect(
+        instance.submit({
+          sessionId: sessionName,
+          messageId: "archived-message",
+          content: "must not resume",
+          model: "openai/gpt-5.6-sol",
+        })
+      ).resolves.toMatchObject({ accepted: false, rejected: "The session is archived" });
+      await instance.restoreFromArchive(sessionName);
+      await expect(state.storage.get("open-inspect:archive-state")).resolves.toBeUndefined();
     });
     const rows = await runInPiSessionDO(stub, async (_instance, state) =>
       state.storage.sql
@@ -724,16 +754,130 @@ describe("PiSessionDO", () => {
     expect(rows).toContain("pi_conversations");
   });
 
+  it("refuses to confirm an archive while a transcript event is undelivered", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-archive-incomplete");
+    await stub.status(sessionName);
+    await runInPiSessionDO(stub, (instance) => {
+      instance.projectionOutbox.enqueue(
+        "missing-message:token",
+        "missing-message",
+        {
+          type: "token",
+          sandboxId: `pi:${sessionName}`,
+          timestamp: 1,
+          messageId: "missing-message",
+          content: "must reach the transcript",
+          partId: "entry-1",
+        },
+        1
+      );
+    });
+
+    await expect(
+      runInPiSessionDO(stub, (instance) => instance.preserveForArchive(sessionName))
+    ).rejects.toThrow();
+    await runInPiSessionDO(stub, async (instance, state) => {
+      const failed = state.storage.sql
+        .exec(
+          "SELECT failed_at FROM oi_pi_projection_outbox WHERE operation_id = 'missing-message'"
+        )
+        .toArray();
+      expect(failed).toHaveLength(1);
+      await expect(state.storage.get("open-inspect:archive-state")).resolves.toBe("archiving");
+      await expect(
+        instance.submit({
+          sessionId: sessionName,
+          messageId: "cannot-race-archive",
+          content: "must stay quiescent",
+          model: "openai/gpt-5.6-sol",
+        })
+      ).resolves.toMatchObject({ accepted: false, rejected: "The session is archived" });
+    });
+  });
+
   it("exposes bounded native controls with sanitized inspection and exact cancellation", async () => {
-    const { sessionName, stub } = await initializedPiStub("pi-controls");
+    const faux = createFauxCodexProvider({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "Faux gpt-5.6-sol",
+          cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+        },
+      ],
+      responses: [
+        {
+          ...fauxAssistantMessage("controlled answer"),
+          usage: {
+            input: 10,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 12,
+            cost: { input: 999, output: 999, cacheRead: 0, cacheWrite: 0, total: 1_998 },
+          },
+        },
+      ],
+    });
+    piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
+    const now = Date.now();
+    const accountId = crypto.randomUUID().replaceAll("-", "");
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+         (id, provider, display_name, external_account_id, status, created_at, updated_at)
+       VALUES (?, 'openai', 'OpenAI', 'acct-controls', 'active', ?, ?)`
+    )
+      .bind(accountId, now, now)
+      .run();
+    await new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!).create({
+      providerAccountId: accountId,
+      provider: "openai",
+      credentialSchemaVersion: 1,
+      payload: {
+        refreshToken: "openai-refresh-secret",
+        accessToken: "openai-access-secret",
+        accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
+      },
+      accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
+      now,
+    });
+    await ensureActiveUser("user-1");
+    const { sessionName } = await initSession({
+      sessionName: `pi-controls-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      providerAuth: [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: accountId,
+          selectionSource: "explicit",
+        },
+        { provider: "xai", authMode: "api_key", selectionSource: "explicit" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "explicit" },
+      ],
+    });
+    const stub = piStub(sessionName);
+    const sessionStub = env.SESSION.getByName(sessionName);
+    await expect(
+      new ProviderCredentialService(
+        env.DB,
+        env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!
+      ).getProviderAccess(sessionName, "openai")
+    ).resolves.toMatchObject({ credentialVersion: 1 });
     await stub.status(sessionName);
     await runInPiSessionDO(stub, async (instance) => {
-      const models = (instance as unknown as { models: MutableModels }).models;
-      const faux = fauxProvider();
-      models.setProvider(faux.provider);
-      faux.setResponses([fauxAssistantMessage("controlled answer")]);
+      const installed = (instance as unknown as { models: MutableModels }).models.getProvider(
+        PI_MODEL_PROVIDER_ID
+      );
+      expect(installed?.stream).not.toBe(faux.provider.stream);
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
-      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      await root.configure(
+        { model: { provider: "openai-codex", modelId: "gpt-5.6-sol" } },
+        BACKGROUND_CONTEXT
+      );
     });
     const list = await controlPi(stub, {
       sessionId: sessionName,
@@ -741,12 +885,24 @@ describe("PiSessionDO", () => {
       action: "list_conversations",
     });
     expect(list).toMatchObject({ state: "completed" });
-    const submitted = await controlPi(stub, {
-      sessionId: sessionName,
-      requestId: "control-submit-1",
-      action: "submit",
-      content: "private sentinel prompt",
-    });
+    const submittedResponse = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.piControl}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: "user-1",
+          canonicalUserId: "user-1",
+          source: "web",
+          control: {
+            sessionId: sessionName,
+            requestId: "control-submit-1",
+            action: "send",
+            content: "private sentinel prompt",
+          },
+        }),
+      })
+    );
+    const submitted = await submittedResponse.json<PiRuntimeControlResult>();
     expect(submitted).toMatchObject({ state: "accepted" });
     await runInPiSessionDO(stub, async (instance) => {
       await expect(
@@ -764,17 +920,34 @@ describe("PiSessionDO", () => {
       const pi = await instance.harness.pi();
       const submission = await pi.submission(submissionId as never, BACKGROUND_CONTEXT);
       expect(submission).toBeDefined();
-      await submission!.wait(BACKGROUND_CONTEXT);
+      const result = await submission!.wait(BACKGROUND_CONTEXT);
+      expect(result).toMatchObject({ status: "done" });
     });
-    await runInPiSessionDO(stub, async (instance) =>
-      expect(
-        (
-          await (
-            instance as unknown as { accountingTotals(): Promise<{ usage: { total: number } }> }
-          ).accountingTotals()
-        ).usage.total
-      ).toBeGreaterThan(0)
-    );
+    await runInPiSessionDO(stub, async (instance) => {
+      const totals = await (
+        instance as unknown as {
+          accountingTotals(): Promise<{
+            usage: {
+              input: number;
+              output: number;
+              cacheRead: number;
+              cacheWrite: number;
+              total: number;
+            };
+            costUsd: number;
+          }>;
+        }
+      ).accountingTotals();
+      expect(totals.usage.total).toBeGreaterThan(0);
+      expect(totals.costUsd).toBeCloseTo(
+        (totals.usage.input * 4 +
+          totals.usage.output * 20 +
+          totals.usage.cacheRead * 0.4 +
+          totals.usage.cacheWrite * 5) /
+          1_000_000,
+        10
+      );
+    });
     const conversations = list.result as Array<{ id: number }>;
     const rootId = conversations[0]!.id;
     const detail = await controlPi(stub, {
@@ -934,7 +1107,7 @@ describe("PiSessionDO", () => {
       accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
       now,
     });
-    await seedActiveUser("user-1");
+    await ensureActiveUser("user-1");
     const { sessionName } = await initSession({
       sessionName: `pi-control-completion-${crypto.randomUUID()}`,
       harness: "pi",

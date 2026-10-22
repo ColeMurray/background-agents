@@ -195,6 +195,7 @@ import { PiOperationRepository } from "./pi-operation-repository";
 import { SessionSkillStore } from "../db/session-skills";
 import { PiRepositoryTools } from "../pi/repository-tools";
 import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
+import { createPiInProcessRuntime } from "../pi/in-process-runtime-adapter";
 import { PiBridgeHandler } from "./http/handlers/pi-bridge.handler";
 import { McpSessionHandler } from "./http/handlers/mcp-session.handler";
 import { McpServerReviewStore } from "../db/mcp-server-reviews";
@@ -572,6 +573,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   async function processPiEvent(event: SandboxIngressEvent): Promise<void> {
     await sandboxEventProcessor.processSandboxEvent(event);
   }
+  const inProcessRuntime = env.PI_SESSION ? createPiInProcessRuntime(env.PI_SESSION) : undefined;
   const messageQueue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
     log,
@@ -607,12 +609,42 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
     () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
-    env.PI_SESSION
+    inProcessRuntime
   );
 
   // Tier 7 — services over the queue and lifecycle.
-  const isPiSession = () => sessionCoreRepository.getSession()?.harness === "pi";
-  const isSandboxlessPiSession = () => isPiSession() && sandboxRepository.getSandbox() === null;
+  const isInProcessSession = () =>
+    sessionCoreRepository.getSession()?.harness === inProcessRuntime?.harness;
+  const isSandboxlessInProcessSession = () =>
+    isInProcessSession() && sandboxRepository.getSandbox() === null;
+  const turnAuthorMayAct = async (operationId: string): Promise<boolean> => {
+    const actorId = messageRepository.getMessageHumanActor(operationId);
+    if (!actorId) return false;
+    const session = await sessionIndexStore.get(getPublicSessionId());
+    if (!session) return false;
+    const decision = await evaluateTurnAuthor(
+      { db, action: "collaborate" },
+      {
+        sessionId: getPublicSessionId(),
+        userId: actorId,
+        sessionRow: {
+          id: getPublicSessionId(),
+          ownerUserId: session.userId ?? null,
+          ownerTeamId: session.ownerTeamId ?? null,
+          visibility: session.visibility,
+        },
+      }
+    );
+    if (decision.kind === "denied") {
+      log.warn("harness.author_denied", {
+        event: "harness.author_denied",
+        operation_id: operationId,
+        actor_id: actorId,
+        reason: decision.reason,
+      });
+    }
+    return decision.kind === "allowed";
+  };
   const presenceService = new PresenceService({
     getAuthenticatedClients: () => wsManager.getAuthenticatedClients(),
     messenger,
@@ -620,7 +652,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getSandboxSocket: () => wsManager.getSandboxSocket(),
     isSpawning: () => lifecycleManager.isSpawning(),
     warmSandbox: async () => {
-      if (isSandboxlessPiSession()) return;
+      if (isSandboxlessInProcessSession()) return;
       await lifecycleManager.spawnSandbox("warm");
     },
     log,
@@ -628,8 +660,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
   const stopExecution = async () => {
     const session = sessionCoreRepository.getSession();
-    if (session?.harness === "pi" && env.PI_SESSION) {
-      await messageQueue.stopPiExecution("Execution was stopped");
+    if (session && inProcessRuntime?.harness === session.harness) {
+      await messageQueue.stopInProcessExecution("Execution was stopped");
       return;
     }
     await executionStop.stop();
@@ -716,6 +748,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         );
       },
       operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
+      authorMayAct: turnAuthorMayAct,
     },
     getSessionId: getPublicSessionId,
   });
@@ -732,6 +765,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       operationActor: (operationId) => messageRepository.getMessageHumanActor(operationId),
       operationBelongsToSession: (operationId) =>
         messageRepository.getMessageById(operationId) !== null,
+      authorMayAct: turnAuthorMayAct,
       // The session holds the browser. The agent never does, and the binding
       // never leaves this gateway.
       browserAvailable: () => env.BROWSER?.available() ?? false,
@@ -767,11 +801,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => messageQueue.processMessageQueue(),
     generateId,
     {
-      isPiSession,
-      stopPiExecution: async (reason) => {
+      isInProcessSession,
+      stopInProcessExecution: async (reason) => {
         // Do not call back into PiSessionDO while acknowledging Pi's outbox
         // fetch; a settled abort may need that same relay to close first.
-        backgroundTasks.submit(() => messageQueue.stopPiExecution(reason), {
+        backgroundTasks.submit(() => messageQueue.stopInProcessExecution(reason), {
           name: "pi.budget_stop",
         });
       },
@@ -779,10 +813,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   );
 
   const updateLastActivity = (timestamp: number) => {
-    if (!isSandboxlessPiSession()) lifecycleManager.updateLastActivity(timestamp);
+    if (!isSandboxlessInProcessSession()) lifecycleManager.updateLastActivity(timestamp);
   };
   const scheduleInactivityCheck = async () => {
-    if (!isSandboxlessPiSession()) await lifecycleManager.scheduleInactivityCheck();
+    if (!isSandboxlessInProcessSession()) await lifecycleManager.scheduleInactivityCheck();
   };
   const streamingEventHandler = new SandboxStreamingEventHandler(
     backgroundTasks,
@@ -809,7 +843,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     recordTerminalMessage,
     statusService,
     (reason) =>
-      isSandboxlessPiSession() ? Promise.resolve() : lifecycleManager.triggerSnapshot(reason),
+      isSandboxlessInProcessSession()
+        ? Promise.resolve()
+        : lifecycleManager.triggerSnapshot(reason),
     updateLastActivity,
     scheduleInactivityCheck,
     () => messageQueue.processMessageQueue(),
@@ -819,7 +855,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
     },
-    isPiSession
+    isInProcessSession
   );
   const piSandboxExecution = new HarnessSandboxExecutionCoordinator({
     commands: sandboxCommandRepository,
@@ -894,7 +930,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       messageQueue.broadcastPromptQueue();
       await messageQueue.processMessageQueue();
     },
-    isPiSession,
+    isInProcessSession,
     getPublicSessionId,
     Date.now,
     (operationId, settledAt) => {
@@ -932,7 +968,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const piEventHandler = new HarnessEventHandler(
     piOperations,
     processPiEvent,
-    isPiSession,
+    isInProcessSession,
     (request) => {
       const operationId = request.headers.get("X-Pi-Operation-ID");
       const displayId = request.headers.get("X-Pi-Projection-ID");
@@ -974,7 +1010,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     redriveIdleQueue: () => lifecycleManager.redriveIdleQueue(),
     sandboxCommandDeadlines: () => piSandboxExecution.handleAlarm(),
     reconcilePiStop: async () => {
-      if (!isPiSession()) return false;
+      if (!isInProcessSession()) return false;
       await messageQueue.processMessageQueue();
       return true;
     },
@@ -1083,23 +1119,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // A harness with no sandbox has no containment, so the turn's author is
     // checked again at the moment of each action: a user suspended, or
     // removed from the team, after the turn started keeps nothing.
-    authorMayAct: async ({ actorId }) => {
-      const session = await new SessionIndexStore(db).get(getPublicSessionId());
-      if (!session) return { kind: "denied", reason: "The session is not initialized" };
-      return evaluateTurnAuthor(
-        { db, action: "collaborate" },
-        {
-          sessionId: getPublicSessionId(),
-          userId: actorId,
-          sessionRow: {
-            id: getPublicSessionId(),
-            ownerUserId: session.userId ?? null,
-            ownerTeamId: session.ownerTeamId ?? null,
-            visibility: session.visibility,
-          },
-        }
-      );
-    },
+    authorMayAct: async ({ operationId }) =>
+      (await turnAuthorMayAct(operationId))
+        ? { kind: "allowed" }
+        : { kind: "denied", reason: "The turn's author may no longer act on this session" },
     recordCodeModeActivity: (input) => {
       // The Code Mode run is visible to the session's collaborators, with its
       // actor.
@@ -1128,7 +1151,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getSessionId: getPublicSessionId,
     service: piMemoryService,
     activeOperation: createHarnessOperationFence({
-      isHarnessSession: isPiSession,
+      isHarnessSession: isInProcessSession,
       messages: messageRepository,
       controls: piControlRepository,
       operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
@@ -1141,6 +1164,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     commands: sandboxCommandRepository,
     getProcessingMessageId: () => messageRepository.getProcessingMessage()?.id ?? null,
     getOperationActor: (operationId) => messageRepository.getMessageActor(operationId),
+    authorMayAct: turnAuthorMayAct,
     sessionCapability: () =>
       sessionCoreRepository.getPiFeatureCapabilitySnapshot()?.capabilities.sandboxExecution ??
       "off",
@@ -1182,7 +1206,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       }),
     generateId,
     Date.now,
-    env.PI_SESSION,
+    inProcessRuntime,
     () => createPiDeploymentCapabilitySnapshot(env)
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
@@ -1196,15 +1220,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     async () => {
       await statusService.cancel(() => messageQueue.cancelExecution());
     },
-    // The Pi Durable Object preserves itself for the archive: it stops the
-    // agent's work and delivers every event the agent produced, so the
-    // session's timeline — and the export read from it — hold the whole
-    // record.
-    env.PI_SESSION
-      ? async () => {
-          await env.PI_SESSION!.preserveForArchive(getPublicSessionId());
-        }
-      : undefined
+    inProcessRuntime
   );
   const sessionBudgetHandler = new SessionBudgetHandler(sessionCoreRepository, budgetService, () =>
     Date.now()

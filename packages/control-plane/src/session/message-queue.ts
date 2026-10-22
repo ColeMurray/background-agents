@@ -55,7 +55,12 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
-import type { PiHumanControl, PiRuntimeDispatch, PiRuntimeReceipt } from "../pi/runtime-contract";
+import type { PiHumanControl } from "../pi/runtime-contract";
+import type {
+  InProcessHarnessOperationStatus,
+  InProcessHarnessReceipt,
+  InProcessHarnessRuntime,
+} from "../harness/in-process-runtime";
 import type { PiOperationRepository } from "./pi-operation-repository";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
@@ -146,7 +151,7 @@ export async function fingerprintWebPrompt(
   return hashToken(canonicalRequest);
 }
 
-function isAuthoritativePiAbort(status: Awaited<ReturnType<PiRuntimeDispatch["lookup"]>>): boolean {
+function isAuthoritativeInProcessAbort(status: InProcessHarnessOperationStatus): boolean {
   return (
     status.status === "settled" &&
     status.result.status === "unanswered" &&
@@ -201,8 +206,8 @@ function resolveParticipantGitIdentity(
 }
 
 export class SessionMessageQueue {
-  private readonly piSubmissionsInFlight = new Map<string, Promise<void>>();
-  private readonly piStopsInFlight = new Map<string, Promise<void>>();
+  private readonly inProcessSubmissionsInFlight = new Map<string, Promise<void>>();
+  private readonly inProcessStopsInFlight = new Map<string, Promise<void>>();
 
   constructor(
     private readonly backgroundTasks: BackgroundTasks,
@@ -231,7 +236,7 @@ export class SessionMessageQueue {
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
     private readonly getSandboxPromptBlockReason: () => string | null,
-    private readonly piRuntime?: PiRuntimeDispatch
+    private readonly inProcessRuntime?: InProcessHarnessRuntime
   ) {}
 
   async enqueueAutofix(
@@ -522,8 +527,8 @@ export class SessionMessageQueue {
     const currentHarness = getValidHarnessOrDefault(currentSession.harness);
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
-      if (currentHarness === "pi") {
-        await this.reconcilePiOperation(currentSession, awaitingStop.id);
+      if (this.inProcessRuntime?.harness === currentHarness) {
+        await this.reconcileInProcessOperation(currentSession, awaitingStop.id);
         return;
       }
       if (awaitingStop.deadline <= Date.now()) {
@@ -539,7 +544,8 @@ export class SessionMessageQueue {
     }
     const processing = this.messageRepository.getProcessingMessage();
     if (processing) {
-      if (currentHarness === "pi") await this.reconcilePiOperation(currentSession, processing.id);
+      if (this.inProcessRuntime?.harness === currentHarness)
+        await this.reconcileInProcessOperation(currentSession, processing.id);
       this.log.debug("processMessageQueue: already processing, returning");
       return;
     }
@@ -580,8 +586,8 @@ export class SessionMessageQueue {
       }
       return;
     }
-    if (harness === "pi") {
-      await this.dispatchPiMessage(
+    if (this.inProcessRuntime?.harness === harness) {
+      await this.dispatchInProcessMessage(
         message,
         currentSession,
         resolvedModel,
@@ -752,14 +758,21 @@ export class SessionMessageQueue {
     });
   }
 
-  private async dispatchPiMessage(
+  private async dispatchInProcessMessage(
     message: MessageRow,
     session: SessionRow,
     resolvedModel: string,
     inheritedReasoningEffort: string | null | undefined
   ): Promise<void> {
-    if (!this.piRuntime) {
-      if (this.failMessage(message, "Pi Durable is not available", Date.now(), "pending")) {
+    if (!this.inProcessRuntime) {
+      if (
+        this.failMessage(
+          message,
+          "In-process harness runtime is not available",
+          Date.now(),
+          "pending"
+        )
+      ) {
         this.broadcastPromptQueue();
         await this.sessionStatus.reconcileAfterExecution(false);
       }
@@ -771,11 +784,15 @@ export class SessionMessageQueue {
     const requestedEffort =
       message.reasoning_effort ??
       inheritedReasoningEffort ??
-      getHarnessReasoningConfig("pi", resolvedModel)?.default ??
+      getHarnessReasoningConfig(this.inProcessRuntime.harness, resolvedModel)?.default ??
       getDefaultReasoningEffort(resolvedModel);
     const reasoningEffort =
-      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log, "pi") ??
-      undefined;
+      validateReasoningEffort(
+        resolvedModel,
+        requestedEffort ?? undefined,
+        this.log,
+        this.inProcessRuntime.harness
+      ) ?? undefined;
     const attachments = parseStoredSessionAttachments(message.attachments, () =>
       this.log.error("prompt.invalid_stored_attachments")
     );
@@ -795,15 +812,15 @@ export class SessionMessageQueue {
       timestamp_ms: now,
       message_id: message.id,
       operation_id: message.id,
-      harness: "pi",
-      execution_backend: "durable_object",
+      harness: this.inProcessRuntime.harness,
+      execution_backend: "in_process",
       source: message.source,
       model: resolvedModel,
       repository_mode: session.repo_owner ? "repository" : "none",
       sandbox_avoided: 1,
     });
     const barrier = completionBarrier();
-    this.piSubmissionsInFlight.set(message.id, barrier.promise);
+    this.inProcessSubmissionsInFlight.set(message.id, barrier.promise);
     let stopAfterBarrier = false;
     let pumpAfterBarrier = false;
     try {
@@ -820,7 +837,7 @@ export class SessionMessageQueue {
         });
       }
 
-      let receipt: PiRuntimeReceipt | undefined;
+      let receipt: InProcessHarnessReceipt | undefined;
       let submissionError: unknown;
       const submitStartedAt = Date.now();
       this.log.info("pi.latency", {
@@ -829,14 +846,14 @@ export class SessionMessageQueue {
         timestamp_ms: submitStartedAt,
         message_id: message.id,
         operation_id: message.id,
-        harness: "pi",
-        execution_backend: "durable_object",
+        harness: this.inProcessRuntime.harness,
+        execution_backend: "in_process",
         source: message.source,
         model: resolvedModel,
         sandbox_avoided: 1,
       });
       try {
-        receipt = await this.piRuntime.submit({
+        receipt = await this.inProcessRuntime.submit({
           sessionId: session.session_name || session.id,
           messageId: message.id,
           content: message.content,
@@ -847,7 +864,7 @@ export class SessionMessageQueue {
           // own execution budget plus the grace the recovery sweep gets.
           executionDeadlineMs:
             Date.now() + this.getExecutionTimeoutMs() + EXECUTION_DEADLINE_GRACE_MS,
-          // Metadata only: the Pi Durable Object fetches the bytes from the
+          // Metadata only: the in-process runtime fetches the bytes from the
           // session that owns them, the way a sandbox harness does.
           ...(attachments ? { attachments } : {}),
         });
@@ -856,7 +873,7 @@ export class SessionMessageQueue {
       }
 
       if (submissionError !== undefined) {
-        // The RPC may have failed after Pi durably admitted the operation.
+        // The RPC may have failed after the runtime durably admitted the operation.
         this.log.warn("prompt.dispatch", {
           event: "prompt.dispatch",
           message_id: message.id,
@@ -914,8 +931,8 @@ export class SessionMessageQueue {
           duration_ms: Date.now() - submitStartedAt,
           message_id: message.id,
           operation_id: receipt.operationId,
-          harness: "pi",
-          execution_backend: "durable_object",
+          harness: this.inProcessRuntime.harness,
+          execution_backend: "in_process",
           source: message.source,
           model: resolvedModel,
           recovery: receipt.accepted ? 0 : 1,
@@ -924,12 +941,12 @@ export class SessionMessageQueue {
       }
     } finally {
       barrier.resolve();
-      if (this.piSubmissionsInFlight.get(message.id) === barrier.promise) {
-        this.piSubmissionsInFlight.delete(message.id);
+      if (this.inProcessSubmissionsInFlight.get(message.id) === barrier.promise) {
+        this.inProcessSubmissionsInFlight.delete(message.id);
       }
     }
     if (stopAfterBarrier) {
-      await this.ensurePiStop(session, message.id, "Execution was stopped");
+      await this.ensureInProcessStop(session, message.id, "Execution was stopped");
     }
     if (pumpAfterBarrier) await this.processMessageQueue();
   }
@@ -948,9 +965,9 @@ export class SessionMessageQueue {
     }
 
     const session = this.repository.getSession();
-    if (session?.harness === "pi" && this.piRuntime) {
+    if (session && this.inProcessRuntime?.harness === session.harness) {
       this.broadcastPromptQueue();
-      this.backgroundTasks.submit(() => this.stopPiExecution("Execution was cancelled"), {
+      this.backgroundTasks.submit(() => this.stopInProcessExecution("Execution was cancelled"), {
         name: "pi.abort",
       });
       return;
@@ -996,8 +1013,8 @@ export class SessionMessageQueue {
     if (!processingMessage) return;
 
     const session = this.repository.getSession();
-    if (session?.harness === "pi" && this.piRuntime) {
-      await this.stopPiExecution(error);
+    if (session && this.inProcessRuntime?.harness === session.harness) {
+      await this.stopInProcessExecution(error);
       return;
     }
 
@@ -1009,10 +1026,10 @@ export class SessionMessageQueue {
     await this.sessionStatus.reconcileAfterExecution(false);
   }
 
-  async stopPiExecution(reason = "Execution was stopped"): Promise<void> {
+  async stopInProcessExecution(reason = "Execution was stopped"): Promise<void> {
     const session = this.repository.getSession();
     const processing = this.messageRepository.getProcessingMessageWithCreatedAt();
-    if (!session || session.harness !== "pi" || !this.piRuntime || !processing) return;
+    if (!session || this.inProcessRuntime?.harness !== session.harness || !processing) return;
     const now = Date.now();
     this.piOperations.begin(processing.id, now);
     this.messageRepository.markMessageAwaitingStopConfirmation(
@@ -1025,26 +1042,29 @@ export class SessionMessageQueue {
       "stopping",
       now
     );
-    await this.ensurePiStop(session, processing.id, reason);
+    await this.ensureInProcessStop(session, processing.id, reason);
   }
 
-  private async reconcilePiOperation(
+  private async reconcileInProcessOperation(
     session: SessionRow,
     operationId: string,
     stopReason = "Execution was stopped"
   ): Promise<void> {
-    if (!this.piRuntime) return;
-    const inFlight = this.piSubmissionsInFlight.get(operationId);
+    if (!this.inProcessRuntime) return;
+    const inFlight = this.inProcessSubmissionsInFlight.get(operationId);
     if (inFlight) await inFlight.catch(() => undefined);
     const record = this.piOperations.get(operationId);
     if (record?.state === "stopping") {
-      await this.ensurePiStop(session, operationId, stopReason);
+      await this.ensureInProcessStop(session, operationId, stopReason);
       return;
     }
     if (record?.state === "admitted" || record?.state === "settled") return;
     const now = Date.now();
     try {
-      const status = await this.piRuntime.lookup(session.session_name || session.id, operationId);
+      const status = await this.inProcessRuntime.lookup(
+        session.session_name || session.id,
+        operationId
+      );
       if (status.status === "not_found") {
         if (
           this.piOperations.transition(
@@ -1059,7 +1079,7 @@ export class SessionMessageQueue {
           this.broadcastPromptQueue();
           await this.processMessageQueue();
         } else if (this.piOperations.get(operationId)?.state === "stopping") {
-          await this.ensurePiStop(session, operationId, stopReason);
+          await this.ensureInProcessStop(session, operationId, stopReason);
         }
         return;
       }
@@ -1082,28 +1102,32 @@ export class SessionMessageQueue {
     await this.alarmScheduler.schedule(reconcileAt);
   }
 
-  private ensurePiStop(session: SessionRow, operationId: string, reason: string): Promise<void> {
-    const existing = this.piStopsInFlight.get(operationId);
-    if (existing) return existing;
-    const stopping = this.performPiStop(session, operationId, reason).finally(() => {
-      if (this.piStopsInFlight.get(operationId) === stopping) {
-        this.piStopsInFlight.delete(operationId);
-      }
-    });
-    this.piStopsInFlight.set(operationId, stopping);
-    return stopping;
-  }
-
-  private async performPiStop(
+  private ensureInProcessStop(
     session: SessionRow,
     operationId: string,
     reason: string
   ): Promise<void> {
-    if (!this.piRuntime) return;
-    const submission = this.piSubmissionsInFlight.get(operationId);
+    const existing = this.inProcessStopsInFlight.get(operationId);
+    if (existing) return existing;
+    const stopping = this.performInProcessStop(session, operationId, reason).finally(() => {
+      if (this.inProcessStopsInFlight.get(operationId) === stopping) {
+        this.inProcessStopsInFlight.delete(operationId);
+      }
+    });
+    this.inProcessStopsInFlight.set(operationId, stopping);
+    return stopping;
+  }
+
+  private async performInProcessStop(
+    session: SessionRow,
+    operationId: string,
+    reason: string
+  ): Promise<void> {
+    if (!this.inProcessRuntime) return;
+    const submission = this.inProcessSubmissionsInFlight.get(operationId);
     if (submission) await submission.catch(() => undefined);
     try {
-      await this.piRuntime.abort(session.session_name || session.id, operationId);
+      await this.inProcessRuntime.abort(session.session_name || session.id, operationId);
     } catch (error) {
       this.log.warn("pi.abort_failed", {
         event: "pi.abort_failed",
@@ -1112,10 +1136,13 @@ export class SessionMessageQueue {
       });
     }
     try {
-      const status = await this.piRuntime.lookup(session.session_name || session.id, operationId);
-      if (status.status === "not_found" || isAuthoritativePiAbort(status)) {
+      const status = await this.inProcessRuntime.lookup(
+        session.session_name || session.id,
+        operationId
+      );
+      if (status.status === "not_found" || isAuthoritativeInProcessAbort(status)) {
         const message = this.messageRepository.getMessageById(operationId);
-        if (message) await this.settleStoppedPiOperation(message, reason);
+        if (message) await this.settleStoppedInProcessOperation(message, reason);
         return;
       }
       // A natural result owns terminal status and callbacks even when it raced stop.
@@ -1130,7 +1157,7 @@ export class SessionMessageQueue {
     await this.alarmScheduler.schedule(Date.now() + PI_RECONCILE_RETRY_MS);
   }
 
-  private async settleStoppedPiOperation(
+  private async settleStoppedInProcessOperation(
     message: { id: string; created_at: number },
     reason: string
   ): Promise<void> {
@@ -1364,7 +1391,7 @@ export class SessionMessageQueue {
         )
     );
     if (incompatibility) throw new HarnessModelIncompatibleError(incompatibility.message);
-    if (harness === "pi" && attachments && attachments.length > 0) {
+    if (this.inProcessRuntime?.harness === harness && attachments && attachments.length > 0) {
       this.assertPiTurnCanCarryAttachments(effectiveModelForEffort, resolvedAttachments);
     }
     const messageReasoningEffort = validateReasoningEffort(
@@ -1444,9 +1471,9 @@ export class SessionMessageQueue {
   }
 
   /**
-   * Whether a Pi turn can carry the images it was given.
+   * Whether an in-process turn can carry the images it was given.
    *
-   * The Pi runtime keeps a turn's user message as one Durable Object SQLite
+   * The runtime keeps a turn's user message as one durable SQLite
    * row, and a SQLite row caps at 2 MB, so the turn's images must fit in it
    * beside the prompt text. A model that takes text only would drop the
    * image, so the turn is refused by name rather than run without it.
@@ -1458,7 +1485,7 @@ export class SessionMessageQueue {
     if (!resolved) return;
     if (resolved.totalBytes > PI_ATTACHMENT_MAX_TURN_BYTES) {
       throw new SessionAttachmentError(
-        `The attached images are too large for one Pi Durable turn (limit ${PI_ATTACHMENT_MAX_TURN_BYTES / (1024 * 1024)} MB)`
+        `The attached images are too large for one in-process turn (limit ${PI_ATTACHMENT_MAX_TURN_BYTES / (1024 * 1024)} MB)`
       );
     }
     if (!piModelAcceptsImages(model)) {

@@ -10,6 +10,7 @@ function harness(
     actorId?: string | null;
     belongsToSession?: boolean;
     browserAvailable?: boolean;
+    authorMayAct?: boolean;
     readFails?: boolean;
   } = {}
 ) {
@@ -24,6 +25,7 @@ function harness(
     allowedDomains: () => options.allowedDomains ?? ["example.com", "*.docs.example.com"],
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
     operationBelongsToSession: () => options.belongsToSession ?? true,
+    authorMayAct: async () => options.authorMayAct ?? true,
     browserAvailable: () => options.browserAvailable ?? true,
     read,
     recordActivity,
@@ -32,21 +34,21 @@ function harness(
   return { gateway, recordActivity, read };
 }
 
-describe("BrowserGateway", () => {
-  it("authorizes a page inside the reviewed hosts", () => {
+describe("BrowserGateway", async () => {
+  it("authorizes a page inside the reviewed hosts", async () => {
     const h = harness();
 
-    expect(h.gateway.authorize({ url: "https://example.com/docs" }, "message-1")).toEqual({
+    expect(await h.gateway.authorize({ url: "https://example.com/docs" }, "message-1")).toEqual({
       kind: "allowed",
       actorId: "user-1",
     });
   });
 
-  it("refuses an action that needs a human approval, by name", () => {
+  it("refuses an action that needs a human approval, by name", async () => {
     const h = harness();
 
     for (const action of ["login", "upload", "download"]) {
-      const decision = h.gateway.authorize(
+      const decision = await h.gateway.authorize(
         { action, url: "https://example.com/page" },
         "operation-1"
       );
@@ -57,10 +59,10 @@ describe("BrowserGateway", () => {
     }
   });
 
-  it("refuses an action the browser does not offer", () => {
+  it("refuses an action the browser does not offer", async () => {
     const h = harness();
 
-    const decision = h.gateway.authorize(
+    const decision = await h.gateway.authorize(
       { action: "evaluate", url: "https://example.com/page" },
       "operation-1"
     );
@@ -68,11 +70,11 @@ describe("BrowserGateway", () => {
     expect(decision).toMatchObject({ kind: "denied", code: "browser_action_not_allowed" });
   });
 
-  it("authorizes a read and a screenshot", () => {
+  it("authorizes a read and a screenshot", async () => {
     const h = harness();
 
     for (const action of ["read", "screenshot"]) {
-      const decision = h.gateway.authorize(
+      const decision = await h.gateway.authorize(
         { action, url: "https://example.com/page" },
         "operation-1"
       );
@@ -80,70 +82,83 @@ describe("BrowserGateway", () => {
     }
   });
 
-  it("refuses a page outside the reviewed hosts", () => {
+  it("refuses a page outside the reviewed hosts", async () => {
     const h = harness();
 
-    expect(h.gateway.authorize({ url: "https://evil.example.net/" }, "message-1")).toMatchObject({
+    expect(
+      await h.gateway.authorize({ url: "https://evil.example.net/" }, "message-1")
+    ).toMatchObject({
       kind: "denied",
       code: "browser_domain_not_allowed",
     });
   });
 
-  it("refuses every page when the deployment reviewed no host", () => {
+  it("refuses every page when the deployment reviewed no host", async () => {
     const h = harness({ allowedDomains: [] });
 
-    expect(h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
+    expect(await h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
       code: "browser_domain_not_allowed",
     });
   });
 
-  it("refuses a page when the session capability is off", () => {
+  it("refuses a page when the session capability is off", async () => {
     const h = harness({ sessionCapability: "off" });
 
-    expect(h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
+    expect(await h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
       code: "browser_disabled",
     });
   });
 
-  it("refuses a page when the live deployment mode denies it", () => {
+  it("refuses a page when the live deployment mode denies it", async () => {
     const h = harness({ liveMode: "off" });
 
-    expect(h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
+    expect(await h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
       code: "browser_disabled",
     });
   });
 
-  it("refuses a request whose turn belongs to another session", () => {
+  it("refuses a request whose turn belongs to another session", async () => {
     const h = harness({ belongsToSession: false });
 
-    expect(h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
+    expect(await h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
       code: "browser_turn_not_in_session",
     });
   });
 
-  it("refuses a request with no workspace actor", () => {
+  it("refuses a request with no workspace actor", async () => {
     const h = harness({ actorId: null });
 
-    expect(h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
+    expect(await h.gateway.authorize({ url: "https://example.com/" }, "message-1")).toMatchObject({
       code: "browser_actor_missing",
     });
   });
 
-  it("refuses a scheme that is not a page", () => {
+  it("refuses a request after the turn author loses current authority", async () => {
+    const h = harness({ authorMayAct: false });
+
+    await expect(
+      h.gateway.authorize({ action: "read", url: "https://example.com/" }, "message-1")
+    ).resolves.toMatchObject({
+      kind: "denied",
+      code: "browser_author_no_longer_allowed",
+    });
+  });
+
+  it("refuses a scheme that is not a page", async () => {
     const h = harness();
 
-    expect(h.gateway.authorize({ url: "file:///etc/passwd" }, "message-1")).toMatchObject({
+    expect(await h.gateway.authorize({ url: "file:///etc/passwd" }, "message-1")).toMatchObject({
       code: "browser_scheme_not_allowed",
     });
   });
 
-  it("records the decision so collaborators can see the browser activity", () => {
+  it("records the decision so collaborators can see the browser activity", async () => {
     const h = harness();
 
     h.gateway.record(
       { action: "read", url: "https://example.com/docs" },
       "message-1",
-      h.gateway.authorize({ action: "read", url: "https://example.com/docs" }, "message-1")
+      await h.gateway.authorize({ action: "read", url: "https://example.com/docs" }, "message-1")
     );
 
     expect(h.recordActivity).toHaveBeenCalledWith({
@@ -155,19 +170,19 @@ describe("BrowserGateway", () => {
     });
   });
 
-  it("does not record the early gate, which is a policy fact and not activity", () => {
+  it("does not record the early gate, which is a policy fact and not activity", async () => {
     const h = harness();
 
     h.gateway.record(
       { url: "https://example.com/docs" },
       "message-1",
-      h.gateway.authorize({ url: "https://example.com/docs" }, "message-1")
+      await h.gateway.authorize({ url: "https://example.com/docs" }, "message-1")
     );
 
     expect(h.recordActivity).not.toHaveBeenCalled();
   });
 
-  it("matches a wildcard only for its sub-domains", () => {
+  it("matches a wildcard only for its sub-domains", async () => {
     expect(hostMatches("docs.example.com", ["*.example.com"])).toBe(true);
     expect(hostMatches("example.com", ["*.example.com"])).toBe(false);
     expect(hostMatches("example.com", ["example.com"])).toBe(true);
@@ -175,7 +190,7 @@ describe("BrowserGateway", () => {
   });
 });
 
-describe("the browser read route", () => {
+describe("the browser read route", async () => {
   function readRequest(body: unknown, operationId = "operation-1"): Request {
     return new Request("http://session/internal/pi-browser/read", {
       method: "POST",

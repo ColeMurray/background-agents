@@ -12,6 +12,7 @@ import type { SessionTitleService } from "../../title-service";
 import { resolvePublicSessionId } from "../../public-session-id";
 import { normalizeSessionTitle, type SessionTitleUpdateResult } from "../../title";
 import { z } from "zod";
+import type { InProcessHarnessRuntime } from "../../../harness/in-process-runtime";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
 /**
@@ -69,14 +70,9 @@ export class SessionLifecycleHandler {
     private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>,
-    /**
-     * The Pi Durable Object's own preservation step.
-     *
-     * A Pi session has no sandbox to save, so its runtime preserves itself:
-     * the agent stops working and every event it produced reaches the
-     * session's timeline. Absent when the deployment has no Pi runtime.
-     */
-    private readonly preservePiArchive: (() => Promise<void>) | undefined
+    private readonly inProcessLifecycle:
+      | Pick<InProcessHarnessRuntime, "harness" | "preserveForArchive" | "restoreFromArchive">
+      | undefined
   ) {}
 
   getState(): Response {
@@ -172,15 +168,15 @@ export class SessionLifecycleHandler {
 
     // Commit archived before starting preservation, but do not await its index
     // projection: reconnects must see draining in the same turn.
+    const ownsInProcessRuntime = this.inProcessLifecycle?.harness === session.harness;
     await Promise.all([
       this.statusService.beginTransition("archived"),
-      ...(session.harness === "pi" && !this.sandboxRepository.getSandbox()
+      ...(ownsInProcessRuntime && !this.sandboxRepository.getSandbox()
         ? []
         : [this.sandboxLifecycle.preserveForArchive()]),
-      // A Pi session has no sandbox to save, so its own runtime preserves
-      // itself. A Pi session that does have an execution sandbox preserves
-      // both.
-      ...(session.harness === "pi" && this.preservePiArchive ? [this.preservePiArchive()] : []),
+      ...(ownsInProcessRuntime
+        ? [this.inProcessLifecycle.preserveForArchive(session.session_name || session.id)]
+        : []),
     ]);
     try {
       await this.statusService.confirmIndexStatus("archived");
@@ -261,6 +257,9 @@ export class SessionLifecycleHandler {
     // not exist, and no settle path would ever correct it — they all run off
     // execution events, so an idle session sat in the in-progress group until
     // someone prompted it again.
+    if (this.inProcessLifecycle?.harness === session.harness) {
+      await this.inProcessLifecycle.restoreFromArchive(session.session_name || session.id);
+    }
     const settled = await this.statusService.settleFromMessageState();
 
     return Response.json({ status: settled });
@@ -278,7 +277,10 @@ export class SessionLifecycleHandler {
 
     await this.cancelSession();
 
-    if (session.harness !== "pi" || this.sandboxRepository.getSandbox()) {
+    if (
+      this.inProcessLifecycle?.harness !== session.harness ||
+      this.sandboxRepository.getSandbox()
+    ) {
       await this.sandboxLifecycle.cancelSandbox();
     }
 

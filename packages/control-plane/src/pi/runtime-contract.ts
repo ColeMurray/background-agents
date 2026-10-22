@@ -196,6 +196,8 @@ export interface PiRuntimeDispatch {
    * compaction boundaries and the workspace files stay where they are.
    */
   preserveForArchive(sessionId: string): Promise<void>;
+  /** Clear the archive quiescence marker before the session becomes promptable again. */
+  restoreFromArchive(sessionId: string): Promise<void>;
   destroy(sessionId: string): Promise<void>;
 }
 

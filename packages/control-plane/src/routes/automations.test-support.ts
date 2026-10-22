@@ -108,6 +108,7 @@ export function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS)
       control: vi.fn(),
       refreshDiff: vi.fn(),
       preserveForArchive: vi.fn(),
+      restoreFromArchive: vi.fn(),
       destroy: vi.fn(),
     },
     DB: createDatabase(permissions),

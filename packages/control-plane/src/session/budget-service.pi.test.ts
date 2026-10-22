@@ -20,7 +20,7 @@ describe("SessionBudgetService Pi exhaustion", () => {
       }),
     };
     const executionStop = { prepare: vi.fn(), deliver: vi.fn(async () => {}) };
-    const stopPiExecution = vi.fn(async () => {});
+    const stopInProcessExecution = vi.fn(async () => {});
     const service = new SessionBudgetService(
       repository as never,
       { raiseReportedCost: () => 0.0002 },
@@ -29,7 +29,7 @@ describe("SessionBudgetService Pi exhaustion", () => {
       executionStop as never,
       async () => {},
       () => "warning-1",
-      { isPiSession: () => true, stopPiExecution }
+      { isInProcessSession: () => true, stopInProcessExecution }
     );
 
     await service.ingestStepFinish(
@@ -46,7 +46,9 @@ describe("SessionBudgetService Pi exhaustion", () => {
       1_000
     );
 
-    expect(stopPiExecution).toHaveBeenCalledWith("Session cost limit reached: $0.00 of $0.00");
+    expect(stopInProcessExecution).toHaveBeenCalledWith(
+      "Session cost limit reached: $0.00 of $0.00"
+    );
     expect(executionStop.prepare).not.toHaveBeenCalled();
     expect(session.budget_exhausted).toBe(1);
   });

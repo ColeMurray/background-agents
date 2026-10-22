@@ -6,6 +6,7 @@ function harness(
     sessionCapability?: "off" | "read_only" | "enabled";
     liveMode?: "off" | "read_only" | "enabled";
     actorId?: string | null;
+    authorMayAct?: boolean;
     sharedServers?: Array<{ serverId: string; serverName: string; toolNames: string[] }>;
     sharedResult?: unknown;
     failure?: string;
@@ -30,6 +31,7 @@ function harness(
     ),
     callSharedTool,
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
+    authorMayAct: async () => options.authorMayAct ?? true,
   };
   const handler = new McpSessionHandler({
     mcp: bridge,
@@ -90,6 +92,18 @@ describe("the shared MCP gateway", () => {
     const response = await h.handler.read(readRequest(request, { "X-Pi-Operation-ID": "" }));
 
     expect(response.status).toBe(409);
+  });
+
+  it("refuses a read after the turn author loses current authority", async () => {
+    const h = harness({
+      authorMayAct: false,
+      sharedServers: [{ serverId: "mcpsrv_1", serverName: "Docs", toolNames: ["search"] }],
+    });
+
+    const response = await h.handler.read(readRequest());
+
+    expect(response.status).toBe(403);
+    expect(h.callSharedTool).not.toHaveBeenCalled();
   });
 
   it("refuses a server this session may not use", async () => {

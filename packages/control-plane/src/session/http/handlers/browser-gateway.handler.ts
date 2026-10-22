@@ -32,6 +32,8 @@ export interface BrowserGatewayBridge {
   operationActor(operationId: string): string | null;
   /** The operation must belong to this session. */
   operationBelongsToSession(operationId: string): boolean;
+  /** Re-read the turn author's current workspace and session authority. */
+  authorMayAct(actorId: string): Promise<boolean>;
   /** Whether this deployment stages a browser at all. */
   browserAvailable(): boolean;
   /**
@@ -105,10 +107,10 @@ export class BrowserGateway {
    * The order is the boundary: the session's own capability, the live
    * deployment mode, the turn's actor, and then the reviewed hosts.
    */
-  authorize(
+  async authorize(
     request: { action?: string; url?: string },
     operationId: string | null
-  ): BrowserAuthorization {
+  ): Promise<BrowserAuthorization> {
     const bridge = this.options.browser;
     // Every browser action this session may take reads a page, so a
     // read-only capability may use it.
@@ -139,6 +141,13 @@ export class BrowserGateway {
         kind: "denied",
         code: "browser_actor_missing",
         reason: "The originating turn has no workspace actor",
+      };
+    }
+    if (!(await bridge.authorMayAct(actorId))) {
+      return {
+        kind: "denied",
+        code: "browser_author_no_longer_allowed",
+        reason: "The originating turn's author may no longer act on this session",
       };
     }
     if (
@@ -238,7 +247,7 @@ export class BrowserGateway {
         { status: 400 }
       );
     }
-    const decision = this.authorize(parsed.data, operationId);
+    const decision = await this.authorize(parsed.data, operationId);
     if (operationId) this.record(parsed.data, operationId, decision);
     return Response.json(
       decision.kind === "allowed"
@@ -271,7 +280,7 @@ export class BrowserGateway {
     }
     const action = parsed.data.action;
     const url = parsed.data.url;
-    const decision = this.authorize({ action, url }, operationId);
+    const decision = await this.authorize({ action, url }, operationId);
     if (operationId) this.record({ action, url }, operationId, decision);
     if (decision.kind === "denied") {
       return Response.json(

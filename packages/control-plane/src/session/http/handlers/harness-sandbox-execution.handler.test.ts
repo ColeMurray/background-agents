@@ -48,6 +48,7 @@ function fixture(
   options: {
     sessionCapability?: "off" | "read_only" | "enabled";
     liveMode?: "off" | "read_only" | "enabled";
+    authorMayAct?: boolean;
   } = {}
 ) {
   const execution = {
@@ -66,6 +67,7 @@ function fixture(
       commands,
       getProcessingMessageId: () => processingId,
       getOperationActor: () => ({ kind: "user", id: "user-1" }),
+      authorMayAct: async () => options.authorMayAct ?? true,
       sessionCapability: () => options.sessionCapability ?? "enabled",
       liveMode: () => options.liveMode ?? "enabled",
     }),
@@ -126,6 +128,15 @@ describe("HarnessSandboxExecutionHandler", () => {
 
   it("refuses a new submission when the session never had the capability", async () => {
     const h = fixture("operation-1", { sessionCapability: "off" });
+
+    const response = await h.handler.handle(request(submit));
+
+    expect(response.status).toBe(403);
+    expect(h.execution.submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a command after the turn author loses current authority", async () => {
+    const h = fixture("operation-1", { authorMayAct: false });
 
     const response = await h.handler.handle(request(submit));
 

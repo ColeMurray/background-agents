@@ -34,7 +34,8 @@ export function agentWriteGuard(actor: AgentActor, partition: MemoryPartition): 
   return sql`EXISTS (SELECT 1 FROM sessions s
     JOIN users u ON u.id = s.user_id AND u.suspended_at IS NULL
     WHERE s.id = ${actor.sessionId} AND s.user_id = ${actor.userId}
-      AND s.status IN ('created', 'active') AND ${sessionReaches(partition)})`;
+      AND s.status IN ('created', 'active', 'durable_created', 'durable_active')
+      AND ${sessionReaches(partition)})`;
 }
 
 /**

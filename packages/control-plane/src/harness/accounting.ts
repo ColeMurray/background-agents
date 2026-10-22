@@ -36,7 +36,7 @@ export interface UsageAccountingSnapshot {
   readonly costUsd: number;
 }
 
-/** The cost and the usage of a turn, from what it used. */
+/** Aggregate unpriced counters for diagnostics; authoritative cost comes from the trusted meter. */
 export function summarizeUsage(state: Readonly<HarnessUsageState>): UsageAccountingSnapshot {
   const usage = {
     input: 0,
@@ -45,16 +45,10 @@ export function summarizeUsage(state: Readonly<HarnessUsageState>): UsageAccount
     cacheWrite: 0,
     total: 0,
   } as { -readonly [K in keyof HarnessUsage]: HarnessUsage[K] };
-  let costUsd = 0;
   for (const item of [...Object.values(state.models), ...Object.values(state.tools)]) {
-    const cost = item.cost;
-    if (
-      !cost ||
-      ![cost.input, cost.output, cost.cacheRead, cost.cacheWrite, cost.total].every(
-        (value) => Number.isFinite(value) && value >= 0
-      )
-    ) {
-      throw new Error("Invalid usage cost");
+    const counters = [item.input, item.output, item.cacheRead, item.cacheWrite, item.totalTokens];
+    if (!counters.every((value) => Number.isFinite(value) && value >= 0)) {
+      throw new Error("Invalid usage counters");
     }
     usage.input += item.input;
     usage.output += item.output;
@@ -62,10 +56,8 @@ export function summarizeUsage(state: Readonly<HarnessUsageState>): UsageAccount
     usage.cacheWrite += item.cacheWrite;
     usage.total += item.totalTokens;
     if (item.reasoning !== undefined) usage.reasoning = (usage.reasoning ?? 0) + item.reasoning;
-    costUsd += cost.total;
   }
-  if (!Number.isFinite(costUsd) || costUsd < 0) throw new Error("Invalid usage cost");
-  return { usage, costUsd };
+  return { usage, costUsd: 0 };
 }
 
 export function accountingDelta(

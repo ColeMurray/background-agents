@@ -324,7 +324,7 @@ export class SessionInboxStore {
                      MAX(updated_at) AS latest_updated_at,
                      CASE
                        WHEN MAX(unread) = 1 THEN 'needs_attention'
-                       WHEN MAX(status = 'active') = 1 THEN 'in_progress'
+                       WHEN MAX(status IN ('active', 'durable_active')) = 1 THEN 'in_progress'
                        ELSE 'finished'
                      END AS category
               FROM effective_sessions

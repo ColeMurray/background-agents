@@ -1,23 +1,33 @@
 import {
-  DEFAULT_HARNESS,
-  getValidHarnessOrDefault,
+  getHarnessCapabilities,
   harnessIdSchema,
+  type HarnessId,
 } from "@open-inspect/shared/harnesses";
-import { sessionStatusSchema, spawnSourceSchema } from "@open-inspect/shared/types/sessions";
+import {
+  sessionStatusSchema,
+  spawnSourceSchema,
+  type SessionStatus,
+} from "@open-inspect/shared/types/sessions";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
 import { z } from "zod";
 
 /** Persisted D1 session row shared by index and export readers. */
+const persistedSessionStatusSchema = z.union([
+  sessionStatusSchema,
+  z.literal("durable_created"),
+  z.literal("durable_active"),
+]);
+
 export const sessionRowSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
   repo_owner: z.string().nullable(),
   repo_name: z.string().nullable(),
-  harness: harnessIdSchema.catch(DEFAULT_HARNESS),
+  harness: harnessIdSchema,
   model: z.string(),
   reasoning_effort: z.string().nullable(),
   base_branch: z.string().nullable(),
-  status: sessionStatusSchema,
+  status: persistedSessionStatusSchema,
   parent_session_id: z.string().nullable(),
   root_session_id: z.string().nullable(),
   spawn_source: spawnSourceSchema,
@@ -58,11 +68,11 @@ export function toSessionFields(row: SessionRow) {
     title: row.title,
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
-    harness: getValidHarnessOrDefault(row.harness),
+    harness: row.harness,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     baseBranch: row.base_branch,
-    status: row.status,
+    status: decodeSessionStatus(row.status),
     parentSessionId: row.parent_session_id,
     spawnSource: row.spawn_source,
     spawnDepth: row.spawn_depth,
@@ -85,4 +95,17 @@ export function toSessionFields(row: SessionRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** Encode active in-process rows so older binaries reject them instead of falling back. */
+export function encodeSessionStatus(harness: HarnessId, status: SessionStatus): string {
+  if (getHarnessCapabilities(harness).execution !== "in_process") return status;
+  if (status === "created" || status === "active") return `durable_${status}`;
+  return status;
+}
+
+function decodeSessionStatus(status: z.infer<typeof persistedSessionStatusSchema>): SessionStatus {
+  if (status === "durable_created") return "created";
+  if (status === "durable_active") return "active";
+  return status;
 }

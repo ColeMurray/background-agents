@@ -7,22 +7,32 @@ import type { SessionStatusService } from "../../session-status-service";
 import type { SessionTitleService } from "../../title-service";
 import { SessionLifecycleHandler } from "./session-lifecycle.handler";
 
-function createHandler(harness: "opencode" | "pi" = "opencode", hasSandbox = false) {
+function createHandler(
+  harness: "opencode" | "pi" = "opencode",
+  hasSandbox = false,
+  status: "active" | "archived" = "active"
+) {
   const beginTransition = vi.fn<SessionStatusService["beginTransition"]>();
   const confirmIndexStatus = vi.fn<SessionStatusService["confirmIndexStatus"]>();
   const preserveForArchive = vi.fn(async () => undefined);
   const cancelSandbox = vi.fn(async () => undefined);
   const preservePiArchive = vi.fn(async () => undefined);
+  const restoreFromArchive = vi.fn(async () => undefined);
+  const settleFromMessageState = vi.fn(async () => "completed" as const);
   const handler = new SessionLifecycleHandler(
-    { getSession: () => createMockSession({ harness }) } as SessionCoreRepository,
+    { getSession: () => createMockSession({ harness, status }) } as SessionCoreRepository,
     { getSandbox: () => (hasSandbox ? ({} as never) : null) } as SandboxStateReader,
     { getPendingOrProcessingCount: () => 0 } as MessageRepository,
-    { beginTransition, confirmIndexStatus } as unknown as SessionStatusService,
+    {
+      beginTransition,
+      confirmIndexStatus,
+      settleFromMessageState,
+    } as unknown as SessionStatusService,
     {} as SessionTitleService,
     { cancelSandbox, preserveForArchive },
     "session-do-id",
     vi.fn(),
-    preservePiArchive
+    { harness: "pi", preserveForArchive: preservePiArchive, restoreFromArchive }
   );
   return {
     handler,
@@ -31,6 +41,8 @@ function createHandler(harness: "opencode" | "pi" = "opencode", hasSandbox = fal
     preserveForArchive,
     cancelSandbox,
     preservePiArchive,
+    restoreFromArchive,
+    settleFromMessageState,
   };
 }
 
@@ -92,6 +104,22 @@ describe("SessionLifecycleHandler.archive", () => {
 
     expect((await handler.archive()).status).toBe(200);
     expect(preserveForArchive).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SessionLifecycleHandler.unarchive", () => {
+  it("restores an in-process runtime before making its session promptable", async () => {
+    const { handler, restoreFromArchive, settleFromMessageState } = createHandler(
+      "pi",
+      false,
+      "archived"
+    );
+
+    await expect(handler.unarchive()).resolves.toHaveProperty("status", 200);
+    expect(restoreFromArchive).toHaveBeenCalledOnce();
+    expect(restoreFromArchive.mock.invocationCallOrder[0]).toBeLessThan(
+      settleFromMessageState.mock.invocationCallOrder[0]
+    );
   });
 });
 

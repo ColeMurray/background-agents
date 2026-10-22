@@ -104,6 +104,7 @@ describe("session budgets", () => {
       control: vi.fn(),
       refreshDiff: vi.fn(async () => {}),
       preserveForArchive: vi.fn(async () => {}),
+      restoreFromArchive: vi.fn(async () => {}),
       destroy: vi.fn(async () => {}),
     } satisfies PiRuntimeDispatch;
     const { sessionName, stub } = await initSession({

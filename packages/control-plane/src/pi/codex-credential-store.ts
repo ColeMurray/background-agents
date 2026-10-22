@@ -8,7 +8,6 @@ import type {
 
 const PROVIDER_ID = "openai-codex";
 const REFRESH_SENTINEL = "managed-by-open-inspect";
-const REFRESH_BUFFER_MS = 60_000;
 
 interface BrokerCredential {
   accessToken: string;
@@ -41,9 +40,9 @@ export class CodexBrokerCredentialStore implements CredentialStore {
 
   async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
     if (providerId !== PROVIDER_ID) return undefined;
-    if (this.credential && this.credential.expires - this.now() > REFRESH_BUFFER_MS) {
-      return { ...this.credential };
-    }
+    // Every model call re-enters the control plane. The access token may still
+    // be valid, but the turn author may have been suspended or removed since
+    // the previous call; token freshness is not authorization freshness.
     return { ...(await this.loadOnce(undefined, options?.signal)) };
   }
 
