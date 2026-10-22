@@ -578,6 +578,33 @@ export class MessageRepository {
     });
   }
 
+  /**
+   * Record the terminal event of a control turn.
+   *
+   * A control message is admitted already completed (the runtime, not the
+   * session queue, owns the turn), so the ordinary processing-to-complete
+   * transition never runs for it. The terminal event is still required: the
+   * timeline, the export, and every client settle on it. The upsert keeps the
+   * record exactly-once when the runtime retries its completion.
+   */
+  recordControlCompletion(
+    messageId: string,
+    event: ExecutionCompleteEvent,
+    completedAt: number
+  ): void {
+    this.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE messages SET status = ?, completed_at = ?, error_message = ?
+         WHERE id = ? AND status = 'completed'`,
+        event.success ? "completed" : "failed",
+        completedAt,
+        event.success ? null : (event.error ?? null),
+        messageId
+      );
+      this.eventRepository.upsertExecutionCompleteEvent(messageId, event, completedAt);
+    });
+  }
+
   listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
     const result = this.sql.exec(
       `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`

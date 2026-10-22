@@ -56,6 +56,20 @@ export class PiControlHandler {
       control: PiHumanControl;
     }) => { conflict: boolean; deduplicated: boolean; messageId?: string },
     /**
+     * Record the terminal event of a control turn.
+     *
+     * A control turn is not owned by the session's message queue, so the
+     * runtime's completion is the only place its terminal event can come
+     * from. The callback writes the event idempotently and broadcasts it.
+     */
+    private readonly recordTerminal: (input: {
+      operationId: string;
+      success: boolean;
+      error?: string;
+      costUsd: number;
+      now: number;
+    }) => void,
+    /**
      * The session's record of the turns the runtime is running.
      *
      * A turn that arrives through a control is recorded here before the
@@ -195,6 +209,7 @@ export class PiControlHandler {
     if (operationId && this.operations) {
       const now = Date.now();
       this.operations.begin(operationId, now);
+      this.receipts.attachOperation(control.requestId, operationId);
       this.operations.transition(operationId, ["dispatching"], "dispatching", now);
     }
     try {
@@ -219,6 +234,19 @@ export class PiControlHandler {
             ? "rejected"
             : "runtime_unavailable";
       const settled = this.receipts.settle(control.requestId, state, undefined, code, Date.now());
+      // A deterministic rejection never runs a turn, so the message it was
+      // recorded as would otherwise never receive a terminal event. An
+      // indeterminate outcome may still run; its completion carries the
+      // terminal event.
+      if (deterministic && operationId) {
+        this.recordTerminal({
+          operationId,
+          success: false,
+          error: code,
+          costUsd: 0,
+          now: Date.now(),
+        });
+      }
       return Response.json(
         {
           error:
@@ -260,6 +288,19 @@ export class PiControlHandler {
     });
     if (!completion.receipt)
       return Response.json({ error: "Pi control receipt not found" }, { status: 404 });
+    // The receipt is settled; the turn's message still needs its terminal
+    // event. It is written on every completion, not only the first, because
+    // the event upsert is idempotent and a retry may be all that survives a
+    // crash between the receipt and the timeline.
+    if (completion.receipt.operationId) {
+      this.recordTerminal({
+        operationId: completion.receipt.operationId,
+        success: parsed.data.status === "completed",
+        ...(parsed.data.errorCode ? { error: parsed.data.errorCode } : {}),
+        costUsd: parsed.data.costUsd,
+        now,
+      });
+    }
     this.receipts.prune();
     return Response.json({ status: completion.changed ? "recorded" : "already_recorded" });
   }

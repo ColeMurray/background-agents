@@ -114,6 +114,24 @@ export class PiControlRepository {
       .toArray()[0];
     return row !== undefined;
   }
+  /**
+   * Link a receipt to the message the session recorded for its turn.
+   *
+   * The receipt is admitted before the message exists (deduplication comes
+   * first), so the operation is attached once projection names it. The
+   * runtime's completion reads it back to write the turn's terminal event.
+   */
+  attachOperation(requestId: string, operationId: string): void {
+    this.sql
+      .exec(
+        `UPDATE pi_control_receipts SET operation_id = ?
+         WHERE request_id = ? AND operation_id IS NULL`,
+        operationId,
+        requestId
+      )
+      .toArray();
+  }
+
   complete(
     requestId: string,
     state: "completed" | "failed",

@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import {
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxToolCall,
-} from "@earendil-works/pi-ai/providers/faux";
-import type { MutableModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { createFauxCodexProvider } from "./faux-codex-provider";
 import type { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { initSession, queryDO, seedActiveUser } from "./helpers";
+import { PI_MODEL_PROVIDER_ID, piProviderFactories } from "../../src/pi/provider-factories";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
 import { cleanD1Tables } from "./cleanup";
 import { SessionInternalPaths } from "../../src/session/contracts";
@@ -63,6 +60,23 @@ describe("the Pi projection the export reads", () => {
     // authority reads D1 again at every action.
     await seedActiveUser("user-1");
 
+    // The faux serves the model through the seam, and it is registered before
+    // the session exists: the session's own initialization opens the Pi Durable
+    // Object, and the harness installs its provider at that moment.
+    const faux = createFauxCodexProvider({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "Faux gpt-5.6-sol",
+          cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+        },
+      ],
+      responses: [
+        fauxAssistantMessage(fauxToolCall("list_agents", {}), { stopReason: "toolUse" }),
+        fauxAssistantMessage("there are no other agents"),
+      ],
+    });
+    piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
     const session = await initSession({
       title: "pi-projection",
       harness: "pi",
@@ -92,26 +106,13 @@ describe("the Pi projection the export reads", () => {
     // agree on which model is running.
     await runInDurableObject(piStub as unknown as DurableObjectStub, async (instance) => {
       const pi = instance as unknown as PiSessionDO;
-      // Opening the harness installs the codex provider; the faux provider
-      // must be the one that answers, so it is installed afterwards.
-      await (await pi.harness.pi()).root(BACKGROUND_CONTEXT);
-      const faux = fauxProvider({
-        provider: "openai",
-        models: [
-          {
-            id: "gpt-5.6-sol",
-            name: "Faux gpt-5.6-sol",
-            cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
-          },
-        ],
-      });
-      (pi as unknown as { models: MutableModels }).models.setProvider(faux.provider);
-      faux.setResponses([
-        fauxAssistantMessage(fauxToolCall("write", { path: "notes.txt", content: "hello" }), {
-          stopReason: "toolUse",
-        }),
-        fauxAssistantMessage("the notes are written"),
-      ]);
+      // A control keeps the conversation's model, so the conversation is
+      // given the faux's.
+      const root = await (await pi.harness.pi()).root(BACKGROUND_CONTEXT);
+      await root.configure(
+        { model: { provider: PI_MODEL_PROVIDER_ID, modelId: "gpt-5.6-sol" } },
+        BACKGROUND_CONTEXT
+      );
     });
 
     // The session runs the turn.

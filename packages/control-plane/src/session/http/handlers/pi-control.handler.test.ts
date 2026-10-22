@@ -31,6 +31,8 @@ function fixture(overrides: Record<string, unknown> = {}) {
   const setSessionBudget = vi.fn();
   const receipts = new PiControlRepository(storage.sql);
   const recordHumanControl = vi.fn();
+  const recordTerminal = vi.fn();
+  const operations = { begin: vi.fn(), transition: vi.fn(), get: vi.fn(() => undefined) };
   const handler = new PiControlHandler(
     {
       getSession: () => session,
@@ -41,9 +43,20 @@ function fixture(overrides: Record<string, unknown> = {}) {
     receipts,
     runtime,
     { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
-    recordHumanControl
+    recordHumanControl,
+    recordTerminal,
+    operations
   );
-  return { handler, runtime, receipts, addSessionCost, setSessionBudget, recordHumanControl };
+  return {
+    handler,
+    runtime,
+    receipts,
+    addSessionCost,
+    setSessionBudget,
+    recordHumanControl,
+    recordTerminal,
+    operations,
+  };
 }
 function request(requestId = "request-1") {
   return new Request("http://session/internal/pi-control", {
@@ -123,6 +136,36 @@ describe("PiControlHandler", () => {
     expect(h.setSessionBudget).toHaveBeenCalledExactlyOnceWith(0.2, true, expect.any(Number));
     expect(h.receipts.get("request-1")?.state).toBe("completed");
   });
+  it("records a projected control turn's terminal event when its completion arrives", async () => {
+    const h = fixture();
+    h.recordHumanControl.mockReturnValue({
+      conflict: false,
+      deduplicated: false,
+      messageId: "pi-control:request-1",
+    });
+    expect((await h.handler.handle(request())).status).toBe(202);
+    expect(h.receipts.get("request-1")?.operationId).toBe("pi-control:request-1");
+
+    const completion = (status: "completed" | "failed", errorCode?: string) =>
+      new Request("http://session/internal/pi-control-completion", {
+        method: "POST",
+        body: JSON.stringify({ requestId: "request-1", status, errorCode, costUsd: 0.25 }),
+      });
+    await h.handler.complete(completion("completed"));
+    await h.handler.complete(completion("failed", "model_error"));
+
+    // The runtime may retry its completion; the terminal write is an upsert,
+    // so every delivery carries the same identity and the last state wins.
+    expect(h.recordTerminal).toHaveBeenCalledTimes(2);
+    expect(h.recordTerminal).toHaveBeenLastCalledWith({
+      operationId: "pi-control:request-1",
+      success: false,
+      error: "model_error",
+      costUsd: 0.25,
+      now: expect.any(Number),
+    });
+  });
+
   it("projects human controls with verified actor metadata but not internal Pi controls", async () => {
     const human = fixture();
     expect((await human.handler.handle(request("human-control"))).status).toBe(202);

@@ -17,7 +17,7 @@ import {
 } from "@open-inspect/shared";
 import { RemoteCodemodeSandbox } from "@earendil-works/pi-codemode/portable";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { PI_MODEL_PROVIDER_ID, piProviderFactories } from "../pi/provider-factories";
 import {
   createRegistry,
   defineExtension,
@@ -160,11 +160,6 @@ import {
   type HarnessActionCeiling,
 } from "../harness/action-ceiling";
 import { createPiPriceTable } from "../pi/price-table";
-import {
-  createFixedActionCeiling,
-  HARNESS_ACTION_CEILING,
-  type HarnessActionCeiling,
-} from "../harness/action-ceiling";
 import { createBudgetGateProvider, type HarnessBudgetState } from "../harness/budget-gate";
 import { armTurnDeadline, type HarnessTurnDeadline } from "../harness/turn-deadline";
 import {
@@ -585,8 +580,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       for (const extension of assembly.extensions) this.registry.install(extension);
       // The provider is wrapped so the budget is checked before *every*
       // model call, not only after a step is priced.
+      const providerFactory = piProviderFactories.factoryFor(PI_MODEL_PROVIDER_ID);
+      if (!providerFactory) {
+        throw new Error(`Pi Durable requires a provider for ${PI_MODEL_PROVIDER_ID}`);
+      }
       this.models.setProvider(
-        createBudgetGateProvider(openaiCodexProvider(), () => this.readBudgetState())
+        createBudgetGateProvider(providerFactory(), () => this.readBudgetState())
       );
       const openStartedAt = Date.now();
       const opened = await Harness.open(
@@ -764,10 +763,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         return Promise.resolve();
       }),
       ...pending.map(async (operation) => {
-        // A native control submission was never admitted as a message of
-        // this session, so it has no operation metadata. Its completion is
-        // recorded by the control path. Relaying it would fail the whole
-        // startup and strand every later prompt.
+        // A control submission recorded before operation metadata existed
+        // (an upgrade, or a crash between admission and the record) has
+        // nothing to translate or price. Its completion is recorded by the
+        // control path. Relaying it would fail the whole startup and strand
+        // every later prompt.
         if (!(await this.operationMetadata(operation.operationId))) return;
         return this.startEventRelay(sessionId, operation.operationId, {
           recoverSnapshot: operation.status === "running",
@@ -1266,6 +1266,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
       const whenBusy = input.action === "follow_up" ? "followUp" : "reject";
       const baseline = await this.accountingTotals();
+      // A control turn belongs to the message the session recorded for it.
+      // Give that operation the same record and live relay a prompt turn
+      // gets, so its tool calls reach the session's timeline and export; the
+      // control completion below stays its terminal receipt.
+      const operationId = input.operationId;
+      if (operationId) {
+        const agent = await conversation.agent(BACKGROUND_CONTEXT);
+        const model = input.model ?? canonicalModelOf(agent.model);
+        await this.rememberOperation({ messageId: operationId, model }, baseline);
+        await this.startEventRelay(input.sessionId, operationId);
+      }
       const submission = await conversation.submit(
         {
           type: "input",
@@ -1313,14 +1324,21 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private async resumeNativeControlCompletion(record: NativeControlCompletion): Promise<void> {
     const pi = await this.harness.pi();
     let status: "completed" | "failed";
+    let operationId: string | undefined;
     if (record.target.kind === "submission") {
       const submission = await pi.submission(record.target.id as SubmissionId, BACKGROUND_CONTEXT);
       if (!submission) throw new Error("Pi control submission is unavailable");
       const settled = await submission.wait(BACKGROUND_CONTEXT);
       status = settled.status === "done" ? "completed" : "failed";
+      operationId = operationIdForSubmission(settled.requestId);
     } else {
       const task = await pi.waitForTask(record.target.id as TaskId, BACKGROUND_CONTEXT);
       status = task.state.outcome.status === "completed" ? "completed" : "failed";
+    }
+    // A control turn has no projector job — its receipt is the terminal path —
+    // so the relay and outbox close here, before the receipt is reported.
+    if (operationId && (await this.operationMetadata(operationId))) {
+      await this.finalizeControlProjection(operationId);
     }
     const current = await this.accountingTotals();
     const costBaseline = record.runningOperationId
@@ -1347,6 +1365,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!response.ok && response.status !== 404)
       throw new Error(`Pi control completion rejected (${response.status})`);
     await this.ctx.storage.delete(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`);
+  }
+
+  /**
+   * Deliver a control turn's remaining steps and close its operation.
+   *
+   * The final snapshot is the durable backstop: a step the live relay missed
+   * is still in the transcript, so the session's timeline ends complete even
+   * when the relay raced the turn.
+   */
+  private async finalizeControlProjection(operationId: string): Promise<void> {
+    await this.captureFinalProjection(operationId);
+    await this.projectionOutbox.drain(operationId);
+    this.projectionOutbox.complete(operationId);
+    await this.settleOperationMetadata(operationId);
   }
 
   /**
@@ -2732,7 +2764,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private async operationEntries(operationId: string): Promise<EntryRecord[]> {
     const pi = await this.harness.pi();
     const submission = (await pi.inspect(BACKGROUND_CONTEXT)).submissions.find(
-      (candidate) => candidate.requestId === operationId
+      (candidate) =>
+        candidate.requestId === operationId ||
+        candidate.requestId === nativeControlSubmissionRequestId(operationId)
     );
     if (!submission || submission.type !== "input" || submission.entry === undefined) return [];
     const conversation = await pi.conversation(submission.conversationId, BACKGROUND_CONTEXT);
@@ -2903,6 +2937,14 @@ function latestAssistantEntryId(entries: readonly EntryRecord[]): number | null 
 
 function nativeControlSubmissionRequestId(requestId: string): string {
   return `${CONTROL_SUBMISSION_REQUEST_PREFIX}${requestId}`;
+}
+
+/** The canonical model name (`openai/<id>`) of a conversation's current agent. */
+function canonicalModelOf(model: { provider: string; modelId: string } | undefined): string {
+  if (!model || model.provider !== "openai-codex") {
+    throw new Error("Pi control requires an OpenAI model");
+  }
+  return `openai/${model.modelId}`;
 }
 
 function operationIdForSubmission(requestId: string | undefined): string | undefined {

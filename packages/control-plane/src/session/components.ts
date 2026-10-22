@@ -183,7 +183,7 @@ import {
 } from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
-import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxEvent, SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import { PiCredentialService } from "./pi-credential-service";
 import { PiResultHandler } from "./http/handlers/pi-result.handler";
 import { PiControlHandler } from "./http/handlers/pi-control.handler";
@@ -912,6 +912,19 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     env.PI_SESSION,
     log,
     (input) => messageQueue.recordPiControlMessage(input),
+    (terminal) => {
+      const event = {
+        type: "execution_complete",
+        sandboxId: `pi:${getPublicSessionId()}`,
+        timestamp: terminal.now / 1_000,
+        messageId: terminal.operationId,
+        success: terminal.success,
+        messageCostUsd: terminal.costUsd,
+        ...(terminal.success ? {} : { error: terminal.error ?? "Pi execution did not complete" }),
+      } satisfies Extract<SandboxEvent, { type: "execution_complete" }>;
+      messageRepository.recordControlCompletion(terminal.operationId, event, terminal.now);
+      messenger.broadcast({ type: "sandbox_event", event });
+    },
     piOperations
   );
   const visiblePiTokens = new Set<string>();
