@@ -90,6 +90,11 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
+    "packages/control-plane/src/cloudflare/pi-overlay-runtime.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
     "packages/control-plane/src/cloudflare/pi-runtime-dispatch.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
@@ -231,14 +236,14 @@
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/harness/budget-gate.test.ts": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/harness/budget-gate.ts": {
-      "layer": "overlay",
-      "need": ["DEV:overlay-integration"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/harness/emergency-policy.test.ts": {
       "layer": "core-support",
@@ -276,14 +281,9 @@
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/harness/provider-factory.ts": {
-      "layer": "overlay",
-      "need": ["DEV:overlay-integration"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
-    },
-    "packages/control-plane/src/harness/reference-harness.test.ts": {
-      "layer": "overlay",
-      "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/harness/tool-policy.ts": {
       "layer": "core-seam",
@@ -296,14 +296,14 @@
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/harness/turn-deadline.test.ts": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/harness/turn-deadline.ts": {
-      "layer": "overlay",
-      "need": ["DEV:overlay-integration"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/image-builds/model.ts": {
       "layer": "core-seam",
@@ -630,6 +630,11 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
+    "packages/control-plane/src/pi/personal-mcp-extension.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
     "packages/control-plane/src/pi/pi-harness-wake.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -671,14 +676,14 @@
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/pricing.test.ts": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/pi/pricing.ts": {
-      "layer": "overlay",
-      "need": ["DEV:overlay-integration"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/projection-capability.ts": {
       "layer": "core-adapter",
@@ -716,9 +721,9 @@
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/provider-factories.ts": {
-      "layer": "overlay",
-      "need": ["DEV:overlay-integration"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-diff-outbox.test.ts": {
       "layer": "core-support",
@@ -1360,6 +1365,26 @@
       "need": ["DEV:external-actions"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
+    "packages/control-plane/src/session/harness-result-receipt-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/harness-result-receipt-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/harness-sandbox-execution.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/harness-sandbox-execution.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
     "packages/control-plane/src/session/http/handlers/browser-gateway.handler.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -1390,6 +1415,41 @@
       "need": ["DEV:cross-session"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
+    "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-event.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-event.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-executions.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-operation-fence.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
     "packages/control-plane/src/session/http/handlers/mcp-session.handler.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -1399,6 +1459,11 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/personal-mcp-session.handler.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
     "packages/control-plane/src/session/http/handlers/pi-bridge.handler.test.ts": {
       "layer": "core-support",
@@ -1420,21 +1485,6 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
-    "packages/control-plane/src/session/http/handlers/pi-event.handler.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
-    },
-    "packages/control-plane/src/session/http/handlers/pi-event.handler.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
-    },
-    "packages/control-plane/src/session/http/handlers/pi-executions.handler.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
-    },
     "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -1445,27 +1495,12 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
-    "packages/control-plane/src/session/http/handlers/pi-operation-fence.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
-    },
     "packages/control-plane/src/session/http/handlers/pi-result.handler.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/session/http/handlers/pi-result.handler.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
-    },
-    "packages/control-plane/src/session/http/handlers/pi-sandbox-execution.handler.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
-    },
-    "packages/control-plane/src/session/http/handlers/pi-sandbox-execution.handler.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
@@ -1499,6 +1534,11 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/overlay-routes.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
     "packages/control-plane/src/session/http/routes.combined.test.ts": {
       "layer": "core-support",
@@ -1555,10 +1595,20 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
-    "packages/control-plane/src/session/pi-control-message-id.ts": {
+    "packages/control-plane/src/session/overlay-schema-migrations.ts": {
       "layer": "overlay",
       "need": ["DEV:overlay-integration"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/overlay-session-services.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/pi-control-message-id.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/pi-control-repository.test.ts": {
       "layer": "core-support",
@@ -1566,11 +1616,6 @@
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/session/pi-control-repository.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
-    },
-    "packages/control-plane/src/session/pi-credential-service.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
@@ -1585,25 +1630,10 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
-    "packages/control-plane/src/session/pi-result-receipt-repository.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
-    },
-    "packages/control-plane/src/session/pi-result-receipt-repository.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
-    },
-    "packages/control-plane/src/session/pi-sandbox-execution.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
-    },
-    "packages/control-plane/src/session/pi-sandbox-execution.ts": {
-      "layer": "core-adapter",
-      "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    "packages/control-plane/src/session/provider-credential-service.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
     "packages/control-plane/src/session/pull-request-refresh.test.ts": {
       "layer": "core-support",
@@ -1616,6 +1646,11 @@
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/session/pull-request-service.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/reference-harness.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
@@ -1866,9 +1901,9 @@
       "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
     },
     "packages/control-plane/test/integration/faux-codex-provider.ts": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/test/integration/helpers.ts": {
       "layer": "core-support",
@@ -2270,22 +2305,37 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
-    "packages/shared/src/pi-feature-capabilities.test.ts": {
+    "packages/shared/src/overlay-migration-reservations.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/pi-overlay-feature-capabilities.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/pi-overlay-tool-effects.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/pi-runtime-feature-capabilities.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
-    "packages/shared/src/pi-feature-capabilities.ts": {
+    "packages/shared/src/pi-runtime-feature-capabilities.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
-    "packages/shared/src/pi-tool-effects.test.ts": {
+    "packages/shared/src/pi-runtime-tool-effects.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
-    "packages/shared/src/pi-tool-effects.ts": {
+    "packages/shared/src/pi-runtime-tool-effects.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
@@ -2355,7 +2405,7 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
-    "packages/shared/src/types/integrations.ts": {
+    "packages/shared/src/types/integrations.test.ts": {
       "layer": "overlay-hook",
       "need": ["DEV:overlay-integration"],
       "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
@@ -2369,6 +2419,21 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/overlay-index.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/types/overlay-integrations.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/types/overlay-mcp-read.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
     "packages/shared/src/types/repositories.ts": {
       "layer": "core-seam",
@@ -2580,6 +2645,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/web/src/app/(app)/settings/page.test.tsx": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
+    },
     "packages/web/src/app/api/automations/[id]/external-action-grants/[grantId]/route.test.ts": {
       "layer": "overlay",
       "need": ["SUPPORT:test"],
@@ -2673,7 +2743,7 @@
     "packages/web/src/app/api/sessions/[id]/pi/agents/route.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the web-facing Pi controls to the harness-neutral session runtime contract."
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/app/api/sessions/[id]/pi/control/route.test.ts": {
       "layer": "core-support",
@@ -2683,12 +2753,12 @@
     "packages/web/src/app/api/sessions/[id]/pi/control/route.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the web-facing Pi controls to the harness-neutral session runtime contract."
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/app/api/sessions/[id]/pi/lifecycle-control/route.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the web-facing Pi controls to the harness-neutral session runtime contract."
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/components/automations/automation-agent-fields.tsx": {
       "layer": "core-seam",
@@ -2840,14 +2910,19 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
+    "packages/web/src/components/settings/mcp-overlay-settings.tsx": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
     "packages/web/src/components/settings/mcp-servers-settings.test.tsx": {
       "layer": "overlay-hook",
       "need": ["DEV:personal-mcp"],
       "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
     },
-    "packages/web/src/components/settings/mcp-servers-settings.tsx": {
+    "packages/web/src/components/settings/settings-registry.ts": {
       "layer": "overlay-hook",
-      "need": ["DEV:personal-mcp"],
+      "need": ["DEV:overlay-integration"],
       "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
     },
     "packages/web/src/components/sidebar/budget-section.tsx": {
@@ -2928,7 +3003,7 @@
     "packages/web/src/hooks/use-pi-agents.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the web-facing Pi controls to the harness-neutral session runtime contract."
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/hooks/use-session-diffs.ts": {
       "layer": "core-seam",
@@ -3013,7 +3088,7 @@
     "scripts/deploy-pi-codemode-sandbox.sh": {
       "layer": "core-support",
       "need": ["SUPPORT:deploy"],
-      "why": "This deployment helper publishes the isolated code-mode worker required by the core Pi adapter."
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "scripts/execution-isolation-contract.test.mjs": {
       "layer": "core-support",

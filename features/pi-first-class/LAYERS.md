@@ -371,6 +371,15 @@ reason it is gone. Nothing is dropped silently.
 
 ### The core files the overlay edits
 
+The remaining thin hooks also include:
+
+- `packages/shared/src/types/sandbox-execution.ts` — selects the overlay's extended tool-effect
+  catalog at the package boundary.
+- `packages/shared/src/types/server-messages.ts` — selects the overlay's extended capability
+  snapshot reader at the package boundary.
+- `packages/web/src/components/settings/settings-registry.ts` — selects the overlay-owned MCP
+  settings composition.
+
 The overlay is additive. It edits a core file only to add an extension point the core declares, and
 every one of them is named here.
 
