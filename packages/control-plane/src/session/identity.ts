@@ -9,6 +9,7 @@ import {
   type ProviderAccountSelection,
   type ProviderAccountClient,
 } from "../source-control/github-credential-authority";
+import { parseActor, type ActorNamespace } from "../auth/principal";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
 
@@ -163,10 +164,8 @@ export async function resolveCurrentGitHubAccessToken(
  */
 export function parseAuthorId(
   authorId: string
-): { provider: string; providerUserId: string } | null {
-  const match = authorId.match(/^(github|slack|linear|discord):(.+)$/);
-  if (!match) return null;
-  return { provider: match[1], providerUserId: match[2] };
+): { provider: ActorNamespace; providerUserId: string } | null {
+  return parseActor(authorId);
 }
 
 /**

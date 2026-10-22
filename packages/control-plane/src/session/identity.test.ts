@@ -100,6 +100,13 @@ describe("parseAuthorId", () => {
     });
   });
 
+  it("parses discord authorId", () => {
+    expect(parseAuthorId("discord:123456789")).toEqual({
+      provider: "discord",
+      providerUserId: "123456789",
+    });
+  });
+
   it("returns null for plain user ID (web client)", () => {
     expect(parseAuthorId("user-id-123")).toBeNull();
   });

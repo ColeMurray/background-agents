@@ -11,6 +11,7 @@
  */
 
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
+import { spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { getModelDisplayName, normalizeModelId } from "@open-inspect/shared/models";
 import { HARNESS_CATALOG, isValidHarness } from "@open-inspect/shared/harnesses";
 import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
@@ -62,15 +63,7 @@ const repoRowSchema = z.object({
 });
 
 const sourceRowSchema = z.object({
-  source: z.enum([
-    "user",
-    "agent",
-    "automation",
-    "github-bot",
-    "linear-bot",
-    "slack-bot",
-    "discord-bot",
-  ]),
+  source: spawnSourceSchema,
   created: z.number(),
   merged: z.number(),
 });

@@ -13,22 +13,12 @@ import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";
 import type { Env } from "../../types";
-import { ASSERTION_RIGHTS, isActorNamespace, type ActorNamespace } from "../principal";
+import { ASSERTION_RIGHTS, parseActor } from "../principal";
 import type { AuthenticationRequestServices } from "../request-services";
 import type { AuthResult } from "../result";
 import { serviceAuthSecret } from "./config";
 
 const logger = createLogger("auth");
-
-/** Parse `<namespace>:<id>` into a typed actor reference; null when malformed. */
-function parseActor(actor: string): { provider: ActorNamespace; providerUserId: string } | null {
-  const separator = actor.indexOf(":");
-  if (separator <= 0) return null;
-  const namespace = actor.slice(0, separator);
-  const providerUserId = actor.slice(separator + 1);
-  if (providerUserId === "" || !isActorNamespace(namespace)) return null;
-  return { provider: namespace, providerUserId };
-}
 
 /**
  * Best-effort nonce-reuse detection (log-only for now). This is in-isolate

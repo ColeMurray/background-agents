@@ -5,6 +5,7 @@ import {
   type SessionCollaboratorCandidate,
 } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
+import type { IdentityProvider } from "../auth/principal";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
@@ -12,7 +13,7 @@ import type { SqlDatabase } from "./sql-database";
 // ── Public types ────────────────────────────────────────────────────
 
 export interface ProviderIdentity {
-  provider: "github" | "slack" | "linear" | "discord" | "google";
+  provider: IdentityProvider;
   providerUserId: string;
   providerLogin?: string;
   providerEmail?: string;
