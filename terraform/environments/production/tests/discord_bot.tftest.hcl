@@ -40,7 +40,7 @@ variables {
   # Slack defaults to on; this suite covers Discord alone.
   enable_slack_bot = false
 
-  enable_discord_bot          = true
+  # Each run enables the bot itself so the suite also covers the real default.
   discord_application_id      = "123"
   discord_public_key          = "abcdef"
   discord_bot_token           = "test-discord-token"
@@ -52,6 +52,10 @@ variables {
 # connected Claude subscription, and needs no Anthropic API key to deploy.
 run "defaults_reach_the_worker_and_control_plane" {
   command = plan
+
+  variables {
+    enable_discord_bot = true
+  }
 
   assert {
     condition     = module.discord_bot_worker[0].plain_text_bindings["HARNESS"] == "claude"
@@ -79,7 +83,20 @@ run "requires_an_allowed_role" {
   command = plan
 
   variables {
+    enable_discord_bot       = true
     discord_allowed_role_ids = " "
+  }
+
+  expect_failures = [var.enable_discord_bot]
+}
+
+# A separator alone names no role either.
+run "requires_a_non_empty_role_id" {
+  command = plan
+
+  variables {
+    enable_discord_bot       = true
+    discord_allowed_role_ids = " , "
   }
 
   expect_failures = [var.enable_discord_bot]
@@ -89,18 +106,42 @@ run "rejects_an_unknown_harness" {
   command = plan
 
   variables {
+    enable_discord_bot  = true
     discord_bot_harness = "codex"
   }
 
   expect_failures = [var.discord_bot_harness]
 }
 
-run "disabled_by_default" {
+# The Claude Agent harness runs Anthropic models only; catch the mismatch at plan time.
+run "rejects_a_non_anthropic_model_on_the_claude_harness" {
   command = plan
 
   variables {
-    enable_discord_bot = false
+    enable_discord_bot        = true
+    discord_bot_default_model = "openai/gpt-5.5"
   }
+
+  expect_failures = [var.discord_bot_default_model]
+}
+
+run "accepts_any_provider_on_opencode" {
+  command = plan
+
+  variables {
+    enable_discord_bot        = true
+    discord_bot_harness       = "opencode"
+    discord_bot_default_model = "openai/gpt-5.5"
+  }
+
+  assert {
+    condition     = module.discord_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] == "openai/gpt-5.5"
+    error_message = "OpenCode sessions may use any provider's model."
+  }
+}
+
+run "disabled_by_default" {
+  command = plan
 
   assert {
     condition     = length(module.discord_bot_worker) == 0

@@ -353,9 +353,9 @@ variable "enable_discord_bot" {
       length(var.discord_application_id) > 0 &&
       length(var.discord_public_key) > 0 &&
       length(var.discord_bot_token) > 0 &&
-      length(trimspace(var.discord_allowed_role_ids)) > 0
+      length(compact([for id in split(",", var.discord_allowed_role_ids) : trimspace(id)])) > 0
     )
-    error_message = "When enable_discord_bot is true, discord_application_id, discord_public_key, discord_bot_token, and discord_allowed_role_ids must be non-empty."
+    error_message = "When enable_discord_bot is true, discord_application_id, discord_public_key, and discord_bot_token must be non-empty, and discord_allowed_role_ids must name at least one role ID."
   }
 }
 
@@ -402,6 +402,17 @@ variable "discord_bot_default_model" {
       var.discord_bot_default_model
     ))
     error_message = "discord_bot_default_model must be a canonical \"provider/model\" id such as \"anthropic/claude-opus-5\"."
+  }
+
+  # Mirrors HARNESS_CATALOG.claude.modelFamilies in packages/shared/src/harnesses.ts:
+  # the Claude Agent harness runs Anthropic models only, and the control plane
+  # would reject the session after the user has already run /task.
+  validation {
+    condition = var.discord_bot_harness != "claude" || can(regex(
+      "^(?:anthropic/|claude-)",
+      var.discord_bot_default_model
+    ))
+    error_message = "discord_bot_default_model must be an Anthropic model (\"anthropic/...\") while discord_bot_harness is \"claude\"."
   }
 }
 
