@@ -30,6 +30,7 @@ import {
   boatSandboxName,
   classifyBoatError,
   dropBoatReservedEnv,
+  isUsableBoatArchive,
   resolveBoatMachineType,
   resolveBoatTtlSeconds,
   type BoatLifecycleTimings,
@@ -184,7 +185,10 @@ export class BoatImageBuildResources {
       if (error instanceof BoatNotFoundError) return "missing";
       throw error;
     }
-    if (sandbox.state === "archived" && sandbox.snapshotAvailable) return "stopped";
+    // Already there only if the archive is one a save can use; an archived
+    // sandbox whose stop failed its capture goes through `archive`, which
+    // names what is wrong with it.
+    if (isUsableBoatArchive(sandbox)) return "stopped";
     const outcome = await this.lifecycle.archive(providerSessionId, { signal });
     switch (outcome.type) {
       case "archived":

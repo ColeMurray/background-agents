@@ -343,6 +343,24 @@ describe("BoatImageBuildResources stopBuildSandboxForSave", () => {
     expect((error as Error).message).toContain("disk busy");
   });
 
+  it("does not take a stale automatic snapshot behind a failed stop for a usable archive", async () => {
+    const client = mockClient({
+      getSandbox: vi.fn(async () =>
+        boatSandbox({
+          state: "archived",
+          snapshotAvailable: true,
+          stop: { id: "stop_1", status: "failing", error: "capture failed" },
+        })
+      ),
+    });
+    const error = await createResources(client)
+      .stopBuildSandboxForSave("bx_abcdefgh")
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect((error as SandboxProviderError).errorType).toBe("permanent");
+    expect((error as Error).message).toContain("capture failed");
+  });
+
   it("lets a Boat refusal through untouched for the adapter to weigh", async () => {
     const client = mockClient({
       getSandbox: vi.fn(async () => {

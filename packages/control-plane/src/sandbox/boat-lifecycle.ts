@@ -152,6 +152,22 @@ export type BoatArchiveOutcome =
   | { type: "missing" }
   | { type: "unusable"; detail: string };
 
+/**
+ * Whether an archived sandbox has a disk anything can resume from or save:
+ * a snapshot exists, and the stop that archived it (if one was requested)
+ * completed. `snapshotAvailable` alone is not enough: it also reports an
+ * earlier automatic snapshot, which a stop that failed its final capture
+ * leaves behind without the writes since.
+ */
+export function isUsableBoatArchive(sandbox: BoatSandbox): boolean {
+  const stopStatus = sandbox.stop?.status;
+  return (
+    sandbox.state === "archived" &&
+    sandbox.snapshotAvailable === true &&
+    (stopStatus === undefined || stopStatus === "completed")
+  );
+}
+
 /** Machine size for a resource request: the smallest one that fits. */
 export function resolveBoatMachineType(
   settings: Pick<SandboxSettings, "cpuCores" | "memoryMib"> | undefined,
@@ -495,17 +511,11 @@ export class BoatSandboxLifecycle {
           throw error;
         }
         if (current.state === "archived") {
-          const stopStatus = current.stop?.status;
-          if (
-            current.snapshotAvailable &&
-            (stopStatus === undefined || stopStatus === "completed")
-          ) {
-            return { type: "archived" };
-          }
+          if (isUsableBoatArchive(current)) return { type: "archived" };
           return {
             type: "unusable",
             detail: `Boat archived the sandbox without a usable snapshot (stop ${
-              stopStatus ?? "unknown"
+              current.stop?.status ?? "unknown"
             }${current.stop?.error ? `: ${current.stop.error}` : ""})`,
           };
         }

@@ -319,7 +319,11 @@ admission:
 
 Open-Inspect's own plumbing never persists build credentials into an image: the callback token stays
 in memory, the clone token and scope secrets reach only the build process and its children, and none
-of them are written to the container's configuration or to a file.
+of them are written to the container's configuration or to a file. Boat is the one provider where
+the build's env takes a file on the way in: a Boat snapshot inherits a sandbox's create-time env, so
+the env is written under `/tmp` only after the sandbox is private and bound, the launcher reads it
+once and removes it, and `/tmp` is never part of a Boat snapshot, so it reaches no image either (see
+[Boat prebuilds](#boat-prebuilds)).
 
 A repository's `.openinspect/setup.sh` is trusted code that runs with those secrets in its
 environment. It can write them into a dependency, a cache, or any file it likes, and the capture has
