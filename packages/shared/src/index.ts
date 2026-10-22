@@ -2,7 +2,7 @@
  * Shared types and utilities for Open-Inspect.
  */
 
-export * from "./types";
+export * from "./types/overlay-index";
 export * from "./git";
 export * from "./regex";
 export * from "./auth";
@@ -24,7 +24,7 @@ export * from "./slack";
 export * from "./pull-request-tool";
 export * from "./rbac";
 export * from "./trace/compaction";
-export * from "./pi-runtime-tool-effects";
+export * from "./pi-overlay-tool-effects";
 export {
   PI_FEATURE_IDS,
   PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
@@ -35,7 +35,7 @@ export {
   type PiFeatureCapabilityMatrix,
   type PiFeatureCapabilitySnapshot,
   type PiFeatureId,
-} from "./pi-runtime-feature-capabilities";
+} from "./pi-overlay-feature-capabilities";
 export * from "./migration-reservations";
 export * from "./capability-modes";
 export * from "./tool-effects";

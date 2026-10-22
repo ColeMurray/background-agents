@@ -21,9 +21,7 @@ export const PI_FEATURE_IDS = [
   "repositoryEditing",
   "codeMode",
   "sandboxExecution",
-  "externalActions",
   "mcp",
-  "crossSessionMessaging",
   "browser",
   "memory",
 ] as const;
@@ -34,16 +32,7 @@ export type PiFeatureCapabilityMatrix = FeatureCapabilityMatrix<PiFeatureId>;
 
 export type PiFeatureCapabilityInput = FeatureCapabilityInput;
 
-export const PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION = 7 as const;
-
-/**
- * The snapshot version the core writes: the same capabilities, without the
- * overlay's two.
- *
- * The overlay reads it with the overlay's two features closed, so a session
- * created by the core keeps the capabilities it was created with.
- */
-export const PI_FEATURE_CAPABILITY_SNAPSHOT_CORE_VERSION = 6 as const;
+export const PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION = 6 as const;
 
 /**
  * The snapshot version written before the MCP capability existed.
@@ -96,28 +85,11 @@ export const piFeatureCapabilityMatrixSchema = z
     repositoryEditing: featureCapabilityModeSchema,
     codeMode: featureCapabilityModeSchema,
     sandboxExecution: featureCapabilityModeSchema,
-    externalActions: featureCapabilityModeSchema,
     mcp: featureCapabilityModeSchema,
-    crossSessionMessaging: featureCapabilityModeSchema,
     browser: featureCapabilityModeSchema,
     memory: featureCapabilityModeSchema,
   })
   .strict();
-
-/**
- * A snapshot as it was written before the overlay's two capabilities existed.
- *
- * Not strict, for the same reason as every other legacy reader.
- */
-const preOverlayPiFeatureCapabilityMatrixSchema = z.object({
-  scratchWorkspace: featureCapabilityModeSchema,
-  repositoryEditing: featureCapabilityModeSchema,
-  codeMode: featureCapabilityModeSchema,
-  sandboxExecution: featureCapabilityModeSchema,
-  mcp: featureCapabilityModeSchema,
-  browser: featureCapabilityModeSchema,
-  memory: featureCapabilityModeSchema,
-});
 
 /**
  * A snapshot as it was written before the MCP capability existed.
@@ -197,12 +169,6 @@ export const piFeatureCapabilitySnapshotSchema = z
       .strict(),
     z
       .object({
-        version: z.literal(PI_FEATURE_CAPABILITY_SNAPSHOT_CORE_VERSION),
-        capabilities: preOverlayPiFeatureCapabilityMatrixSchema,
-      })
-      .strict(),
-    z
-      .object({
         version: z.literal(PI_FEATURE_CAPABILITY_SNAPSHOT_PRE_MEMORY_VERSION),
         capabilities: preMemoryPiFeatureCapabilityMatrixSchema,
       })
@@ -240,19 +206,6 @@ export const piFeatureCapabilitySnapshotSchema = z
           ...snapshot.capabilities,
           // A feature that did not exist cannot have been enabled.
           mcp: "off",
-          externalActions: "off",
-          crossSessionMessaging: "off",
-        },
-      };
-    }
-    if (snapshot.version === PI_FEATURE_CAPABILITY_SNAPSHOT_CORE_VERSION) {
-      return {
-        version: PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
-        capabilities: {
-          ...snapshot.capabilities,
-          // A capability that did not exist cannot have been enabled.
-          externalActions: "off",
-          crossSessionMessaging: "off",
         },
       };
     }
@@ -263,8 +216,6 @@ export const piFeatureCapabilitySnapshotSchema = z
           ...snapshot.capabilities,
           // A feature that did not exist cannot have been enabled.
           mcp: "off",
-          externalActions: "off",
-          crossSessionMessaging: "off",
           memory: "off",
         },
       };
@@ -276,8 +227,6 @@ export const piFeatureCapabilitySnapshotSchema = z
           ...snapshot.capabilities,
           // A feature that did not exist cannot have been enabled.
           mcp: "off",
-          externalActions: "off",
-          crossSessionMessaging: "off",
           browser: "off",
           memory: "off",
         },
@@ -294,8 +243,6 @@ export const piFeatureCapabilitySnapshotSchema = z
         sandboxExecution: rest.sandboxExecution,
         // A feature that did not exist cannot have been enabled.
         mcp: "off",
-        externalActions: "off",
-        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -316,9 +263,7 @@ export function resolvePiFeatureCapabilities(
     repositoryEditing: resolveFeatureCapability(input.repositoryEditing),
     codeMode: resolveFeatureCapability(input.codeMode),
     sandboxExecution: resolveFeatureCapability(input.sandboxExecution),
-    externalActions: resolveFeatureCapability(input.externalActions),
     mcp: resolveFeatureCapability(input.mcp),
-    crossSessionMessaging: resolveFeatureCapability(input.crossSessionMessaging),
     browser: resolveFeatureCapability(input.browser),
     memory: resolveFeatureCapability(input.memory),
   };

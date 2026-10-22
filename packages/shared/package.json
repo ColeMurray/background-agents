@@ -103,8 +103,8 @@
       "types": "./dist/types/image-builds.d.ts"
     },
     "./types/integrations": {
-      "import": "./dist/types/integrations.js",
-      "types": "./dist/types/integrations.d.ts"
+      "import": "./dist/types/overlay-integrations.js",
+      "types": "./dist/types/overlay-integrations.d.ts"
     },
     "./sign-in-provider": {
       "import": "./dist/sign-in-provider.js",
@@ -187,6 +187,10 @@
       "types": "./dist/types/cross-session.d.ts"
     },
     "./types/mcp-read": {
+      "import": "./dist/types/overlay-mcp-read.js",
+      "types": "./dist/types/overlay-mcp-read.d.ts"
+    },
+    "./types/shared-mcp-read": {
       "import": "./dist/types/mcp-read.js",
       "types": "./dist/types/mcp-read.d.ts"
     },
@@ -251,16 +255,16 @@
       "types": "./dist/child-status-tool.d.ts"
     },
     "./pi-runtime-tool-effects": {
-      "import": "./dist/pi-runtime-tool-effects.js",
-      "types": "./dist/pi-runtime-tool-effects.d.ts"
+      "import": "./dist/pi-overlay-tool-effects.js",
+      "types": "./dist/pi-overlay-tool-effects.d.ts"
     },
     "./pi-runtime-feature-capabilities": {
-      "import": "./dist/pi-runtime-feature-capabilities.js",
-      "types": "./dist/pi-runtime-feature-capabilities.d.ts"
+      "import": "./dist/pi-overlay-feature-capabilities.js",
+      "types": "./dist/pi-overlay-feature-capabilities.d.ts"
     },
     "./migration-reservations": {
-      "import": "./dist/migration-reservations.js",
-      "types": "./dist/migration-reservations.d.ts"
+      "import": "./dist/overlay-migration-reservations.js",
+      "types": "./dist/overlay-migration-reservations.d.ts"
     },
     "./capability-modes": {
       "import": "./dist/capability-modes.js",

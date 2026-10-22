@@ -18,7 +18,7 @@ import { externalActionStatusResponseSchema } from "@open-inspect/shared";
 import { resolvePiFeatureCapabilities } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { ExternalActionGateway } from "../session/external-action-gateway";
-import { PiBridgeHandler } from "../session/http/handlers/pi-bridge.handler";
+import { ExternalActionBridgeHandler } from "../session/http/handlers/external-action-bridge.handler";
 import { initSchema } from "../session/schema";
 import { ExternalActionDefinitionRegistry } from "../session/external-action-definitions";
 import { z } from "zod";
@@ -52,37 +52,8 @@ describe("Pi external action approval integration", () => {
       publicResult: { publicationId: "comment-7" },
     }));
     let activeOperationId = "message-1";
-    const handler = new PiBridgeHandler({
-      sessions: {
-        getSession: () => ({ harness: "pi" }) as never,
-        getSessionRepositories: () => [],
-        getPiFeatureCapabilitySnapshot: () => null,
-      },
-      messages: {
-        getProcessingMessage: () => ({ id: activeOperationId }) as never,
-        getMessageHumanActor: () => "user-1",
-      },
-      controls: { isActiveOperation: () => false },
-      agentControls: { handle: vi.fn() },
-      credentials: { getProviderAccess: vi.fn() },
-      skills: { getSandboxInstallation: vi.fn(async () => null) },
-      attachments: { getClaimedByMessage: vi.fn(() => null) },
-      media: {
-        get: vi.fn(async () => null),
-        put: vi.fn(),
-        delete: vi.fn(),
-        head: vi.fn(async () => null),
-      },
-      repositories: {
-        pin: vi.fn(async () => []),
-        restore: vi.fn(() => []),
-        list: vi.fn(),
-        read: vi.fn(),
-        prepareMaterialization: vi.fn(),
-        materializeBatch: vi.fn(),
-      },
-      diffs: { claimBaselines: vi.fn() },
-      externalActions: {
+    const handler = new ExternalActionBridgeHandler(
+      {
         enabled: true,
         gateway,
         definitions: fakeDefinitions({
@@ -90,8 +61,9 @@ describe("Pi external action approval integration", () => {
           status: vi.fn(async () => ({ kind: "unknown" as const })),
         }),
       },
-      getSessionId: () => "session-1",
-    });
+      () => "session-1",
+      (request) => request.headers.get("X-Pi-Operation-ID") === activeOperationId
+    );
     const client = createBindingClient(handler, () => activeOperationId);
     const publication = createGatewayExternalActionTool(
       {
@@ -194,7 +166,7 @@ describe("Pi external action approval integration", () => {
   });
 });
 
-function createBindingClient(handler: PiBridgeHandler, operationId: () => string) {
+function createBindingClient(handler: ExternalActionBridgeHandler, operationId: () => string) {
   const headers = () => ({
     "Content-Type": "application/json",
     "X-Pi-Operation-ID": operationId(),

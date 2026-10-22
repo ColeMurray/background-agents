@@ -6,7 +6,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { McpServerMetadata } from "@open-inspect/shared/types/integrations";
-import { McpServersSettings } from "./mcp-servers-settings";
+import { McpServersSettings } from "./mcp-overlay-settings";
 
 expect.extend(matchers);
 

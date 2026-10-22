@@ -6,7 +6,7 @@ import {
   PI_MEMORY_TOOL_EFFECT_REGISTRATIONS,
   PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
-} from "./pi-runtime-tool-effects";
+} from "./pi-overlay-tool-effects";
 import {
   SANDBOX_EXECUTION_TOOL_EFFECT,
   TOOL_CALLERS,

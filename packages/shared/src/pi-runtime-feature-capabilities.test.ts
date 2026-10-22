@@ -11,7 +11,7 @@ import {
   piFeatureCapabilitySnapshotSchema,
   resolvePiFeatureCapabilities,
   type PiFeatureCapabilityMatrix,
-} from "./pi-runtime-feature-capabilities";
+} from "./pi-overlay-feature-capabilities";
 import { FEATURE_CAPABILITY_MODES } from "./capability-modes";
 
 describe("Pi feature capability contracts", () => {

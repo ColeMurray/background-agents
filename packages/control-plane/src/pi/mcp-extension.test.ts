@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMcpExtension } from "./mcp-extension";
+import { createMcpExtension } from "./personal-mcp-extension";
 
 type McpReadRequest = {
   serverId: string;

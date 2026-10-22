@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mcpReadResultSchema } from "./mcp-read";
+import { mcpReadResultSchema } from "./overlay-mcp-read";
 import { findCredentialLikeKeys } from "./credential-shaped";
 
 describe("the MCP read result", () => {

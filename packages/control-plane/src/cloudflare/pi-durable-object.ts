@@ -143,7 +143,7 @@ import {
   type SandboxExecutionToolRequest,
   type SandboxExecutionToolResponse,
 } from "../pi/sandbox-execution-extension";
-import { createMcpExtension } from "../pi/mcp-extension";
+import { createMcpExtension } from "../pi/personal-mcp-extension";
 import {
   mcpReadResultSchema,
   mcpSharedServerListSchema,

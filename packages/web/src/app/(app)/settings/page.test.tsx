@@ -90,7 +90,7 @@ vi.mock("@/components/settings/integrations-settings", () => ({
 vi.mock("@/components/settings/skills-settings", () => ({
   SkillsSettings: () => <div>Skills panel</div>,
 }));
-vi.mock("@/components/settings/mcp-servers-settings", () => ({
+vi.mock("@/components/settings/mcp-overlay-settings", () => ({
   McpServersSettings: () => <div>MCP servers panel</div>,
 }));
 

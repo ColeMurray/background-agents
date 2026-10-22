@@ -1,6 +1,6 @@
 import { DEFAULT_HARNESS, harnessIdSchema } from "../harnesses";
 import { z } from "zod";
-import { piFeatureCapabilitySnapshotSchema } from "../pi-runtime-feature-capabilities";
+import { piFeatureCapabilitySnapshotSchema } from "../pi-overlay-feature-capabilities";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxBootPhaseSchema, sandboxEventSchema } from "./sandbox-events";

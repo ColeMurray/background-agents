@@ -16,9 +16,7 @@ export type MigrationOwner =
   | "coreAuthority"
   | "piProjection"
   | "piControls"
-  | "slackIngress"
-  | "externalActions"
-  | "crossSessionMessaging";
+  | "slackIngress";
 
 /**
  * The stores that carry a tracked migration registry.
@@ -45,31 +43,24 @@ export const PI_DO_TURN_AUTHORITY_MIGRATION_ID = 4;
 export const PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID = 57;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID = 58;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID = 59;
-export const PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID = 60;
 export const PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID = 61;
 export const PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID = 62;
 export const PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID = 63;
 export const PI_SESSION_DO_CONTROLS_MIGRATION_ID = 64;
 export const PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID = 65;
-export const PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID = 66;
 export const IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID = 67;
 export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 90;
-
-/**
- * The overlay's migration numbers.
- *
- * The overlay's migrations live in the `9xxx` block, which upstream will not
- * reach for thousands of migrations. The block is claimed here, in the one
- * ledger that says which numbers are taken, and the CI guard
- * (`scripts/migration-block-guard.test.mjs`) fails the build if upstream
- * ever takes it.
- */
-export const PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION = 9001;
-export const PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION = 9003;
-export const PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION = 9004;
 export const PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION = 91;
 export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
 export const PI_D1_SLACK_MAPPING_MIGRATION_VERSION = 93;
+/**
+ * The dormant foundation of the personal MCP lane.
+ *
+ * The core carries the tables but no lane: nothing grants a connection, and
+ * nothing reads one. The version sits high so the core's own migrations keep
+ * the low numbers the deployment already applied.
+ */
+export const PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION = 9002;
 
 export interface MigrationReservation {
   readonly store: MigrationStore;
@@ -136,12 +127,6 @@ export const MIGRATION_RESERVATIONS = [
   },
   {
     store: "session_do",
-    version: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
-    feature: "externalActions",
-    purpose: "The external-action grant ledger",
-  },
-  {
-    store: "session_do",
     version: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
     feature: "coreAuthority",
     purpose: "creation-time Pi capability authority",
@@ -172,33 +157,9 @@ export const MIGRATION_RESERVATIONS = [
   },
   {
     store: "session_do",
-    version: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
-    feature: "externalActions",
-    purpose: "The external-action lifecycle",
-  },
-  {
-    store: "session_do",
     version: IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
     feature: "coreAuthority",
     purpose: "canonical queued controls for in-process harnesses",
-  },
-  {
-    store: "d1",
-    version: PI_D1_EXTERNAL_ACTIONS_MIGRATION_VERSION,
-    feature: "externalActions",
-    purpose: "The external-action ledger and its audit trail",
-  },
-  {
-    store: "d1",
-    version: PI_D1_CROSS_SESSION_MESSAGING_MIGRATION_VERSION,
-    feature: "crossSessionMessaging",
-    purpose: "Cross-session delivery receipts",
-  },
-  {
-    store: "d1",
-    version: PI_D1_MCP_SESSION_PINS_MIGRATION_VERSION,
-    feature: "mcp",
-    purpose: "The session grants of a personal MCP connection",
   },
   {
     store: "d1",
@@ -223,6 +184,12 @@ export const MIGRATION_RESERVATIONS = [
     version: PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
     feature: "slackIngress",
     purpose: "durable Slack thread mapping projection",
+  },
+  {
+    store: "d1",
+    version: PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
+    feature: "mcp",
+    purpose: "the dormant foundation of the personal MCP lane",
   },
 ] as const satisfies readonly MigrationReservation[];
 

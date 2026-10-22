@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { McpSessionHandler, type McpSessionBridge } from "./mcp-session.handler";
+import { McpSessionHandler, type McpSessionBridge } from "./personal-mcp-session.handler";
 
 function harness(
   options: {
