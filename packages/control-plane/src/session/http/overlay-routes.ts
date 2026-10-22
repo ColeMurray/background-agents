@@ -6,7 +6,7 @@ import {
   type SessionInternalRouteHandlers,
 } from "./routes";
 
-export interface OverlaySessionInternalRouteHandlers extends SessionInternalRouteHandlers {
+export interface OverlaySessionInternalRouteHandlers {
   piExternalActionPrepare: SessionInternalRouteHandler;
   piExternalActionStatus: SessionInternalRouteHandler;
   piExternalActionExecute: SessionInternalRouteHandler;
@@ -17,59 +17,71 @@ export interface OverlaySessionInternalRouteHandlers extends SessionInternalRout
   externalActionStatus: SessionInternalRouteHandler;
   externalActionPending: SessionInternalRouteHandler;
   externalActionDecision: SessionInternalRouteHandler;
+  piMcpList: SessionInternalRouteHandler;
+  piMcpRead: SessionInternalRouteHandler;
 }
 
 /** Add the Compound-only routes to the upstream-compatible session router. */
 export function createOverlaySessionInternalRoutes(
-  handlers: OverlaySessionInternalRouteHandlers
+  handlers: SessionInternalRouteHandlers,
+  overlay: OverlaySessionInternalRouteHandlers
 ): SessionInternalRoute[] {
+  const coreRoutes = createSessionInternalRoutes(handlers).map((route) => {
+    if (route.path === SessionInternalPaths.piMcpList) {
+      return { ...route, handler: overlay.piMcpList };
+    }
+    if (route.path === SessionInternalPaths.piMcpRead) {
+      return { ...route, handler: overlay.piMcpRead };
+    }
+    return route;
+  });
   return [
-    ...createSessionInternalRoutes(handlers),
+    ...coreRoutes,
     {
       method: "POST",
       path: SessionInternalPaths.piExternalActionPrepare,
-      handler: handlers.piExternalActionPrepare,
+      handler: overlay.piExternalActionPrepare,
     },
     {
       method: "GET",
       path: SessionInternalPaths.piExternalActionStatus,
-      handler: handlers.piExternalActionStatus,
+      handler: overlay.piExternalActionStatus,
     },
     {
       method: "POST",
       path: SessionInternalPaths.piExternalActionExecute,
-      handler: handlers.piExternalActionExecute,
+      handler: overlay.piExternalActionExecute,
     },
     {
       method: "GET",
       path: SessionInternalPaths.externalActionStatus,
-      handler: handlers.externalActionStatus,
+      handler: overlay.externalActionStatus,
     },
-    { method: "POST", path: SessionInternalPaths.mcpPinGrant, handler: handlers.mcpPinGrant },
+    { method: "POST", path: SessionInternalPaths.mcpPinGrant, handler: overlay.mcpPinGrant },
     {
       method: "POST",
       path: SessionInternalPaths.crossSessionAuthorize,
-      handler: handlers.crossSessionAuthorize,
+      handler: overlay.crossSessionAuthorize,
     },
     {
       method: "POST",
       path: SessionInternalPaths.crossSessionMessage,
-      handler: handlers.crossSessionMessage,
+      handler: overlay.crossSessionMessage,
     },
     {
       method: "POST",
       path: SessionInternalPaths.crossSessionInbound,
-      handler: handlers.crossSessionInbound,
+      handler: overlay.crossSessionInbound,
     },
     {
       method: "GET",
       path: SessionInternalPaths.externalActionPending,
-      handler: handlers.externalActionPending,
+      handler: overlay.externalActionPending,
     },
     {
       method: "POST",
       path: SessionInternalPaths.externalActionDecision,
-      handler: handlers.externalActionDecision,
+      handler: overlay.externalActionDecision,
     },
   ];
 }

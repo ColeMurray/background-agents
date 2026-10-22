@@ -4,9 +4,13 @@ import {
   createOverlaySessionInternalRoutes,
   type OverlaySessionInternalRouteHandlers,
 } from "./overlay-routes";
+import type { SessionInternalRouteHandlers } from "./routes";
 
 it("retains sandbox execution and every external-action internal route", () => {
-  const routes = createOverlaySessionInternalRoutes({} as OverlaySessionInternalRouteHandlers);
+  const routes = createOverlaySessionInternalRoutes(
+    {} as SessionInternalRouteHandlers,
+    {} as OverlaySessionInternalRouteHandlers
+  );
   const methods = new Map(routes.map(({ path, method }) => [path, method]));
 
   expect(methods.get(SessionInternalPaths.piSandboxCommand)).toBe("POST");
