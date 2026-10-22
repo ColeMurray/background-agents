@@ -33,7 +33,7 @@ describe("the deployment emergency policy", () => {
     const current = vi.fn(async (): Promise<Record<string, FeatureCapabilityMode>> => ({
       scratch: "off",
     }));
-    const policy = createDeploymentEmergencyPolicy({
+    const policy = createDeploymentEmergencyPolicy<ToolHookCall>({
       currentCapabilities: current,
       requirementFor: (toolCall) =>
         toolCall.name === "write"

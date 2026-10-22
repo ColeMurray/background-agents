@@ -58,9 +58,7 @@ export async function fetchExecutionPrincipal(
     ? AbortSignal.any([request.signal, timeout.signal])
     : timeout.signal;
   try {
-    const response = await fetcher.fetch(
-      new Request(`http://session${request.path}`, { signal })
-    );
+    const response = await fetcher.fetch(new Request(`http://session${request.path}`, { signal }));
     if (!response.ok)
       throw new Error(`The execution principal is unavailable (${response.status})`);
     return executionPrincipalResponseSchema.parse(await response.json());

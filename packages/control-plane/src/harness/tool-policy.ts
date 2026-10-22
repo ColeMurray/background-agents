@@ -130,12 +130,9 @@ export function createToolPolicy<
   Api = unknown,
   Context extends HarnessToolContext = HarnessToolContext,
   Result = unknown,
->(options: HarnessToolPolicyOptions<Call, Api, Context, Result>): HarnessToolPolicyHooks<
-  Call,
-  Api,
-  Context,
-  Result
-> {
+>(
+  options: HarnessToolPolicyOptions<Call, Api, Context, Result>
+): HarnessToolPolicyHooks<Call, Api, Context, Result> {
   const {
     effects,
     delegates = [],

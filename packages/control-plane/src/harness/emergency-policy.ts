@@ -39,9 +39,7 @@ export interface DeploymentEmergencyPolicyOptions<Call = unknown> {
 export function createDeploymentEmergencyPolicy<
   Call = unknown,
   Context extends HarnessToolContext = HarnessToolContext,
->(
-  options: DeploymentEmergencyPolicyOptions<Call>
-): ToolEmergencyPolicy<Call, unknown, Context> {
+>(options: DeploymentEmergencyPolicyOptions<Call>): ToolEmergencyPolicy<Call, unknown, Context> {
   return {
     async beforeFeatureDelegates(call, declaration, _api, context) {
       const requirement = options.requirementFor(call, declaration);

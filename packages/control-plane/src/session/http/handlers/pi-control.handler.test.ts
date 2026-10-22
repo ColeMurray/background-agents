@@ -32,7 +32,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
   const receipts = new PiControlRepository(storage.sql);
   const recordHumanControl = vi.fn();
   const recordTerminal = vi.fn();
-  const operations = { begin: vi.fn(), transition: vi.fn(), get: vi.fn(() => undefined) };
+  const operations = { begin: vi.fn(), transition: vi.fn(), get: vi.fn(() => null) };
   const handler = new PiControlHandler(
     {
       getSession: () => session,

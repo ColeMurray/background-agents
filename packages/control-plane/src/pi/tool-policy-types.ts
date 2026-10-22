@@ -1,9 +1,5 @@
 import type { Context } from "@earendil-works/chord";
-import type {
-  HookApi,
-  ToolExecutionResult,
-  ToolHookCall,
-} from "@earendil-works/pi-durable";
+import type { HookApi, ToolExecutionResult, ToolHookCall } from "@earendil-works/pi-durable";
 import type { ToolEmergencyPolicy, ToolPolicyDelegate } from "../harness/tool-policy";
 
 /**

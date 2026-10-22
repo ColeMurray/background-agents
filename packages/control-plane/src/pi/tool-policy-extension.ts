@@ -60,7 +60,8 @@ export function createToolPolicyExtension(options: PiToolPolicyOptions) {
     hooks: [
       hook(ToolTask, {
         beforeTool: async (call, api, context) => policy.beforeTool(call, api, context),
-        afterTool: async (call, result, api, context) => policy.afterTool(call, result, api, context),
+        afterTool: async (call, result, api, context) =>
+          policy.afterTool(call, result, api, context),
       }),
     ],
   });
