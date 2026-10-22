@@ -153,13 +153,15 @@ describe("PiSessionDO native Code Mode", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "read_only",
         repositoryEditing: "off",
         codeMode: "enabled",
         sandboxExecution: "off",
+        externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },
@@ -199,13 +201,15 @@ describe("PiSessionDO native Code Mode", () => {
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
       )
     ).resolves.toEqual({
-      version: 6,
+      version: 7,
       capabilities: {
         scratchWorkspace: "off",
         repositoryEditing: "off",
         codeMode: "off",
         sandboxExecution: "off",
+        externalActions: "off",
         mcp: "off",
+        crossSessionMessaging: "off",
         browser: "off",
         memory: "off",
       },

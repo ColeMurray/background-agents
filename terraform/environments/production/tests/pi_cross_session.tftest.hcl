@@ -44,7 +44,7 @@ run "cross_session_messaging_defaults_off" {
   command = plan
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_CROSS_SESSION_MESSAGING_MODE"] == "off"
+    condition     = lookup(module.control_plane_worker.plain_text_bindings, "PI_CROSS_SESSION_MESSAGING_MODE", "off") == "off"
     error_message = "Cross-session messaging must fail closed by default."
   }
 }
@@ -76,7 +76,7 @@ run "external_actions_default_off" {
   command = plan
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_EXTERNAL_ACTIONS_MODE"] == "off"
+    condition     = lookup(module.control_plane_worker.plain_text_bindings, "PI_EXTERNAL_ACTIONS_MODE", "off") == "off"
     error_message = "External publication must fail closed by default."
   }
 }
@@ -108,12 +108,12 @@ run "browser_defaults_off" {
   command = plan
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_BROWSER_MODE"] == "off"
+    condition     = lookup(module.control_plane_worker.plain_text_bindings, "PI_BROWSER_MODE", "off") == "off"
     error_message = "The browser must fail closed by default."
   }
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["PI_BROWSER_ALLOWED_DOMAINS"] == ""
+    condition     = lookup(module.control_plane_worker.plain_text_bindings, "PI_BROWSER_ALLOWED_DOMAINS", "") == ""
     error_message = "The browser must reach no host until an operator reviews one."
   }
 }
@@ -122,7 +122,7 @@ run "browser_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_browser_mode             = "enabled"
+    pi_browser_mode            = "enabled"
     pi_browser_allowed_domains = "example.com,*.docs.example.com"
   }
 

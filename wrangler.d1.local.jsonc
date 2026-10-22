@@ -7,7 +7,7 @@
       "binding": "DB",
       "database_name": "open-inspect-test",
       "database_id": "00000000-0000-0000-0000-000000000000",
-      "migrations_dir": "terraform/d1/migrations"
-    }
-  ]
+      "migrations_dir": "terraform/d1/migrations",
+    },
+  ],
 }

@@ -181,22 +181,22 @@ upgrade paths and remain visible rather than being waived.
 
 ### 3.1.1 The lanes at this commit
 
-| Lane                                   | State                                                                                              |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `@open-inspect/control-plane` (unit)   | **green** — 350 files, 5,468 tests                                                                  |
-| `@open-inspect/shared`                  | **green** — 64 files, 1,331 tests                                                                   |
-| `@open-inspect/web`                     | green in isolation; 16 of its 20 failures are the load artefact above, and the file passes alone    |
-| the workerd lane                        | **2 red** — `pi-end-to-end` and `pi-export-projection`; 178 of 180 files green, 2,504 tests green   |
-| typecheck                               | green for the control plane and the shared package                                                 |
-| the local D1                            | 96 migrations applied to a clean local D1, versions 1 … 9004, the overlay's tables present          |
-| `npm run test:migration-block-guard`    | green — 3 checks                                                                                   |
+| Lane                                 | State                                                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `@open-inspect/control-plane` (unit) | **green** — 350 files, 5,468 tests                                                                |
+| `@open-inspect/shared`               | **green** — 64 files, 1,331 tests                                                                 |
+| `@open-inspect/web`                  | green in isolation; 16 of its 20 failures are the load artefact above, and the file passes alone  |
+| the workerd lane                     | **2 red** — `pi-end-to-end` and `pi-export-projection`; 178 of 180 files green, 2,504 tests green |
+| typecheck                            | green for the control plane and the shared package                                                |
+| the local D1                         | 96 migrations applied to a clean local D1, versions 1 … 9004, the overlay's tables present        |
+| `npm run test:migration-block-guard` | green — 3 checks                                                                                  |
 
-The two red tests are the same defect: the turn's **model call** ends with `No tool named "bash" is
-currently available`, which comes from the computer-workspace extension's tool surface
-(`@cloudflare/computer`), and the faux provider the integration tests install is not the one the
-turn asks. Everything around it is green — the turn is admitted, the credential is fetched, the
-events reach the session's `events` table, and the export carries them. The root cause is written
-up in `OI-CONFORMANCE.md`.
+The two red tests are the same defect: the turn's **model call** ends with
+`No tool named "bash" is currently available`, which comes from the computer-workspace extension's
+tool surface (`@cloudflare/computer`), and the faux provider the integration tests install is not
+the one the turn asks. Everything around it is green — the turn is admitted, the credential is
+fetched, the events reach the session's `events` table, and the export carries them. The root cause
+is written up in `OI-CONFORMANCE.md`.
 
 ### 3.2 The migrations, on a clean local D1
 

@@ -49,7 +49,11 @@ test("no two migrations share a numeric prefix", () => {
     const prefix = name.match(/^(\d+)/)?.[1];
     assert.ok(prefix, `${name} has no numeric prefix`);
     const previous = seen.get(prefix);
-    assert.equal(previous, undefined, `duplicate migration prefix ${prefix}: ${previous} and ${name}`);
+    assert.equal(
+      previous,
+      undefined,
+      `duplicate migration prefix ${prefix}: ${previous} and ${name}`
+    );
     seen.set(prefix, name);
   }
 });

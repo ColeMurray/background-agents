@@ -23,8 +23,7 @@ the name of that test.
 commits: the seam, the Pi adapter, the capabilities, the conformance fixes, the web client, the
 bots, the execution sandbox, the deployment, and the control plane's wiring. **Overlay:**
 `compound/pi-overlay` — the overlay's commit on the core's tip. **Reference:**
-`feat/pi-go-live-integration-v2` @ `be4fc772` — the oracle the equivalence diff is measured
-against.
+`feat/pi-go-live-integration-v2` @ `be4fc772` — the oracle the equivalence diff is measured against.
 
 ```
 origin/main
@@ -43,8 +42,8 @@ origin/main
         └─ 3207056b fix: the turn's events reach the session, and the turn names the operation
 ```
 
-The tag is the seam between the layers: the core is the harness, the overlay is three
-capabilities on top of it. Check the core out in the same worktree to test the core alone.
+The tag is the seam between the layers: the core is the harness, the overlay is three capabilities
+on top of it. Check the core out in the same worktree to test the core alone.
 
 ## What is in the core
 
@@ -80,23 +79,23 @@ personal MCP credential storage, `9003` the cross-session receipts, `9004` the s
 
 ## The fixes that made it
 
-| Row | The fix | The test that fails without it |
-| --- | --- | --- |
-| **B-8** | The Durable Object's runtime bindings are scoped _before_ they reach the base class, so the object physically holds no deployment secret. | `packages/control-plane/src/cloudflare/binding-scope.test.ts` |
-| **B-5, B-6** | The turn's author is checked again, against current D1, before every capability call. | `packages/control-plane/test/integration/turn-authority.test.ts` |
-| **A-2** | A stored harness this binary does not know **fails closed** instead of becoming the built-in harness. | `packages/shared/src/stored-harness.test.ts` |
-| **G-1, G-2** | Every migration number the branch took is **reserved**, and the migrations declare the feature that owns them. | `packages/shared/src/migration-reservations.test.ts` |
-| **G-3** | The session-Durable-Object migrations are ordered and owned; the overlay's are the `9xxx` block. | `packages/control-plane/src/session/schema.test.ts` |
-| **G-5** | The projection the export reads reaches the session's own `events` table, and the export carries the events. The *events* half is proven; the *tool call* half is **still open** — see below. | `packages/control-plane/test/integration/pi-export-projection.test.ts` (events) and `packages/control-plane/test/integration/pi-end-to-end.test.ts` (the export) |
-| **G-6** | The audit records a **harness-neutral principal kind**, so a Pi agent's row no longer says "sandbox". | `packages/shared/src/types/audit-events.test.ts` |
-| **C2** | Mid-turn steering is **gone** — the reference model forbids it and the brief says not to build it. It is removed, not renamed: a renamed tool is a duplicate registration, and the registry refuses duplicates. | `packages/control-plane/src/pi/runtime-contract.test.ts` |
-| **suspect #5** | An MCP grant is re-evaluated against **current** authority at every call. | `packages/control-plane/test/integration/mcp-grant-scope.test.ts` |
-| **the trace-export schema** | It has a drift test again, and the test caught the schema being stale. | `scripts/trace-export-schema-drift.test.mjs` |
-| **B-7** | **Fixed.** A static ceiling on what one turn may do: `packages/control-plane/src/harness/action-ceiling.ts`. A harness with no sandbox has no wall, so the count is the wall; the policy hook consumes one action per tool call and refuses the turn when the ceiling is reached. | `packages/control-plane/src/harness/action-ceiling.test.ts` |
-| **D-3** | **Fixed.** The turn's deadline is armed **inside** the Durable Object: `packages/control-plane/src/harness/turn-deadline.ts`, armed by `PiSessionDO.armTurnDeadline` and derived from the session's execution budget plus `EXECUTION_DEADLINE_GRACE_MS`, so the in-object stop and the recovery sweep never disagree. | `packages/control-plane/src/harness/turn-deadline.test.ts` |
-| **H-3** | **Fixed.** The cost limit is checked **before every model call**: `packages/control-plane/src/harness/budget-gate.ts` wraps the provider, so the only path every model call takes is gated. The session answers `GET /internal/budget-state` with its own `budget_exhausted`, `total_cost` and `max_cost_usd`. | `packages/control-plane/src/harness/budget-gate.test.ts` |
-| **the MCP egress check** | **Replaced.** The old `assertMcpEgress` resolved DNS, which a Durable Object cannot do, so it could never be reached from production — and a check that cannot run is not a control. The replacement, `assertMcpEgressTarget`, checks what is enforceable (HTTPS, no credentials, the exact reviewed host, no literal internal address), and **the broker calls it** with the endpoint it is about to open. | `packages/control-plane/src/mcp/egress-policy.test.ts` and `packages/control-plane/test/integration/mcp-connections.test.ts` |
-| **the `9xxx` block** | **Guarded.** `scripts/migration-block-guard.test.mjs` fails the build if upstream ever lands a `9xxx_` migration, if two migrations share a numeric prefix, or if a migration in the block does not declare the feature that owns it. | `npm run test:migration-block-guard` |
+| Row                         | The fix                                                                                                                                                                                                                                                                                                                                                                                                     | The test that fails without it                                                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **B-8**                     | The Durable Object's runtime bindings are scoped _before_ they reach the base class, so the object physically holds no deployment secret.                                                                                                                                                                                                                                                                   | `packages/control-plane/src/cloudflare/binding-scope.test.ts`                                                                                                    |
+| **B-5, B-6**                | The turn's author is checked again, against current D1, before every capability call.                                                                                                                                                                                                                                                                                                                       | `packages/control-plane/test/integration/turn-authority.test.ts`                                                                                                 |
+| **A-2**                     | A stored harness this binary does not know **fails closed** instead of becoming the built-in harness.                                                                                                                                                                                                                                                                                                       | `packages/shared/src/stored-harness.test.ts`                                                                                                                     |
+| **G-1, G-2**                | Every migration number the branch took is **reserved**, and the migrations declare the feature that owns them.                                                                                                                                                                                                                                                                                              | `packages/shared/src/migration-reservations.test.ts`                                                                                                             |
+| **G-3**                     | The session-Durable-Object migrations are ordered and owned; the overlay's are the `9xxx` block.                                                                                                                                                                                                                                                                                                            | `packages/control-plane/src/session/schema.test.ts`                                                                                                              |
+| **G-5**                     | The projection the export reads reaches the session's own `events` table, and the export carries the events. The _events_ half is proven; the _tool call_ half is **still open** — see below.                                                                                                                                                                                                               | `packages/control-plane/test/integration/pi-export-projection.test.ts` (events) and `packages/control-plane/test/integration/pi-end-to-end.test.ts` (the export) |
+| **G-6**                     | The audit records a **harness-neutral principal kind**, so a Pi agent's row no longer says "sandbox".                                                                                                                                                                                                                                                                                                       | `packages/shared/src/types/audit-events.test.ts`                                                                                                                 |
+| **C2**                      | Mid-turn steering is **gone** — the reference model forbids it and the brief says not to build it. It is removed, not renamed: a renamed tool is a duplicate registration, and the registry refuses duplicates.                                                                                                                                                                                             | `packages/control-plane/src/pi/runtime-contract.test.ts`                                                                                                         |
+| **suspect #5**              | An MCP grant is re-evaluated against **current** authority at every call.                                                                                                                                                                                                                                                                                                                                   | `packages/control-plane/test/integration/mcp-grant-scope.test.ts`                                                                                                |
+| **the trace-export schema** | It has a drift test again, and the test caught the schema being stale.                                                                                                                                                                                                                                                                                                                                      | `scripts/trace-export-schema-drift.test.mjs`                                                                                                                     |
+| **B-7**                     | **Fixed.** A static ceiling on what one turn may do: `packages/control-plane/src/harness/action-ceiling.ts`. A harness with no sandbox has no wall, so the count is the wall; the policy hook consumes one action per tool call and refuses the turn when the ceiling is reached.                                                                                                                           | `packages/control-plane/src/harness/action-ceiling.test.ts`                                                                                                      |
+| **D-3**                     | **Fixed.** The turn's deadline is armed **inside** the Durable Object: `packages/control-plane/src/harness/turn-deadline.ts`, armed by `PiSessionDO.armTurnDeadline` and derived from the session's execution budget plus `EXECUTION_DEADLINE_GRACE_MS`, so the in-object stop and the recovery sweep never disagree.                                                                                       | `packages/control-plane/src/harness/turn-deadline.test.ts`                                                                                                       |
+| **H-3**                     | **Fixed.** The cost limit is checked **before every model call**: `packages/control-plane/src/harness/budget-gate.ts` wraps the provider, so the only path every model call takes is gated. The session answers `GET /internal/budget-state` with its own `budget_exhausted`, `total_cost` and `max_cost_usd`.                                                                                              | `packages/control-plane/src/harness/budget-gate.test.ts`                                                                                                         |
+| **the MCP egress check**    | **Replaced.** The old `assertMcpEgress` resolved DNS, which a Durable Object cannot do, so it could never be reached from production — and a check that cannot run is not a control. The replacement, `assertMcpEgressTarget`, checks what is enforceable (HTTPS, no credentials, the exact reviewed host, no literal internal address), and **the broker calls it** with the endpoint it is about to open. | `packages/control-plane/src/mcp/egress-policy.test.ts` and `packages/control-plane/test/integration/mcp-connections.test.ts`                                     |
+| **the `9xxx` block**        | **Guarded.** `scripts/migration-block-guard.test.mjs` fails the build if upstream ever lands a `9xxx_` migration, if two migrations share a numeric prefix, or if a migration in the block does not declare the feature that owns it.                                                                                                                                                                       | `npm run test:migration-block-guard`                                                                                                                             |
 
 ## The projection defect, and what it was
 
@@ -119,7 +118,6 @@ With those fixed, the session's own `events` table receives the turn's `step_sta
 and `execution_complete` — `/internal/pi-event` answers 200 for every projection — and the export
 carries them.
 
-
 ## What is still open, and who owns it
 
 1. **The overlay's migration numbers are frozen** (the `9xxx` block). A renumber after an
@@ -127,12 +125,12 @@ carries them.
    upstream takes the block; the guard script is in the repository, and the workflow that calls it
    still has to be added.
 2. **The tool call is still open.** The events reach the session and the export carries them, but
-   the model's tool call does not: the turn's model call ends with the error `No tool named "bash"
-   is currently available`, which comes from the computer-workspace extension's tool surface
-   (`@cloudflare/computer`), and the faux provider the integration tests install is not the one the
-   turn asks. Until that is root-caused, **G-5's tool-call half is FAIL, not PASS**, and its
-   delete-the-check proof does not exist yet. The projection half — that every step of a turn
-   reaches the session's own events — is proven.
+   the model's tool call does not: the turn's model call ends with the error
+   `No tool named "bash" is currently available`, which comes from the computer-workspace
+   extension's tool surface (`@cloudflare/computer`), and the faux provider the integration tests
+   install is not the one the turn asks. Until that is root-caused, **G-5's tool-call half is FAIL,
+   not PASS**, and its delete-the-check proof does not exist yet. The projection half — that every
+   step of a turn reaches the session's own events — is proven.
 3. **The decisions that are the user's**: the D8 authority split, delete semantics, revocation
    inside a replaying Code Mode script, which models Pi may serve, personal MCP in unattended
    sessions, the E-2 question of whether an unattended Pi session may run on a person's

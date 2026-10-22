@@ -2,7 +2,17 @@
  * Shared types and utilities for Open-Inspect.
  */
 
-export * from "./types/overlay-index";
+export * from "./types";
+export * from "./types/external-actions";
+export * from "./types/cross-session";
+export {
+  mcpSessionGrantInputSchema,
+  mcpSessionPinListSchema,
+  mcpSessionPinSchema,
+  type McpSessionGrantInput,
+  type McpSessionPin,
+  type McpSessionPinList,
+} from "./types/overlay-mcp-read";
 export * from "./git";
 export * from "./regex";
 export * from "./auth";

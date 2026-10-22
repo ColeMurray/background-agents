@@ -831,6 +831,34 @@ variable "pi_mcp_mode" {
   }
 }
 
+variable "pi_cross_session_messaging_mode" {
+  description = "Compound cross-session messaging capability: off or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "enabled"], var.pi_cross_session_messaging_mode)
+    error_message = "pi_cross_session_messaging_mode must be 'off' or 'enabled'."
+  }
+}
+
+variable "pi_external_actions_mode" {
+  description = "Compound external-action approval capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_external_actions_mode)
+    error_message = "pi_external_actions_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
+variable "pi_external_action_providers" {
+  description = "Comma-separated external-action providers enabled for this deployment"
+  type        = string
+  default     = ""
+}
+
 variable "pi_browser_mode" {
   description = "Pi Durable browser capability: off, read_only, or enabled"
   type        = string

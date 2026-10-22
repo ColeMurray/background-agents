@@ -116,6 +116,9 @@ module "control_plane_worker" {
       PI_SANDBOX_EXECUTION_ATTESTATION = { value = var.pi_sandbox_execution_attestation }
       PI_CODE_MODE                     = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
       PI_MCP_MODE                      = { value = var.pi_mcp_mode }
+      PI_CROSS_SESSION_MESSAGING_MODE  = { value = var.pi_cross_session_messaging_mode }
+      PI_EXTERNAL_ACTIONS_MODE         = { value = var.pi_external_actions_mode }
+      PI_EXTERNAL_ACTION_PROVIDERS     = { value = var.pi_external_action_providers }
       PI_BROWSER_MODE                  = { value = var.pi_browser_mode }
       PI_BROWSER_ALLOWED_DOMAINS       = { value = var.pi_browser_allowed_domains }
       PI_MEMORY_MODE                   = { value = var.pi_memory_mode }
