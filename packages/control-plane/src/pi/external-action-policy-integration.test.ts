@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import "../session/overlay-schema-migrations";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -60,6 +61,7 @@ describe("Pi external action approval integration", () => {
           execute: providerExecute,
           status: vi.fn(async () => ({ kind: "unknown" as const })),
         }),
+        operationIsUnattended: () => false,
       },
       () => "session-1",
       (request) => request.headers.get("X-Pi-Operation-ID") === activeOperationId

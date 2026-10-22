@@ -4,6 +4,7 @@ import {
 } from "@open-inspect/shared/migration-reservations";
 import type { SchemaMigration } from "./schema";
 import type { SqlStorage } from "./sql-storage";
+import { registerSessionSchemaMigrations } from "./schema-extension-registry";
 
 const EXTERNAL_ACTIONS_TABLES_SQL = `CREATE TABLE IF NOT EXISTS external_actions (
   id TEXT PRIMARY KEY,
@@ -108,6 +109,11 @@ export const EXTERNAL_ACTION_LIFECYCLE_SCHEMA_MIGRATION: SchemaMigration = {
     }
   },
 };
+
+registerSessionSchemaMigrations([
+  EXTERNAL_ACTIONS_SCHEMA_MIGRATION,
+  EXTERNAL_ACTION_LIFECYCLE_SCHEMA_MIGRATION,
+]);
 
 function runIdempotentAlter(sql: SqlStorage, statement: string): void {
   try {

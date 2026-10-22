@@ -16,6 +16,7 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   error,
   json,
+  requirePermission,
   type UserRouteContext,
 } from "./shared";
 import type { Env } from "../types";
@@ -25,6 +26,11 @@ import { McpConnectionSaga } from "../mcp/connection-saga";
 const OWNER_ROUTE = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   authorization: ACTIVE_SELF,
+  cacheControl: "private, no-store",
+});
+const CONNECTION_CREATE_ROUTE = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requirePermission("mcp_servers.read", { service: "deny" }),
   cacheControl: "private, no-store",
 });
 
@@ -164,12 +170,16 @@ export const mcpConnectionRoutes = new Hono<ControlPlaneHonoEnv>();
  * The request goes to the broker that owns the connection, and the broker
  * handles it. Nothing else is reachable on this route.
  */
-mcpConnectionRoutes.get("/mcp/oauth/callback/:id", OWNER_ROUTE, (c) => dispatch(c, oauthCallback));
+mcpConnectionRoutes.get("/mcp/oauth/callback/:id", CONNECTION_CREATE_ROUTE, (c) =>
+  dispatch(c, oauthCallback)
+);
 
 mcpConnectionRoutes.get("/mcp-connections", OWNER_ROUTE, (c) => dispatch(c, listConnections));
-mcpConnectionRoutes.post("/mcp-connections", OWNER_ROUTE, (c) => dispatch(c, createConnection));
+mcpConnectionRoutes.post("/mcp-connections", CONNECTION_CREATE_ROUTE, (c) =>
+  dispatch(c, createConnection)
+);
 mcpConnectionRoutes.get("/mcp-connections/:id", OWNER_ROUTE, (c) => dispatch(c, getConnection));
-mcpConnectionRoutes.post("/mcp-connections/:id/authorize", OWNER_ROUTE, (c) =>
+mcpConnectionRoutes.post("/mcp-connections/:id/authorize", CONNECTION_CREATE_ROUTE, (c) =>
   dispatch(c, authorizeConnection)
 );
 mcpConnectionRoutes.delete("/mcp-connections/:id", OWNER_ROUTE, (c) =>

@@ -70,77 +70,6 @@ const PI_PROJECTION_RELIABILITY_TABLES_SQL = `CREATE TABLE IF NOT EXISTS pi_oper
   updated_at INTEGER NOT NULL
 );`;
 
-const EXTERNAL_ACTIONS_TABLES_SQL = `CREATE TABLE IF NOT EXISTS external_actions (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  operation_id TEXT NOT NULL,
-  tool_call_id TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL UNIQUE,
-  provider TEXT NOT NULL,
-  action TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  target_json TEXT NOT NULL CHECK (json_valid(target_json) AND json_type(target_json) = 'object'),
-  arguments_json TEXT NOT NULL CHECK (json_valid(arguments_json) AND json_type(arguments_json) = 'object'),
-  fingerprint TEXT NOT NULL,
-  effect_fingerprint TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN (
-    'awaiting_approval', 'approved', 'executing', 'succeeded', 'failed', 'denied',
-    'indeterminate', 'cancelled'
-  )),
-  approval_source TEXT CHECK (approval_source IN ('human', 'automation_grant')),
-  approval_actor_id TEXT,
-  approval_grant_id TEXT,
-  approved_at INTEGER,
-  continuation_consumed_at INTEGER,
-  provider_reference TEXT,
-  public_result_json TEXT CHECK (public_result_json IS NULL OR json_valid(public_result_json)),
-  error TEXT,
-  lease_token TEXT,
-  lease_expires_at INTEGER,
-  reconciliation_attempts INTEGER NOT NULL DEFAULT 0,
-  reconcile_after INTEGER,
-  revision INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  CHECK ((approval_source IS NULL) = (approval_actor_id IS NULL)),
-  CHECK ((approval_source IS NULL) = (approved_at IS NULL))
-);
-CREATE TABLE IF NOT EXISTS external_action_history (
-  action_id TEXT NOT NULL REFERENCES external_actions(id) ON DELETE CASCADE,
-  revision INTEGER NOT NULL,
-  state TEXT NOT NULL,
-  event TEXT NOT NULL,
-  actor_kind TEXT NOT NULL,
-  actor_id TEXT,
-  reason TEXT,
-  occurred_at INTEGER NOT NULL,
-  PRIMARY KEY (action_id, revision)
-);
-CREATE TABLE IF NOT EXISTS external_action_bindings (
-  idempotency_key TEXT PRIMARY KEY,
-  action_id TEXT NOT NULL REFERENCES external_actions(id) ON DELETE CASCADE,
-  operation_id TEXT NOT NULL,
-  tool_call_id TEXT NOT NULL,
-  fingerprint TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS external_action_audit_outbox (
-  id TEXT PRIMARY KEY,
-  action_id TEXT NOT NULL REFERENCES external_actions(id) ON DELETE CASCADE,
-  revision INTEGER NOT NULL,
-  request_id TEXT NOT NULL,
-  actor_user_id TEXT NOT NULL,
-  actor_kind TEXT NOT NULL DEFAULT 'user',
-  action TEXT NOT NULL,
-  session_id TEXT NOT NULL,
-  before_state TEXT NOT NULL,
-  after_state TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  next_attempt_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  occurred_at INTEGER
-);`;
-
 const SANDBOX_COMMANDS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_commands (
   id TEXT PRIMARY KEY,
   operation_id TEXT NOT NULL,
@@ -424,16 +353,6 @@ CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
 CREATE INDEX IF NOT EXISTS idx_step_usage_message ON step_usage(message_id);
 CREATE INDEX IF NOT EXISTS idx_step_usage_created ON step_usage(created_at, id);
-CREATE INDEX IF NOT EXISTS idx_external_actions_state_updated
-  ON external_actions(state, updated_at);
-CREATE INDEX IF NOT EXISTS idx_external_action_history_action
-  ON external_action_history(action_id, revision);
-CREATE INDEX IF NOT EXISTS idx_external_action_bindings_action
-  ON external_action_bindings(action_id, operation_id);
-CREATE INDEX IF NOT EXISTS idx_external_actions_effect
-  ON external_actions(effect_fingerprint, state, created_at);
-CREATE INDEX IF NOT EXISTS idx_external_action_audit_outbox_due
-  ON external_action_audit_outbox(next_attempt_at, id);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
@@ -441,8 +360,6 @@ import { createLogger } from "../logger";
 import {
   IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
-  PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
-  PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
   PI_SESSION_DO_REPOSITORY_EDITING_MIGRATION_ID,
@@ -956,29 +873,6 @@ const CORE_MIGRATIONS: readonly SchemaMigration[] = [
     },
   },
   {
-    id: PI_SESSION_DO_EXTERNAL_ACTIONS_MIGRATION_ID,
-    description: "Persist external action approvals and execution history",
-    feature: "externalActions",
-    run: (sql) => {
-      sql.exec(EXTERNAL_ACTIONS_TABLES_SQL);
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS idx_external_actions_state_updated ON external_actions(state, updated_at)"
-      );
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS idx_external_action_history_action ON external_action_history(action_id, revision)"
-      );
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS idx_external_action_bindings_action ON external_action_bindings(action_id, operation_id)"
-      );
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS idx_external_actions_effect ON external_actions(effect_fingerprint, state, created_at)"
-      );
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS idx_external_action_audit_outbox_due ON external_action_audit_outbox(next_attempt_at, id)"
-      );
-    },
-  },
-  {
     id: PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
     description: "Persist creation-time Pi capability authority",
     feature: "coreAuthority",
@@ -1049,20 +943,6 @@ const CORE_MIGRATIONS: readonly SchemaMigration[] = [
         "ALTER TABLE sandbox_commands ADD COLUMN replay_gap INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE sandbox_commands ADD COLUMN late_completion_at INTEGER",
         "ALTER TABLE sandbox_commands ADD COLUMN metadata_expires_at INTEGER",
-      ]) {
-        runMigration(sql, statement);
-      }
-    },
-  },
-  {
-    id: PI_SESSION_DO_EXTERNAL_ACTION_LIFECYCLE_MIGRATION_ID,
-    description: "Persist external action approval expiry and audit occurrence time",
-    feature: "externalActions",
-    run: (sql) => {
-      for (const statement of [
-        "ALTER TABLE external_actions ADD COLUMN expires_at INTEGER",
-        "ALTER TABLE external_action_audit_outbox ADD COLUMN occurred_at INTEGER",
-        "ALTER TABLE external_action_audit_outbox ADD COLUMN actor_kind TEXT NOT NULL DEFAULT 'user'",
       ]) {
         runMigration(sql, statement);
       }

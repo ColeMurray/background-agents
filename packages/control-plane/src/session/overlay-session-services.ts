@@ -1,19 +1,9 @@
 import { SessionInternalPaths } from "./contracts";
-import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
-import type { SqlStorage, TransactionSync } from "./sql-storage";
-import type { SessionPlatform } from "./platform";
-import type { CredentialScope } from "../source-control/credential-scope";
-import type { SourceControlProvider } from "../source-control";
-import type { RehydratableAlarmScheduler } from "./alarm/scheduler";
-import type { SessionIndexStore } from "../db/session-index";
-import type { SessionCoreRepository } from "./session-core-repository";
-import type { MessageRepository } from "./message-repository";
-import type { EventRepository } from "./event-repository";
-import type { MessageService } from "./services/message.service";
-import type { PiControlRepository } from "./pi-control-repository";
-import { piControlRequestIdFromMessageId } from "./pi-control-message-id";
-import { createHarnessOperationFence } from "./http/handlers/harness-operation-fence";
+import {
+  registerSessionExtensionServicesFactory,
+  type SessionExtensionServicesContext,
+} from "./extension-services";
+import { createOverlaySessionInternalRoutes } from "./http/overlay-routes";
 import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilities";
 import { McpServerReviewStore } from "../db/mcp-server-reviews";
 import { McpServerStore } from "../db/mcp-servers";
@@ -53,28 +43,7 @@ import {
 import { AutomationExternalActionGrantStore } from "../db/automation-external-action-grants";
 import { ExternalActionBridgeHandler } from "./http/handlers/external-action-bridge.handler";
 
-export interface OverlaySessionServicesContext {
-  env: Env;
-  db: SqlDatabase;
-  sql: SqlStorage;
-  transaction: TransactionSync;
-  durableObjectId: SessionPlatform["id"];
-  repoSecretsEncryptionKey: string;
-  getPublicSessionId(): string;
-  resolveCredentialScope(sessionId: string): Promise<CredentialScope>;
-  sourceControlProvider(): SourceControlProvider;
-  sessionIndexStore: SessionIndexStore;
-  sessionCoreRepository: SessionCoreRepository;
-  messageRepository: MessageRepository;
-  eventRepository: EventRepository;
-  messageService: MessageService;
-  alarmScheduler: RehydratableAlarmScheduler;
-  piControlRepository: PiControlRepository;
-  isInProcessSession(): boolean;
-  turnAuthorMayAct(operationId: string): Promise<boolean>;
-}
-
-export function createOverlaySessionServices(context: OverlaySessionServicesContext) {
+export function createOverlaySessionServices(context: SessionExtensionServicesContext) {
   const {
     env,
     db,
@@ -91,8 +60,7 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
     eventRepository,
     messageService,
     alarmScheduler,
-    piControlRepository,
-    isInProcessSession,
+    activeOperation,
     turnAuthorMayAct,
   } = context;
   const externalActionGateway = new ExternalActionGateway(sql, transaction);
@@ -381,6 +349,8 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
       scheduleReconciliation: (deadline) => alarmScheduler.schedule(deadline),
       flushAudit: () => externalActionAuditOutbox.flush(projectExternalActionAudit),
       nextDeadline: nextExternalActionDeadline,
+      operationIsUnattended: (operationId) =>
+        messageRepository.getMessageActor(operationId)?.kind !== "user",
       resolveAutomationApproval: async (provider, action) => {
         const session = await sessionIndexStore.get(getPublicSessionId());
         if (!session?.automationId || !session.userId) return undefined;
@@ -400,13 +370,7 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
       },
     },
     getPublicSessionId,
-    createHarnessOperationFence({
-      isHarnessSession: isInProcessSession,
-      messages: messageRepository,
-      controls: piControlRepository,
-      operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
-      controlRequestId: piControlRequestIdFromMessageId,
-    })
+    activeOperation
   );
   const alarm = {
     recoverDue: () =>
@@ -421,29 +385,31 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
     nextDeadline: nextExternalActionDeadline,
   };
 
+  const routeHandlers = {
+    piExternalActionPrepare: (request: Request) =>
+      externalActionBridgeHandler.externalActionPrepare(request),
+    piExternalActionStatus: (request: Request) =>
+      externalActionBridgeHandler.externalActionStatus(request),
+    piExternalActionExecute: (request: Request) =>
+      externalActionBridgeHandler.externalActionExecute(request),
+    crossSessionMessage: (request: Request) => crossSessionHandler.outbound(request),
+    crossSessionAuthorize: (request: Request) => crossSessionHandler.authorize(request),
+    mcpPinGrant: (request: Request) => mcpSessionHandler.grantPin(request),
+    piMcpList: (request: Request) => mcpSessionHandler.list(request),
+    piMcpRead: (request: Request) => mcpSessionHandler.read(request),
+    crossSessionInbound: (request: Request) => crossSessionHandler.inbound(request),
+    externalActionStatus: (request: Request) =>
+      externalActionBridgeHandler.humanExternalActionStatus(request),
+    externalActionPending: (request: Request) =>
+      externalActionBridgeHandler.externalActionPending(request),
+    externalActionDecision: (request: Request) =>
+      externalActionBridgeHandler.externalActionDecision(request),
+  };
   return {
+    createRoutes: (handlers: Parameters<typeof createOverlaySessionInternalRoutes>[0]) =>
+      createOverlaySessionInternalRoutes(handlers, routeHandlers),
     alarm,
     contextContributions: () => externalActionBridgeHandler.contextContributions(),
-    routeHandlers: {
-      piExternalActionPrepare: (request: Request) =>
-        externalActionBridgeHandler.externalActionPrepare(request),
-      piExternalActionStatus: (request: Request) =>
-        externalActionBridgeHandler.externalActionStatus(request),
-      piExternalActionExecute: (request: Request) =>
-        externalActionBridgeHandler.externalActionExecute(request),
-      crossSessionMessage: (request: Request) => crossSessionHandler.outbound(request),
-      crossSessionAuthorize: (request: Request) => crossSessionHandler.authorize(request),
-      mcpPinGrant: (request: Request) => mcpSessionHandler.grantPin(request),
-      piMcpList: (request: Request) => mcpSessionHandler.list(request),
-      piMcpRead: (request: Request) => mcpSessionHandler.read(request),
-      crossSessionInbound: (request: Request) => crossSessionHandler.inbound(request),
-      externalActionStatus: (request: Request) =>
-        externalActionBridgeHandler.humanExternalActionStatus(request),
-      externalActionPending: (request: Request) =>
-        externalActionBridgeHandler.externalActionPending(request),
-      externalActionDecision: (request: Request) =>
-        externalActionBridgeHandler.externalActionDecision(request),
-    },
     components: { externalActionGateway, externalActionDefinitions },
     async rehydrate(): Promise<void> {
       const deadline = nextExternalActionDeadline();
@@ -451,3 +417,5 @@ export function createOverlaySessionServices(context: OverlaySessionServicesCont
     },
   };
 }
+
+registerSessionExtensionServicesFactory(createOverlaySessionServices);

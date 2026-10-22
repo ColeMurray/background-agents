@@ -143,12 +143,12 @@ import {
   type SandboxExecutionToolRequest,
   type SandboxExecutionToolResponse,
 } from "../pi/sandbox-execution-extension";
-import { createMcpExtension } from "../pi/personal-mcp-extension";
+import { createMcpExtension } from "../pi/mcp-extension";
 import {
   mcpReadResultSchema,
   mcpSharedServerListSchema,
   type McpReadResult,
-} from "@open-inspect/shared/types/mcp-read";
+} from "@open-inspect/shared/types/shared-mcp-read";
 import { PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS } from "@open-inspect/shared";
 import {
   PiCodeModeExecutionCoordinator,

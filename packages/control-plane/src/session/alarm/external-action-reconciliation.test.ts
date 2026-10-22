@@ -23,7 +23,7 @@ it("composes external reconciliation and sandbox commands through one alarm sche
     lifecycleManager: { handleAlarm: vi.fn(async () => "no_action" as const) },
     terminalMessageProjection: { flushPending: vi.fn() },
     alarmScheduler: { schedule } as never,
-    externalActions: {
+    extensionWork: {
       recoverDue,
       nextDeadline: () => 7_000,
     },

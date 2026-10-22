@@ -29,6 +29,7 @@ import {
 } from "../pi/cross-session-extension";
 import { createMcpExtension } from "../pi/personal-mcp-extension";
 import type { ToolEffectRegistration } from "@open-inspect/shared/tool-effects";
+import { registerPiRuntimeExtensionFactory } from "../pi/runtime-extension-registry";
 
 export interface PiOverlayRuntimeHost {
   getSessionId(): Promise<string | undefined>;
@@ -409,3 +410,7 @@ export class PiOverlayRuntime {
     return externalActionStatusResponseSchema.parse(await response.json());
   }
 }
+
+registerPiRuntimeExtensionFactory((host, context, capabilities, currentCapabilities) =>
+  new PiOverlayRuntime(host).contributions(context, capabilities, currentCapabilities)
+);

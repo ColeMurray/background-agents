@@ -3,6 +3,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
+import "./overlay-schema-migrations";
 import {
   IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,

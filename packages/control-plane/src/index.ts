@@ -1,3 +1,7 @@
+import "./cloudflare/pi-overlay-runtime";
+import "./session/overlay-session-services";
+import "./session/overlay-schema-migrations";
+
 /**
  * Open-Inspect Control Plane
  *

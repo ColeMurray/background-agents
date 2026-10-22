@@ -112,6 +112,8 @@ export interface ExternalActionBridge {
     provider: string,
     action: string
   ): Promise<{ source: "automation_grant"; actorId: string; grantId: string } | undefined>;
+  /** Whether this operation has no interactive human who can approve it. */
+  operationIsUnattended(operationId: string): boolean;
   flushAudit?(): Promise<void>;
   nextDeadline?(): number | null;
   scheduleReconciliation?(deadline: number): Promise<void>;
@@ -178,6 +180,15 @@ export class ExternalActionBridgeHandler {
         parsed.data.provider,
         parsed.data.action
       );
+      if (!approval && this.options.operationIsUnattended(operationId)) {
+        return Response.json(
+          {
+            error: "Unattended external actions require an explicit live grant",
+            code: "external_action_unattended_denied",
+          },
+          { status: 403, headers: { "Cache-Control": "no-store" } }
+        );
+      }
       const expiresAt = Date.now() + DEFAULT_EXTERNAL_ACTION_APPROVAL_TTL_MS;
       const action = approval
         ? await this.options.gateway.prepare(
