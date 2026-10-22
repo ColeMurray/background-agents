@@ -250,7 +250,11 @@ rbacRoutes.post(
     ...PRIVATE_NO_STORE,
     authorization: {
       kind: "active-user",
-      allOf: [permissionRequirement("workspace.members.merge")],
+      // The preview returns member records and linked identities, so it also needs member reads.
+      allOf: [
+        permissionRequirement("workspace.members.merge"),
+        permissionRequirement("workspace.members.read"),
+      ],
       // A dry run writes nothing; the applied merge records its own audit event.
       auditAllowed: false,
       service: { kind: "deny" },

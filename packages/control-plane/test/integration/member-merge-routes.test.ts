@@ -233,7 +233,7 @@ describe("member merge routes", () => {
     expect(await getUserRow(SLACK_ROW)).toBeNull();
   });
 
-  it("lets a custom role holding the merge grant merge members", async () => {
+  it("lets a custom role holding the merge grant merge, previewing only with member reads", async () => {
     await seedSplit();
     await insertCanonicalUser({ id: ADMIN, email: "merger@example.com" });
     await env.DB.batch([
@@ -249,6 +249,19 @@ describe("member merge routes", () => {
         "UPDATE user_role_assignments SET role_id = 'role_custom_merger' WHERE user_id = ?"
       ).bind(ADMIN),
     ]);
+
+    const previewWithoutReads = await post("/members/merge/preview", SPLIT);
+    expect(previewWithoutReads.status).toBe(403);
+    await expect(previewWithoutReads.json()).resolves.toMatchObject({
+      permission: "workspace.members.read",
+    });
+
+    await env.DB.prepare(
+      `INSERT INTO role_permissions (role_id, permission_id)
+       VALUES ('role_custom_merger', 'workspace.members.read')`
+    ).run();
+    const preview = await post("/members/merge/preview", SPLIT);
+    expect(preview.status).toBe(200);
 
     const response = await post("/members/merge", SPLIT);
 
