@@ -25,7 +25,7 @@ export function WorkspaceSettings() {
   const canAssignRoles = canManage && canReadRoles;
   const canTransfer = hasPermission("workspace.transfer_ownership");
   const canMerge = canReadMembers && hasPermission("workspace.members.merge");
-  const { members, roles, loading, error, updateMember, previewMerge, mergeMembers } =
+  const { members, roles, loading, error, refreshError, updateMember, previewMerge, mergeMembers } =
     useWorkspaceAdministration({
       readMembers: canReadMembers,
       readRoles: canReadRoles,
@@ -66,6 +66,11 @@ export function WorkspaceSettings() {
       </div>
 
       {mutationError && <ErrorBanner>{mutationError}</ErrorBanner>}
+      {refreshError && (
+        <ErrorBanner>
+          Couldn&apos;t refresh workspace access. Showing the last loaded data.
+        </ErrorBanner>
+      )}
 
       {canReadMembers && (
         <section className="space-y-3">
@@ -156,11 +161,6 @@ export function WorkspaceSettings() {
               currentUserId={authorization?.userId ?? null}
               previewMerge={previewMerge}
               mergeMembers={mergeMembers}
-              matchRole={
-                canAssignRoles
-                  ? (source, roleId) => updateMember(source, { kind: "role", roleId })
-                  : undefined
-              }
             />
           )}
         </section>

@@ -298,6 +298,7 @@ export const MEMBER_MERGE_BLOCKERS = [
   "owner_suspended",
   "owner_transfer_required",
   "source_is_actor",
+  "identity_conflict",
 ] as const;
 
 /** What an administrator must change before a blocked merge can proceed. */
@@ -311,6 +312,8 @@ export const MEMBER_MERGE_BLOCKER_MESSAGES: Record<(typeof MEMBER_MERGE_BLOCKERS
     owner_transfer_required: "Only an Owner can merge Owner accounts.",
     source_is_actor:
       "You can't merge away the account you're signed in with. Keep this account instead.",
+    identity_conflict:
+      "Both accounts have a GitHub sign-in, and an account can have only one. These accounts can't be merged.",
   };
 
 /** Validates a merge blocker code. */
@@ -333,7 +336,65 @@ const memberMergeAccountSchema = z
   })
   .strict();
 
-const memberMergeCountsSchema = z.record(z.string(), z.number().int().nonnegative());
+/**
+ * Every count a merge reports. Mirrors `USER_MERGE_COUNT_KEYS` in the control plane's
+ * `db/user-merge.ts`, which cannot import runtime values; a control-plane test keeps them equal.
+ */
+export const USER_MERGE_COUNT_KEYS = [
+  "memoriesOwnedRepointed",
+  "memoryAuthorsRepointed",
+  "memoryRevisionAuthorsRepointed",
+  "memoryDecidersRepointed",
+  "memoryArchiversRepointed",
+  "memoryManifestOwnersRepointed",
+  "memoryPreferencesDeduped",
+  "memoryPreferencesRepointed",
+  "identitiesDeduped",
+  "identitiesRepointed",
+  "readStatesDeduped",
+  "readStatesRepointed",
+  "teamLeadRolesPromoted",
+  "teamMembershipsDeduped",
+  "teamMembershipsRepointed",
+  "sessionCollaboratorsDeduped",
+  "sessionCollaboratorsRepointed",
+  "sessionsRepointed",
+  "authSessionsDeleted",
+  "automationsOwnedRepointed",
+  "automationsCreatedRepointed",
+  "scmTokensRepointed",
+  "skillProfileItemsMerged",
+  "skillProfilesDeduped",
+  "skillProfilesRepointed",
+  "roleAssignmentsRemoved",
+  "providerAccountAuthorizationsRepointed",
+  "providerAccountAuthorizationAttemptsRepointed",
+  "providerAccountsCreatedRepointed",
+  "providerAccountsUpdatedRepointed",
+  "providerAccountDefaultsCreatedRepointed",
+  "providerAccountDefaultsUpdatedRepointed",
+  "skillsCreatedRepointed",
+  "skillsUpdatedRepointed",
+  "skillRevisionsCreatedRepointed",
+  "skillAssignmentsCreatedRepointed",
+  "skillCatalogGenerationsAdvanced",
+  "keyboardShortcutPreferencesDeduped",
+  "keyboardShortcutPreferencesRepointed",
+  "auditEventsCreated",
+  "canonicalEmailBackfilled",
+  "usersDeleted",
+] as const;
+
+/** A count a merge reports. */
+export type UserMergeCountKey = (typeof USER_MERGE_COUNT_KEYS)[number];
+
+const countSchema = z.number().int().nonnegative();
+const memberMergeCountsSchema = z.object(
+  Object.fromEntries(USER_MERGE_COUNT_KEYS.map((key) => [key, countSchema])) as Record<
+    UserMergeCountKey,
+    typeof countSchema
+  >
+);
 
 /** Validates a dry-run merge preview: both members, any blocker, and per-record counts. */
 export const memberMergePreviewSchema = z

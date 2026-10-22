@@ -28,8 +28,6 @@ import { describeIdentity, summarizeMergeCounts } from "./member-merge-summary";
 export interface MergeMembersActions {
   previewMerge: (input: MemberMergeInput) => Promise<MemberMergePreview>;
   mergeMembers: (input: MemberMergeInput) => Promise<MemberMergeResult>;
-  /** Aligns the source's role to the target's; omitted when the viewer cannot assign roles. */
-  matchRole?: (source: WorkspaceMember, roleId: string) => Promise<void>;
 }
 
 interface MergeMembersDialogProps extends MergeMembersActions {
@@ -65,7 +63,6 @@ export function MergeMembersDialog({
   currentUserId,
   previewMerge,
   mergeMembers,
-  matchRole,
 }: MergeMembersDialogProps) {
   const [targetUserId, setTargetUserId] = useState<string>("");
   const [sourceUserId, setSourceUserId] = useState<string>("");
@@ -133,13 +130,6 @@ export function MergeMembersDialog({
       onOpenChange(false);
     }, "Couldn't merge these accounts");
 
-  const alignRole = () =>
-    run(async () => {
-      if (!preview || !matchRole) return;
-      await matchRole(preview.source.member, preview.target.member.role.id);
-      setPreview(await previewMerge({ sourceUserId, targetUserId }));
-    }, "Couldn't update the role");
-
   const summary = preview?.counts ? summarizeMergeCounts(preview.counts) : null;
   const canChoose = !busy && !preview;
 
@@ -201,23 +191,20 @@ export function MergeMembersDialog({
             </div>
 
             {preview.blocker ? (
-              <div className="space-y-2">
-                <ErrorBanner>{MEMBER_MERGE_BLOCKER_MESSAGES[preview.blocker]}</ErrorBanner>
-                {preview.blocker === "role_conflict" && matchRole && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void alignRole()}
-                  >
-                    Make {memberName(preview.source.member)} {preview.target.member.role.name}
-                  </Button>
-                )}
-              </div>
+              <ErrorBanner>{MEMBER_MERGE_BLOCKER_MESSAGES[preview.blocker]}</ErrorBanner>
             ) : (
               summary && (
                 <section className="space-y-2 rounded-md border border-border p-4">
+                  {summary.teamLeadPromotions > 0 && (
+                    <p className="rounded-md border border-warning/30 bg-warning-muted p-3 text-sm text-foreground">
+                      <span className="font-medium">Access change:</span>{" "}
+                      {memberName(preview.target.member)} becomes a lead of{" "}
+                      {summary.teamLeadPromotions === 1
+                        ? "1 team"
+                        : `${summary.teamLeadPromotions} teams`}{" "}
+                      that {memberName(preview.source.member)} leads.
+                    </p>
+                  )}
                   <h4 className="text-sm font-medium text-foreground">
                     What moves to {memberName(preview.target.member)}
                   </h4>
@@ -237,11 +224,25 @@ export function MergeMembersDialog({
                     )}
                   </ul>
                   <ul className="space-y-1 text-sm text-muted-foreground">
+                    {summary.combinedSkillProfiles > 0 && (
+                      <li>
+                        {summary.combinedSkillProfiles === 1
+                          ? "1 skill profile is"
+                          : `${summary.combinedSkillProfiles} skill profiles are`}{" "}
+                        combined with the kept account&apos;s profile of the same name.
+                      </li>
+                    )}
+                    {summary.replacedSettings.length > 0 && (
+                      <li>
+                        The kept account&apos;s {summary.replacedSettings.join(" and ")} stay; the
+                        merged-in account&apos;s are discarded.
+                      </li>
+                    )}
                     {summary.duplicates > 0 && (
                       <li>
                         {summary.duplicates} duplicate{" "}
-                        {summary.duplicates === 1 ? "record is" : "records are"} skipped because the
-                        kept account already has {summary.duplicates === 1 ? "it" : "them"}.
+                        {summary.duplicates === 1 ? "record is" : "records are"} dropped because the
+                        kept account already has the same team, session, or sign-in.
                       </li>
                     )}
                     {summary.endedSignIns > 0 && (

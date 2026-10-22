@@ -199,7 +199,12 @@ Pick the **account to keep** and the **account to merge in**. Keep the account t
 <Step>
 ### Review the merge
 
-Click **Review merge**. Nothing changes yet. The review shows both accounts with their linked sign-ins (for example, `GitHub · octocat` and `Slack`) and what moves to the kept account: linked sign-ins, sessions, automations, team memberships, memories, skill profiles, and source-control and model-provider connections. Records the kept account already has, such as read markers for the same session, are skipped rather than duplicated.
+Click **Review merge**. Nothing changes yet. The review shows both accounts with their linked sign-ins (for example, `GitHub · octocat` and `Slack`) and what moves to the kept account: linked sign-ins, sessions, automations, team memberships, memories, skill profiles, and source-control and model-provider connections. The review also spells out what changes besides moving records:
+
+- **Access changes.** If the merged-in account leads a team where the kept account is only a member, the kept account becomes a lead of that team.
+- **Combined skill profiles.** A skill profile with the same name as one on the kept account is combined into it.
+- **Discarded settings.** Where both accounts have memory preferences or keyboard shortcuts, the kept account's stay and the merged-in account's are discarded.
+- **Duplicates.** Records identical to ones the kept account already has, such as membership of the same team or read markers for the same session, are dropped rather than duplicated.
 
 </Step>
 <Step>
@@ -212,12 +217,13 @@ Tick the confirmation and click **Merge accounts**. The merge is applied in one 
 
 The review blocks a merge until these conditions hold:
 
-- **Both accounts have the same role.** If the roles differ and you can assign roles, the review offers a button to give the merged-in account the kept account's role.
+- **Both accounts have the same role.** If they differ, close the dialog, change one account's role in the members list, and review the merge again.
 - **Both accounts are active, or both are suspended.**
 - **You are not merging away the account you are signed in with.** Keep your own account and merge the other one into it.
-- **Only an Owner can merge Owner accounts**, and the kept Owner account must be active.
+- **Only an Owner can merge Owner accounts**, and the kept Owner account must be active. Without that right, the review also hides the linked sign-ins of Owner accounts.
+- **At most one account has a GitHub sign-in.** An account can have only one GitHub identity, so two accounts that each sign in with GitHub can't be merged.
 
-If someone changes either account's role or status, or your own access, while you review, the merge is refused and nothing changes. Review it again.
+If either account or your own access changes while you review (a role, suspension, the merged-in account's email, or a new GitHub sign-in), the merge is refused, nothing changes, and the refusal is recorded in the audit log. Review it again. If a merge succeeded but your browser lost the response, merging the same two accounts again reports success without changing anything.
 
 ### Initial Owner bootstrap
 

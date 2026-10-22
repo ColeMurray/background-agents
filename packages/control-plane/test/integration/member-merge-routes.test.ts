@@ -5,6 +5,7 @@ import { MemberMergeService } from "../../src/authorization/member-merge";
 import { AuthorizationService } from "../../src/authorization/service";
 import type { SqlDatabase, SqlResult, SqlStatement } from "../../src/db/sql-database";
 import { UserStore } from "../../src/db/user-store";
+import { resolveGitHubEnrichment } from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
 import {
@@ -307,8 +308,129 @@ describe("member merge routes", () => {
     expect(await getUserRow(SLACK_ROW)).not.toBeNull();
     expect(
       await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.user_merged'"
-      ).first()
-    ).toEqual({ count: 0 });
+        `SELECT operation_result, reason_code FROM authorization_audit_events
+         WHERE action = 'workspace.user_merged'`
+      ).all()
+    ).toMatchObject({
+      results: [{ operation_result: "denied", reason_code: "actor_authorization_changed" }],
+    });
+  });
+
+  it("reports a conflict when state changes and reverts around the write", async () => {
+    await seedSplit();
+    await insertCanonicalUser({ id: ADMIN, email: "admin@example.com" });
+    await setRole(ADMIN, "administrator");
+    let batchCount = 0;
+    const flippingDatabase: SqlDatabase = {
+      prepare(query: string): SqlStatement {
+        return env.DB.prepare(query) as unknown as SqlStatement;
+      },
+      async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+        batchCount += 1;
+        if (batchCount !== 2) {
+          return env.DB.batch(statements as unknown as D1PreparedStatement[]) as Promise<
+            SqlResult<T>[]
+          >;
+        }
+        // The decision sees the change; anything re-read afterwards would not.
+        await setRole(GITHUB_ROW, "viewer");
+        try {
+          return (await env.DB.batch(
+            statements as unknown as D1PreparedStatement[]
+          )) as SqlResult<T>[];
+        } finally {
+          await setRole(GITHUB_ROW, "member");
+        }
+      },
+    };
+    const service = new MemberMergeService(
+      flippingDatabase,
+      new AuthorizationService(sqlDatabase(env.DB)),
+      new UserStore(sqlDatabase(env.DB))
+    );
+
+    await expect(
+      service.merge({ ...SPLIT, actorUserId: ADMIN, requestId: "flipping-merge" })
+    ).rejects.toThrow("Member merge preconditions changed");
+    expect(await getUserRow(SLACK_ROW)).not.toBeNull();
+  });
+
+  it("blocks merging two GitHub identities and keeps one after a valid merge", async () => {
+    await seedSplit();
+    await insertIdentity({
+      id: "i4444444444444444444444444444444",
+      userId: SLACK_ROW,
+      provider: "github",
+      providerUserId: "99999",
+      issuer: "https://github.com",
+    });
+
+    const preview = await post("/members/merge/preview", SPLIT);
+    await expect(preview.json()).resolves.toMatchObject({
+      blocker: "identity_conflict",
+      counts: null,
+    });
+    const blocked = await post("/members/merge", SPLIT);
+    expect(blocked.status).toBe(409);
+    await expect(blocked.json()).resolves.toMatchObject({ code: "identity_conflict" });
+
+    await env.DB.prepare(
+      "DELETE FROM user_identities WHERE id = 'i4444444444444444444444444444444'"
+    ).run();
+    expect((await post("/members/merge", SPLIT)).status).toBe(200);
+    await expect(
+      resolveGitHubEnrichment(new UserStore(sqlDatabase(env.DB)), GITHUB_ROW)
+    ).resolves.toMatchObject({ scmUserId: "583231" });
+  });
+
+  it("withholds Owner identities whichever blocker is shown", async () => {
+    await seedSplit();
+    await insertCanonicalUser({ id: ADMIN, email: "merger@example.com" });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+         VALUES ('role_custom_merger', NULL, 'Account Merger', 'account merger', NULL, 0)`
+      ),
+      env.DB.prepare(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         VALUES ('role_custom_merger', 'workspace.members.merge'),
+                ('role_custom_merger', 'workspace.members.read')`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_custom_merger' WHERE user_id = ?"
+      ).bind(ADMIN),
+    ]);
+    await setRole(GITHUB_ROW, "owner");
+
+    // Self as source and an Owner as target: two blockers at once.
+    const preview = await post("/members/merge/preview", {
+      sourceUserId: ADMIN,
+      targetUserId: GITHUB_ROW,
+    });
+
+    expect(preview.status).toBe(200);
+    await expect(preview.json()).resolves.toMatchObject({
+      source: { identities: null },
+      target: { identities: null },
+      blocker: "source_is_actor",
+    });
+  });
+
+  it("treats a replay of a completed merge as done, but not a merge into another member", async () => {
+    await seedSplit();
+
+    expect((await post("/members/merge", SPLIT)).status).toBe(200);
+    const replay = await post("/members/merge", SPLIT);
+
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({
+      ...SPLIT,
+      counts: { usersDeleted: 0, sessionsRepointed: 0 },
+    });
+    const elsewhere = await post("/members/merge", {
+      sourceUserId: SLACK_ROW,
+      targetUserId: ADMIN,
+    });
+    expect(elsewhere.status).toBe(404);
   });
 });

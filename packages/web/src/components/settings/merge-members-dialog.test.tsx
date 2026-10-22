@@ -4,7 +4,12 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { MemberMergePreview, WorkspaceMember } from "@open-inspect/shared/rbac";
+import {
+  USER_MERGE_COUNT_KEYS,
+  type MemberMergePreview,
+  type UserMergeCountKey,
+  type WorkspaceMember,
+} from "@open-inspect/shared/rbac";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MergeMembersDialog } from "./merge-members-dialog";
 
@@ -46,6 +51,16 @@ const slackSam: WorkspaceMember = {
   role: MEMBER_ROLE,
 };
 
+function counts(nonZero: Partial<Record<UserMergeCountKey, number>> = {}) {
+  return {
+    ...(Object.fromEntries(USER_MERGE_COUNT_KEYS.map((key) => [key, 0])) as Record<
+      UserMergeCountKey,
+      number
+    >),
+    ...nonZero,
+  };
+}
+
 function previewFor(overrides: Partial<MemberMergePreview> = {}): MemberMergePreview {
   return {
     source: {
@@ -57,7 +72,7 @@ function previewFor(overrides: Partial<MemberMergePreview> = {}): MemberMergePre
       identities: [{ provider: "github", login: "sam-gh", email: null }],
     },
     blocker: null,
-    counts: { identitiesRepointed: 1, sessionsRepointed: 3, authSessionsDeleted: 0 },
+    counts: counts({ identitiesRepointed: 1, sessionsRepointed: 3 }),
     ...overrides,
   };
 }
@@ -72,7 +87,7 @@ function renderDialog(actions: Partial<Parameters<typeof MergeMembersDialog>[0]>
     mergeMembers: vi.fn().mockResolvedValue({
       sourceUserId: slackSam.userId,
       targetUserId: githubSam.userId,
-      counts: {},
+      counts: counts(),
     }),
     ...actions,
   };
@@ -140,17 +155,16 @@ describe("MergeMembersDialog", () => {
     expect(screen.getByRole("button", { name: "Swap accounts" })).toBeDisabled();
   });
 
-  it("explains a role conflict and offers to align the roles", async () => {
+  it("explains a role conflict without changing roles from the merge dialog", async () => {
     const user = userEvent.setup();
-    const blocked = previewFor({
-      target: { member: { ...githubSam, role: ADMIN_ROLE }, identities: [] },
-      blocker: "role_conflict",
-      counts: null,
-    });
-    const matchRole = vi.fn().mockResolvedValue(undefined);
-    const props = renderDialog({
-      previewMerge: vi.fn().mockResolvedValueOnce(blocked).mockResolvedValueOnce(previewFor()),
-      matchRole,
+    renderDialog({
+      previewMerge: vi.fn().mockResolvedValue(
+        previewFor({
+          target: { member: { ...githubSam, role: ADMIN_ROLE }, identities: [] },
+          blocker: "role_conflict",
+          counts: null,
+        })
+      ),
     });
 
     await chooseAccounts(user);
@@ -158,11 +172,26 @@ describe("MergeMembersDialog", () => {
 
     expect(await screen.findByText(/different roles/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Merge accounts" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Make Sam (Slack) Administrator" }));
+    expect(screen.queryByRole("button", { name: /^Make / })).not.toBeInTheDocument();
+  });
 
-    expect(matchRole).toHaveBeenCalledWith(slackSam, ADMIN_ROLE.id);
-    expect(props.previewMerge).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText("3 sessions")).toBeInTheDocument();
+  it("calls out a team lead promotion as an access change", async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      previewMerge: vi
+        .fn()
+        .mockResolvedValue(
+          previewFor({ counts: counts({ teamLeadRolesPromoted: 1, teamMembershipsDeduped: 1 }) })
+        ),
+    });
+
+    await chooseAccounts(user);
+    await user.click(screen.getByRole("button", { name: "Review merge" }));
+
+    expect(await screen.findByText("Access change:")).toBeInTheDocument();
+    expect(
+      screen.getByText(/becomes a lead of 1 team that Sam \(Slack\) leads/)
+    ).toBeInTheDocument();
   });
 
   it("shows the server's reason when the merge fails", async () => {

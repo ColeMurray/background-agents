@@ -34,6 +34,10 @@
     "packages/control-plane/src/db/user-merge.ts": {
       "json-function": {
         "occurrences": [
+          "json(",
+          "json_object(",
+          "json_object(",
+          "json_object(",
           "json_object(",
           "json_object(",
           "json_object(",
@@ -42,7 +46,7 @@
           "json_object(",
           "json_object("
         ],
-        "reason": "Merge audit payload, same constraint as authorization-store: before/after state is read inside the mutating batch. Postgres form is json_build_object."
+        "reason": "Merge audit payload, same constraint as authorization-store: before/after state (and, for a refused merge, the unchanged after state chosen by the in-batch decision) is read inside the mutating batch. Postgres form is json_build_object."
       }
     },
     "terraform/d1/migrations/0076_anthropic_provider_accounts.sql": {

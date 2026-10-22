@@ -141,20 +141,40 @@ export function useWorkspaceAdministration(input: { readMembers: boolean; readRo
     const result = memberMergeResultSchema.parse(
       await postMemberMerge("/api/members/merge", merge)
     );
-    try {
-      // The source row is gone and role assignment counts changed; refetch both.
-      await Promise.all([members.mutate(), roles.mutate()]);
-    } catch {
-      // The merge already committed; a failed refresh must not read as a failed merge.
-    }
+    // The merge committed: reflect the known deletion locally so it completes now, whatever the
+    // network does next. Revalidation runs in the background and reports through `refreshError`.
+    const removedRoleId = members.data?.find((member) => member.userId === merge.sourceUserId)?.role
+      .id;
+    await Promise.all([
+      members.mutate(
+        (current) => current?.filter((member) => member.userId !== merge.sourceUserId),
+        { revalidate: false }
+      ),
+      roles.mutate(
+        (current) =>
+          current?.map((role) =>
+            role.id === removedRoleId
+              ? { ...role, assignmentCount: Math.max(0, role.assignmentCount - 1) }
+              : role
+          ),
+        { revalidate: false }
+      ),
+    ]);
+    void Promise.all([members.mutate(), roles.mutate()]).catch(() => undefined);
     return result;
   }
+
+  // A failure before any data loaded blocks the page; one while refreshing loaded data does not.
+  const loadError =
+    (members.data === undefined ? members.error : undefined) ??
+    (roles.data === undefined ? roles.error : undefined);
 
   return {
     members: members.data ?? [],
     roles: roles.data ?? [],
     loading: (input.readMembers && members.isLoading) || (input.readRoles && roles.isLoading),
-    error: members.error ?? roles.error,
+    error: loadError,
+    refreshError: loadError ? undefined : (members.error ?? roles.error),
     updateMember,
     previewMerge,
     mergeMembers,

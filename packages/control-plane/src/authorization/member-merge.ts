@@ -8,7 +8,14 @@ import {
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
 import type { SqlDatabase } from "../db/sql-database";
-import { mergeUsers, UserMergeError, type UserMergeGuard } from "../db/user-merge";
+import {
+  emptyUserMergeCounts,
+  hasCompletedUserMerge,
+  mergeUsers,
+  UserMergeError,
+  type UserMergeCounts,
+  type UserMergeGuard,
+} from "../db/user-merge";
 import type { UserStore } from "../db/user-store";
 import { rolePermissionPredicate } from "./permission-sql";
 import { AuthorizationError, RbacConflictError, type AuthorizationService } from "./service";
@@ -48,13 +55,14 @@ export class MemberMergeService {
   /** Describes both members, the first blocker if any, and the records a merge would move. */
   async preview(input: MemberMergeRequest): Promise<MemberMergePreview> {
     const { source, target } = await this.loadMembers(input);
-    let blocker = await this.actorBlocker(input, source, target);
-    // Linked identities are Owner-account details an actor without ownership rights may not read.
-    const withholdIdentities = blocker === "owner_transfer_required";
-    const [sourceIdentities, targetIdentities] = withholdIdentities
-      ? [null, null]
-      : await Promise.all([this.loadIdentities(source.userId), this.loadIdentities(target.userId)]);
-    let counts: Record<string, number> | null = null;
+    // Decided apart from which blocker is shown: Owner-account identities are readable only by an
+    // actor who could merge Owner accounts, whatever else blocks this merge.
+    const mayMergeOwners = await this.actorMayMergeOwners(input.actorUserId, source, target);
+    const [sourceIdentities, targetIdentities] = mayMergeOwners
+      ? await Promise.all([this.loadIdentities(source.userId), this.loadIdentities(target.userId)])
+      : [null, null];
+    let blocker = actorBlocker(input, mayMergeOwners);
+    let counts: UserMergeCounts | null = null;
     if (!blocker) {
       try {
         counts = (
@@ -65,7 +73,9 @@ export class MemberMergeService {
           })
         ).counts;
       } catch (cause) {
-        blocker = toBlocker(cause);
+        const refusal = toServiceError(cause);
+        if (!(refusal instanceof MemberMergeBlockedError)) throw refusal;
+        blocker = refusal.blocker;
       }
     }
     return {
@@ -78,8 +88,27 @@ export class MemberMergeService {
 
   /** Atomically folds the source member into the target, audited as the acting user. */
   async merge(input: MemberMergeRequest & { requestId: string }): Promise<MemberMergeResult> {
-    const { source, target } = await this.loadMembers(input);
-    const blocker = await this.actorBlocker(input, source, target);
+    const [source, target] = await Promise.all([
+      this.authorization.getMember(input.sourceUserId),
+      this.authorization.getMember(input.targetUserId),
+    ]);
+    if (!target) throw new AuthorizationError(404, "member_not_found");
+    if (!source) {
+      // Replaying a merge of this exact pair, e.g. after its response was lost, is a no-op. A
+      // source merged into some other member is still not found.
+      if (await hasCompletedUserMerge(this.db, target.userId, input.sourceUserId)) {
+        return {
+          sourceUserId: input.sourceUserId,
+          targetUserId: target.userId,
+          counts: emptyUserMergeCounts(),
+        };
+      }
+      throw new AuthorizationError(404, "member_not_found");
+    }
+    const blocker = actorBlocker(
+      input,
+      await this.actorMayMergeOwners(input.actorUserId, source, target)
+    );
     if (blocker === "owner_transfer_required") {
       throw new AuthorizationError(403, "permission_required", "workspace.transfer_ownership");
     }
@@ -97,7 +126,7 @@ export class MemberMergeService {
       });
       return { sourceUserId: source.userId, targetUserId: target.userId, counts: result.counts };
     } catch (cause) {
-      throw await this.explainFailedMerge(input, cause);
+      throw toServiceError(cause);
     }
   }
 
@@ -121,39 +150,24 @@ export class MemberMergeService {
     }));
   }
 
-  private async actorBlocker(
-    input: MemberMergeRequest,
+  /** Owner accounts may be merged, and their identities read, only with ownership transfer. */
+  private async actorMayMergeOwners(
+    actorUserId: string,
     source: WorkspaceMember,
     target: WorkspaceMember
-  ): Promise<MemberMergeBlocker | null> {
-    if (input.sourceUserId === input.actorUserId) return "source_is_actor";
-    if (source.role.key !== "owner" && target.role.key !== "owner") return null;
-    const actor = await this.authorization.getEffectiveAuthorization(input.actorUserId);
-    return actor.permissions.includes("workspace.transfer_ownership")
-      ? null
-      : "owner_transfer_required";
+  ): Promise<boolean> {
+    if (source.role.key !== "owner" && target.role.key !== "owner") return true;
+    const actor = await this.authorization.getEffectiveAuthorization(actorUserId);
+    return actor.permissions.includes("workspace.transfer_ownership");
   }
+}
 
-  /**
-   * The in-batch guard aborts the write with a constraint error when state changed after
-   * preflight. Re-reading state distinguishes that conflict from a database outage.
-   */
-  private async explainFailedMerge(input: MemberMergeRequest, cause: unknown): Promise<unknown> {
-    if (cause instanceof UserMergeError) return blockedError(cause);
-    try {
-      const actor = await this.authorization.getEffectiveAuthorization(input.actorUserId);
-      if (!actor.permissions.includes("workspace.members.merge")) {
-        return new RbacConflictError("Actor authorization changed");
-      }
-      const preview = await this.preview(input);
-      if (preview.blocker) return new MemberMergeBlockedError(preview.blocker);
-    } catch (recheck) {
-      if (recheck instanceof AuthorizationError) {
-        return new RbacConflictError("Member merge preconditions changed");
-      }
-    }
-    return cause;
-  }
+function actorBlocker(
+  input: MemberMergeRequest,
+  mayMergeOwners: boolean
+): MemberMergeBlocker | null {
+  if (input.sourceUserId === input.actorUserId) return "source_is_actor";
+  return mayMergeOwners ? null : "owner_transfer_required";
 }
 
 /** The acting user must still hold the merge grant, plus ownership transfer for Owner accounts. */
@@ -184,20 +198,19 @@ function actorGuard(input: MemberMergeRequest): UserMergeGuard {
   };
 }
 
-function toBlocker(cause: unknown): MemberMergeBlocker {
-  const blocked = blockedError(cause);
-  if (blocked instanceof MemberMergeBlockedError) return blocked.blocker;
-  throw blocked;
-}
-
-function blockedError(cause: unknown): unknown {
+/** Translates a merge refusal, from preflight or the in-batch decision, into an API error. */
+function toServiceError(cause: unknown): unknown {
   if (!(cause instanceof UserMergeError)) return cause;
   switch (cause.code) {
     case "role_assignment_missing":
     case "role_conflict":
     case "suspension_conflict":
     case "owner_suspended":
+    case "identity_conflict":
       return new MemberMergeBlockedError(cause.code);
+    case "actor_authorization_changed":
+      return new RbacConflictError("Actor authorization changed");
+    case "preconditions_changed":
     case "source_changed":
       return new RbacConflictError("Member merge preconditions changed");
     case "self_merge":
