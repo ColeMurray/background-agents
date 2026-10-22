@@ -60,6 +60,11 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
+    "packages/control-plane/src/automation/github-event-admission.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Recognizes rollback-safe enabled markers while reauthorizing GitHub automation events."
+    },
     "packages/control-plane/src/cloudflare/binding-scope.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -127,8 +132,8 @@
     },
     "packages/control-plane/src/db/automation-store.ts": {
       "layer": "core-seam",
-      "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "need": ["A2", "F-3"],
+      "why": "Persists enabled in-process automations with a marker older binaries do not execute and current code decodes."
     },
     "packages/control-plane/src/db/cross-session-receipts.ts": {
       "layer": "overlay",
@@ -149,6 +154,11 @@
       "layer": "overlay",
       "need": ["DEV:external-actions"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/github-automation-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Includes rollback-safe enabled markers in current GitHub automation candidate queries."
     },
     "packages/control-plane/src/db/mcp-connections.test.ts": {
       "layer": "overlay",
@@ -229,6 +239,11 @@
       "layer": "core-seam",
       "need": ["A2"],
       "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/slack-channel-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Includes rollback-safe enabled markers in current Slack automation candidate queries."
     },
     "packages/control-plane/src/db/slack-ingress.ts": {
       "layer": "core-seam",
@@ -1257,8 +1272,8 @@
     },
     "packages/control-plane/src/scheduler/scheduler.ts": {
       "layer": "core-seam",
-      "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "need": ["A2", "F-3"],
+      "why": "Recognizes rollback-safe enabled markers while retaining current automation launch authority."
     },
     "packages/control-plane/src/session/alarm/external-action-reconciliation.test.ts": {
       "layer": "overlay",
@@ -1959,6 +1974,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/automation-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves an older binary cannot fire an enabled in-process automation through the OpenCode fallback."
     },
     "packages/control-plane/test/integration/automation-team-ownership.test.ts": {
       "layer": "core-support",

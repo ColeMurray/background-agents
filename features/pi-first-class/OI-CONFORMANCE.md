@@ -28,9 +28,10 @@ external-action approvals, and cross-session messaging remain in the off-by-defa
 - **Trusted accounting:** every provider terminal response is metered before the harness sees it.
   Durable cumulative cost is computed from measured counters and the server-held price table;
   provider-reported `usage.cost` is ignored.
-- **Rollback safety:** promptable in-process rows persist `durable_created` / `durable_active`.
-  Current code decodes them only after validating the harness; an older binary rejects the status
-  instead of silently dispatching OpenCode.
+- **Rollback safety:** every in-process session state persists with a `durable_` marker, and enabled
+  in-process automations persist a non-legacy enabled marker. Current code decodes them only after
+  validating the harness; an older binary can neither reopen the session nor fire the automation as
+  OpenCode.
 - **Archive completeness:** archiving fences new work before its first await, aborts runtime work,
   drains every canonical projection, persists quiescence, and fails closed if delivery is
   incomplete. Only explicit unarchive clears the marker.

@@ -24,20 +24,26 @@
       "status": "PASS",
       "code": [
         "packages/control-plane/src/db/session-row.ts:1",
-        "packages/shared/src/harnesses.ts:95",
+        "packages/control-plane/src/db/automation-store.ts:1",
+        "packages/control-plane/src/db/session-status-projection-store.ts:1",
+        "packages/shared/src/harnesses.ts:86",
         "packages/control-plane/src/harness-admission.ts:40"
       ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/d1-session-index.test.ts",
           "name": "persists promptable in-process rows with a rollback-safe status marker"
+        },
+        {
+          "file": "packages/control-plane/test/integration/automation-store.test.ts",
+          "name": "persists enabled in-process automations with a rollback-safe marker"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/db/session-row.ts",
-        "find": "  if (status === \"created\" || status === \"active\") return `durable_${status}`;",
-        "replace": "  if (status === \"created\" || status === \"active\") return status;",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- d1-session-index"
+        "file": "packages/shared/src/harnesses.ts",
+        "find": "    execution: \"in_process\",",
+        "replace": "    execution: \"sandbox\",",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- d1-session-index automation-store"
       }
     },
     "A3": {
@@ -185,7 +191,7 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/http/handlers/browser-gateway.handler.ts",
-        "find": "    if (!(await bridge.authorMayAct(actorId))) {",
+        "find": "    if (!(await bridge.authorMayAct(operationId))) {",
         "replace": "    if (false) {",
         "cmd": "npm test -w @open-inspect/control-plane -- browser-gateway.handler"
       }
