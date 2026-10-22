@@ -85,3 +85,10 @@ export function createOverlaySessionInternalRoutes(
     },
   ];
 }
+
+/** Bind overlay handlers once so the core route table keeps its native shape. */
+export function createOverlaySessionInternalRouteBuilder(
+  overlay: OverlaySessionInternalRouteHandlers
+): (handlers: SessionInternalRouteHandlers) => SessionInternalRoute[] {
+  return (handlers) => createOverlaySessionInternalRoutes(handlers, overlay);
+}
