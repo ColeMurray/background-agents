@@ -221,6 +221,8 @@ describe("member merge routes", () => {
 
     const preview = await post("/members/merge/preview", SPLIT);
     await expect(preview.json()).resolves.toMatchObject({
+      source: { identities: null },
+      target: { identities: null },
       blocker: "owner_transfer_required",
       counts: null,
     });

@@ -128,6 +128,18 @@ describe("MergeMembersDialog", () => {
     );
   });
 
+  it("does not let Swap move the signed-in account into the merge-in slot", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("combobox", { name: "Account to keep" }));
+    await user.click(await screen.findByRole("option", { name: /^Ada/ }));
+    await user.click(screen.getByRole("combobox", { name: "Account to merge in" }));
+    await user.click(await screen.findByRole("option", { name: /^Sam \(Slack\)/ }));
+
+    expect(screen.getByRole("button", { name: "Swap accounts" })).toBeDisabled();
+  });
+
   it("explains a role conflict and offers to align the roles", async () => {
     const user = userEvent.setup();
     const blocked = previewFor({

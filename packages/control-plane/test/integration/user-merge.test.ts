@@ -545,6 +545,39 @@ describe("mergeUsers", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("rolls back when the loser's email is verified after preflight", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com", emailVerified: 0 });
+    let batchCount = 0;
+    const racingDatabase: SqlDatabase = {
+      prepare(query: string): SqlStatement {
+        return env.DB.prepare(query) as unknown as SqlStatement;
+      },
+      async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+        batchCount += 1;
+        // Batch 1 is the role preflight; a sign-in proves the email before batch 2 writes.
+        if (batchCount === 2) {
+          await env.DB.prepare("UPDATE users SET email_verified = 1 WHERE id = ?")
+            .bind(LOSER)
+            .run();
+        }
+        return env.DB.batch(statements as unknown as D1PreparedStatement[]) as Promise<
+          SqlResult<T>[]
+        >;
+      },
+    };
+
+    await expect(
+      mergeUsers(racingDatabase, { survivorId: SURVIVOR, loserId: LOSER })
+    ).rejects.toMatchObject({ name: "UserMergeError", code: "source_changed" });
+    expect(await getUserRow(LOSER)).toMatchObject({ email_verified: 1 });
+    expect(
+      await env.DB.prepare("SELECT email, email_verified FROM users WHERE id = ?")
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ email: null, email_verified: 0 });
+  });
+
   it("rejects a missing survivor and a self-merge", async () => {
     await insertCanonicalUser({ id: LOSER, email: null });
 

@@ -51,7 +51,8 @@ export type UserMergeErrorCode =
   | "role_assignment_missing"
   | "role_conflict"
   | "suspension_conflict"
-  | "owner_suspended";
+  | "owner_suspended"
+  | "source_changed";
 
 export class UserMergeError extends Error {
   // A declared field, not a parameter property: the operator CLI loads this
@@ -470,7 +471,8 @@ export async function mergeUsers(
         };
   // The NOT NULL occurred_at column turns a failed revalidation into a batch
   // error, rolling back every merge write. This closes the preflight/write
-  // window for role, suspension, last-active-Owner, and actor-grant invariants.
+  // window for role, suspension, last-active-Owner, and actor-grant invariants,
+  // and for the loser's email and verification the backfill below copies.
   add(
     "auditEventsCreated",
     db
@@ -494,6 +496,7 @@ export async function mergeUsers(
                AND survivor_assignment.role_id = loser_assignment.role_id
                AND (survivor.suspended_at IS NULL) = (loser.suspended_at IS NULL)
                AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
+               AND loser.email IS ? AND loser.email_verified = ?
            ) AND (${principal.guard.sql}) THEN ? ELSE NULL END,
             ?, ?, ?, ?,
             'workspace.user_merged', 'user', ?, ?, ?, 'applied',
@@ -526,6 +529,8 @@ export async function mergeUsers(
         auditId,
         loserId,
         survivorId,
+        loser.email,
+        loser.email_verified,
         ...principal.guard.values,
         occurredAt,
         principal.requestId,
@@ -621,7 +626,24 @@ export async function mergeUsers(
     );
   }
 
-  const results: SqlResult[] = await db.batch(statements);
+  let results: SqlResult[];
+  try {
+    results = await db.batch(statements);
+  } catch (cause) {
+    // A concurrent sign-in can verify the loser's email after the preload.
+    // The guard rolled the batch back; report it as retryable, not an outage.
+    const current = await db
+      .prepare(`SELECT email, email_verified FROM users WHERE id = ?`)
+      .bind(loserId)
+      .first<{ email: string | null; email_verified: number }>();
+    if (
+      current &&
+      (current.email !== loser.email || current.email_verified !== loser.email_verified)
+    ) {
+      throw new UserMergeError("source_changed", "The merged-in user changed; retry the merge");
+    }
+    throw cause;
+  }
 
   const counts = emptyCounts();
   for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {

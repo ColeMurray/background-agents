@@ -48,11 +48,12 @@ export class MemberMergeService {
   /** Describes both members, the first blocker if any, and the records a merge would move. */
   async preview(input: MemberMergeRequest): Promise<MemberMergePreview> {
     const { source, target } = await this.loadMembers(input);
-    const [sourceIdentities, targetIdentities] = await Promise.all([
-      this.loadIdentities(source.userId),
-      this.loadIdentities(target.userId),
-    ]);
     let blocker = await this.actorBlocker(input, source, target);
+    // Linked identities are Owner-account details an actor without ownership rights may not read.
+    const withholdIdentities = blocker === "owner_transfer_required";
+    const [sourceIdentities, targetIdentities] = withholdIdentities
+      ? [null, null]
+      : await Promise.all([this.loadIdentities(source.userId), this.loadIdentities(target.userId)]);
     let counts: Record<string, number> | null = null;
     if (!blocker) {
       try {
@@ -197,6 +198,8 @@ function blockedError(cause: unknown): unknown {
     case "suspension_conflict":
     case "owner_suspended":
       return new MemberMergeBlockedError(cause.code);
+    case "source_changed":
+      return new RbacConflictError("Member merge preconditions changed");
     case "self_merge":
     case "survivor_not_found":
       return new AuthorizationError(404, "member_not_found");

@@ -328,7 +328,8 @@ export const memberIdentitySchema = z
 const memberMergeAccountSchema = z
   .object({
     member: workspaceMemberSchema,
-    identities: z.array(memberIdentitySchema),
+    /** Null when withheld because the actor may not merge these accounts. */
+    identities: z.array(memberIdentitySchema).nullable(),
   })
   .strict();
 

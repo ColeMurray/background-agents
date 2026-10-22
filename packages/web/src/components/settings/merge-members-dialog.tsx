@@ -169,7 +169,10 @@ export function MergeMembersDialog({
             size="icon"
             className="mb-6 justify-self-center"
             onClick={swap}
-            disabled={!canChoose || (!sourceUserId && !targetUserId)}
+            // Swapping would make the signed-in account the merge-in source.
+            disabled={
+              !canChoose || (!sourceUserId && !targetUserId) || targetUserId === currentUserId
+            }
             aria-label="Swap accounts"
             title="Swap accounts"
           >
@@ -387,7 +390,9 @@ function AccountCard({ title, account }: { title: string; account: MemberMergePr
         {member.suspendedAt !== null && <span className="text-muted-foreground"> · Suspended</span>}
       </p>
       <div className="flex flex-wrap gap-1">
-        {identities.length === 0 ? (
+        {identities === null ? (
+          <span className="text-xs text-muted-foreground">Linked sign-ins hidden</span>
+        ) : identities.length === 0 ? (
           <span className="text-xs text-muted-foreground">No linked sign-ins</span>
         ) : (
           identities.map((identity, index) => (
