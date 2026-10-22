@@ -89,6 +89,42 @@ function hasRunnableContent(content: IncomingMessageContent): boolean {
   return Boolean(content.text) || content.images.length > 0 || content.forwarded.hasBody;
 }
 
+/** Parse a message whose event carries its own files and attachments, unlike `app_mention`. */
+function parseMessageEventContent(
+  event: { text: string; files?: SlackMessageFile[]; attachments?: SlackMessageAttachment[] },
+  traceId?: string
+): IncomingMessageContent {
+  const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
+  const forwarded = collectForwardedMessages(event.attachments);
+  return {
+    text: parsedFlags.ok ? parsedFlags.text : "",
+    images: toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId),
+    forwarded,
+    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : EMPTY_INLINE_PROMPT_OPTIONS,
+    inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
+  };
+}
+
+/** Inline overrides show the status themselves once they resolve. */
+function showsStartingStatusNow(content: IncomingMessageContent): boolean {
+  return (
+    !content.inlineFlagError &&
+    !hasInlinePromptOptions(content.inlinePromptOptions) &&
+    hasRunnableContent(content)
+  );
+}
+
+function describeChannel(info: Awaited<ReturnType<typeof getChannelInfo>> | undefined): {
+  channelName?: string;
+  channelDescription?: string;
+} {
+  if (!info?.ok || !info.channel) return {};
+  return {
+    channelName: info.channel.name,
+    channelDescription: info.channel.topic?.value || info.channel.purpose?.value,
+  };
+}
+
 type ThreadSessionAdmission =
   | { kind: "launch" }
   | { kind: "followUp"; session: ThreadSession; threadTs: string }
@@ -647,12 +683,6 @@ export async function handleAppMention(
   ) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
-  let channelName: string | undefined;
-  let channelDescription: string | undefined;
-  if (channelInfo?.ok && channelInfo.channel) {
-    channelName = channelInfo.channel.name;
-    channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
-  }
   await handleIncomingMessage({
     content,
     admission,
@@ -660,8 +690,7 @@ export async function handleAppMention(
     channel: event.channel,
     ts: event.ts,
     threadTs: event.thread_ts,
-    channelName,
-    channelDescription,
+    ...describeChannel(channelInfo),
     env,
     traceId,
     scheduleBackground,
@@ -693,20 +722,16 @@ export async function handleDirectMessage(
     traceId
   );
   if (admission.kind === "stop") return;
-  const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
-  const messageText = parsedFlags.ok ? parsedFlags.text : "";
-  const forwarded = collectForwardedMessages(event.attachments);
-  const images = toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId);
-  const content: IncomingMessageContent = {
-    text: messageText,
-    images,
-    forwarded,
-    inlinePromptOptions: parsedFlags.ok ? parsedFlags.options : EMPTY_INLINE_PROMPT_OPTIONS,
-    inlineFlagError: parsedFlags.ok ? undefined : parsedFlags.error,
-  };
-  const threadKey = event.thread_ts || event.ts;
-  if (parsedFlags.ok && !hasInlinePromptOptions(parsedFlags.options) && hasRunnableContent(content))
-    scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
+  const content = parseMessageEventContent(event, traceId);
+  if (showsStartingStatusNow(content)) {
+    scheduleStartingStatus(
+      scheduleBackground,
+      env,
+      event.channel,
+      event.thread_ts || event.ts,
+      traceId
+    );
+  }
   await handleIncomingMessage({
     content,
     admission,
