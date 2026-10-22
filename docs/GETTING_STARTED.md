@@ -1539,6 +1539,152 @@ it is the recovery source for automatically generated keys.
 
 ---
 
+### Preview-state ownership transfer
+
+If an earlier preview already placed `module.pi_codemode_sandbox_worker` in Terraform state and the
+external binding must remain available for latched-session replay:
+
+1. Set Code Mode admission to `off` and deploy/upgrade the same deterministic Worker through the
+   protected Wrangler workflow.
+2. Complete the live deployment proof, record its exact Worker version ID in
+   `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, then set `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`
+   **before the first Terraform apply** that contains the ownership-transfer `removed` block.
+   Applying with the flag false would remove the retained external binding even though
+   `destroy = false` preserves the Worker.
+3. Run Terraform. It forgets the preview module without destroying the Worker and retains the
+   external binding. Continue with the paid canary before restoring admission.
+
+### Fresh Code Mode deployment
+
+1. Keep `PI_CODEMODE_MODE=off`, `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=false`, and
+   `PI_CODEMODE_PAID_CANARY_VERIFIED=false` during normal Terraform deployment. Terraform creates no
+   Code Mode Worker, version, WASM upload, or migration.
+2. Dispatch **Deploy Pi Code Mode Sandbox** with operation `deploy` and confirm the exact
+   `open-inspect-pi-codemode-sandbox-<DEPLOYMENT_NAME>` name. Wrangler uploads the private Worker,
+   QuickJS WASM, fixed 60000 ms CPU limit, and `CodemodeSandbox` v1 SQLite migration. The workflow
+   builds once, records exact JS/WASM SHA-256 hashes, preserves that immutable artifact, and deploys
+   those bytes with bundling disabled. The job uses the protected `production` environment and fails
+   unless the reviewed workflow runs from `main`; Cloudflare credentials are scoped only to the
+   final deploy/rollback step after validation.
+3. Record the deployed version ID as `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, complete the deployment
+   portion of `docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`, then set
+   `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true` and run Terraform to add only the retained
+   external `CODEMODE_SANDBOX` binding. Keep admission off.
+4. Run the paid runtime canary through an ordinary authorized SessionDO prompt. Save bounded-script,
+   nested-read, abort, and canonical timeline IDs in a credential-free runtime evidence JSON file.
+   Run `scripts/attest-pi-codemode-sandbox.mjs` with the artifact manifest, runtime evidence, exact
+   version, Worker name, and all managed zone IDs. The read-only script verifies one version at 100%
+   traffic, the artifact digest annotation, Cloudflare etag, CPU/migration/export, and absence of
+   bindings, routes, custom domains, secrets, workers.dev, and previews. It never deploys. After it
+   passes, set `PI_CODEMODE_PAID_CANARY_VERSION` to the same version ID,
+   `PI_CODEMODE_PAID_CANARY_VERIFIED=true`, and `PI_CODEMODE_MODE=paid`, then apply Terraform. The
+   hard Terraform gate refuses admission when the two version IDs differ.
+
+### Code Mode upgrade
+
+1. Set `PI_CODEMODE_MODE=off` and `PI_CODEMODE_PAID_CANARY_VERIFIED=false` first, then apply
+   Terraform while retaining the external binding. The deployment workflow refuses a deploy or
+   rollback while paid admission or the old canary approval remains active.
+2. Dispatch the Wrangler workflow with operation `deploy`; Terraform never adopts its version.
+3. Set `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION` to the new version ID. Repeat exact artifact,
+   Cloudflare attestation, execution, nested-read, abort, replay, and canonical-timeline checks,
+   then set `PI_CODEMODE_PAID_CANARY_VERSION` to that same ID before restoring paid admission.
+
+Provider issues [#6852](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6852) and
+[#6404](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6404) remain live canary
+concerns. Local plans/workerd tests do not prove provider behavior, and this repository has no
+paid-account proof, so production admission remains blocked by default.
+
+### Code Mode rollback
+
+Set `PI_CODEMODE_MODE=off` and apply Terraform first. Keep
+`PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. A
+recovering top-level Code Mode task still in Pi Durable's `call` phase reruns current policy and is
+denied. A task that already committed Pi Durable's `execute` checkpoint follows the native replay
+contract using its durable admission memo without rerunning `beforeTool`. To roll back the Worker
+version, dispatch the dedicated workflow with operation `rollback` and an exact known-good version
+ID. Never delete or import the Wrangler-owned Worker through Terraform during normal rollback.
+Before restoring paid admission, set both version variables to the rollback target and ensure the
+recorded canary evidence covers that exact version.
+
+### Pi execution isolation boundary
+
+Generation 78 includes a separate, default-off execution artifact. It is not an agent sandbox: it
+contains no harness, repository image/snapshot, user environment, VCS/model/MCP credentials,
+repository hooks, code server, VNC, terminal, or desktop service. Its privileged in-process bridge
+receives a rotating, two-hour execution credential through stdin rather than argv/environment;
+commands run as dedicated UID/GID 10001 with a root-owned runtime and a mode-0700 workspace.
+
+Execution startup fails unless the provider supplies `/proc` `hidepid=2`, Yama ptrace isolation, and
+the exact `package-install-v1` egress policy: the control-plane host, `registry.npmjs.org`,
+`pypi.org`, and `files.pythonhosted.org`. The pinned Modal SDK does not expose domain allowlists,
+and the other provider adapters do not yet have reviewed enforcement, so **all providers remain
+canary-blocked**. This is intentional; no Pi execution tool is exposed in Slice 6A. Use
+`docs/templates/PI_EXECUTION_ISOLATION_CANARY.md` and the read-only
+`scripts/attest-execution-isolation.mjs` before changing a provider verdict. Never use an execution
+credential on SCM, provider-token, diff, push, or public routes.
+
+Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
+The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
+sessions can still continue, stop, and delete while new admission and selectors are disabled. Direct
+Terraform operators must likewise keep `pi_durable_binding_enabled=true` after the class migration.
+When the web app runs on Vercel, dispatch **Deploy Web** again so the disabled build-time flag
+reaches the active bundle. Do not delete the class or its storage as part of a normal rollback.
+
+When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
+application in **Linear Settings → API → Applications**. This provider-side setting is not managed
+by Terraform. Existing eligible single-workspace installations transition on their next request
+without uninstalling or reinstalling the app.
+
+**Bulk upload with `gh` CLI:**
+
+For non-secret settings, create a `.variables` file:
+
+```dotenv
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+DEPLOYMENT_NAME=my-deployment
+WEB_PLATFORM=cloudflare
+ENABLE_SLACK_BOT=false
+```
+
+Upload it with `gh variable set -f .variables`. For credentials, create a `.secrets` file (don't
+commit this!):
+
+```
+CLOUDFLARE_API_TOKEN=your-token
+ANTHROPIC_API_KEY=sk-ant-...
+DEEPSEEK_API_KEY=sk-...
+# ... add all secrets
+```
+
+Then upload all at once (run from your fork's directory, or use
+`-R {your_github_username}/{background-agents}`):
+
+```bash
+gh secret set -f .secrets
+```
+
+If you bulk upload from a file, set multiline secrets like `GH_APP_PRIVATE_KEY` separately so the
+PEM formatting is preserved:
+
+```bash
+gh secret set GH_APP_PRIVATE_KEY < private-key-pkcs8.pem
+```
+
+Once configured, the GitHub Actions workflow will:
+
+- Run `terraform plan` on pull requests (with PR comment)
+- Run `terraform apply` when merged to main
+
+Terraform generates and persists `PROVIDER_ACCOUNTS_ENCRYPTION_KEY` when no override is configured.
+Existing local Terraform installations retain an existing key through the
+`provider_accounts_encryption_key` input; Actions deployments retain it through the
+`PROVIDER_ACCOUNTS_ENCRYPTION_KEY` repository or production-environment secret. Changing the key
+makes stored provider credentials unreadable. Preserve backups of the remote Terraform state because
+it is the recovery source for automatically generated keys.
+
+---
+
 ## Customizing the App Name and Icon (Optional)
 
 Open-Inspect can be whitelabeled by overriding the brand name and logo. Both values are optional and

@@ -11,8 +11,10 @@ serves the socket).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -106,11 +108,17 @@ def _service(tmp_path, **kwargs) -> DockerService:
     return service
 
 
+def _control_socket_path(tmp_path: Path) -> Path:
+    """Keep Unix-domain sockets below macOS's 104-byte path limit."""
+    digest = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"oi-docker-{digest}.sock"
+
+
 def _session_supervisor(tmp_path, service):
     supervisor, *_ = _supervisor(tmp_path, [])
     supervisor.docker_service = service
     supervisor.docker_control = DockerControl(
-        service, str(tmp_path / "control.sock"), supervisor._recover_docker_after_prepare
+        service, str(_control_socket_path(tmp_path)), supervisor._recover_docker_after_prepare
     )
     return supervisor
 
@@ -386,12 +394,13 @@ async def test_requested_stop_is_not_reported_as_a_crash(processes, tmp_path):
 )
 async def test_control_rejects_service_budgets_beyond_capture_deadline(tmp_path, budgets):
     service = _service(tmp_path, **budgets)
-    control = DockerControl(service, str(tmp_path / "control.sock"))
+    socket_path = _control_socket_path(tmp_path)
+    control = DockerControl(service, str(socket_path))
 
     with pytest.raises(ValueError, match="Docker control deadline"):
         await control.start()
 
-    assert not (tmp_path / "control.sock").exists()
+    assert not socket_path.exists()
 
 
 async def test_shutdown_during_preparation_does_not_restart_docker(processes, tmp_path):

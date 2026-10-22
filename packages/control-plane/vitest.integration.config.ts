@@ -62,12 +62,17 @@ export default defineConfig({
                 workers: [
                   {
                     name: "open-inspect-pi-codemode-sandbox-test",
-                    scriptPath: path.resolve(__dirname, "../pi-codemode-sandbox/dist/index.js"),
-                    modules: true,
-                    modulesRoot: path.resolve(__dirname, "../pi-codemode-sandbox/dist"),
-                    modulesRules: [
-                      { type: "CompiledWasm" as const, include: ["**/*.wasm"], fallthrough: true },
+                    modules: [
+                      {
+                        type: "ESModule" as const,
+                        path: path.resolve(__dirname, "../pi-codemode-sandbox/dist/index.js"),
+                      },
+                      {
+                        type: "CompiledWasm" as const,
+                        path: path.resolve(__dirname, "../pi-codemode-sandbox/dist/quickjs.wasm"),
+                      },
                     ],
+                    modulesRoot: path.resolve(__dirname, "../pi-codemode-sandbox/dist"),
                     additionalUnboundDurableObjects: [
                       { className: "CodemodeSandbox", useSQLite: true },
                     ],
@@ -252,6 +257,8 @@ export default defineConfig({
             TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             PROVIDER_ACCOUNTS_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            MCP_OAUTH_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            MCP_CONNECTIONS_ENABLED: "true",
             // The MCP broker's callback URL is built from the worker's own
             // public origin, and the callback is only recognized when it
             // matches the origin the owner is actually sent back to.
@@ -266,6 +273,7 @@ export default defineConfig({
             PI_REPOSITORY_EDITING_MODE: codeModeIntegration ? "off" : "enabled",
             PI_SANDBOX_EXECUTION_MODE: codeModeIntegration ? "off" : "enabled",
             PI_CODE_MODE: codeModeIntegration ? "enabled" : "off",
+            PI_EXTERNAL_ACTIONS_MODE: codeModeIntegration ? "off" : "enabled",
             TEST_MIGRATIONS: migrations,
           },
         },

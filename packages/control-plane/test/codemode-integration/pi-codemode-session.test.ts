@@ -23,6 +23,29 @@ interface PiSessionInternals {
   workspace?: Workspace;
 }
 
+async function recordLiveTurn(sessionName: string, operationId: string): Promise<void> {
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO users (id, display_name, created_at, updated_at) VALUES ('user-1', 'Code Mode User', ?, ?)"
+    ).bind(now, now),
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO user_role_assignments (user_id, role_id) SELECT 'user-1', id FROM roles WHERE key = 'member'"
+    ),
+  ]);
+  await runInSessionDO(env.SESSION.getByName(sessionName), (_instance, state) => {
+    state.storage.sql.exec(
+      "INSERT OR IGNORE INTO participants (id, user_id, canonical_user_id, role, joined_at) VALUES ('user-1', 'user-1', 'user-1', 'member', ?)",
+      now
+    );
+    state.storage.sql.exec(
+      "INSERT INTO messages (id, author_id, content, source, status, created_at) VALUES (?, 'user-1', 'code mode', 'web', 'processing', ?)",
+      operationId,
+      now
+    );
+  });
+}
+
 describe("PiSessionDO native Code Mode", () => {
   it("keeps Code Mode installed but denies a fresh call when deployment policy flips off", async () => {
     const { sessionName, stub: sessionStub } = await initSession({
@@ -33,6 +56,7 @@ describe("PiSessionDO native Code Mode", () => {
       repoName: null,
       repoId: null,
     });
+    await recordLiveTurn(sessionName, "codemode-emergency");
     await runInSessionDO(sessionStub, (instance) => {
       (instance as unknown as { appEnv: { PI_CODE_MODE?: string } }).appEnv.PI_CODE_MODE = "off";
     });
@@ -108,7 +132,6 @@ describe("PiSessionDO native Code Mode", () => {
       "send_agent_message",
       "get_last_message",
       "follow_up_agent",
-      "follow_up_agent",
       "cancel_agent",
       "inspect_agents",
       "read",
@@ -117,14 +140,7 @@ describe("PiSessionDO native Code Mode", () => {
       "grep",
       "codemode",
     ]);
-    expect(agent.callableTools).toEqual([
-      "read",
-      "ls",
-      "find",
-      "grep",
-      "pi.codemode.models.classify",
-      "pi.codemode.models.generateImages",
-    ]);
+    expect(agent.callableTools).toEqual(["read", "ls", "find", "grep"]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>
         state.storage.get(PI_FEATURE_CAPABILITY_SNAPSHOT_KEY)
@@ -200,6 +216,7 @@ describe("PiSessionDO native Code Mode", () => {
     });
     if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
     const stub = env.PI_SESSION.getByName(sessionName);
+    await recordLiveTurn(sessionName, "remote-restart");
     let interruptedReadStarted: (() => void) | undefined;
     const waiting = new Promise<void>((resolve) => {
       interruptedReadStarted = resolve;
@@ -300,6 +317,7 @@ describe("PiSessionDO native Code Mode", () => {
       });
       if (!env.PI_SESSION) throw new Error("PI_SESSION test binding is missing");
       const stub = env.PI_SESSION.getByName(sessionName);
+      await recordLiveTurn(sessionName, "destroy-active-code");
 
       const destroyed = await runInDurableObject(stub, async (instance, state) => {
         if (!(instance instanceof PiSessionDO)) throw new Error("Expected PiSessionDO instance");

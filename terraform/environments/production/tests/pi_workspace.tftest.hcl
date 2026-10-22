@@ -109,7 +109,7 @@ run "workspace_read_only_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_scratch_workspace_mode                = "read_only"
+    pi_scratch_workspace_mode        = "read_only"
     pi_computer_preview_acknowledged = true
   }
 
@@ -123,7 +123,7 @@ run "workspace_writable_reaches_the_worker" {
   command = plan
 
   variables {
-    pi_scratch_workspace_mode                = "writable"
+    pi_scratch_workspace_mode        = "writable"
     pi_computer_preview_acknowledged = true
   }
 
@@ -137,7 +137,7 @@ run "repository_editing_reaches_the_worker_independently" {
   command = plan
 
   variables {
-    pi_scratch_workspace_mode                = "read_only"
+    pi_scratch_workspace_mode        = "read_only"
     pi_repository_editing_mode       = "enabled"
     pi_computer_preview_acknowledged = true
   }
