@@ -19,7 +19,11 @@
 #   4. points the runtime's cross-boot state (OPENINSPECT_STATE_DIR: the
 #      harness session id, the repository manifest with the session-start
 #      commits) at the home directory, because a Boat snapshot keeps /home but
-#      never /tmp, where that state lives on other providers;
+#      never /tmp, where that state lives on other providers. An image build
+#      (IMAGE_BUILD_MODE=true, stated by the control plane on every boot) is
+#      the exception: its lock, log and state stay under /tmp, so the disk the
+#      build leaves behind, which is saved as the prebuilt image, carries the
+#      workspace and nothing of the build that produced it;
 #   5. decides the boot mode from the completed-boot marker: the runtime
 #      creates it (OI_BOOT_COMPLETE_MARKER) once a boot has synced the
 #      checkout, run setup.sh and started the harness. A later boot that finds
@@ -30,12 +34,18 @@
 #   6. execs the runtime entrypoint with its output in the supervisor log.
 #
 # `--prepare-only` performs steps 1 and 2 and exits; the image build uses it to
-# verify a fresh deploy without starting a session runtime.
+# verify a fresh deploy without starting a session runtime. The one value that
+# ever rides the command line is an image build's own sandbox id, as a
+# variable prefix the control plane adds for the build callback.
 set -euo pipefail
 
 OI_USER_HOME=/home/user
 OI_INSTALL_HOME=$OI_USER_HOME/openinspect
-OI_STATE_DIR=$OI_USER_HOME/.openinspect
+if [[ "${IMAGE_BUILD_MODE:-}" == "true" ]]; then
+  OI_STATE_DIR=/tmp/openinspect-image-build
+else
+  OI_STATE_DIR=$OI_USER_HOME/.openinspect
+fi
 OI_LOCK_FILE=$OI_STATE_DIR/runtime.lock
 OI_BOOT_COMPLETE_MARKER=$OI_STATE_DIR/boot-complete
 OI_RUNTIME_STATE_DIR=$OI_STATE_DIR/state

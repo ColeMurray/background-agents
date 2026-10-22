@@ -530,6 +530,17 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert 'STATE_DIR_ENV_VAR = "OPENINSPECT_STATE_DIR"' in constants
     assert "OI_RUNTIME_STATE_DIR=$OI_STATE_DIR/state" in launcher
     assert 'export OPENINSPECT_STATE_DIR="$OI_RUNTIME_STATE_DIR"' in launcher
+    # An image build's lock, log and state stay under /tmp, so the disk saved as
+    # the prebuilt image carries none of them (boat-adapter.ts relies on this).
+    assert 'if [[ "${IMAGE_BUILD_MODE:-}" == "true" ]]' in launcher
+    assert "OI_STATE_DIR=/tmp/openinspect-image-build" in launcher
+    assert "OI_STATE_DIR=$OI_USER_HOME/.openinspect" in launcher
+    # The build callback's provider session id rides the launch as a variable
+    # prefix under the shared contract name (sandbox-env.ts), never as an argument.
+    assert (
+        "`${REPO_IMAGE_CALLBACK_ENV.providerSessionId}=${options.providerSessionId} "
+        "${BOAT_LAUNCHER_PATH}`" in provider
+    )
     assert 'exec "$OI_PYTHON" -m sandbox_runtime.entrypoint' in launcher
     assert "--prepare-only" in launcher
     assert (

@@ -34,12 +34,12 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "e2b"`, or
-`sandbox_provider = "daytona"`. The artifact is stored per provider as a Modal image, Vercel
-snapshot, or E2B/Daytona snapshot. With `modal-vm`, the artifact is a Modal image built on the VM
-backend. Images built under `modal` are not used by `modal-vm` sessions. Boat has no prebuilt
-images: every Boat session starts from the deployment's base snapshot and runs `setup.sh` on its
-first boot.
+`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "e2b"`,
+`sandbox_provider = "daytona"`, or `sandbox_provider = "boat"`. The artifact is stored per provider
+as a Modal image, Vercel snapshot, E2B/Daytona snapshot, or Boat named snapshot. With `modal-vm`,
+the artifact is a Modal image built on the VM backend. Images built under `modal` are not used by
+`modal-vm` sessions. Boat's artifact has its own allowance and snapshot rules — see
+[Boat prebuilds](#boat-prebuilds).
 
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
@@ -211,13 +211,14 @@ workspace environment build has no team layer, even when a team session later la
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
-snapshot, or E2B/Daytona snapshot.
+snapshot, E2B/Daytona snapshot, or Boat named snapshot (on Boat, caches under `/tmp` and `~/.cache`
+are the exception; see [Boat prebuilds](#boat-prebuilds)).
 
 The configured build timeout covers clone and setup execution. Build sandboxes receive an additional
 ten minutes for callback delivery and snapshot finalization. Because Vercel limits sandbox lifetime
 to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve is never lost;
-Modal, E2B and Daytona continue to honor the configured execution timeout up to the shared one-hour
-limit.
+Modal, E2B, Daytona and Boat continue to honor the configured execution timeout up to the shared
+one-hour limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
@@ -338,6 +339,53 @@ own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
 | `image_build.source_intent_unresolved`                | A create whose response was lost may have left a sandbox.      | Maintenance looks it up by its reserved name each tick. It is only written off once the source's hard lifetime has certainly elapsed.                                                                                                                    |
 | `image_build.operation_unresolved` older than 6 hours | A reserved capture has not settled and is not being reclaimed. | Investigate provider-side. Verify ownership labels before deleting anything by hand: a resource is this build's only when its labels (or a snapshot's `sourceSandboxId`) say so.                                                                         |
 | Cleanup backlog after a provider switch               | Rows dispatch cleanup from their own recorded provider.        | Keep `daytona_api_key` and `daytona_api_url` configured until the backlog drains. The base snapshot is not needed for cleanup.                                                                                                                           |
+
+---
+
+## Boat prebuilds
+
+On Boat a prebuilt image is a **named snapshot**: a standalone copy of the build sandbox's disk,
+saved under a name derived from the build (`oi-img-<scope>-<digest>`). A session deploys from it
+exactly as it deploys from the deployment's base snapshot, with its own env, and the runtime syncs
+the checkout and skips `setup.sh`.
+
+Finalization archives the build sandbox (the same stop an idle session gets), saves the archived
+disk under the image name, and waits for Boat to report the snapshot `ready`; the build sandbox is
+then deleted. The name is fixed per build, and Boat replaces rather than duplicates a snapshot saved
+under an existing name, so a retried finalization can never leave a second artifact behind.
+Superseded images are deleted by the same reaper as on every other provider.
+
+Things to know:
+
+- **Allowance.** Boat includes a fixed number of named snapshots per account or organization (ten at
+  the time of writing) and bills each one beyond that monthly. The deployment's base snapshot
+  counts, and so does every ready image plus, briefly, the image a rebuild is replacing. A save past
+  the allowance with no credit fails the build with Boat's `credit_required` reason; remove unused
+  named snapshots (old base snapshots included) or add credit, then rebuild.
+- **What the image keeps.** A named snapshot follows Boat's snapshot rules: `/home` (the workspace
+  with every clone and everything `setup.sh` put there) and changes under `/etc`, `/usr`, `/opt`,
+  `/var`, `/root` and `/srv` are saved; `/tmp` and `~/.cache` are not. A setup script that warms a
+  cache under `~/.cache` (pip, uv, Playwright browsers) does not carry it into the image — point
+  such caches somewhere under the workspace instead. OpenCode's refreshed
+  [model catalog](#model-catalog) lives under `~/.cache` too, so sessions from a Boat image resolve
+  models from the pinned binary's catalog until OpenCode's own background refresh lands.
+- **Build state stays out of the image.** The Boat launcher keeps an image build's lock, log and
+  runtime state under `/tmp`, so the saved disk carries the workspace and nothing of the build that
+  produced it; a session's first boot from the image creates its own state under
+  `/home/user/.openinspect`.
+- **Inherited env.** Boat keeps the build sandbox's per-sandbox env as the default env for a deploy
+  from the snapshot that passes none of its own. Open-Inspect always passes a session's own env, so
+  a session never sees the build's, but anyone holding the account's API key could deploy from the
+  image without one. Treat a scope's image as no less sensitive than the scope's secrets, as the
+  [credential trust boundary](#credential-trust-boundary) already requires.
+- **Starts.** Each build spends one Boat sandbox start against the plan's start limits; the save and
+  the deploys from the image spend none beyond each session's own.
+
+| Symptom                                                 | What it means                                                  | What to do                                                                                                                            |
+| ------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Build fails with `credit_required`                      | The account is at its named-snapshot allowance with no credit. | Delete named snapshots nothing deploys from (`DELETE /named-snapshots/{name}` or the Boat CLI), or add credit, then rebuild.          |
+| Callback accepted, build stays `building` for minutes   | The save is still `saving`, or the source is still archiving.  | Nothing; finalization re-polls the reserved name. It fails the build only past the save's fixed deadline, and then reclaims the name. |
+| `image_build.operation_unresolved` naming an `oi-img-*` | A reserved save never settled and maintenance keeps asking.    | Check the name in the Boat dashboard; a `failed` or `ready` snapshot under it is deleted by maintenance on its next pass.             |
 
 ---
 

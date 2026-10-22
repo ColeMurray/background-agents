@@ -4,6 +4,7 @@ import {
 } from "../sandbox/provider-factory";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import { BoatImageBuildAdapter } from "./boat-adapter";
 import { DaytonaImageBuildAdapter } from "./daytona-adapter";
 import { DaytonaImageBuildResources } from "./daytona-build-resources";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
@@ -42,6 +43,8 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
         return new VercelImageBuildAdapter(createSandboxProviderFromEnv(this.env, "vercel"));
       case "e2b":
         return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
+      case "boat":
+        return new BoatImageBuildAdapter(createSandboxProviderFromEnv(this.env, "boat"));
       case "daytona":
         return new DaytonaImageBuildAdapter(
           new DaytonaImageBuildResources(

@@ -26,6 +26,12 @@ per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, auth token, user secr
 `env` and starts the launcher; on every resume it starts the launcher again, which boots the runtime
 in restored mode.
 
+Prebuilt images are named snapshots too, saved by the control plane as `oi-img-<scope>-<digest>`
+from a build sandbox that deployed from this base snapshot. The launcher keeps an image build's
+lock, log and runtime state under `/tmp` (`IMAGE_BUILD_MODE=true`), so the saved disk carries the
+workspace and nothing of the build. Those names are the control plane's to create and delete; the
+base snapshot and the images share the account's named-snapshot allowance.
+
 ## Auth: one credential
 
 - **`BOAT_API_KEY`** — the runtime key the control-plane worker uses for the Boat REST API (and the

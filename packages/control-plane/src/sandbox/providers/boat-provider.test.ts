@@ -7,6 +7,7 @@ import {
   BOAT_SANDBOX_VERSION,
   BOAT_TUNNEL_ENV_FILE_PATH,
   boatIdempotencyKey,
+  boatImageSnapshotName,
   resolveBoatMachineType,
   resolveBoatTtlSeconds,
 } from "./boat-provider";
@@ -18,8 +19,9 @@ import {
   providerConfig,
   createProvider,
 } from "./boat-provider.test-helpers";
-import { SandboxProviderError } from "../provider";
+import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import {
+  BOAT_NAMED_SNAPSHOT_NAME_PATTERN,
   BoatApiError,
   BoatCancelledError,
   BoatConflictError,
@@ -622,6 +624,313 @@ describe("BoatSandboxProvider", () => {
     });
   });
 
+  describe("prebuilt images", () => {
+    it("deploys a session from its prebuilt image and marks the boot", async () => {
+      const client = mockClient();
+      await createProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        prebuiltImageId: "oi-img-o-r-0123456789abcdef",
+        prebuiltImageSha: "abc123",
+      });
+      const [params] = vi.mocked(client.createSandbox).mock.calls[0];
+      expect(params.from).toBe("oi-img-o-r-0123456789abcdef");
+      expect(createEnv(client)).toMatchObject({
+        FROM_REPO_IMAGE: "true",
+        REPO_IMAGE_SHA: "abc123",
+        RESTORED_FROM_SNAPSHOT: "false",
+        IMAGE_BUILD_MODE: "false",
+      });
+      expect(client.startDetachedCommand).toHaveBeenCalledWith("bx_abcdefgh", BOAT_LAUNCHER_PATH);
+    });
+
+    it("states FROM_REPO_IMAGE=false and sends no sha for a base-snapshot spawn", async () => {
+      const client = mockClient();
+      await createProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        userEnvVars: { FROM_REPO_IMAGE: "true", REPO_IMAGE_SHA: "evil" },
+      });
+      const env = createEnv(client);
+      expect(env.FROM_REPO_IMAGE).toBe("false");
+      expect(env).not.toHaveProperty("REPO_IMAGE_SHA");
+    });
+
+    it("retires an image Boat no longer has instead of failing the session", async () => {
+      const client = mockClient({
+        createSandbox: vi.fn(async () => {
+          throw new BoatNotFoundError("no named snapshot", "snapshot_not_found");
+        }),
+      });
+      const error = await createProvider(client, providerConfig)
+        .createSandbox({ ...baseCreateConfig, prebuiltImageId: "oi-img-gone" })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PrebuiltImageUnavailableError);
+      expect(client.createSandbox).toHaveBeenCalledTimes(1);
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
+    });
+
+    it("keeps a 404 on a base-snapshot create an ordinary permanent failure", async () => {
+      const client = mockClient({
+        createSandbox: vi.fn(async () => {
+          throw new BoatNotFoundError("no named snapshot", "snapshot_not_found");
+        }),
+      });
+      const error = await createProvider(client, providerConfig)
+        .createSandbox(baseCreateConfig)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect(error).not.toBeInstanceOf(PrebuiltImageUnavailableError);
+      expect((error as SandboxProviderError).errorType).toBe("permanent");
+    });
+  });
+
+  describe("triggerImageBuild", () => {
+    const buildConfig = {
+      buildId: "imgb-acme-repo-1757000000000-ab12",
+      scopeKind: "repo" as const,
+      scopeId: "acme/repo",
+      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
+      callbackUrl: "https://worker.test/image-builds/build-complete",
+      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+      callbackToken: "a".repeat(64),
+      cloneToken: "clone-token",
+      userEnvVars: {
+        FOO: "bar",
+        BOAT_ID: "evil",
+        OI_DEFERRED_START: "true",
+        OI_REPO_IMAGE_CALLBACK_URL: "https://evil.test",
+      },
+      buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    };
+
+    it("creates the build sandbox from the base snapshot, binds it, then launches the build", async () => {
+      const client = mockClient();
+      const order: string[] = [];
+      vi.mocked(client.getSandbox).mockImplementation(async () => {
+        order.push("ready");
+        return boatSandbox();
+      });
+      vi.mocked(client.startDetachedCommand).mockImplementation(async () => {
+        order.push("launch");
+        return { processId: 7 };
+      });
+      const onProviderSessionCreated = vi.fn(async () => {
+        order.push("bind");
+      });
+
+      await createProvider(client, providerConfig).triggerImageBuild({
+        ...buildConfig,
+        onProviderSessionCreated,
+      });
+
+      const [params] = vi.mocked(client.createSandbox).mock.calls[0];
+      expect(params).toMatchObject({
+        type: "default",
+        ttlSeconds: 2400,
+        from: "open-inspect-abc123",
+        monitoring: false,
+        idempotencyKey: await boatIdempotencyKey(
+          "test",
+          buildConfig.buildId,
+          "build-env-acme/repo"
+        ),
+      });
+      expect(params.env).toMatchObject({
+        IMAGE_BUILD_MODE: "true",
+        OI_DEFERRED_START: "false",
+        RESTORED_FROM_SNAPSHOT: "false",
+        FROM_REPO_IMAGE: "false",
+        SANDBOX_ID: "build-env-acme/repo",
+        SANDBOX_VERSION: BOAT_SANDBOX_VERSION,
+        OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
+        OI_REPO_IMAGE_BUILD_ID: buildConfig.buildId,
+        OI_REPO_IMAGE_CALLBACK_URL: buildConfig.callbackUrl,
+        OI_REPO_IMAGE_FAILURE_CALLBACK_URL: buildConfig.failureCallbackUrl,
+        OI_REPO_IMAGE_CALLBACK_TOKEN: buildConfig.callbackToken,
+        VCS_CLONE_TOKEN: "clone-token",
+        FOO: "bar",
+      });
+      expect(JSON.parse(params.env.SESSION_CONFIG)).toEqual({
+        branch: "main",
+        repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "main" }],
+      });
+      // The sandbox id does not exist at create time; it rides the launch instead.
+      expect(params.env).not.toHaveProperty("OI_REPO_IMAGE_PROVIDER_SESSION_ID");
+      expect(params.env).not.toHaveProperty("BOAT_ID");
+      expect(params.env).not.toHaveProperty("SANDBOX_AUTH_TOKEN");
+      expect(onProviderSessionCreated).toHaveBeenCalledWith("bx_abcdefgh");
+      expect(order.indexOf("bind")).toBeLessThan(order.indexOf("ready"));
+      expect(order.indexOf("ready")).toBeLessThan(order.indexOf("launch"));
+      expect(client.startDetachedCommand).toHaveBeenCalledWith(
+        "bx_abcdefgh",
+        `OI_REPO_IMAGE_PROVIDER_SESSION_ID=bx_abcdefgh ${BOAT_LAUNCHER_PATH}`
+      );
+      expect(client.updateSandbox).toHaveBeenCalledWith("bx_abcdefgh", {
+        name: expect.stringMatching(/^openinspect-test-build-env-acme\/repo-\d+$/),
+      });
+      expect(client.hostPort).not.toHaveBeenCalled();
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
+    });
+
+    it("deletes the build sandbox when it cannot be bound", async () => {
+      const client = mockClient();
+      const error = await createProvider(client, providerConfig)
+        .triggerImageBuild({
+          ...buildConfig,
+          onProviderSessionCreated: vi.fn(async () => {
+            throw new Error("bind failed");
+          }),
+        })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect((error as Error).message).toContain("bind failed");
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+      expect(client.startDetachedCommand).not.toHaveBeenCalled();
+    });
+
+    it("refuses to bind or launch a sandbox id outside the expected alphabet", async () => {
+      const client = mockClient({
+        createSandbox: vi.fn(async () => boatSandbox({ id: "bx_abc; rm -rf /", state: "ready" })),
+      });
+      const onProviderSessionCreated = vi.fn(async () => {});
+      await expect(
+        createProvider(client, providerConfig).triggerImageBuild({
+          ...buildConfig,
+          onProviderSessionCreated,
+        })
+      ).rejects.toThrow("expected alphabet");
+      expect(onProviderSessionCreated).not.toHaveBeenCalled();
+      expect(client.startDetachedCommand).not.toHaveBeenCalled();
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abc; rm -rf /");
+    });
+
+    it("deletes the build sandbox when the launcher exits early", async () => {
+      const client = mockClient({
+        getCommandStatus: vi.fn(async () => ({
+          status: "exited" as const,
+          running: false,
+          exitCode: 1,
+          stdout: "",
+          stderr: "toolchain missing",
+        })),
+      });
+      await expect(
+        createProvider(client, providerConfig).triggerImageBuild({
+          ...buildConfig,
+          onProviderSessionCreated: vi.fn(async () => {}),
+        })
+      ).rejects.toThrow("exited with code 1");
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+    });
+  });
+
+  describe("image finalization", () => {
+    it("archives a live build sandbox and reports it stopped", async () => {
+      const getSandbox = vi
+        .fn()
+        .mockResolvedValueOnce(boatSandbox({ state: "idle" }))
+        .mockResolvedValue(
+          boatSandbox({
+            state: "archived",
+            snapshotAvailable: true,
+            stop: { id: "stop_1", status: "completed" },
+          })
+        );
+      const client = mockClient({ getSandbox });
+      await expect(
+        createProvider(client, providerConfig).stopImageBuildSource("bx_abcdefgh", "build-1")
+      ).resolves.toBe("stopped");
+      expect(client.stopSandbox).toHaveBeenCalledWith("bx_abcdefgh", expect.any(AbortSignal));
+    });
+
+    it("does not stop a source that is already archived with a snapshot", async () => {
+      const client = mockClient({
+        getSandbox: vi.fn(async () => boatSandbox({ state: "archived", snapshotAvailable: true })),
+      });
+      await expect(
+        createProvider(client, providerConfig).stopImageBuildSource("bx_abcdefgh", "build-1")
+      ).resolves.toBe("stopped");
+      expect(client.stopSandbox).not.toHaveBeenCalled();
+    });
+
+    it("reports a missing source and a slow archive distinctly", async () => {
+      const missing = mockClient({
+        getSandbox: vi.fn(async () => {
+          throw new BoatNotFoundError("gone");
+        }),
+      });
+      await expect(
+        createProvider(missing, providerConfig).stopImageBuildSource("bx_abcdefgh", "build-1")
+      ).resolves.toBe("missing");
+
+      const slow = mockClient({
+        getSandbox: vi.fn(async () =>
+          boatSandbox({ state: "archiving", stop: { id: "stop_1", status: "pending" } })
+        ),
+      });
+      await expect(
+        createProvider(slow, providerConfig).stopImageBuildSource("bx_abcdefgh", "build-1")
+      ).resolves.toBe("stopping");
+    });
+
+    it("fails a source that archived without a usable snapshot", async () => {
+      const client = mockClient({
+        getSandbox: vi.fn(async () =>
+          boatSandbox({
+            state: "archived",
+            snapshotAvailable: false,
+            stop: { id: "stop_1", status: "failing", error: "disk busy" },
+          })
+        ),
+      });
+      await expect(
+        createProvider(client, providerConfig).stopImageBuildSource("bx_abcdefgh", "build-1")
+      ).rejects.toThrow("disk busy");
+    });
+
+    it("saves, reads and deletes image snapshots through the client", async () => {
+      const client = mockClient();
+      const provider = createProvider(client, providerConfig);
+      await expect(provider.saveImageSnapshot("bx_abcdefgh", "oi-img-x")).resolves.toMatchObject({
+        status: "saving",
+      });
+      expect(client.saveNamedSnapshot).toHaveBeenCalledWith("bx_abcdefgh", "oi-img-x", undefined);
+      await expect(provider.getImageSnapshot("oi-img-x")).resolves.toMatchObject({
+        name: "oi-img-x",
+      });
+      vi.mocked(client.getNamedSnapshot).mockRejectedValueOnce(new BoatNotFoundError("gone"));
+      await expect(provider.getImageSnapshot("oi-img-gone")).resolves.toBeNull();
+      await provider.deleteProviderImage("oi-img-x");
+      expect(client.deleteNamedSnapshot).toHaveBeenCalledWith("oi-img-x", undefined);
+      vi.mocked(client.deleteNamedSnapshot).mockRejectedValueOnce(new BoatNotFoundError("gone"));
+      await expect(provider.deleteProviderImage("oi-img-gone")).resolves.toBeUndefined();
+      vi.mocked(client.deleteSandbox).mockRejectedValueOnce(new BoatNotFoundError("gone"));
+      await expect(provider.deleteSandbox("bx_gone")).resolves.toBeUndefined();
+    });
+
+    it("keeps Boat's code on a refused save so the adapter can act on it", async () => {
+      const client = mockClient({
+        saveNamedSnapshot: vi.fn(async () => {
+          throw new BoatApiError("credit", 402, "credit_required");
+        }),
+      });
+      const error = await createProvider(client, providerConfig)
+        .saveImageSnapshot("bx_abcdefgh", "oi-img-x")
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect((error as SandboxProviderError).errorType).toBe("permanent");
+      expect(((error as SandboxProviderError).cause as BoatApiError).code).toBe("credit_required");
+    });
+
+    it("derives the image name for the deployment", async () => {
+      const provider = createProvider(mockClient(), providerConfig);
+      await expect(provider.imageSnapshotName("imgb-acme-repo-1757000000000-ab12")).resolves.toBe(
+        await boatImageSnapshotName("test", "imgb-acme-repo-1757000000000-ab12")
+      );
+    });
+  });
+
   describe("error classification", () => {
     it.each([
       [new BoatApiError("rate limited", 429, "rate_limited"), "transient"],
@@ -705,5 +1014,28 @@ describe("boatIdempotencyKey", () => {
     expect(await boatIdempotencyKey("staging", "sess-a", "sb-1")).not.toBe(key);
     expect(await boatIdempotencyKey("prod", "sess-a", "sb-2")).not.toBe(key);
     expect(await boatIdempotencyKey("prod", "sess-b", "sb-1")).not.toBe(key);
+  });
+});
+
+describe("boatImageSnapshotName", () => {
+  it("is a valid Boat name that leads with the build's scope and ends with a deployment digest", async () => {
+    const name = await boatImageSnapshotName("prod", "imgb-acme-repo-1757000000000-ab12");
+    expect(name).toMatch(BOAT_NAMED_SNAPSHOT_NAME_PATTERN);
+    expect(name).toMatch(/^oi-img-acme-repo-1757000000000-ab12-[0-9a-f]{16}$/);
+    expect(name).toBe(await boatImageSnapshotName("prod", "imgb-acme-repo-1757000000000-ab12"));
+    expect(name).not.toBe(
+      await boatImageSnapshotName("staging", "imgb-acme-repo-1757000000000-ab12")
+    );
+    expect(name).not.toBe(await boatImageSnapshotName("prod", "imgb-acme-repo-1757000000000-cd34"));
+  });
+
+  it("sanitizes nested owners and uppercase and stays within Boat's length limit", async () => {
+    const name = await boatImageSnapshotName(
+      "Prod_EU",
+      "imgb-Group/Sub.group/a_very_long_repository_name-1757000000000-ab12"
+    );
+    expect(name).toMatch(BOAT_NAMED_SNAPSHOT_NAME_PATTERN);
+    expect(name.length).toBeLessThanOrEqual(63);
+    expect(name).toMatch(/^oi-img-group-sub-group-a-very-long-[0-9a-f]{16}$/);
   });
 });

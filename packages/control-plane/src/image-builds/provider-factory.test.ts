@@ -23,6 +23,23 @@ describe("createImageBuildAdapterFactory", () => {
     expect(factory.create("daytona", "existing_session")).toBeDefined();
   });
 
+  it("builds the Boat adapter from the Boat provider configuration", () => {
+    const factory = createImageBuildAdapterFactory(
+      createEnv({ BOAT_API_KEY: "boat_key", BOAT_BASE_SNAPSHOT: "open-inspect-abc" })
+    );
+
+    expect(factory.create("boat", "start")).toBeDefined();
+    expect(factory.create("boat", "existing_session")).toBeDefined();
+    // The base snapshot is the provider's configuration, as E2B's template is:
+    // every Boat operation constructs the same provider.
+    expect(() =>
+      createImageBuildAdapterFactory(createEnv({ BOAT_API_KEY: "boat_key" })).create(
+        "boat",
+        "existing_session"
+      )
+    ).toThrow("BOAT_API_KEY and BOAT_BASE_SNAPSHOT are required");
+  });
+
   it("still requires Daytona credentials for every operation", () => {
     const factory = createImageBuildAdapterFactory(
       createEnv({ DAYTONA_API_URL: "https://daytona.test" })

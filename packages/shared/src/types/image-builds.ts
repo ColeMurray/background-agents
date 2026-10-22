@@ -19,6 +19,7 @@ export const IMAGE_BUILD_PROVIDER_IDS = [
   "vercel",
   "e2b",
   "daytona",
+  "boat",
 ] as const satisfies readonly SandboxProviderName[];
 
 /** Mirrors the `image_builds.status` column. */

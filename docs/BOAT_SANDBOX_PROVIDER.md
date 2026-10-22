@@ -120,9 +120,10 @@ the image is installed on, which does not change the saved disk). The command pr
 `{"reference": "<snapshot name>"}`; set that name as `BOAT_BASE_SNAPSHOT` on the control plane. See
 [`packages/boat-infra/README.md`](../packages/boat-infra/README.md) for details.
 
-A build uses two sandbox starts and keeps one named snapshot. Boat includes ten named snapshots per
-account; superseded ones are not deleted automatically, so remove old names with
-`DELETE /named-snapshots/{name}` (or the Boat CLI) once no deployment references them.
+A build uses two sandbox starts and keeps one named snapshot. Boat includes a fixed number of named
+snapshots per account (ten at the time of writing) and bills each one beyond that; prebuilt images
+share the allowance. Superseded base snapshots are not deleted automatically, so remove old names
+with `DELETE /named-snapshots/{name}` (or the Boat CLI) once no deployment references them.
 
 ## Runtime Behavior
 
@@ -151,9 +152,8 @@ smallest Boat size that satisfies it (`small` 2 vCPU/4 GB, `default` 4/8, `large
 `boat_sandbox_type`. The sandbox lifetime (`sandboxTimeoutMs`, default 2 hours) becomes Boat's
 auto-stop TTL, clamped to Boat's bounds of one second to thirty days.
 
-Prebuilt repository and environment images are not available on Boat: every session starts from the
-base snapshot and runs `.openinspect/setup.sh` on its first boot. The Codex harness is limited to
-Modal and is not available on Boat.
+Prebuilt repository and environment images are supported; see [Prebuilt images](#prebuilt-images).
+The Codex harness is limited to Modal and is not available on Boat.
 
 ### Ports
 
@@ -168,6 +168,27 @@ password) and the web app embeds the terminal in an iframe, where Boat's access 
 blocked third-party cookie, so their routes are created as public hosted ports. User tunnel ports
 stay behind Boat's token: their URLs carry a `_token` query parameter that a browser exchanges for a
 cookie on the first visit. Treat a tunnel URL like a password.
+
+## Prebuilt Images
+
+Enabling prebuilds for a repository (Settings > Images) or an environment (Settings > Environments)
+works as on every other provider ([IMAGE_PREBUILD.md](./IMAGE_PREBUILD.md)). On Boat:
+
+- a build sandbox deploys from the base snapshot with the build env and runs the launcher in
+  image-build mode; the runtime clones the repositories, runs each `.openinspect/setup.sh` and
+  reports back to the control plane
+- finalization archives the build sandbox and saves its disk as a **named snapshot** called
+  `oi-img-<scope>-<digest>`, then deletes the build sandbox. The image is a standalone copy: it
+  keeps deploying after its source is gone and never expires until the control plane deletes it
+- a session with a ready image deploys from that name instead of the base snapshot, with its own env
+  and a fresh boot; the runtime syncs the checkout and skips `setup.sh`
+
+Every image counts toward the account's named-snapshot allowance together with the base snapshot.
+Superseded images are deleted automatically; old **base** snapshots are not (see
+[Snapshot Build](#snapshot-build)), so remove those by hand to keep room for images. The
+[Boat prebuilds](./IMAGE_PREBUILD.md#boat-prebuilds) section covers the allowance, what a named
+snapshot keeps (`/tmp` and `~/.cache` are not saved), the env a snapshot inherits from its source,
+and the runbook.
 
 ## Lifecycle: Stop and Resume
 

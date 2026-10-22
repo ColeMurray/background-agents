@@ -16,9 +16,18 @@
  * marker the runtime wrote when an earlier boot completed and starts the
  * runtime in `RESTORED_FROM_SNAPSHOT` mode, so the checkout is kept and
  * `setup.sh` does not run again. There is no session snapshot/restore pair
- * here, and no prebuilt-image support: `evaluateSpawnDecision` consults
- * `supportsPersistentResume` before any snapshot id, so a stopped sandbox
- * always resumes in place.
+ * here: `evaluateSpawnDecision` consults `supportsPersistentResume` before
+ * any snapshot id, so a stopped sandbox always resumes in place.
+ *
+ * Prebuilt images are named snapshots too. The image-build workflow runs
+ * `.openinspect/setup.sh` once in a build sandbox deployed from the base
+ * snapshot (triggerImageBuild); finalization archives that sandbox and saves
+ * its disk under the build's image name (stopImageBuildSource,
+ * saveImageSnapshot). A prebuilt spawn is a create with that name in place of
+ * the base snapshot and `FROM_REPO_IMAGE` set, so the runtime syncs the
+ * checkout and skips setup.sh. The image's contract is its filesystem: a
+ * session deployed from it gets its own env and boots the launcher like any
+ * other.
  *
  * A sandbox an organization pays for starts `shared` unless the organization's
  * default says otherwise, and every member of a shared sandbox can run
@@ -42,15 +51,21 @@ import {
   BoatNotFoundError,
   delayUnlessCancelled,
   type BoatMachineType,
+  type BoatNamedSnapshot,
   type BoatRestClient,
   type BoatSandbox,
 } from "../boat-rest-client";
 import {
+  buildImageBuildCallbackEnv,
+  buildImageBuildEnvVars,
   buildSandboxEnvVars,
   DEFERRED_START_ENV_VAR,
   deriveCodeServerPassword,
   deriveVncPassword,
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
+  imageBuildSandboxIdentity,
+  REPO_IMAGE_CALLBACK_ENV,
   scmCloneIdentity,
 } from "../sandbox-env";
 import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
@@ -58,10 +73,12 @@ import { resolveSandboxPortPlan, type SandboxPortPlan } from "./port-resolution"
 import {
   createVncAccess,
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  PrebuiltImageUnavailableError,
   SandboxProviderError,
   signalUntilDeadline,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type ImageBuildProviderTriggerConfig,
   type ResumeConfig,
   type ResumeResult,
   type SandboxLifetime,
@@ -126,11 +143,26 @@ const BOAT_MAX_NAME_CHARS = 120;
  * boot-time filesystem links, holds a lock so a second start exits with
  * LAUNCHER_ALREADY_RUNNING_EXIT_CODE, decides the boot mode from the marker
  * the runtime writes once a boot has completed, and execs the runtime
- * entrypoint with its output in the launcher log. It takes no arguments on a
- * session boot, so no value ever rides the command line.
+ * entrypoint with its output in the launcher log. It takes no arguments; the
+ * one value that ever rides its command line is an image build's own sandbox
+ * id, as a variable prefix (see launchRuntime).
  */
 export const BOAT_LAUNCHER_PATH = "/home/user/openinspect/launcher.sh";
 const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
+
+/**
+ * Prefix of the named snapshot an image build is saved under; the rest is a
+ * legible slug of the build id and a digest (see boatImageSnapshotName).
+ */
+export const BOAT_IMAGE_SNAPSHOT_NAME_PREFIX = "oi-img-";
+const BOAT_IMAGE_SNAPSHOT_SLUG_MAX_CHARS = 28;
+
+/**
+ * A Boat sandbox id is interpolated into one command line (a build's launch)
+ * and persisted as a build's provider session; an id outside this alphabet
+ * is refused before either use.
+ */
+const BOAT_SANDBOX_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Where the tunnel env file is written. Boat's file API only writes under
@@ -305,6 +337,40 @@ function boatSandboxName(deploymentName: string, sandboxId: string): string {
   return `openinspect-${deploymentName}-${sandboxId}`.slice(0, BOAT_MAX_NAME_CHARS);
 }
 
+/**
+ * The named snapshot a build's image is saved under. Fixed by the deployment
+ * and the build id: a save repeated under it replaces the artifact rather
+ * than adding one, so the name doubles as the save's idempotency key, and two
+ * deployments sharing a Boat account cannot collide. The build id's own text
+ * leads so Boat's dashboard shows which scope an image belongs to.
+ */
+export async function boatImageSnapshotName(
+  deploymentName: string,
+  buildId: string
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${deploymentName}:${buildId}`)
+  );
+  const slug = buildId
+    .toLowerCase()
+    .replace(/^imgb-/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, BOAT_IMAGE_SNAPSHOT_SLUG_MAX_CHARS)
+    .replace(/^-+|-+$/g, "");
+  const digestHex = bytesToHex(new Uint8Array(digest)).slice(0, 16);
+  return `${BOAT_IMAGE_SNAPSHOT_NAME_PREFIX}${slug ? `${slug}-` : ""}${digestHex}`;
+}
+
+function assertSafeBoatSandboxId(boatSandboxId: string): void {
+  if (!BOAT_SANDBOX_ID_PATTERN.test(boatSandboxId)) {
+    throw new SandboxProviderError(
+      "Boat returned a sandbox id outside the expected alphabet",
+      "permanent"
+    );
+  }
+}
+
 function lifetimeFromSandbox(sandbox: BoatSandbox): SandboxLifetime {
   const observedAtMs = Date.now();
   if (sandbox.archiveAfter === null) return { kind: "none", observedAtMs };
@@ -360,20 +426,36 @@ export class BoatSandboxProvider implements SandboxProvider {
         ttlSeconds
       );
 
-      const created = await this.createWithIdempotency({
-        type: machineType,
-        ttlSeconds,
-        env: envVars,
-        from: this.providerConfig.baseSnapshot,
-        idempotencyKey: await boatIdempotencyKey(
-          this.providerConfig.deploymentName,
-          config.sessionId,
-          config.sandboxId
-        ),
-        // Session output stays inside the sandbox: Boat keeps no command or
-        // process output for it.
-        monitoring: false,
-      });
+      let created: BoatSandbox;
+      try {
+        created = await this.createWithIdempotency({
+          type: machineType,
+          ttlSeconds,
+          env: envVars,
+          // A prebuilt image is a named snapshot too: the session deploys
+          // from it exactly as from the base snapshot, with its own env.
+          from: config.prebuiltImageId || this.providerConfig.baseSnapshot,
+          idempotencyKey: await boatIdempotencyKey(
+            this.providerConfig.deploymentName,
+            config.sessionId,
+            config.sandboxId
+          ),
+          // Session output stays inside the sandbox: Boat keeps no command or
+          // process output for it.
+          monitoring: false,
+        });
+      } catch (error) {
+        // Boat answers a `from` that names no snapshot with 404
+        // (`snapshot_not_found`): the image is gone, so the manager retires
+        // it and retries from the base snapshot.
+        if (config.prebuiltImageId && error instanceof BoatNotFoundError) {
+          throw new PrebuiltImageUnavailableError(
+            "Boat prebuilt image snapshot is unavailable",
+            error
+          );
+        }
+        throw error;
+      }
       boatSandboxId = created.id;
       await this.ensurePrivate(created);
 
@@ -584,6 +666,161 @@ export class BoatSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * Start an image build. A build sandbox deploys from the base snapshot with
+   * the build env (the repository set, the clone token, the scope's secrets
+   * and the callback contract), is bound to the build before anything in it
+   * runs, and boots the launcher in image-build mode: the runtime clones every
+   * repository, runs each `.openinspect/setup.sh`, reports completion over the
+   * callback and idles until finalization archives the sandbox and saves its
+   * disk (stopImageBuildSource, saveImageSnapshot).
+   *
+   * The build sandbox's own id is the one value that rides the launch command
+   * line: the callback needs it, it does not exist before create returns, and
+   * it is no secret. Everything else is in the create-time env. The launcher
+   * keeps a build's lock, log and runtime state under /tmp, which a snapshot
+   * never saves, so the image carries the workspace and nothing of the build
+   * that produced it.
+   */
+  async triggerImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
+    const identity = imageBuildSandboxIdentity(config, Date.now());
+    let boatSandboxId: string | undefined;
+    try {
+      const envVars = this.buildImageBuildEnv(config, identity.sandboxId);
+      const created = await this.createWithIdempotency({
+        type: this.providerConfig.defaultMachineType,
+        ttlSeconds: resolveBoatTtlSeconds(config.providerSessionTimeoutSeconds),
+        env: envVars,
+        from: this.providerConfig.baseSnapshot,
+        idempotencyKey: await boatIdempotencyKey(
+          this.providerConfig.deploymentName,
+          config.buildId,
+          identity.sandboxId
+        ),
+        monitoring: false,
+      });
+      boatSandboxId = created.id;
+      // Refused before it is bound: the bind persists the id as the build's
+      // provider session, and the launch interpolates it into a command.
+      assertSafeBoatSandboxId(created.id);
+      await this.ensurePrivate(created);
+      // Bound before the runtime can run: the build-complete callback is
+      // rejected until the build names its sandbox, and the bound id is the
+      // workflow's handle for cleanup should anything below fail.
+      await config.onProviderSessionCreated(created.id);
+      await this.waitForReady(created.id);
+      await this.nameSandbox(created.id, identity.sandboxName);
+      await this.launchRuntime(created.id, { providerSessionId: created.id });
+      log.info("boat.image_build_triggered", {
+        build_id: config.buildId,
+        scope_kind: config.scopeKind,
+        scope_id: config.scopeId,
+        sandbox_id: created.id,
+        request_id: config.correlation.request_id,
+        trace_id: config.correlation.trace_id,
+      });
+    } catch (error) {
+      // Any failure after create leaves a sandbox that will never build;
+      // delete it rather than leave it running until its TTL.
+      if (boatSandboxId) {
+        await this.cleanupSandbox(boatSandboxId, "boat.build_cleanup_failed");
+      }
+      throw this.classifyError("Failed to trigger Boat image build", error);
+    }
+  }
+
+  /**
+   * Bring a build's source sandbox to a stop so its disk can be saved: a live
+   * one is archived (Boat snapshots the disk and releases the machine), an
+   * archived one is already there. `stopping` means the archive outlasted
+   * this call's budget and is still Boat's to finish; `missing` means Boat no
+   * longer has the sandbox.
+   */
+  async stopImageBuildSource(
+    boatSandboxId: string,
+    buildId: string,
+    signal?: AbortSignal
+  ): Promise<"stopped" | "stopping" | "missing"> {
+    let sandbox: BoatSandbox;
+    try {
+      sandbox = await this.client.getSandbox(boatSandboxId, signal);
+    } catch (error) {
+      if (error instanceof BoatNotFoundError) return "missing";
+      throw this.classifyError("Failed to read Boat build sandbox", error);
+    }
+    if (sandbox.state === "archived" && sandbox.snapshotAvailable) return "stopped";
+    const deadlineAtMs = Date.now() + this.timings.stopTimeoutMs;
+    const result = await this.stopSandbox({
+      providerObjectId: boatSandboxId,
+      sessionId: buildId,
+      reason: "image_build_finalization",
+      intent: "preserve",
+      signal,
+      deadlineAtMs,
+    });
+    if (result.success) return "stopped";
+    if (Date.now() >= deadlineAtMs || signal?.aborted) return "stopping";
+    throw new SandboxProviderError(
+      `Boat build sandbox could not be stopped for its image: ${result.error ?? "unknown error"}`,
+      "permanent"
+    );
+  }
+
+  /** The name a build's image is saved under in this deployment. */
+  imageSnapshotName(buildId: string): Promise<string> {
+    return boatImageSnapshotName(this.providerConfig.deploymentName, buildId);
+  }
+
+  /**
+   * Save the build's disk under its image name. Boat answers at once with the
+   * snapshot in `saving`; a source that is still running is captured first,
+   * an archived one is saved from its last automatic snapshot.
+   */
+  async saveImageSnapshot(
+    boatSandboxId: string,
+    name: string,
+    signal?: AbortSignal
+  ): Promise<BoatNamedSnapshot> {
+    try {
+      return await this.client.saveNamedSnapshot(boatSandboxId, name, signal);
+    } catch (error) {
+      throw this.classifyError("Failed to save Boat image snapshot", error);
+    }
+  }
+
+  /** The named snapshot under `name`, or null when Boat has none. */
+  async getImageSnapshot(name: string, signal?: AbortSignal): Promise<BoatNamedSnapshot | null> {
+    try {
+      return await this.client.getNamedSnapshot(name, signal);
+    } catch (error) {
+      if (error instanceof BoatNotFoundError) return null;
+      throw this.classifyError("Failed to read Boat image snapshot", error);
+    }
+  }
+
+  /** Delete a prebuilt image's named snapshot; one already gone counts as deleted. */
+  async deleteProviderImage(providerImageId: string, signal?: AbortSignal): Promise<void> {
+    try {
+      await this.client.deleteNamedSnapshot(providerImageId, signal);
+    } catch (error) {
+      if (error instanceof BoatNotFoundError) return;
+      throw this.classifyError("Failed to delete Boat image snapshot", error);
+    }
+  }
+
+  /**
+   * Delete a sandbox for good: a build's source once its image is saved, or a
+   * failed build's. One already gone counts as deleted.
+   */
+  async deleteSandbox(boatSandboxId: string, signal?: AbortSignal): Promise<void> {
+    try {
+      await this.client.deleteSandbox(boatSandboxId, signal);
+    } catch (error) {
+      if (error instanceof BoatNotFoundError) return;
+      throw this.classifyError("Failed to delete Boat sandbox", error);
+    }
+  }
+
+  /**
    * Effective ports for a sandbox. noVNC defaults to BOAT_DEFAULT_VNC_PORT
    * because the shared default is one of Boat's own ports, and any port Boat
    * holds is rejected outright: a service bound there is unreachable.
@@ -642,30 +879,76 @@ export class BoatSandboxProvider implements SandboxProvider {
       }
     );
 
-    // Boat rejects its own names in a per-sandbox env, so a user secret under
-    // one of them can never be delivered; drop it rather than fail every spawn.
-    const dropped = BOAT_RESERVED_ENV_KEYS.filter((key) => key in envVars);
-    for (const key of dropped) delete envVars[key];
-    if (dropped.length > 0) {
-      log.warn("boat.reserved_env_dropped", { sandbox_id: config.sandboxId, keys: dropped });
-    }
+    this.dropBoatReservedEnv(envVars, config.sandboxId);
 
     // Every boot marker is stated, never merely omitted, so a repo secret of
     // the same name cannot decide how the runtime boots. The launcher raises
-    // RESTORED_FROM_SNAPSHOT itself on every boot after the first.
+    // RESTORED_FROM_SNAPSHOT itself on every boot after the first, and the
+    // runtime consults it before FROM_REPO_IMAGE, so a resumed prebuilt
+    // session keeps its checkout rather than syncing it again.
     Object.assign(envVars, {
       [DEFERRED_START_ENV_VAR]: "false",
       [IMAGE_BUILD_MODE_ENV_VAR]: "false",
       RESTORED_FROM_SNAPSHOT: "false",
-      FROM_REPO_IMAGE: "false",
+      // A prebuilt image already ran setup.sh; the runtime syncs and skips it.
+      FROM_REPO_IMAGE: config.prebuiltImageId ? "true" : "false",
       // So the runtime reports a version (spawn-time selection gates on it).
       SANDBOX_VERSION: BOAT_SANDBOX_VERSION,
     });
+    if (config.prebuiltImageId) {
+      envVars.REPO_IMAGE_SHA = config.prebuiltImageSha ?? "";
+    }
     if (portPlan.extraTunnelPorts.length > 0) {
       envVars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = portPlan.extraTunnelPorts.join(",");
     }
     assertBoatEnvWithinLimits(envVars);
     return { envVars, codeServerPassword, vncPassword };
+  }
+
+  /** Assemble the env an image-build sandbox is created with. */
+  private buildImageBuildEnv(
+    config: ImageBuildProviderTriggerConfig,
+    sandboxId: string
+  ): Record<string, string> {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId,
+      repositories: config.repositories,
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      cloneToken: config.cloneToken,
+      baseEnvVars: config.userEnvVars,
+    });
+    this.dropBoatReservedEnv(envVars, sandboxId);
+    Object.assign(envVars, {
+      [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
+      // No provider session id: the sandbox does not exist before create
+      // returns, so the id rides the launch command instead (launchRuntime).
+      ...buildImageBuildCallbackEnv({
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
+        token: config.callbackToken,
+      }),
+      // The other boot controls are stated too (IMAGE_BUILD_MODE already is),
+      // so a scope secret can neither hold the build dormant nor reshape it.
+      [DEFERRED_START_ENV_VAR]: "false",
+      RESTORED_FROM_SNAPSHOT: "false",
+      FROM_REPO_IMAGE: "false",
+      SANDBOX_VERSION: BOAT_SANDBOX_VERSION,
+    });
+    assertBoatEnvWithinLimits(envVars);
+    return envVars;
+  }
+
+  /**
+   * Boat rejects its own names in a per-sandbox env, so a user secret under
+   * one of them can never be delivered; drop it rather than fail every spawn.
+   */
+  private dropBoatReservedEnv(envVars: Record<string, string>, sandboxId: string): void {
+    const dropped = BOAT_RESERVED_ENV_KEYS.filter((key) => key in envVars);
+    for (const key of dropped) delete envVars[key];
+    if (dropped.length > 0) {
+      log.warn("boat.reserved_env_dropped", { sandbox_id: sandboxId, keys: dropped });
+    }
   }
 
   /**
@@ -842,9 +1125,21 @@ export class BoatSandboxProvider implements SandboxProvider {
    * the settle window means it never reached the runtime (or found one already
    * running, which is the one exit that counts as success). Readiness beyond
    * that is the bridge's phone-home and the connecting timeout, as everywhere.
+   *
+   * An image build's launch carries the sandbox's own id as a variable prefix
+   * (the callback contract's provider session id); it cannot be in the
+   * create-time env because it does not exist until create returns.
    */
-  private async launchRuntime(boatSandboxId: string): Promise<void> {
-    const { processId } = await this.client.startDetachedCommand(boatSandboxId, BOAT_LAUNCHER_PATH);
+  private async launchRuntime(
+    boatSandboxId: string,
+    options: { providerSessionId?: string } = {}
+  ): Promise<void> {
+    let command = BOAT_LAUNCHER_PATH;
+    if (options.providerSessionId !== undefined) {
+      assertSafeBoatSandboxId(options.providerSessionId);
+      command = `${REPO_IMAGE_CALLBACK_ENV.providerSessionId}=${options.providerSessionId} ${BOAT_LAUNCHER_PATH}`;
+    }
+    const { processId } = await this.client.startDetachedCommand(boatSandboxId, command);
     const settleUntilMs = Date.now() + this.timings.launchSettleMs;
     for (;;) {
       await delayUnlessCancelled(this.timings.launchPollIntervalMs);
@@ -953,7 +1248,10 @@ export class BoatSandboxProvider implements SandboxProvider {
         error
       );
     }
-    return SandboxProviderError.fromFetchError(message, error);
+    // Anything else (a transport failure, a callback the workflow rejected)
+    // keeps its own words: they are what the build row and the logs show.
+    const detail = error instanceof Error && error.message ? `: ${error.message}` : "";
+    return SandboxProviderError.fromFetchError(`${message}${detail}`, error);
   }
 }
 

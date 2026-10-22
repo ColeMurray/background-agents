@@ -4,7 +4,7 @@ import {
   type BoatProviderConfig,
   type BoatProviderTimings,
 } from "./boat-provider";
-import type { BoatRestClient, BoatSandbox } from "../boat-rest-client";
+import type { BoatNamedSnapshot, BoatRestClient, BoatSandbox } from "../boat-rest-client";
 
 export const providerConfig: BoatProviderConfig = {
   scmProvider: "github",
@@ -24,6 +24,18 @@ export function boatSandbox(overrides: Partial<BoatSandbox> = {}): BoatSandbox {
     snapshotAvailable: false,
     hydrated: true,
     stop: null,
+    ...overrides,
+  };
+}
+
+export function boatNamedSnapshot(overrides: Partial<BoatNamedSnapshot> = {}): BoatNamedSnapshot {
+  return {
+    name: "oi-img-acme-repo-0123456789abcdef",
+    status: "ready",
+    sourceSandboxId: "bx_abcdefgh",
+    type: "default",
+    sizeBytes: 3_907_112_960,
+    createdAt: "2030-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -48,6 +60,11 @@ export function mockClient(overrides: Partial<BoatRestClient> = {}): BoatRestCli
       stderr: "",
     })),
     writeFile: vi.fn(async () => {}),
+    saveNamedSnapshot: vi.fn(async (sandboxId: string, name: string) =>
+      boatNamedSnapshot({ name, status: "saving", sourceSandboxId: sandboxId })
+    ),
+    getNamedSnapshot: vi.fn(async (name: string) => boatNamedSnapshot({ name })),
+    deleteNamedSnapshot: vi.fn(async () => {}),
     hostPort: vi.fn(async (_id: string, options: { port: number; public: boolean }) => ({
       port: options.port,
       url: options.public
