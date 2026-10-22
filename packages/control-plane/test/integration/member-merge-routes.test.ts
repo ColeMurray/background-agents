@@ -233,6 +233,35 @@ describe("member merge routes", () => {
     expect(await getUserRow(SLACK_ROW)).toBeNull();
   });
 
+  it("lets a custom role holding the merge grant merge members", async () => {
+    await seedSplit();
+    await insertCanonicalUser({ id: ADMIN, email: "merger@example.com" });
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO roles (id, key, name, normalized_name, description, is_system)
+         VALUES ('role_custom_merger', NULL, 'Account Merger', 'account merger', NULL, 0)`
+      ),
+      env.DB.prepare(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         VALUES ('role_custom_merger', 'workspace.members.merge')`
+      ),
+      env.DB.prepare(
+        "UPDATE user_role_assignments SET role_id = 'role_custom_merger' WHERE user_id = ?"
+      ).bind(ADMIN),
+    ]);
+
+    const response = await post("/members/merge", SPLIT);
+
+    expect(response.status).toBe(200);
+    expect(await getUserRow(SLACK_ROW)).toBeNull();
+    expect(
+      await env.DB.prepare(
+        `SELECT actor_user_id_snapshot FROM authorization_audit_events
+         WHERE action = 'workspace.user_merged'`
+      ).first()
+    ).toEqual({ actor_user_id_snapshot: ADMIN });
+  });
+
   it("rolls back when the actor loses the merge grant after preflight", async () => {
     await seedSplit();
     await insertCanonicalUser({ id: ADMIN, email: "admin@example.com" });

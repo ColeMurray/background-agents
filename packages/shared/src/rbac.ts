@@ -182,18 +182,9 @@ export function isRegisteredPermission(value: string): value is PermissionId {
   return (PERMISSION_IDS as readonly string[]).includes(value);
 }
 
-/**
- * Grants reserved for built-in roles. Merging users re-points sign-in identities, so it is held
- * to the same non-delegable standard as ownership transfer.
- */
-const BUILT_IN_ONLY_PERMISSIONS = new Set<PermissionId>([
-  "workspace.members.merge",
-  "workspace.transfer_ownership",
-]);
-
 /** Reports whether a permission may be delegated through a custom role. */
 export function isCustomRolePermission(permission: PermissionId): boolean {
-  return !BUILT_IN_ONLY_PERMISSIONS.has(permission);
+  return permission !== "workspace.transfer_ownership";
 }
 
 const roleNameSchema = z.string().min(1);

@@ -187,7 +187,7 @@ Rules that apply regardless of who is signed in:
 
 One person can end up with two member accounts. The most common case is a Slack account and a GitHub account that use different email addresses: the Slack integration creates an account for the Slack user, and GitHub sign-in creates another. Merging folds one account into the other so the person has a single identity, history, and set of settings.
 
-Owners and Administrators merge accounts from Settings › Workspace access by clicking **Merge accounts** above the members list. The permission (`workspace.members.merge`) belongs to the built-in Owner and Administrator roles and cannot be granted to a custom role, because a merge moves sign-in identities between accounts.
+Owners and Administrators merge accounts from Settings › Workspace access by clicking **Merge accounts** above the members list. The permission (`workspace.members.merge`) belongs to the built-in Owner and Administrator roles and can also be granted to a custom role. Grant it carefully: a merge moves sign-in identities between accounts, so whoever signs in with the merged-in account's identities signs in as the kept account. Merging Owner accounts always requires an Owner.
 
 <Steps>
 <Step>
