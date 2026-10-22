@@ -43,7 +43,7 @@
       "project": ["src/**/*.ts"]
     },
     "packages/discord-bot": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts", "scripts/**/*.ts"]
     },
     "packages/slack-bot": {
       "project": ["src/**/*.ts"]

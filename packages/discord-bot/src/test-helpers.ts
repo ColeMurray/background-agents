@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { Env, Interaction } from "./types";
+import type { Env, GuildCommand, Interaction } from "./types";
 
 export function createKv(initial: Record<string, string> = {}) {
   const store = new Map(Object.entries(initial));
@@ -26,6 +26,7 @@ export function createEnv(overrides: Partial<Env> = {}): Env {
     DEPLOYMENT_NAME: "test",
     WEB_APP_URL: "https://web.example.com",
     DEFAULT_MODEL: "anthropic/claude-opus-5",
+    HARNESS: "claude",
     DISCORD_APPLICATION_ID: "app-1",
     DISCORD_PUBLIC_KEY: "",
     DISCORD_ALLOWED_ROLE_IDS: "role-dev",
@@ -36,7 +37,8 @@ export function createEnv(overrides: Partial<Env> = {}): Env {
   };
 }
 
-export function createInteraction(overrides: Partial<Interaction> = {}): Interaction {
+/** A `/task` command from an allowed member in the task channel. */
+export function createGuildCommand(overrides: Partial<GuildCommand> = {}): GuildCommand {
   return {
     id: "interaction-1",
     application_id: "app-1",
@@ -58,6 +60,11 @@ export function createInteraction(overrides: Partial<Interaction> = {}): Interac
     },
     ...overrides,
   };
+}
+
+/** Any interaction, including the DM shapes a guild command rules out. */
+export function createInteraction(overrides: Partial<Interaction> = {}): Interaction {
+  return { ...createGuildCommand(), ...overrides };
 }
 
 export function toHex(bytes: ArrayBuffer): string {

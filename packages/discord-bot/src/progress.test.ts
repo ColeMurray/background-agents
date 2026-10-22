@@ -7,7 +7,7 @@ import {
   recordStep,
   startProgress,
 } from "./progress";
-import { createEnv, createKv } from "./test-helpers";
+import { createEnv } from "./test-helpers";
 
 const discordFetch = vi.fn();
 
@@ -49,55 +49,49 @@ describe("formatting", () => {
   });
 
   it("shows the starting line before the first step", () => {
-    const text = formatStatus({ messageId: "m", startedAt: 0, recentSteps: [] }, 0);
-    expect(text).toBe("⏳ **Working…** 0s\n-# Starting the sandbox");
+    expect(formatStatus(0, undefined, 0)).toBe("⏳ **Working…** 0s\n-# Starting the sandbox");
   });
 });
 
 describe("progress lifecycle", () => {
   it("posts, updates, and finishes one status message", async () => {
-    const kv = createKv();
-    const env = createEnv({ DISCORD_KV: kv as unknown as KVNamespace });
+    const env = createEnv();
 
-    await startProgress(env, "s1", "thread-1");
-    for (let i = 0; i < 7; i++) {
-      await recordStep(env, {
-        sessionId: "s1",
-        channelId: "thread-1",
-        tool: "Bash",
-        args: { command: `step ${i}` },
-      });
-    }
+    const statusMessage = await startProgress(env, "thread-1");
+    expect(statusMessage).toEqual({ id: "status-1", startedAt: expect.any(Number) });
+    expect(calls()[0]).toMatchObject({
+      url: expect.stringContaining("/channels/thread-1/messages"),
+    });
 
-    const record = JSON.parse(kv.store.get("status:s1:thread-1")!);
-    expect(record.recentSteps).toEqual(
-      ["step 2", "step 3", "step 4", "step 5", "step 6"].map((c) => `Ran: ${c}`)
-    );
-
-    const lastEdit = calls()
-      .filter((call) => call.method === "PATCH")
-      .at(-1)!;
-    expect(lastEdit.url).toContain("/channels/thread-1/messages/status-1");
-    expect(lastEdit.body.content).toContain("-# Ran: step 6");
+    await recordStep(env, {
+      channelId: "thread-1",
+      statusMessage: statusMessage!,
+      tool: "Bash",
+      args: { command: "npm test" },
+    });
+    const edit = calls().find((call) => call.method === "PATCH")!;
+    expect(edit.url).toContain("/channels/thread-1/messages/status-1");
+    expect(edit.body.content).toMatch(/^⏳ \*\*Working…\*\* \d+s\n-# Ran: npm test$/);
     expect(calls().some((call) => call.url.endsWith("/channels/thread-1/typing"))).toBe(true);
 
-    await finishProgress(env, { sessionId: "s1", channelId: "thread-1", success: true });
-    expect(kv.store.has("status:s1:thread-1")).toBe(false);
+    await finishProgress(env, {
+      channelId: "thread-1",
+      statusMessage: statusMessage!,
+      success: true,
+    });
     expect(calls().at(-1)!.body.content).toMatch(/^✅ \*\*Finished\*\* in \d+s$/);
   });
 
-  it("ignores steps for tasks without a status message", async () => {
-    await recordStep(createEnv(), {
-      sessionId: "s1",
-      channelId: "thread-1",
-      tool: "Bash",
-      args: {},
-    });
-    expect(discordFetch).not.toHaveBeenCalled();
-  });
-
-  it("never throws when Discord fails", async () => {
+  it("returns nothing and never throws when Discord fails", async () => {
     discordFetch.mockResolvedValue(new Response("down", { status: 500 }));
-    await expect(startProgress(createEnv(), "s1", "thread-1")).resolves.toBeUndefined();
+    await expect(startProgress(createEnv(), "thread-1")).resolves.toBeUndefined();
+    await expect(
+      recordStep(createEnv(), {
+        channelId: "thread-1",
+        statusMessage: { id: "status-1", startedAt: 0 },
+        tool: "Bash",
+        args: {},
+      })
+    ).resolves.toBeUndefined();
   });
 });

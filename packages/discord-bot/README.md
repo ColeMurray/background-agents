@@ -29,10 +29,12 @@ For setup and day-to-day usage, see the user-facing
      `DEFAULT_MODEL`), edits the deferred reply into a "Task started" message, opens a thread on it,
      and stores `thread:<thread id> → session` in KV for 30 days.
    - It posts a status message in the thread, then sends the prompt with a `discord` callback
-     context naming the channel, thread, and user.
+     context naming the channel, thread, user, and that status message. The control plane echoes the
+     context on every callback, so each prompt's progress lands on its own message without any
+     bot-side state.
 5. The control plane calls back with signed payloads:
-   - `POST /callbacks/tool_call` appends a one-line step summary to the status message (keeping the
-     last five) and sends a typing indicator (`src/progress.ts`).
+   - `POST /callbacks/tool_call` shows the latest tool call on the status message and sends a typing
+     indicator (`src/progress.ts`).
    - `POST /callbacks/complete` fetches the agent's response, marks the status message finished or
      stopped, and posts the summary and pull request link, mentioning the requester
      (`src/callbacks.ts`, `src/format.ts`).
@@ -41,19 +43,19 @@ If the thread cannot be created, replies go to the channel and follow-ups are un
 
 ## Bindings
 
-| Binding                       | Kind    | Purpose                                                       |
-| ----------------------------- | ------- | ------------------------------------------------------------- |
-| `DISCORD_KV`                  | KV      | Thread → session map, status message records, repo list cache |
-| `CONTROL_PLANE`               | Service | Control plane API                                             |
-| `DISCORD_APPLICATION_ID`      | Var     | Edits the deferred interaction response                       |
-| `DISCORD_PUBLIC_KEY`          | Var     | Verifies interaction signatures                               |
-| `DISCORD_ALLOWED_ROLE_IDS`    | Var     | Comma-separated roles allowed to submit tasks                 |
-| `DISCORD_ALLOWED_CHANNEL_IDS` | Var     | Comma-separated channels; empty accepts any                   |
-| `DEFAULT_MODEL`               | Var     | Model for new sessions                                        |
-| `HARNESS`                     | Var     | `claude` (default) or `opencode`                              |
-| `WEB_APP_URL`                 | Var     | Session links                                                 |
-| `DISCORD_BOT_TOKEN`           | Secret  | Posts and edits messages, opens threads                       |
-| `SERVICE_AUTH_SECRET`         | Secret  | Signs control plane requests and verifies its callbacks       |
+| Binding                       | Kind    | Purpose                                                 |
+| ----------------------------- | ------- | ------------------------------------------------------- |
+| `DISCORD_KV`                  | KV      | Thread → session map, repo list cache                   |
+| `CONTROL_PLANE`               | Service | Control plane API                                       |
+| `DISCORD_APPLICATION_ID`      | Var     | Edits the deferred interaction response                 |
+| `DISCORD_PUBLIC_KEY`          | Var     | Verifies interaction signatures                         |
+| `DISCORD_ALLOWED_ROLE_IDS`    | Var     | Comma-separated roles allowed to submit tasks           |
+| `DISCORD_ALLOWED_CHANNEL_IDS` | Var     | Comma-separated channels; empty accepts any             |
+| `DEFAULT_MODEL`               | Var     | Model for new sessions                                  |
+| `HARNESS`                     | Var     | `claude` (default) or `opencode`                        |
+| `WEB_APP_URL`                 | Var     | Session links                                           |
+| `DISCORD_BOT_TOKEN`           | Secret  | Posts and edits messages, opens threads                 |
+| `SERVICE_AUTH_SECRET`         | Secret  | Signs control plane requests and verifies its callbacks |
 
 All of these are set by Terraform (`terraform/environments/production/workers-discord.tf`) when
 `enable_discord_bot = true`.

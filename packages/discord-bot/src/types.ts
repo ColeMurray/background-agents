@@ -19,8 +19,8 @@ export interface Env {
   DEPLOYMENT_NAME: string;
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
-  /** Harness for sessions started from Discord: "claude" (default) or "opencode". */
-  HARNESS?: string;
+  /** Harness id for sessions started from Discord; Terraform sets and validates it. */
+  HARNESS: string;
   APP_NAME?: string;
 
   // Discord application
@@ -103,6 +103,17 @@ export const interactionSchema = z.object({
 });
 
 export type Interaction = z.infer<typeof interactionSchema>;
+
+/**
+ * A command sent from inside a server. Discord omits `guild_id`, `member`, and
+ * `channel_id` only for DMs, which access control rejects; after that check the
+ * task handler can rely on all three.
+ */
+export type GuildCommand = Interaction & {
+  guild_id: string;
+  channel_id: string;
+  member: NonNullable<Interaction["member"]>;
+};
 
 // ─── KV records ──────────────────────────────────────────────────────────────
 

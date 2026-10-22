@@ -12,8 +12,9 @@ describe("parseIdList", () => {
 });
 
 describe("checkAccess", () => {
-  it("allows a dev in the task channel", () => {
-    expect(checkAccess(createInteraction(), config)).toEqual({ allowed: true });
+  it("allows a dev in the task channel and hands back the narrowed command", () => {
+    const interaction = createInteraction();
+    expect(checkAccess(interaction, config)).toEqual({ allowed: true, command: interaction });
   });
 
   it("allows a dev in a thread under the task channel", () => {
@@ -21,7 +22,7 @@ describe("checkAccess", () => {
       channel_id: "thread-1",
       channel: { id: "thread-1", type: 11, parent_id: "chan-tasks" },
     });
-    expect(checkAccess(interaction, config)).toEqual({ allowed: true });
+    expect(checkAccess(interaction, config)).toMatchObject({ allowed: true });
   });
 
   it("rejects other channels", () => {
@@ -31,7 +32,7 @@ describe("checkAccess", () => {
 
   it("accepts any channel when no channel is configured", () => {
     const interaction = createInteraction({ channel_id: "chan-general" });
-    expect(checkAccess(interaction, { ...config, allowedChannelIds: [] })).toEqual({
+    expect(checkAccess(interaction, { ...config, allowedChannelIds: [] })).toMatchObject({
       allowed: true,
     });
   });
@@ -52,6 +53,10 @@ describe("checkAccess", () => {
   it("rejects DMs", () => {
     const interaction = createInteraction({ guild_id: undefined, member: undefined });
     expect(checkAccess(interaction, config)).toEqual({ allowed: false, reason: "not_in_guild" });
+    expect(checkAccess(createInteraction({ channel_id: undefined }), config)).toEqual({
+      allowed: false,
+      reason: "not_in_guild",
+    });
   });
 });
 

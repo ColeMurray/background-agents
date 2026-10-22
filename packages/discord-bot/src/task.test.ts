@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutboundRequestToSign } from "@open-inspect/shared/service-auth";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { handleTask } from "./task";
-import { createEnv, createInteraction, createKv } from "./test-helpers";
+import { createEnv, createGuildCommand, createKv } from "./test-helpers";
 
 vi.mock("./internal-auth", () => ({ signedControlPlaneFetch: vi.fn() }));
 
@@ -25,23 +25,25 @@ function discordCalls(): { url: string; method: string; body: Record<string, unk
   }));
 }
 
+function repo(owner: string, name: string) {
+  return {
+    id: 1,
+    owner,
+    name,
+    fullName: `${owner}/${name}`,
+    description: null,
+    private: true,
+    defaultBranch: "main",
+    archived: false,
+  };
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", discordFetch);
   cpFetch.mockImplementation(async (_env, request) => {
     if (request.url === "https://internal/repos") {
       return json({
-        repos: [
-          {
-            id: 1,
-            owner: "octo",
-            name: "website",
-            fullName: "octo/website",
-            description: null,
-            private: true,
-            defaultBranch: "main",
-            archived: false,
-          },
-        ],
+        repos: [repo("octo", "website"), repo("group/subgroup", "api")],
         cached: false,
         cachedAt: "2026-09-23T00:00:00Z",
       });
@@ -66,7 +68,7 @@ describe("handleTask", () => {
     const env = createEnv({ DISCORD_KV: kv as unknown as KVNamespace });
 
     await handleTask(env, {
-      interaction: createInteraction(),
+      interaction: createGuildCommand(),
       prompt: "Make the icon black",
       repo: "Octo/Website",
     });
@@ -91,21 +93,44 @@ describe("handleTask", () => {
         userId: "user-1",
         repoFullName: "octo/website",
         model: "anthropic/claude-opus-5",
+        statusMessage: { id: "msg-1", startedAt: expect.any(Number) },
       },
     });
 
-    const [edit, thread] = discordCalls();
+    const [edit, thread, status] = discordCalls();
     expect(edit.url).toContain("/webhooks/app-1/interaction-token/messages/@original");
     expect(edit.body.content).toContain("https://web.example.com/session/s1");
     expect(thread.url).toContain("/channels/chan-tasks/messages/msg-1/threads");
+    expect(status.url).toContain("/channels/thread-1/messages");
     expect(JSON.parse(kv.store.get("thread:thread-1")!)).toMatchObject({ sessionId: "s1" });
-    expect(discordCalls()[2].url).toContain("/channels/thread-1/messages");
-    expect(kv.store.has("status:s1:thread-1")).toBe(true);
+  });
+
+  it("keeps a nested owner intact when creating the session", async () => {
+    await handleTask(createEnv(), {
+      interaction: createGuildCommand(),
+      prompt: "Do something",
+      repo: "group/subgroup/api",
+    });
+
+    const [, create] = cpCalls();
+    expect(JSON.parse(create.body as string)).toMatchObject({
+      repoOwner: "group/subgroup",
+      repoName: "api",
+    });
+  });
+
+  it("rejects a harness Terraform would not have set", async () => {
+    await handleTask(createEnv({ HARNESS: "cursor" }), {
+      interaction: createGuildCommand(),
+      prompt: "Do something",
+      repo: "octo/website",
+    });
+
+    expect(cpCalls().map((call) => call.url)).toEqual(["https://internal/repos"]);
+    expect(discordCalls()[0].body.content).toContain("Couldn't start the task");
   });
 
   it("closes the status message when the prompt cannot be sent", async () => {
-    const kv = createKv();
-    const env = createEnv({ DISCORD_KV: kv as unknown as KVNamespace });
     const base = cpFetch.getMockImplementation()!;
     cpFetch.mockImplementation(async (e, request, init) =>
       request.url.endsWith("/prompt")
@@ -113,15 +138,15 @@ describe("handleTask", () => {
         : base(e, request, init)
     );
 
-    await handleTask(env, {
-      interaction: createInteraction(),
+    await handleTask(createEnv(), {
+      interaction: createGuildCommand(),
       prompt: "Make the icon black",
       repo: "octo/website",
     });
 
-    expect(kv.store.has("status:s1:thread-1")).toBe(false);
     const edits = discordCalls().filter((call) => call.method === "PATCH");
     expect(edits.some((call) => String(call.body.content).startsWith("⚠️ **Stopped**"))).toBe(true);
+    expect(edits.at(-1)!.body.content).toContain("Couldn't start the task");
   });
 
   it("sends a follow-up when run inside a task thread", async () => {
@@ -136,7 +161,7 @@ describe("handleTask", () => {
     const env = createEnv({ DISCORD_KV: kv as unknown as KVNamespace });
 
     await handleTask(env, {
-      interaction: createInteraction({ channel_id: "thread-1" }),
+      interaction: createGuildCommand({ channel_id: "thread-1" }),
       prompt: "Also make it smaller",
       repo: undefined,
     });
@@ -146,12 +171,16 @@ describe("handleTask", () => {
     expect(reply?.body.content).toContain("Follow-up");
     const status = discordCalls().find((call) => call.url.endsWith("/channels/thread-1/messages"));
     expect(status?.body.content).toContain("Working");
-    expect(kv.store.has("status:s1:thread-1")).toBe(true);
+    const context = JSON.parse(cpCalls()[0].body as string).callbackContext;
+    expect(context).toMatchObject({
+      threadId: "thread-1",
+      statusMessage: { id: "msg-1" },
+    });
   });
 
   it("rejects repositories the GitHub App cannot access", async () => {
     await handleTask(createEnv(), {
-      interaction: createInteraction(),
+      interaction: createGuildCommand(),
       prompt: "Do something",
       repo: "someone/else",
     });
@@ -162,7 +191,7 @@ describe("handleTask", () => {
 
   it("asks for a repository outside a task thread", async () => {
     await handleTask(createEnv(), {
-      interaction: createInteraction(),
+      interaction: createGuildCommand(),
       prompt: "Do something",
       repo: undefined,
     });
@@ -180,7 +209,7 @@ describe("handleTask", () => {
     );
 
     await handleTask(createEnv(), {
-      interaction: createInteraction(),
+      interaction: createGuildCommand(),
       prompt: "Do something",
       repo: "octo/website",
     });
@@ -198,7 +227,7 @@ describe("handleTask", () => {
     );
 
     await handleTask(createEnv(), {
-      interaction: createInteraction(),
+      interaction: createGuildCommand(),
       prompt: "Make the icon black",
       repo: "octo/website",
     });
@@ -207,5 +236,22 @@ describe("handleTask", () => {
     const context = JSON.parse(prompt.body as string).callbackContext;
     expect(context.threadId).toBeUndefined();
     expect(context.channelId).toBe("chan-tasks");
+  });
+
+  it("sends the prompt without progress when the status message cannot be posted", async () => {
+    discordFetch.mockImplementation(async (url: string, init: RequestInit) =>
+      String(url).endsWith("/channels/thread-1/messages") && init.method === "POST"
+        ? json({ message: "Missing Permissions" }, 403)
+        : json({ id: String(url).includes("/threads") ? "thread-1" : "msg-1" })
+    );
+
+    await handleTask(createEnv(), {
+      interaction: createGuildCommand(),
+      prompt: "Make the icon black",
+      repo: "octo/website",
+    });
+
+    const context = JSON.parse(cpCalls().at(-1)!.body as string).callbackContext;
+    expect(context.statusMessage).toBeUndefined();
   });
 });

@@ -79,7 +79,7 @@ describe("POST /interactions", () => {
     );
     expect(json).toMatchObject({
       type: 4,
-      data: { content: "You need the dev role to submit tasks.", flags: 64 },
+      data: { content: expect.stringContaining("Your roles don't allow"), flags: 64 },
     });
     expect(waitUntil).not.toHaveBeenCalled();
   });

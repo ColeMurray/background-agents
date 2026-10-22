@@ -5,6 +5,13 @@
 import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import { MAX_MESSAGE_LENGTH } from "./discord-api";
 
+/** Longest error shown inline; anything more belongs on the session page. */
+const MAX_ERROR_LENGTH = 500;
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
 export function formatCompletion(params: {
   userId: string;
   success: boolean;
@@ -19,7 +26,7 @@ export function formatCompletion(params: {
   const details: string[] = [];
   const pr = response?.artifacts.find((artifact) => artifact.type === "pr" && artifact.url);
   if (pr?.url) details.push(`**Pull request:** ${pr.url}`);
-  if (!success && params.error) details.push(`**Error:** ${params.error}`);
+  if (!success && params.error) details.push(`**Error:** ${clip(params.error, MAX_ERROR_LENGTH)}`);
 
   const fixed = [header, ...details, footer].join("\n");
   const summary = response?.textContent.trim() ?? "";
@@ -27,6 +34,5 @@ export function formatCompletion(params: {
   const budget = MAX_MESSAGE_LENGTH - fixed.length - 2;
   if (!summary || budget < 50) return fixed;
 
-  const clipped = summary.length > budget ? `${summary.slice(0, budget - 3)}...` : summary;
-  return [header, ...details, "", clipped, footer].join("\n").slice(0, MAX_MESSAGE_LENGTH);
+  return [header, ...details, "", clip(summary, budget), footer].join("\n");
 }

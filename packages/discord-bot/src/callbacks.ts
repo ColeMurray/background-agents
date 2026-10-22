@@ -4,44 +4,27 @@
  */
 
 import { Hono } from "hono";
-import { z } from "zod";
 import { isSignedCallbackPayload, verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import { extractAgentResponse } from "@open-inspect/shared/completion/extractor";
 import { resolveOutboundCredential } from "@open-inspect/shared/service-auth";
-import { discordCallbackContextSchema } from "@open-inspect/shared/types/session-api";
+import {
+  discordCompletionCallbackSchema,
+  discordToolCallCallbackSchema,
+  type DiscordCallbackContext,
+  type DiscordCompletionCallback,
+} from "@open-inspect/shared/types/session-api";
 import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import { postChannelMessage } from "./discord-api";
 import { formatCompletion } from "./format";
+import { sessionUrl } from "./links";
 import { createLogger } from "./logger";
 import { finishProgress, recordStep } from "./progress";
-import { sessionUrl } from "./task";
 import type { Env } from "./types";
 
 const log = createLogger("callback");
 
-const completionCallbackSchema = z.object({
-  sessionId: z.string().min(1),
-  messageId: z.string().min(1),
-  success: z.boolean(),
-  error: z.string().optional(),
-  timestamp: z.number(),
-  context: discordCallbackContextSchema,
-  signature: z.string().min(1),
-});
-
-const toolCallCallbackSchema = z.object({
-  sessionId: z.string().min(1),
-  tool: z.string().min(1),
-  args: z.record(z.string(), z.unknown()),
-  callId: z.string().min(1),
-  status: z.string().optional(),
-  timestamp: z.number(),
-  context: discordCallbackContextSchema,
-  signature: z.string().min(1),
-});
-
 /** Where replies for a callback context go: the task thread, else its channel. */
-function replyChannel(context: z.infer<typeof discordCallbackContextSchema>): string {
+function replyChannel(context: DiscordCallbackContext): string {
   return context.threadId ?? context.channelId;
 }
 
@@ -55,7 +38,7 @@ callbacksRouter.post("/complete", async (c) => {
   const payload: unknown = await c.req.json().catch(() => null);
   if (!(await isAuthentic(c.env, payload))) return c.json({ error: "unauthorized" }, 401);
 
-  const parsed = completionCallbackSchema.safeParse(payload);
+  const parsed = discordCompletionCallbackSchema.safeParse(payload);
   if (!parsed.success) return c.json({ error: "invalid payload" }, 400);
 
   c.executionCtx.waitUntil(postCompletion(c.env, parsed.data));
@@ -66,24 +49,25 @@ callbacksRouter.post("/tool_call", async (c) => {
   const payload: unknown = await c.req.json().catch(() => null);
   if (!(await isAuthentic(c.env, payload))) return c.json({ error: "unauthorized" }, 401);
 
-  const parsed = toolCallCallbackSchema.safeParse(payload);
+  const parsed = discordToolCallCallbackSchema.safeParse(payload);
   if (!parsed.success) return c.json({ error: "invalid payload" }, 400);
 
-  c.executionCtx.waitUntil(
-    recordStep(c.env, {
-      sessionId: parsed.data.sessionId,
-      channelId: replyChannel(parsed.data.context),
-      tool: parsed.data.tool,
-      args: parsed.data.args,
-    })
-  );
+  const { context, tool, args } = parsed.data;
+  // No status message means posting it failed; there is nothing to update.
+  if (context.statusMessage) {
+    c.executionCtx.waitUntil(
+      recordStep(c.env, {
+        channelId: replyChannel(context),
+        statusMessage: context.statusMessage,
+        tool,
+        args,
+      })
+    );
+  }
   return c.json({ ok: true });
 });
 
-async function postCompletion(
-  env: Env,
-  callback: z.infer<typeof completionCallbackSchema>
-): Promise<void> {
+async function postCompletion(env: Env, callback: DiscordCompletionCallback): Promise<void> {
   const { sessionId, messageId, context } = callback;
   let response: AgentResponse | null = null;
   try {
@@ -102,7 +86,13 @@ async function postCompletion(
   }
 
   const channelId = replyChannel(context);
-  await finishProgress(env, { sessionId, channelId, success: callback.success });
+  if (context.statusMessage) {
+    await finishProgress(env, {
+      channelId,
+      statusMessage: context.statusMessage,
+      success: callback.success,
+    });
+  }
 
   try {
     await postChannelMessage(env.DISCORD_BOT_TOKEN, channelId, {

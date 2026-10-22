@@ -54,10 +54,27 @@ describe("formatCompletion", () => {
     expect(text.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
     expect(text.endsWith("[View session](<https://web/session/s1>)")).toBe(true);
   });
+
+  it("bounds a long error so the session link survives", () => {
+    const text = formatCompletion({
+      userId: "u1",
+      success: false,
+      error: "e".repeat(3000),
+      response: null,
+      sessionUrl: "https://web/session/s1",
+    });
+    expect(text.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    expect(text).toContain(`**Error:** ${"e".repeat(497)}...`);
+    expect(text.endsWith("[View session](<https://web/session/s1>)")).toBe(true);
+  });
 });
 
 describe("repo helpers", () => {
-  const repos = ["octo/website", "octo/tools", "acme/api"];
+  const repos = [
+    { owner: "octo", name: "website", fullName: "octo/website" },
+    { owner: "octo", name: "tools", fullName: "octo/tools" },
+    { owner: "acme", name: "api", fullName: "acme/api" },
+  ];
 
   it("matches any part of the name, case-insensitively", () => {
     expect(repoChoices(repos, "WEBS").map((choice) => choice.value)).toEqual(["octo/website"]);
@@ -65,7 +82,7 @@ describe("repo helpers", () => {
   });
 
   it("resolves exact names only", () => {
-    expect(findRepo(repos, "Octo/Tools")).toBe("octo/tools");
+    expect(findRepo(repos, "Octo/Tools")).toEqual(repos[1]);
     expect(findRepo(repos, "tools")).toBeUndefined();
   });
 });

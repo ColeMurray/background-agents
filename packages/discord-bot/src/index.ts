@@ -8,8 +8,9 @@
  */
 
 import { Hono } from "hono";
-import { checkAccess, denialMessage, parseIdList } from "./access";
+import { checkAccess, denialMessage, parseIdList, type AccessDecision } from "./access";
 import { callbacksRouter } from "./callbacks";
+import { PROMPT_OPTION_NAME, REPO_OPTION_NAME, TASK_COMMAND_NAME } from "./commands";
 import { createLogger } from "./logger";
 import { listRepos, repoChoices } from "./repos";
 import { handleTask } from "./task";
@@ -20,12 +21,11 @@ import {
   interactionSchema,
   type CommandOption,
   type Env,
+  type Interaction,
 } from "./types";
 import { verifyDiscordSignature } from "./verify";
 
 const log = createLogger("interactions");
-
-export const TASK_COMMAND = "task";
 
 function optionValue(options: CommandOption[] | undefined, name: string): string | undefined {
   const value = options?.find((option) => option.name === name)?.value;
@@ -37,6 +37,51 @@ function ephemeral(content: string) {
     type: InteractionResponseType.ChannelMessageWithSource,
     data: { content, flags: EPHEMERAL_FLAG, allowed_mentions: { parse: [] } },
   };
+}
+
+function autocompleteResult(choices: { name: string; value: string }[]) {
+  return { type: InteractionResponseType.AutocompleteResult, data: { choices } };
+}
+
+async function handleAutocomplete(env: Env, interaction: Interaction, access: AccessDecision) {
+  // Only reveal the repository list to people allowed to use it.
+  if (!access.allowed) return autocompleteResult([]);
+  const query = String(interaction.data?.options?.find((option) => option.focused)?.value ?? "");
+  try {
+    return autocompleteResult(repoChoices(await listRepos(env), query));
+  } catch (error) {
+    log.error("autocomplete.failed", { error });
+    return autocompleteResult([]);
+  }
+}
+
+function handleCommand(
+  env: Env,
+  interaction: Interaction,
+  access: AccessDecision,
+  allowedChannelIds: string[],
+  waitUntil: (promise: Promise<unknown>) => void
+) {
+  if (!access.allowed) {
+    log.info("task.denied", {
+      reason: access.reason,
+      user_id: interaction.member?.user.id,
+      channel_id: interaction.channel_id,
+    });
+    return ephemeral(denialMessage(access, allowedChannelIds));
+  }
+
+  const prompt = optionValue(interaction.data?.options, PROMPT_OPTION_NAME);
+  if (!prompt) return ephemeral(`Describe the task in the \`${PROMPT_OPTION_NAME}\` option.`);
+
+  waitUntil(
+    handleTask(env, {
+      interaction: access.command,
+      prompt,
+      repo: optionValue(interaction.data?.options, REPO_OPTION_NAME),
+    })
+  );
+  return { type: InteractionResponseType.DeferredChannelMessageWithSource };
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -66,8 +111,7 @@ app.post("/interactions", async (c) => {
   if (interaction.type === InteractionType.Ping) {
     return c.json({ type: InteractionResponseType.Pong });
   }
-
-  if (interaction.data?.name !== TASK_COMMAND) {
+  if (interaction.data?.name !== TASK_COMMAND_NAME) {
     return c.json(ephemeral("Unknown command."));
   }
 
@@ -77,48 +121,18 @@ app.post("/interactions", async (c) => {
     allowedChannelIds,
   });
 
-  if (interaction.type === InteractionType.Autocomplete) {
-    // Only reveal the repository list to people allowed to use it.
-    if (!access.allowed) {
-      return c.json({ type: InteractionResponseType.AutocompleteResult, data: { choices: [] } });
-    }
-    const query = String(interaction.data.options?.find((option) => option.focused)?.value ?? "");
-    try {
-      const repos = await listRepos(c.env);
-      return c.json({
-        type: InteractionResponseType.AutocompleteResult,
-        data: { choices: repoChoices(repos, query) },
-      });
-    } catch (error) {
-      log.error("autocomplete.failed", { error });
-      return c.json({ type: InteractionResponseType.AutocompleteResult, data: { choices: [] } });
-    }
+  switch (interaction.type) {
+    case InteractionType.Autocomplete:
+      return c.json(await handleAutocomplete(c.env, interaction, access));
+    case InteractionType.ApplicationCommand:
+      return c.json(
+        handleCommand(c.env, interaction, access, allowedChannelIds, (promise) =>
+          c.executionCtx.waitUntil(promise)
+        )
+      );
+    default:
+      return c.json(ephemeral("Unsupported interaction."));
   }
-
-  if (interaction.type !== InteractionType.ApplicationCommand) {
-    return c.json(ephemeral("Unsupported interaction."));
-  }
-
-  if (!access.allowed) {
-    log.info("task.denied", {
-      reason: access.reason,
-      user_id: interaction.member?.user.id,
-      channel_id: interaction.channel_id,
-    });
-    return c.json(ephemeral(denialMessage(access, allowedChannelIds)));
-  }
-
-  const prompt = optionValue(interaction.data.options, "prompt");
-  if (!prompt) return c.json(ephemeral("Describe the task in the `prompt` option."));
-
-  c.executionCtx.waitUntil(
-    handleTask(c.env, {
-      interaction,
-      prompt,
-      repo: optionValue(interaction.data.options, "repo"),
-    })
-  );
-  return c.json({ type: InteractionResponseType.DeferredChannelMessageWithSource });
 });
 
 app.route("/callbacks", callbacksRouter);

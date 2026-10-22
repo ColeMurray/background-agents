@@ -18,10 +18,10 @@ take that long to appear.
 
 1. **Task started**: the bot's reply in the channel quotes the prompt, names the repository, and
    links to the session in the web app. A thread named after the prompt's first line opens on it.
-2. **Live status**: a status message in the thread shows the elapsed time and the last few steps the
+2. **Live status**: a status message in the thread shows the elapsed time and the latest step the
    agent took (for example `Read …/src/app.ts` or `Ran npm test`), with a typing indicator while it
-   works. The control plane sends at most one step update every few seconds, so the list is a sample
-   of recent steps, not a full log. Open the session link for everything.
+   works. The control plane sends at most one step update every few seconds, so the step shown is a
+   sample, not a full log. Open the session link for everything.
 3. **Result**: the status message changes to **Finished** (or **Stopped** on failure) with the total
    time, and the bot posts the summary and pull request link, mentioning whoever ran `/task`.
 

@@ -6,17 +6,27 @@
  * role list tight.
  */
 
-import type { Interaction } from "./types";
+import type { GuildCommand, Interaction } from "./types";
 
 export type AccessDecision =
-  | { allowed: true }
+  | { allowed: true; command: GuildCommand }
   | { allowed: false; reason: "not_in_guild" | "wrong_channel" | "missing_role" };
+
+export type AccessDenial = Exclude<AccessDecision, { allowed: true }>;
 
 export function parseIdList(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
+}
+
+function isGuildCommand(interaction: Interaction): interaction is GuildCommand {
+  return (
+    interaction.guild_id !== undefined &&
+    interaction.channel_id !== undefined &&
+    interaction.member !== undefined
+  );
 }
 
 /**
@@ -29,7 +39,7 @@ export function checkAccess(
   interaction: Interaction,
   config: { allowedRoleIds: string[]; allowedChannelIds: string[] }
 ): AccessDecision {
-  if (!interaction.guild_id || !interaction.member) {
+  if (!isGuildCommand(interaction)) {
     return { allowed: false, reason: "not_in_guild" };
   }
 
@@ -46,19 +56,16 @@ export function checkAccess(
     return { allowed: false, reason: "missing_role" };
   }
 
-  return { allowed: true };
+  return { allowed: true, command: interaction };
 }
 
-export function denialMessage(
-  decision: Exclude<AccessDecision, { allowed: true }>,
-  allowedChannelIds: string[]
-): string {
+export function denialMessage(decision: AccessDenial, allowedChannelIds: string[]): string {
   switch (decision.reason) {
     case "not_in_guild":
       return "Tasks can only be submitted from the server, not from DMs.";
     case "wrong_channel":
       return `Tasks can only be submitted in ${allowedChannelIds.map((id) => `<#${id}>`).join(", ")}.`;
     case "missing_role":
-      return "You need the dev role to submit tasks.";
+      return "Your roles don't allow submitting tasks. Ask a server admin for access.";
   }
 }
