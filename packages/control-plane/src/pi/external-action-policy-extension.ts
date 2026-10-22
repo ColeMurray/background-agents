@@ -10,7 +10,7 @@ import type {
   ExternalActionStatusResponse,
 } from "@open-inspect/shared";
 import type { ToolEffectRegistration } from "@open-inspect/shared/pi-tool-effects";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 const POLICY_MEMO_SCHEMA = "open-inspect.external-action-policy.v1";
 export interface ExternalActionPolicyClient {
@@ -114,7 +114,7 @@ export function createGatewayExternalActionTool<TParameters extends TSchema>(
  */
 export function createExternalActionPolicyDelegate(
   options: ExternalActionPolicyOptions
-): ToolPolicyDelegate {
+): PiToolPolicyDelegate {
   return {
     beforeTool: async (call, declaration, api, context) => {
       if (declaration.effect !== "external_mutation") return undefined;

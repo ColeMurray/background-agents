@@ -231,6 +231,13 @@ const nonArtifactSandboxEventSchemas = [
     reason: z.string().nullable(),
   }),
   messageSandboxEventBaseSchema.extend({
+    type: z.literal("cross_session_message"),
+    targetSessionId: z.string().min(1),
+    receiptId: z.string().min(1),
+    status: z.enum(["delivered", "duplicate", "rejected"]),
+    reason: z.string().nullable(),
+  }),
+  messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),
   }),
   // Push events: repoOwner/repoName identify the repository in a multi-repo

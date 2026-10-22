@@ -6,7 +6,7 @@ import {
   type ToolEffectRegistration,
 } from "@open-inspect/shared/pi-tool-effects";
 import { createExternalActionPolicyDelegate } from "./external-action-policy-extension";
-import { createToolPolicyExtension } from "../harness/tool-policy";
+import { createToolPolicyExtension } from "./tool-policy-extension";
 
 const action = {
   id: "action-1",
@@ -69,7 +69,7 @@ function hookHarness(
       }),
     },
   });
-  const extension = createToolPolicyExtension(effects, [delegate]);
+  const extension = createToolPolicyExtension({ effects, delegates: [delegate] });
   const handlers = extension.hooks?.[0]?.handlers as {
     beforeTool: (
       call: never,
@@ -139,7 +139,7 @@ describe("external action policy extension", () => {
         h.api as never,
         {} as never
       )
-    ).resolves.toEqual({ block: "Pi tool is not declared: unclassified_local_tool" });
+    ).resolves.toEqual({ block: "Tool is not declared: unclassified_local_tool" });
     expect(h.client.prepare).not.toHaveBeenCalled();
   });
 

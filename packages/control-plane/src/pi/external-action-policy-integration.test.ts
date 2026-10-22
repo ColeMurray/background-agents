@@ -27,7 +27,7 @@ import {
   createGatewayExternalActionTool,
 } from "./external-action-policy-extension";
 import { assembleExtensions } from "../harness/extension-assembler";
-import { createToolPolicyExtension } from "../harness/tool-policy";
+import { createToolPolicyExtension } from "./tool-policy-extension";
 
 describe("Pi external action approval integration", () => {
   const databases: DatabaseSync[] = [];
@@ -120,7 +120,8 @@ describe("Pi external action approval integration", () => {
         {
           slot: "policy",
           effects: [],
-          createExtension: (effects) => createToolPolicyExtension(effects, [delegate]),
+          createExtension: (effects) =>
+            createToolPolicyExtension({ effects, delegates: [delegate] }),
         },
         {
           slot: "external_actions",

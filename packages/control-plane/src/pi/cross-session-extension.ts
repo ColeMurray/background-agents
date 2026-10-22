@@ -1,7 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
-import type { ToolPolicyDelegate } from "../harness/tool-policy";
+import type { PiToolPolicyDelegate } from "./tool-policy-types";
 
 /** The cross-session tool's stable name. */
 export const CROSS_SESSION_TOOL_NAME = "message_session";
@@ -36,7 +36,7 @@ export interface CrossSessionPolicyOptions {
  */
 export function createCrossSessionPolicyDelegate(
   options: CrossSessionPolicyOptions
-): ToolPolicyDelegate {
+): PiToolPolicyDelegate {
   return {
     async beforeTool(call, declaration, _api, context) {
       if (call.name !== CROSS_SESSION_TOOL_NAME) return undefined;
