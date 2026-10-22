@@ -27,10 +27,12 @@ per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, auth token, user secr
 in restored mode.
 
 Prebuilt images are named snapshots too, saved by the control plane as `oi-img-<scope>-<digest>`
-from a build sandbox that deployed from this base snapshot. The launcher keeps an image build's
-lock, log and runtime state under `/tmp` (`IMAGE_BUILD_MODE=true`), so the saved disk carries the
-workspace and nothing of the build. Those names are the control plane's to create and delete; the
-base snapshot and the images share the account's named-snapshot allowance.
+from a build sandbox that deployed from this base snapshot. A build sandbox is created with the boot
+markers alone; its env arrives as `/tmp/openinspect-image-build.env` once the sandbox is private,
+and the launcher (`IMAGE_BUILD_MODE=true`) sources that file once, removes it, and keeps the build's
+lock, log and runtime state under `/tmp` too, so the saved disk carries the workspace and nothing of
+the build. Those names are the control plane's to create and delete; the base snapshot and the
+images share the account's named-snapshot allowance.
 
 ## Auth: one credential
 

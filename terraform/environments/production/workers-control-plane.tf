@@ -156,13 +156,18 @@ module "control_plane_worker" {
       E2B_SANDBOX_TIMEOUT_SECONDS = { value = tostring(var.e2b_sandbox_timeout_seconds) }
       E2B_AUTO_PAUSE              = { value = tostring(var.e2b_auto_pause) }
     } : {},
+    # Boat credentials stay bound while the key is configured, as Daytona's
+    # do, so image builds recorded against Boat can finalize or be reclaimed
+    # after a provider switch; only creating sandboxes needs the base snapshot.
+    trimspace(var.boat_api_key) != "" ? {
+      BOAT_API_URL = { value = var.boat_api_url }
+    } : {},
+    trimspace(var.boat_api_key) != "" && trimspace(var.boat_org) != "" ? {
+      BOAT_ORG = { value = var.boat_org }
+    } : {},
     local.use_boat_backend ? {
-      BOAT_API_URL       = { value = var.boat_api_url }
       BOAT_BASE_SNAPSHOT = { value = module.boat_infra[0].snapshot_name }
       BOAT_SANDBOX_TYPE  = { value = var.boat_sandbox_type }
-    } : {},
-    local.use_boat_backend && trimspace(var.boat_org) != "" ? {
-      BOAT_ORG = { value = var.boat_org }
     } : {}
   )
 
@@ -205,7 +210,7 @@ module "control_plane_worker" {
     local.use_e2b_backend ? {
       E2B_API_KEY = { value = var.e2b_api_key }
     } : {},
-    local.use_boat_backend ? {
+    trimspace(var.boat_api_key) != "" ? {
       BOAT_API_KEY = { value = var.boat_api_key }
     } : {},
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.

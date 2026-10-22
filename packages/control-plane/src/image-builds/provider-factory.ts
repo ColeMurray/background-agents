@@ -1,10 +1,13 @@
 import {
+  createBoatRestClientFromEnv,
   createDaytonaRestClientFromEnv,
   createSandboxProviderFromEnv,
+  resolveBoatDefaultMachineType,
 } from "../sandbox/provider-factory";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
 import { BoatImageBuildAdapter } from "./boat-adapter";
+import { BoatImageBuildResources } from "./boat-build-resources";
 import { DaytonaImageBuildAdapter } from "./daytona-adapter";
 import { DaytonaImageBuildResources } from "./daytona-build-resources";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
@@ -44,7 +47,17 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
       case "e2b":
         return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
       case "boat":
-        return new BoatImageBuildAdapter(createSandboxProviderFromEnv(this.env, "boat"));
+        if (operation === "start" && !this.env.BOAT_BASE_SNAPSHOT) {
+          throw new Error("BOAT_BASE_SNAPSHOT is required to start a Boat image build");
+        }
+        return new BoatImageBuildAdapter(
+          new BoatImageBuildResources(createBoatRestClientFromEnv(this.env), {
+            scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+            deploymentName: this.env.DEPLOYMENT_NAME,
+            defaultMachineType: resolveBoatDefaultMachineType(this.env),
+            baseSnapshot: this.env.BOAT_BASE_SNAPSHOT,
+          })
+        );
       case "daytona":
         return new DaytonaImageBuildAdapter(
           new DaytonaImageBuildResources(

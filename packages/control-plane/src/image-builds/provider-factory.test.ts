@@ -23,21 +23,28 @@ describe("createImageBuildAdapterFactory", () => {
     expect(factory.create("daytona", "existing_session")).toBeDefined();
   });
 
-  it("builds the Boat adapter from the Boat provider configuration", () => {
+  it("needs a base snapshot to start a Boat image build, but not to reclaim one", () => {
+    const factory = createImageBuildAdapterFactory(createEnv({ BOAT_API_KEY: "boat_key" }));
+
+    expect(() => factory.create("boat", "start")).toThrow(
+      "BOAT_BASE_SNAPSHOT is required to start a Boat image build"
+    );
+    // Images and build sources recorded against Boat are finalized and
+    // reclaimed after a provider switch, when no base snapshot is built.
+    expect(factory.create("boat", "existing_session")).toBeDefined();
+    expect(
+      createImageBuildAdapterFactory(
+        createEnv({ BOAT_API_KEY: "boat_key", BOAT_BASE_SNAPSHOT: "open-inspect-abc" })
+      ).create("boat", "start")
+    ).toBeDefined();
+  });
+
+  it("still requires Boat credentials for every operation", () => {
     const factory = createImageBuildAdapterFactory(
-      createEnv({ BOAT_API_KEY: "boat_key", BOAT_BASE_SNAPSHOT: "open-inspect-abc" })
+      createEnv({ BOAT_BASE_SNAPSHOT: "open-inspect-abc" })
     );
 
-    expect(factory.create("boat", "start")).toBeDefined();
-    expect(factory.create("boat", "existing_session")).toBeDefined();
-    // The base snapshot is the provider's configuration, as E2B's template is:
-    // every Boat operation constructs the same provider.
-    expect(() =>
-      createImageBuildAdapterFactory(createEnv({ BOAT_API_KEY: "boat_key" })).create(
-        "boat",
-        "existing_session"
-      )
-    ).toThrow("BOAT_API_KEY and BOAT_BASE_SNAPSHOT are required");
+    expect(() => factory.create("boat", "existing_session")).toThrow("BOAT_API_KEY is required");
   });
 
   it("still requires Daytona credentials for every operation", () => {

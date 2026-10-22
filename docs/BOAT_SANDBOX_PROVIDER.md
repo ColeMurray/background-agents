@@ -63,9 +63,10 @@ account's active wallet), every member of the organization can see them, and a s
 `shared` can be used by every member: commands, files, ports. A session sandbox's env holds the
 sandbox auth token and the user's secrets, so the provider makes a sandbox that reports itself
 `shared` private (`POST /sandboxes/{id}/unshare`) before it waits for it, and the snapshot build
-does the same for its build and verification sandboxes. A sandbox that cannot be made private fails
-the spawn and is deleted. Set the organization's default for new sandboxes to private first, so no
-sandbox is ever shared for even a moment:
+does the same for its build and verification sandboxes. An image build's sandbox is made private
+before the build's env is even delivered to it (see [Prebuilt Images](#prebuilt-images)). A sandbox
+that cannot be made private fails the spawn and is deleted. Set the organization's default for new
+sandboxes to private first, so no sandbox is ever shared for even a moment:
 
 ```bash
 boat org default-visibility private
@@ -174,7 +175,10 @@ cookie on the first visit. Treat a tunnel URL like a password.
 Enabling prebuilds for a repository (Settings > Images) or an environment (Settings > Environments)
 works as on every other provider ([IMAGE_PREBUILD.md](./IMAGE_PREBUILD.md)). On Boat:
 
-- a build sandbox deploys from the base snapshot with the build env and runs the launcher in
+- a build sandbox deploys from the base snapshot with only the boot markers in its env, on the
+  machine size the scope's settings select. Once it is private and bound to the build, the control
+  plane writes the build's env (repositories, clone token, scope secrets, callback contract) to a
+  file under `/tmp`, which the launcher reads once and removes, and starts the launcher in
   image-build mode; the runtime clones the repositories, runs each `.openinspect/setup.sh` and
   reports back to the control plane
 - finalization archives the build sandbox and saves its disk as a **named snapshot** called
@@ -187,7 +191,7 @@ Every image counts toward the account's named-snapshot allowance together with t
 Superseded images are deleted automatically; old **base** snapshots are not (see
 [Snapshot Build](#snapshot-build)), so remove those by hand to keep room for images. The
 [Boat prebuilds](./IMAGE_PREBUILD.md#boat-prebuilds) section covers the allowance, what a named
-snapshot keeps (`/tmp` and `~/.cache` are not saved), the env a snapshot inherits from its source,
+snapshot keeps (`/tmp` and `~/.cache` are not saved), why the build's env never reaches the image,
 and the runbook.
 
 ## Lifecycle: Stop and Resume
@@ -224,6 +228,10 @@ Terraform passes these provider-level values to the control plane:
   time, and to authenticate the snapshot build
 - `BOAT_BASE_SNAPSHOT`
 - `BOAT_API_URL`, `BOAT_ORG`, `BOAT_SANDBOX_TYPE` (optional)
+
+`BOAT_API_KEY`, `BOAT_API_URL` and `BOAT_ORG` stay bound while `boat_api_key` is set, even after
+`sandbox_provider` changes, so prebuilt images and build sandboxes recorded against Boat can still
+be finalized and reclaimed; `BOAT_BASE_SNAPSHOT` and `BOAT_SANDBOX_TYPE` follow the active provider.
 
 Model credentials are not among them: Boat sandboxes take every LLM API key from Open-Inspect's
 secrets settings, so add `ANTHROPIC_API_KEY` there for Claude models and the equivalent key for any

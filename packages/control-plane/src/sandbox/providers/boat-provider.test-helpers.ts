@@ -1,9 +1,6 @@
 import { expect, vi } from "vitest";
-import {
-  BoatSandboxProvider,
-  type BoatProviderConfig,
-  type BoatProviderTimings,
-} from "./boat-provider";
+import type { BoatLifecycleTimings } from "../boat-lifecycle";
+import { BoatSandboxProvider, type BoatProviderConfig } from "./boat-provider";
 import type { BoatNamedSnapshot, BoatRestClient, BoatSandbox } from "../boat-rest-client";
 
 export const providerConfig: BoatProviderConfig = {
@@ -98,7 +95,7 @@ export const baseCreateConfig = {
 };
 
 /** Polling intervals shrunk so the provider's waits complete within a unit test. */
-export const fastTimings: BoatProviderTimings = {
+export const fastTimings: BoatLifecycleTimings = {
   pollIntervalMs: 1,
   readyTimeoutMs: 200,
   stopTimeoutMs: 200,

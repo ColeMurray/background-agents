@@ -6,8 +6,10 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 **Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A
 build runs `setup.sh` once in a sandbox deployed from the base snapshot and its disk is saved as a
-Boat named snapshot; sessions deploy from that image and skip setup. Images count toward the
-account's named-snapshot allowance. See [Pre-Built Images](docs/IMAGE_PREBUILD.md#boat-prebuilds).
+Boat named snapshot; sessions deploy from that image and skip setup. The build sandbox receives the
+scope's secrets only after it is private, through a file no snapshot keeps, so an image never
+carries them. Images count toward the account's named-snapshot allowance. See
+[Pre-Built Images](docs/IMAGE_PREBUILD.md#boat-prebuilds).
 
 ## October 20, 2026
 

@@ -373,19 +373,34 @@ Things to know:
   runtime state under `/tmp`, so the saved disk carries the workspace and nothing of the build that
   produced it; a session's first boot from the image creates its own state under
   `/home/user/.openinspect`.
-- **Inherited env.** Boat keeps the build sandbox's per-sandbox env as the default env for a deploy
-  from the snapshot that passes none of its own. Open-Inspect always passes a session's own env, so
-  a session never sees the build's, but anyone holding the account's API key could deploy from the
-  image without one. Treat a scope's image as no less sensitive than the scope's secrets, as the
+- **The build's env never reaches the image.** Boat keeps a sandbox's create-time env as the default
+  env for a deploy from a snapshot saved from it, so a build sandbox is created with the boot
+  markers alone. Its env — the repository set, the clone token, the scope's secrets, the callback
+  contract — is written to a file under `/tmp` once the sandbox is private and bound to the build;
+  the launcher reads the file once and removes it, and `/tmp` is never part of a snapshot. A session
+  deployed from the image always gets its own env. Treat a scope's image as no less sensitive than
+  the scope's secrets all the same: its filesystem holds whatever `setup.sh` wrote, as the
   [credential trust boundary](#credential-trust-boundary) already requires.
+- **Organization sandboxes.** A build sandbox billed to a Boat organization is made private before
+  anything of the build is delivered to it, exactly as a session sandbox is. Set the organization's
+  default visibility for new sandboxes to private so no sandbox is ever shared
+  ([Boat provider guide](./BOAT_SANDBOX_PROVIDER.md#billing-to-an-organization)).
+- **Build machine.** The build runs on the machine size the scope's CPU and memory settings select,
+  the same size its sessions get, so `setup.sh` has at build time the memory it will have at
+  runtime.
+- **A create whose response is lost** is repeated under the same idempotency key, and Boat answers
+  with the first sandbox. Should every attempt lose its response, the sandbox holds nothing of the
+  build (its env never arrived), stops by itself at its TTL, and Boat deletes its data 14 days
+  later; Boat's create API has no name or label the control plane could find it by sooner.
 - **Starts.** Each build spends one Boat sandbox start against the plan's start limits; the save and
   the deploys from the image spend none beyond each session's own.
 
-| Symptom                                                 | What it means                                                  | What to do                                                                                                                            |
-| ------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Build fails with `credit_required`                      | The account is at its named-snapshot allowance with no credit. | Delete named snapshots nothing deploys from (`DELETE /named-snapshots/{name}` or the Boat CLI), or add credit, then rebuild.          |
-| Callback accepted, build stays `building` for minutes   | The save is still `saving`, or the source is still archiving.  | Nothing; finalization re-polls the reserved name. It fails the build only past the save's fixed deadline, and then reclaims the name. |
-| `image_build.operation_unresolved` naming an `oi-img-*` | A reserved save never settled and maintenance keeps asking.    | Check the name in the Boat dashboard; a `failed` or `ready` snapshot under it is deleted by maintenance on its next pass.             |
+| Symptom                                                 | What it means                                                  | What to do                                                                                                                                 |
+| ------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Build fails with `credit_required`                      | The account is at its named-snapshot allowance with no credit. | Delete named snapshots nothing deploys from (`DELETE /named-snapshots/{name}` or the Boat CLI), or add credit, then rebuild.               |
+| Callback accepted, build stays `building` for minutes   | The save is still `saving`, or the source is still archiving.  | Nothing; finalization re-polls the reserved name. It fails the build only past the save's fixed deadline, and then reclaims the name.      |
+| `image_build.operation_unresolved` naming an `oi-img-*` | A reserved save never settled and maintenance keeps asking.    | Check the name in the Boat dashboard; a `failed` or `ready` snapshot under it is deleted by maintenance on its next pass.                  |
+| Cleanup backlog after a provider switch                 | Rows dispatch cleanup from their own recorded provider.        | Keep `boat_api_key` (with `boat_api_url` and `boat_org`) configured until the backlog drains. The base snapshot is not needed for cleanup. |
 
 ---
 

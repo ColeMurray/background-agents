@@ -1,10 +1,11 @@
 import {
   BoatApiError,
+  BoatCancelledError,
   delayUnlessCancelled,
   type BoatNamedSnapshot,
 } from "../sandbox/boat-rest-client";
 import { SandboxProviderError } from "../sandbox/provider";
-import type { BoatSandboxProvider } from "../sandbox/providers/boat-provider";
+import type { BoatBuildSourceStop, BoatImageBuildResources } from "./boat-build-resources";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 import type { ImageBuildProviderImageRef } from "./model";
 import { resolveImageBuildProviderSessionTimeoutSeconds } from "./timeouts";
@@ -58,21 +59,21 @@ const DEFAULT_BOAT_IMAGE_BUILD_ADAPTER_TIMINGS: BoatImageBuildAdapterTimings = {
  * an existing name rather than adding a second one, and refuses a save that
  * overlaps a running one, so a repeated submission can never leak an extra
  * snapshot. That is why a reserved name under which Boat has no record may
- * simply be submitted again: the only way to have no record is to have had
- * no accepted request.
+ * simply be submitted again, while the operation's deadline allows: the only
+ * way to have no record is to have had no accepted request.
  */
 export class BoatImageBuildAdapter implements ImageBuildAdapter {
   private readonly timings: BoatImageBuildAdapterTimings;
 
   constructor(
-    private readonly provider: BoatSandboxProvider,
+    private readonly resources: BoatImageBuildResources,
     timings: Partial<BoatImageBuildAdapterTimings> = {}
   ) {
     this.timings = { ...DEFAULT_BOAT_IMAGE_BUILD_ADAPTER_TIMINGS, ...timings };
   }
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
-    await this.provider.triggerImageBuild({
+    await this.resources.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
       repositories: plan.repositories,
@@ -86,6 +87,9 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
       providerSessionTimeoutSeconds: resolveImageBuildProviderSessionTimeoutSeconds(
         plan.buildTimeoutMs
       ),
+      // The scope's resource request sizes the build machine as it sizes the
+      // session's: setup must not run out of memory on a smaller box.
+      resources: plan.resources,
       onProviderSessionCreated: callbacks.bindProviderSession,
       correlation: plan.correlation,
     });
@@ -102,15 +106,15 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
 
   async cleanupCompletedBuild(input: CompletedImageBuildInput): Promise<void> {
     // The named snapshot is a standalone copy; the source is not needed again.
-    await this.provider.deleteSandbox(input.providerSessionId, input.signal);
+    await this.resources.deleteBuildSandbox(input.providerSessionId, input.signal);
   }
 
   async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
-    await this.provider.deleteSandbox(input.providerSessionId, input.signal);
+    await this.resources.deleteBuildSandbox(input.providerSessionId, input.signal);
   }
 
   async deleteImage(input: DeleteImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.image.providerImageId, input.signal);
+    await this.resources.deleteProviderImage(input.image.providerImageId, input.signal);
   }
 
   /**
@@ -121,14 +125,14 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
   async reconcileOrphanOperation(
     input: ReconcileOrphanOperationInput
   ): Promise<ReconcileOrphanOperationOutcome> {
-    const snapshot = await this.provider.getImageSnapshot(input.operationRef, input.signal);
+    const snapshot = await this.resources.getImageSnapshot(input.operationRef, input.signal);
     if (!snapshot) return { type: "absent" };
     if (snapshot.status === "saving") return { type: "pending" };
     // The name is this deployment's by construction; a record under it that
     // names another source would still be someone else's artifact.
     if (!isSavedFrom(snapshot, input.providerSessionId)) return { type: "absent" };
     try {
-      await this.provider.deleteProviderImage(input.operationRef, input.signal);
+      await this.resources.deleteProviderImage(input.operationRef, input.signal);
     } catch (error) {
       if (boatErrorCode(error) === "save_in_progress") return { type: "pending" };
       throw error;
@@ -143,13 +147,9 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
    * mid-stop.
    */
   private async submitSave(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef> {
-    let stopped: "stopped" | "stopping" | "missing";
+    let stopped: BoatBuildSourceStop;
     try {
-      stopped = await this.provider.stopImageBuildSource(
-        input.providerSessionId,
-        input.buildId,
-        input.signal
-      );
+      stopped = await this.resources.stopBuildSandboxForSave(input.providerSessionId, input.signal);
     } catch (error) {
       // Nothing is reserved or submitted yet, so a provider that cannot be
       // reached now has created nothing; a later delivery retries.
@@ -171,7 +171,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
     }
 
     const operation: ImageBuildProviderOperation = {
-      ref: await this.provider.imageSnapshotName(input.buildId),
+      ref: await this.resources.imageSnapshotName(input.buildId),
       deadlineAt: Date.now() + BOAT_IMAGE_SAVE_DEADLINE_MS,
     };
     if (!(await input.reserveOperation(operation.ref, operation.deadlineAt))) {
@@ -193,7 +193,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
    */
   private async save(input: FinalizeImageBuildInput, name: string): Promise<void> {
     try {
-      await this.provider.saveImageSnapshot(input.providerSessionId, name, input.signal);
+      await this.resources.saveImageSnapshot(input.providerSessionId, name, input.signal);
     } catch (error) {
       const code = boatErrorCode(error);
       if (code === "save_in_progress") return;
@@ -215,11 +215,13 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
    * build's source.
    *
    * No record under a reserved name means no accepted request, so the save
-   * is submitted (once per delivery) rather than waited for. A `failed`
-   * record fails the build. The attempt stops watching after its observation
-   * window and reports pending, so the lease is released while Boat works;
-   * past the operation's fixed deadline the build fails and maintenance
-   * reclaims whatever the name later holds.
+   * is submitted (once per delivery) rather than waited for — unless the
+   * operation's fixed deadline has passed, when nothing new may be started
+   * for a build that is about to fail. A `failed` record fails the build. The
+   * attempt stops watching after its observation window and reports pending,
+   * so the lease is released while Boat works; past the deadline the build
+   * fails and maintenance reclaims whatever the name later holds. A snapshot
+   * that is already ready is adopted whatever the clock says.
    */
   private async awaitSavedSnapshot(
     input: FinalizeImageBuildInput,
@@ -231,7 +233,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
     for (;;) {
       let snapshot: BoatNamedSnapshot | null | undefined;
       try {
-        snapshot = await this.provider.getImageSnapshot(operation.ref, input.signal);
+        snapshot = await this.resources.getImageSnapshot(operation.ref, input.signal);
       } catch (error) {
         // An unreachable provider says nothing about the reserved artifact;
         // keep the fixed deadline and let a later read decide.
@@ -239,10 +241,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
         snapshot = undefined;
       }
 
-      if (snapshot === null && !submitted) {
-        submitted = true;
-        await this.save(input, operation.ref);
-      } else if (snapshot) {
+      if (snapshot) {
         if (snapshot.status === "ready") {
           if (!isSavedFrom(snapshot, input.providerSessionId)) {
             throw new Error("Boat snapshot under this build's image name has another source");
@@ -254,6 +253,9 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
             `Boat image snapshot save failed${snapshot.error ? `: ${snapshot.error}` : ""}`
           );
         }
+      } else if (snapshot === null && !submitted && Date.now() < operation.deadlineAt) {
+        submitted = true;
+        await this.save(input, operation.ref);
       }
 
       const now = Date.now();
@@ -286,7 +288,7 @@ function isSavedFrom(snapshot: BoatNamedSnapshot, providerSessionId: string | nu
   return snapshot.sourceSandboxId === providerSessionId;
 }
 
-/** Boat's stable error code behind a failed provider call, if any. */
+/** Boat's stable error code behind a failed call, if any. */
 function boatErrorCode(error: unknown): string | undefined {
   if (error instanceof BoatApiError) return error.code;
   if (error instanceof SandboxProviderError && error.cause instanceof BoatApiError) {
@@ -299,5 +301,6 @@ function boatErrorCode(error: unknown): string | undefined {
 function isBoatUnavailable(error: unknown): boolean {
   if (error instanceof SandboxProviderError) return error.errorType === "transient";
   if (error instanceof BoatApiError) return error.status === 429 || error.status >= 500;
+  if (error instanceof BoatCancelledError) return true;
   return SandboxProviderError.isTransientNetworkError(error);
 }

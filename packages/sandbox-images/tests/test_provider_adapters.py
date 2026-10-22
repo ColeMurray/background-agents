@@ -507,11 +507,15 @@ def test_boat_launcher_matches_the_control_plane_contract():
     """The launcher, the build and the control plane pin the same paths and exit code."""
     launcher = (ROOT / "packages/boat-infra/launcher.sh").read_text()
     provider = (ROOT / "packages/control-plane/src/sandbox/providers/boat-provider.ts").read_text()
+    lifecycle = (ROOT / "packages/control-plane/src/sandbox/boat-lifecycle.ts").read_text()
+    resources = (
+        ROOT / "packages/control-plane/src/image-builds/boat-build-resources.ts"
+    ).read_text()
     builder = (ROOT / "packages/boat-infra/build-template.py").read_text()
-    assert 'export const BOAT_LAUNCHER_PATH = "/home/user/openinspect/launcher.sh";' in provider
+    assert 'export const BOAT_LAUNCHER_PATH = "/home/user/openinspect/launcher.sh";' in lifecycle
     assert 'LAUNCHER_PATH = f"{INSTALL_HOME}/launcher.sh"' in builder
     assert 'INSTALL_HOME = f"{USER_HOME}/openinspect"' in builder
-    assert "const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;" in provider
+    assert "const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;" in lifecycle
     assert "EXIT_ALREADY_RUNNING=75" in launcher
     assert (
         'export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";' in provider
@@ -531,15 +535,25 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert "OI_RUNTIME_STATE_DIR=$OI_STATE_DIR/state" in launcher
     assert 'export OPENINSPECT_STATE_DIR="$OI_RUNTIME_STATE_DIR"' in launcher
     # An image build's lock, log and state stay under /tmp, so the disk saved as
-    # the prebuilt image carries none of them (boat-adapter.ts relies on this).
+    # the prebuilt image carries none of them (boat-build-resources.ts relies on this).
     assert 'if [[ "${IMAGE_BUILD_MODE:-}" == "true" ]]' in launcher
     assert "OI_STATE_DIR=/tmp/openinspect-image-build" in launcher
     assert "OI_STATE_DIR=$OI_USER_HOME/.openinspect" in launcher
+    # A build's env arrives as a file the control plane writes once the sandbox
+    # is private; the launcher reads it once and removes it. Both pin the path.
+    assert (
+        'export const BOAT_IMAGE_BUILD_ENV_FILE_PATH = "/tmp/openinspect-image-build.env";'
+        in resources
+    )
+    assert "OI_BUILD_ENV_FILE=/tmp/openinspect-image-build.env" in launcher
+    assert '. "$OI_BUILD_ENV_FILE"' in launcher
+    assert 'rm -f "$OI_BUILD_ENV_FILE"' in launcher
+    assert "load_build_env\n" in launcher
     # The build callback's provider session id rides the launch as a variable
     # prefix under the shared contract name (sandbox-env.ts), never as an argument.
     assert (
         "`${REPO_IMAGE_CALLBACK_ENV.providerSessionId}=${options.providerSessionId} "
-        "${BOAT_LAUNCHER_PATH}`" in provider
+        "${BOAT_LAUNCHER_PATH}`" in lifecycle
     )
     assert 'exec "$OI_PYTHON" -m sandbox_runtime.entrypoint' in launcher
     assert "--prepare-only" in launcher
