@@ -142,10 +142,9 @@ describe("a Pi session, end to end", () => {
       env.DB.prepare("SELECT status FROM sessions WHERE id = ?")
         .bind(session.sessionName)
         .first<{ status: string }>()
-    ).resolves.toEqual({ status: "archived" });
+    ).resolves.toEqual({ status: "durable_archived" });
 
-    // 6. Export. The session's own record is declared, not silently omitted,
-    // and the steps the turn produced are in it.
+    // 6. Export. SessionDO's projection is the canonical exported transcript.
     const exported = await serviceFetch("https://cp.test/sessions/export?include=events");
     expect(exported.status).toBe(200);
     const body = await exported.text();
@@ -157,8 +156,8 @@ describe("a Pi session, end to end", () => {
     expect(sessionLine).toMatchObject({
       type: "session",
       harness: "pi",
-      harnessState: { included: false },
     });
+    expect(sessionLine).not.toHaveProperty("harnessState");
     // The export carries the session's events inside the session's line.
     const exportedEvents = (sessionLine?.events ?? []) as { type: string }[];
     expect(exportedEvents.map((event) => event.type)).toContain("execution_complete");

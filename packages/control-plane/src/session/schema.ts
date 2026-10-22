@@ -368,6 +368,7 @@ import {
 } from "@open-inspect/shared/migration-reservations";
 import type { MigrationOwner } from "@open-inspect/shared/migration-reservations";
 import type { SqlStorage } from "./sql-storage";
+import { sessionSchemaExtensionMigrations } from "./schema-extension-registry";
 
 const schemaLog = createLogger("schema");
 
@@ -410,7 +411,7 @@ function parseSqlColumnNames(rows: unknown[]): string[] {
  * 2. Append an entry here with the next sequential ID
  * 3. For data transforms, use a function-type `run`
  */
-export const MIGRATIONS: readonly SchemaMigration[] = [
+const CORE_MIGRATIONS: readonly SchemaMigration[] = [
   {
     id: 1,
     description: "Add session_name to session",
@@ -946,6 +947,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     },
   },
 ];
+
+export const MIGRATIONS: readonly SchemaMigration[] = [
+  ...CORE_MIGRATIONS,
+  ...sessionSchemaExtensionMigrations(),
+].sort((left, right) => left.id - right.id);
 
 function removePersistedHookOutputTails(sql: SqlStorage): void {
   sql.exec(`UPDATE events

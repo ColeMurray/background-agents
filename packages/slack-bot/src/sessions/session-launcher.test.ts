@@ -11,7 +11,11 @@ import { createSession } from "./control-plane-client";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import type * as ThreadSessionStoreModule from "./thread-session-store";
-import { startSessionAndSendPrompt, type SlackLaunchSettings } from "./session-launcher";
+import {
+  startSessionAndSendPrompt,
+  storedSlackHarnessesAreAvailable,
+  type SlackLaunchSettings,
+} from "./session-launcher";
 import { transitionSlackIngress } from "../ingress-authority";
 
 vi.mock("@open-inspect/shared/slack", async (importOriginal) => ({
@@ -84,6 +88,14 @@ const options = {
   actor,
   launchSettings,
 };
+
+describe("stored Slack harness availability", () => {
+  it("refuses instead of falling back when a stored harness is unavailable", () => {
+    expect(storedSlackHarnessesAreAvailable("pi", undefined, ["opencode"])).toBe(false);
+    expect(storedSlackHarnessesAreAvailable("opencode", "pi", ["opencode"])).toBe(false);
+    expect(storedSlackHarnessesAreAvailable("pi", "pi", ["opencode", "pi"])).toBe(true);
+  });
+});
 
 describe("startSessionAndSendPrompt team boundaries", () => {
   beforeEach(() => {

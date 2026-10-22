@@ -106,7 +106,7 @@ describe("GET /sessions/export with include", () => {
     expect(lines.every((line) => line.id !== hidden.sessionName)).toBe(true);
   });
 
-  it("says plainly that a Pi session's own durable record is not in the export", async () => {
+  it("exports Pi through the canonical projection without an incomplete parallel marker", async () => {
     const pi = await initSession({
       title: "pi",
       harness: "pi",
@@ -123,10 +123,8 @@ describe("GET /sessions/export with include", () => {
     expect(piLine).toMatchObject({
       type: "session",
       harness: "pi",
-      harnessState: { included: false },
     });
-    expect(typeof (piLine?.harnessState as { reason: string }).reason).toBe("string");
-    expect((piLine?.harnessState as { reason: string }).reason).toMatch(/Pi Durable/);
+    expect(piLine).not.toHaveProperty("harnessState");
 
     const sandboxLine = lines.find((line) => line.id === sandbox.sessionName);
     expect(sandboxLine).not.toHaveProperty("harnessState");

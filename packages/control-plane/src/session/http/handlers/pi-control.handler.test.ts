@@ -17,6 +17,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
       state: "accepted" as const,
       result: { submissionId: 1 },
     })),
+    abort: vi.fn(async () => true),
   };
   const session = {
     id: "session-1",

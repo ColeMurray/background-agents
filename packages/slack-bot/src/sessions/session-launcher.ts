@@ -1,7 +1,7 @@
 import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ValidModel } from "@open-inspect/shared/models";
-import { checkHarnessCompatibility, DEFAULT_HARNESS } from "@open-inspect/shared/harnesses";
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -45,6 +45,17 @@ export interface SlackLaunchSettings {
   modelSource: Exclude<LaunchModelSource, "request">;
 }
 
+export function storedSlackHarnessesAreAvailable(
+  workspaceHarness: string,
+  userHarness: string | undefined,
+  availableHarnesses: readonly string[]
+): boolean {
+  return (
+    availableHarnesses.includes(workspaceHarness) &&
+    (userHarness === undefined || availableHarnesses.includes(userHarness))
+  );
+}
+
 export async function loadAuthoritativeSlackLaunchSettings(
   env: Env,
   userId: string,
@@ -58,15 +69,16 @@ export async function loadAuthoritativeSlackLaunchSettings(
       getAvailableHarnessIds(env, traceId),
     ]);
     if (!enabledModels || !slackConfig) return null;
-    const workspaceHarness = availableHarnesses.includes(slackConfig.harness)
-      ? slackConfig.harness
-      : DEFAULT_HARNESS;
-    const availablePreferences =
-      prefs?.harness && !availableHarnesses.includes(prefs.harness)
-        ? { ...prefs, harness: undefined }
-        : prefs;
+    // A stored unavailable harness is a refusal, never permission to launch
+    // the built-in harness. This is the rollback/outage boundary for bot work.
+    if (
+      !storedSlackHarnessesAreAvailable(slackConfig.harness, prefs?.harness, availableHarnesses)
+    ) {
+      return null;
+    }
+    const workspaceHarness = slackConfig.harness;
     const userPreferences = resolveUserPreferences(
-      availablePreferences,
+      prefs,
       slackConfig.defaultModel ?? env.DEFAULT_MODEL,
       workspaceHarness
     );

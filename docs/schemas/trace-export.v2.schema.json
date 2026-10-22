@@ -93,14 +93,6 @@
         },
         "createdAt": { "type": "number" },
         "updatedAt": { "type": "number" },
-        "harnessState": {
-          "type": "object",
-          "properties": {
-            "included": { "type": "boolean", "const": false },
-            "reason": { "type": "string" }
-          },
-          "required": ["included", "reason"]
-        },
         "messages": {
           "type": "array",
           "items": {

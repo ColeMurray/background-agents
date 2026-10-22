@@ -141,6 +141,7 @@ export function createSessionInternalRoutes(
     { method: "POST", path: SessionInternalPaths.wsToken, handler: handlers.wsToken },
     { method: "POST", path: SessionInternalPaths.updateTitle, handler: handlers.updateTitle },
     { method: "POST", path: SessionInternalPaths.budget, handler: handlers.budget },
+    { method: "GET", path: SessionInternalPaths.budgetState, handler: handlers.budgetState },
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
     { method: "POST", path: SessionInternalPaths.unarchive, handler: handlers.unarchive },
     { method: "POST", path: SessionInternalPaths.expireDraft, handler: handlers.expireDraft },

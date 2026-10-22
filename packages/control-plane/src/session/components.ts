@@ -153,7 +153,7 @@ import {
   PersistedAlarmDeadlineStore,
   type RehydratableAlarmScheduler,
 } from "./alarm/scheduler";
-import { createSessionInternalRoutes } from "./http/routes";
+import { createRegisteredSessionExtensionServices } from "./extension-services";
 import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
 import { SessionMessageRouter } from "./message-router";
@@ -256,6 +256,7 @@ export interface SessionComponents {
   pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
   callbackService: CallbackNotificationService;
+  extensionComponents: Record<string, unknown>;
   piSandboxExecution: HarnessSandboxExecutionCoordinator;
 }
 
@@ -943,6 +944,31 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     }
   );
   const piControlRepository = new PiControlRepository(sql);
+  const extensionServices = createRegisteredSessionExtensionServices({
+    env,
+    db,
+    sql,
+    transaction,
+    durableObjectId,
+    repoSecretsEncryptionKey,
+    getPublicSessionId,
+    resolveCredentialScope,
+    sourceControlProvider,
+    sessionIndexStore,
+    sessionCoreRepository,
+    messageRepository,
+    eventRepository,
+    messageService,
+    alarmScheduler,
+    activeOperation: createHarnessOperationFence({
+      isHarnessSession: isInProcessSession,
+      messages: messageRepository,
+      controls: piControlRepository,
+      operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
+      controlRequestId: piControlRequestIdFromMessageId,
+    }),
+    turnAuthorMayAct,
+  });
   const piControlHandler = new PiControlHandler(
     sessionCoreRepository,
     piControlRepository,
@@ -962,7 +988,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       messageRepository.recordControlCompletion(terminal.operationId, event, terminal.now);
       messenger.broadcast({ type: "sandbox_event", event });
     },
-    piOperations
+    piOperations,
+    getExecutionTimeoutMs
   );
   const visiblePiTokens = new Set<string>();
   const piEventHandler = new HarnessEventHandler(
@@ -1002,6 +1029,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     lifecycleManager,
     terminalMessageProjection,
     alarmScheduler,
+    extensionWork: extensionServices.alarm,
     getExecutionTimeoutMs,
     now: () => Date.now(),
     log,
@@ -1141,6 +1169,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     media: env.MEDIA_BUCKET,
     repositories: piRepositoryTools,
     diffs: diffService,
+    contextContributions: extensionServices.contextContributions,
     memory: {
       renderedContext: ({ sessionId, requestId }) =>
         piMemoryService(requestId).renderedContext(sessionId),
@@ -1157,6 +1186,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
       controlRequestId: piControlRequestIdFromMessageId,
     }),
+    authorMayAct: async (request) => {
+      const operationId = request.headers.get("X-Pi-Operation-ID");
+      return operationId !== null && turnAuthorMayAct(operationId);
+    },
   });
   const piSandboxExecutionHandler = new HarnessSandboxExecutionHandler({
     operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
@@ -1349,7 +1382,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   });
 
   // Internal HTTP route table (transport wiring only).
-  const routes = createSessionInternalRoutes({
+  const routes = extensionServices.createRoutes({
     init: (request, _url, requestLog) => sessionInitHandler.init(request, requestLog),
     state: () => sessionLifecycleHandler.getState(),
     snapshot: () => snapshotReader.handleSnapshot(),
@@ -1388,11 +1421,18 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     openaiTokenRefresh: (_request, _url, requestLog) =>
       sandboxHandler.openaiTokenRefresh(requestLog),
     piCredential: (request) => piBridgeHandler.credential(request),
-    budgetState: () => {
+    budgetState: async (request) => {
       const session = sessionCoreRepository.getSession();
       if (!session) return Response.json({ error: "Session is not initialized" }, { status: 404 });
       if (session.harness !== "pi") {
         return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
+      }
+      const operationId = request.headers.get("X-Pi-Operation-ID");
+      if (!operationId || !(await turnAuthorMayAct(operationId))) {
+        return Response.json(
+          { error: "The originating turn's author may no longer act on this session" },
+          { status: 403 }
+        );
       }
       return Response.json(
         {
@@ -1535,6 +1575,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     pushService,
     sessionLifecycleHandler,
     callbackService,
+    extensionComponents: extensionServices.components,
     piSandboxExecution,
   };
 
@@ -1548,6 +1589,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           async () => {
             await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
+            await extensionServices.rehydrate();
             await lifecycleManager.rearmRejectedStartupCleanupAlarm();
             await lifecycleManager.rearmCaptureSettlement();
             await lifecycleManager.replayPendingFatalReport();

@@ -27,6 +27,8 @@ export interface PiMemoryHandlerOptions {
   service(requestId: string): SessionMemoryService;
   /** Whether the request belongs to a live turn of this session. */
   activeOperation(request: Request): boolean;
+  /** Re-read the turn author's current D1 authority before every operation. */
+  authorMayAct(request: Request): Promise<boolean>;
 }
 
 export class PiMemoryHandler {
@@ -86,6 +88,12 @@ export class PiMemoryHandler {
   ): Promise<Response> {
     if (!this.options.activeOperation(request)) {
       return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+    }
+    if (!(await this.options.authorMayAct(request))) {
+      return Response.json(
+        { error: "The originating turn's author may no longer act on this session" },
+        { status: 403 }
+      );
     }
     const service = this.options.service(this.requestId(request));
     try {

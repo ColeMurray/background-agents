@@ -11,7 +11,6 @@
 import {
   DEFAULT_HARNESS,
   getStoredHarnessOrRefuse,
-  getValidHarnessOrDefault,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import {
@@ -2023,6 +2022,12 @@ export class Scheduler {
       environmentId: target.environmentId,
     });
 
+    const harness = getStoredHarnessOrRefuse(automation.harness);
+    if (!harness) {
+      throw new AutomationExecutionUnauthorizedError(
+        `Automation ${automation.id} names a harness this deployment does not know`
+      );
+    }
     const sessionInput: SessionInitInput = {
       memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
@@ -2030,9 +2035,7 @@ export class Scheduler {
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
-      harness:
-        getStoredHarnessOrRefuse(automation.harness) ??
-        getValidHarnessOrDefault(automation.harness),
+      harness,
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,

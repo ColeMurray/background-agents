@@ -35,6 +35,7 @@ import {
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import { DurableObject } from "cloudflare:workers";
+import { createRegisteredPiRuntimeExtensions } from "../pi/runtime-extension-registry";
 import { createBrowserExtension, type BrowserReadAnswer } from "../pi/browser-extension";
 import type { PiBrowserAction, PiBrowserOutcome } from "../pi/browser-transport";
 import { PiHarness } from "agents/harness/pi";
@@ -213,6 +214,13 @@ const DELETION_STATE_KEY = "open-inspect:deletion-state";
 const ARCHIVE_STATE_KEY = "open-inspect:archive-state";
 const REPOSITORY_PINS_KEY = "open-inspect:repository-pins";
 const ROOT_SESSION = "1";
+const DEFAULT_NATIVE_CONTROL_TIMEOUT_MS = 30 * 60 * 1_000;
+
+/** Missing authority or budget state refuses the next model call. */
+function refusedBudgetState(): HarnessBudgetState {
+  return { exhausted: true, spentUsd: 0, capUsd: 0 };
+}
+
 const sandboxExecutionToolResponseSchema = z
   .object({
     command: z
@@ -268,6 +276,7 @@ interface PiOperationMetadata {
 interface NativeControlCompletion {
   readonly sessionId: string;
   readonly requestId: string;
+  readonly operationId?: string;
   readonly baseline: UsageAccountingSnapshot;
   readonly suppressCost: boolean;
   /**
@@ -380,6 +389,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       });
       let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const workspaceMutations = new WorkspaceMutationFifo();
+      const overlay = createRegisteredPiRuntimeExtensions(
+        {
+          getSessionId: () => this.ctx.storage.get<string>(SESSION_ID_KEY),
+          attributedOperationId: () => this.attributedOperationId(ROOT_SESSION),
+          currentOperationId: () => this.currentOperationId(),
+          fetchSession: (sessionId, request) =>
+            this.env.SESSION.getByName(sessionId).fetch(request),
+        },
+        sessionContext,
+        capabilities,
+        currentCapabilities
+      );
       const extensions: ExtensionContribution<Extension>[] = [
         {
           slot: "policy",
@@ -404,6 +425,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               ceiling: () => this.turnActionCeiling,
               delegates: workspacePolicyDelegate
                 ? [
+                    ...overlay.delegates,
                     browserDelegate,
                     memoryDelegate,
                     workspacePolicyDelegate,
@@ -411,6 +433,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                     sandboxExecutionPolicyDelegate,
                   ]
                 : [
+                    ...overlay.delegates,
                     browserDelegate,
                     memoryDelegate,
                     codeModePolicyDelegate,
@@ -427,6 +450,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           effects: declaredEffects(delegation),
         },
       ];
+      extensions.push(...overlay.extensions);
       if (sessionContext.agentMessagingEnabled) {
         extensions.push({
           slot: "agent_messaging",
@@ -528,7 +552,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           effects: PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
         });
       }
-      if (capabilities.mcp !== "off") {
+      if (!overlay.ownsMcp && capabilities.mcp !== "off") {
         extensions.push({
           slot: "mcp",
           feature: "mcp",
@@ -848,14 +872,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         rejected: "Pi Durable initialization failed",
       };
     }
+    this.activeOperationByConversation.set(ROOT_SESSION, input.messageId);
     const receipt = await this.harness.submit(userInput, {
       session: ROOT_SESSION,
       operationId: input.messageId,
     });
-    // The turn's deadline is armed inside the object. A turn that never
-    // finishes would otherwise hold the object, its storage, and the
-    // session's money for as long as it liked.
-    this.armTurnDeadline(input.messageId, input.executionDeadlineMs);
     // The turn's deadline is armed inside the object. A turn that never
     // finishes would otherwise hold the object, its storage, and the
     // session's money for as long as it liked.
@@ -895,21 +916,35 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
    */
   private async readBudgetState(): Promise<HarnessBudgetState> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
-    if (!sessionId) return { exhausted: false, spentUsd: 0, capUsd: null };
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!sessionId || !operationId) return refusedBudgetState();
     try {
       const response = await this.env.SESSION.getByName(sessionId).fetch(
-        new Request(`http://session${SessionInternalPaths.budgetState}`)
+        new Request(`http://session${SessionInternalPaths.budgetState}`, {
+          headers: { "X-Pi-Operation-ID": operationId },
+        })
       );
-      if (!response.ok) return { exhausted: false, spentUsd: 0, capUsd: null };
-      const state = (await response.json()) as HarnessBudgetState;
+      if (!response.ok) return refusedBudgetState();
+      const state = (await response.json()) as Partial<HarnessBudgetState>;
+      if (
+        typeof state.exhausted !== "boolean" ||
+        typeof state.spentUsd !== "number" ||
+        !Number.isFinite(state.spentUsd) ||
+        state.spentUsd < 0 ||
+        !(
+          state.capUsd === null ||
+          (typeof state.capUsd === "number" && Number.isFinite(state.capUsd) && state.capUsd >= 0)
+        )
+      ) {
+        return refusedBudgetState();
+      }
       return {
-        exhausted: state.exhausted === true,
-        spentUsd: typeof state.spentUsd === "number" ? state.spentUsd : 0,
-        capUsd: typeof state.capUsd === "number" ? state.capUsd : null,
+        exhausted: state.exhausted,
+        spentUsd: state.spentUsd,
+        capUsd: state.capUsd,
       };
     } catch {
-      // A budget that cannot be read is not a budget that is reached.
-      return { exhausted: false, spentUsd: 0, capUsd: null };
+      return refusedBudgetState();
     }
   }
 
@@ -919,7 +954,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
    * The stop is the harness's own abort, so the turn ends the way a cancelled
    * turn ends: with a recorded outcome, not a vanished object.
    */
-  private armTurnDeadline(operationId: string, deadlineMs: number | undefined): void {
+  private armTurnDeadline(
+    operationId: string,
+    deadlineMs: number | undefined,
+    abort: () => Promise<void> = async () => {
+      await this.harness.abort({ session: ROOT_SESSION, operationId }).catch(() => false);
+    }
+  ): void {
     if (deadlineMs === undefined) return;
     this.turnDeadlines.get(operationId)?.clear();
     const deadline = armTurnDeadline({
@@ -930,7 +971,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           operation_id: operationId,
           deadline_ms: deadlineMs,
         });
-        await this.harness.abort({ session: ROOT_SESSION, operationId }).catch(() => false);
+        await abort();
       },
     });
     this.turnDeadlines.set(operationId, deadline);
@@ -1217,10 +1258,25 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       if ((await pi.inspect(BACKGROUND_CONTEXT)).tasks.length >= 4)
         throw new Error("Pi active task limit reached");
       const baseline = await this.accountingTotals();
+      const operationId = input.operationId ?? input.requestId;
+      this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
+      this.activeOperationByConversation.set(ROOT_SESSION, operationId);
+      this.armTurnDeadline(
+        operationId,
+        input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS
+      );
       const taskId = await conversation.compact(input.instructions, BACKGROUND_CONTEXT);
+      this.armTurnDeadline(
+        operationId,
+        input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS,
+        async () => {
+          await pi.abortTask(taskId as TaskId, BACKGROUND_CONTEXT);
+        }
+      );
       await this.scheduleNativeControlCompletion({
         sessionId: input.sessionId,
         requestId: input.requestId,
+        operationId,
         baseline,
         suppressCost: false,
         target: { kind: "task", id: taskId },
@@ -1271,6 +1327,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       ).length;
       if (pendingMessages >= MAX_PENDING_AGENT_MESSAGES)
         throw new Error("Pi agent message limit reached");
+      if (input.action === "follow_up" && conversationBusy) {
+        throw new Error("Busy Pi controls cannot start another turn");
+      }
       if (
         input.action === "follow_up" &&
         (input.model !== undefined || input.reasoningEffort !== undefined)
@@ -1294,7 +1353,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           BACKGROUND_CONTEXT
         );
       }
-      const whenBusy = input.action === "follow_up" ? "followUp" : "reject";
+      const whenBusy = "reject";
       const baseline = await this.accountingTotals();
       // A control turn belongs to the message the session recorded for it.
       // Give that operation the same record and live relay a prompt turn
@@ -1302,6 +1361,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       // control completion below stays its terminal receipt.
       const operationId = input.operationId;
       if (operationId) {
+        this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
+        this.activeOperationByConversation.set(ROOT_SESSION, operationId);
+        this.armTurnDeadline(
+          operationId,
+          input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS
+        );
         const agent = await conversation.agent(BACKGROUND_CONTEXT);
         const model = input.model ?? canonicalModelOf(agent.model);
         await this.rememberOperation({ messageId: operationId, model }, baseline);
@@ -1319,6 +1384,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       await this.scheduleNativeControlCompletion({
         sessionId: input.sessionId,
         requestId: input.requestId,
+        operationId: input.operationId ?? input.requestId,
         baseline,
         // A follow-up starts its own run, so its spend is charged here; when
         // it was queued behind a running turn, the running turn's final
@@ -1365,6 +1431,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const task = await pi.waitForTask(record.target.id as TaskId, BACKGROUND_CONTEXT);
       status = task.state.outcome.status === "completed" ? "completed" : "failed";
     }
+    const deadlineOperationId = record.operationId ?? record.requestId;
+    this.turnDeadlines.get(deadlineOperationId)?.clear();
+    this.turnDeadlines.delete(deadlineOperationId);
     // A control turn has no projector job — its receipt is the terminal path —
     // so the relay and outbox close here, before the receipt is reported.
     if (operationId && (await this.operationMetadata(operationId))) {

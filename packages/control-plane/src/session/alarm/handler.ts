@@ -22,6 +22,10 @@ export interface AlarmHandlerDeps {
   lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
+  extensionWork?: {
+    recoverDue(): Promise<void>;
+    nextDeadline(): number | null;
+  };
   /** Wakes queued work for a live runtime that nothing else will; idempotent. */
   redriveIdleQueue?: () => Promise<void>;
   /** Command deadlines share this Durable Object's one alarm slot. */
@@ -68,6 +72,9 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       if (!(await deps.reconcilePiStop?.())) {
         await deps.executionStop.recoverStopConfirmationTimeout();
       }
+      await deps.extensionWork?.recoverDue();
+      const extensionDeadline = deps.extensionWork?.nextDeadline() ?? null;
+      if (extensionDeadline !== null) await deps.alarmScheduler.schedule(extensionDeadline);
       await deps.sandboxCommandDeadlines?.();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was

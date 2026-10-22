@@ -37,6 +37,7 @@ import { createFauxCodexProvider } from "./faux-codex-provider";
 import { PI_MODEL_PROVIDER_ID, piProviderFactories } from "../../src/pi/provider-factories";
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
 import { ProviderCredentialService } from "../../src/session/provider-credential-service";
+import type { HarnessBudgetState } from "../../src/harness/budget-gate";
 
 const defaultPiProviderFactory = piProviderFactories.factoryFor(PI_MODEL_PROVIDER_ID)!;
 afterEach(() => piProviderFactories.register(PI_MODEL_PROVIDER_ID, defaultPiProviderFactory));
@@ -173,6 +174,17 @@ describe("PiSessionDO", () => {
     ]) {
       expect(names).not.toContain(secret);
     }
+  });
+
+  it("fails the model budget gate closed without an attributable active operation", async () => {
+    const { stub } = await initializedPiStub("pi-budget-authority");
+
+    await runInPiSessionDO(stub, async (instance) => {
+      const state = await (
+        instance as unknown as { readBudgetState(): Promise<HarnessBudgetState> }
+      ).readBudgetState();
+      expect(state).toEqual({ exhausted: true, spentUsd: 0, capUsd: 0 });
+    });
   });
 
   it("initializes idempotently only for the exact session identity and snapshot", async () => {
@@ -913,7 +925,7 @@ describe("PiSessionDO", () => {
           content: "queued B",
           model: "openai/gpt-5.6-sol",
         })
-      ).rejects.toThrow(/cannot change model/i);
+      ).rejects.toThrow(/cannot start another turn/i);
     });
     const submissionId = (submitted.result as { submissionId: number }).submissionId;
     await runInPiSessionDO(stub, async (instance) => {
@@ -1306,7 +1318,7 @@ describe("PiSessionDO", () => {
     expect(second.ws.readyState).toBe(WebSocket.OPEN);
   });
 
-  it("keeps active A and explicit steer/follow-up controls attributed to one conversation", async () => {
+  it("refuses follow-up controls while another turn is active", async () => {
     const { sessionName, stub } = await initializedPiStub("pi-control-attribution");
     await stub.status(sessionName);
     await runInPiSessionDO(stub, async (instance) => {
@@ -1335,31 +1347,29 @@ describe("PiSessionDO", () => {
         ).toBe(true)
       );
     });
-    await expect(
-      controlPi(stub, {
-        sessionId: sessionName,
-        requestId: "steer-b",
-        action: "follow_up",
-        content: "B",
-      })
-    ).resolves.toMatchObject({ state: "accepted" });
-    await expect(
-      controlPi(stub, {
-        sessionId: sessionName,
-        requestId: "follow-c",
-        action: "follow_up",
-        content: "C",
-      })
-    ).resolves.toMatchObject({ state: "accepted" });
+    await runInPiSessionDO(stub, async (instance) => {
+      await expect(
+        instance.control({
+          sessionId: sessionName,
+          requestId: "steer-b",
+          action: "follow_up",
+          content: "B",
+        })
+      ).rejects.toThrow("Busy Pi controls cannot start another turn");
+      await expect(
+        instance.control({
+          sessionId: sessionName,
+          requestId: "follow-c",
+          action: "follow_up",
+          content: "C",
+        })
+      ).rejects.toThrow("Busy Pi controls cannot start another turn");
+    });
     await runInPiSessionDO(stub, async (instance) => {
       const submissions = (
         await (await instance.harness.pi()).inspect(BACKGROUND_CONTEXT)
-      ).submissions.filter((submission) =>
-        ["active-a", "steer-b", "follow-c"].some((requestId) =>
-          submission.requestId?.endsWith(requestId)
-        )
-      );
-      expect(new Set(submissions.map((submission) => submission.conversationId)).size).toBe(1);
+      ).submissions.filter((submission) => submission.requestId?.endsWith("active-a"));
+      expect(submissions).toHaveLength(1);
     });
     await controlPi(stub, {
       sessionId: sessionName,

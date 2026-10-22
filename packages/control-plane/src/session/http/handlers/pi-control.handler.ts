@@ -12,6 +12,7 @@ import { sha256Hex } from "@open-inspect/shared/service-auth";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
 import type { PiOperationRepository } from "../../pi-operation-repository";
+import { EXECUTION_DEADLINE_GRACE_MS } from "../../../scheduler/scheduler";
 
 const CONTROL_TIMEOUT_MS = 15_000;
 const envelopeSchema = z.strictObject({
@@ -37,6 +38,7 @@ const HUMAN_CONTROL_ACTIONS = new Set([
   "handoff",
   "compact",
 ]);
+const MODEL_CONTROL_ACTIONS = new Set(["submit", "send", "follow_up", "compact"]);
 
 export class PiControlHandler {
   constructor(
@@ -45,7 +47,7 @@ export class PiControlHandler {
       "getSession" | "addSessionCost" | "setSessionBudget" | "transaction"
     >,
     private readonly receipts: PiControlRepository,
-    private readonly runtime: Pick<PiRuntimeDispatch, "control"> | undefined,
+    private readonly runtime: Pick<PiRuntimeDispatch, "control" | "abort"> | undefined,
     private readonly log: Logger,
     private readonly recordHumanControl: (input: {
       actorId: string;
@@ -76,7 +78,8 @@ export class PiControlHandler {
      * runtime is called, so the session knows the operation the runtime's
      * events will name.
      */
-    private readonly operations?: Pick<PiOperationRepository, "begin" | "transition" | "get">
+    private readonly operations?: Pick<PiOperationRepository, "begin" | "transition" | "get">,
+    private readonly getExecutionTimeoutMs: () => number = () => CONTROL_TIMEOUT_MS
   ) {}
   async handle(request: Request): Promise<Response> {
     const parsed = envelopeSchema.safeParse(await request.json().catch(() => null));
@@ -199,12 +202,6 @@ export class PiControlHandler {
     // names it to the runtime. Without that, the runtime's turn belongs to
     // an id the session has no message for, and every capability call that
     // names the operation is refused.
-    // A control that names no model runs on the session's model.
-    const sessionModel = session.model ?? undefined;
-    const controlWithModel =
-      sessionModel !== undefined && !("model" in control)
-        ? { ...control, model: sessionModel }
-        : control;
     const operationId = projection?.messageId;
     if (operationId && this.operations) {
       const now = Date.now();
@@ -213,18 +210,24 @@ export class PiControlHandler {
       this.operations.transition(operationId, ["dispatching"], "dispatching", now);
     }
     try {
-      const result = await withTimeout(
-        this.runtime.control(
-          (operationId
-            ? { ...controlWithModel, operationId }
-            : controlWithModel) as PiRuntimeControl
-        ),
-        CONTROL_TIMEOUT_MS
-      );
+      const runtimeControl = {
+        ...control,
+        ...(operationId ? { operationId } : {}),
+        ...(MODEL_CONTROL_ACTIONS.has(control.action)
+          ? {
+              executionDeadlineMs:
+                Date.now() + this.getExecutionTimeoutMs() + EXECUTION_DEADLINE_GRACE_MS,
+            }
+          : {}),
+      } as PiRuntimeControl;
+      const result = await withTimeout(this.runtime.control(runtimeControl), CONTROL_TIMEOUT_MS);
       this.receipts.settle(control.requestId, result.state, result.result, undefined, Date.now());
       this.receipts.prune();
       return Response.json(result, { status: result.state === "accepted" ? 202 : 200 });
     } catch (error) {
+      if (error instanceof Error && error.message.includes("timed out") && operationId) {
+        await this.runtime.abort(control.sessionId, operationId).catch(() => false);
+      }
       const deterministic = read || isDeterministicControlError(error);
       const state = deterministic ? "failed" : "indeterminate";
       const code =

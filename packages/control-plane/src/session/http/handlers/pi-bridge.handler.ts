@@ -79,6 +79,8 @@ interface PiBridgeHandlerOptions {
     "pin" | "restore" | "list" | "read" | "prepareMaterialization" | "materializeBatch"
   >;
   diffs: Pick<SessionDiffService, "claimBaselines">;
+  /** Deployment extensions may add bounded, server-authored context fields. */
+  contextContributions?(): Promise<Record<string, unknown>>;
   /**
    * The tenant's memory, rendered for this session.
    *
@@ -195,6 +197,7 @@ export class PiBridgeHandler {
           skills,
           agentMessagingEnabled:
             session?.spawn_source === "user" || session?.spawn_source === "slack-bot",
+          ...(await this.options.contextContributions?.()),
           memory: await this.renderedMemory(sessionId, request),
         }),
         { headers: { "Cache-Control": "no-store" } }

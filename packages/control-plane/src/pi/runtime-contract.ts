@@ -93,6 +93,7 @@ export const piRuntimeOperationStatusSchema = z.discriminatedUnion("status", [
 const controlBase = z.object({
   sessionId: z.string().min(1),
   requestId: z.string().min(1).max(128),
+  executionDeadlineMs: z.number().int().positive().optional(),
 });
 const conversationId = z.number().int().positive();
 const operationId = z.string().min(1).max(128);
@@ -147,6 +148,7 @@ export const piRuntimeControlSchema = z
       action: z.literal("compact"),
       conversationId: conversationId.optional(),
       instructions: z.string().max(4_000).optional(),
+      operationId: operationId.optional(),
     }),
     controlBase.extend({ action: z.enum(["task_graph", "inspect"]) }),
   ])

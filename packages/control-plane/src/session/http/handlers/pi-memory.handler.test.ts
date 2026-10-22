@@ -32,11 +32,15 @@ function service(overrides: Partial<SessionMemoryService> = {}) {
   } as unknown as SessionMemoryService;
 }
 
-function handler(memory: SessionMemoryService, options: { active?: boolean } = {}) {
+function handler(
+  memory: SessionMemoryService,
+  options: { active?: boolean; authorMayAct?: boolean } = {}
+) {
   return new PiMemoryHandler({
     getSessionId: () => sessionId,
     service: () => memory,
     activeOperation: () => options.active ?? true,
+    authorMayAct: async () => options.authorMayAct ?? true,
   });
 }
 
@@ -55,6 +59,16 @@ describe("pi memory handler", () => {
 
     expect(response.status).toBe(200);
     expect(memory.read).toHaveBeenCalledWith(sessionId, "mem_1");
+  });
+
+  it("refuses memory after the turn author loses current authority", async () => {
+    const memory = service();
+    const response = await handler(memory, { authorMayAct: false }).read(
+      request({ memoryId: "mem_1" })
+    );
+
+    expect(response.status).toBe(403);
+    expect(memory.read).not.toHaveBeenCalled();
   });
 
   it("writes through the service with the session's own identity", async () => {
@@ -161,6 +175,7 @@ describe("pi memory handler", () => {
         return memory;
       },
       activeOperation: () => true,
+      authorMayAct: async () => true,
     });
     await gated.read(request({ memoryId: "mem_1" }, { "x-request-id": "turn-1" }));
 
