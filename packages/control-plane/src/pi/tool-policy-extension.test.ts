@@ -6,6 +6,7 @@ import {
   type ToolHooks,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
+import { createFixedActionCeiling } from "../harness/action-ceiling";
 import { createToolPolicyExtension } from "./tool-policy-extension";
 import type { PiToolEmergencyPolicy, PiToolPolicyDelegate } from "./tool-policy-types";
 
@@ -52,6 +53,20 @@ function call(name: string, nested = false): ToolHookCall {
 }
 
 describe("createToolPolicyExtension", () => {
+  it("refuses the turn when the action ceiling is reached", async () => {
+    // The ceiling is the harness's own wall: a harness with no sandbox has no
+    // other bound on a runaway turn, so the count is the wall.
+    const ceiling = createFixedActionCeiling(1);
+    const extension = createToolPolicyExtension({ effects, ceiling: () => ceiling });
+    const handler = (extension.hooks?.[0]?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
+    if (!handler) throw new Error("Expected the tool policy beforeTool hook");
+
+    await expect(handler(call("model_tool"), api, context)).resolves.toBeUndefined();
+    await expect(handler(call("model_tool"), api, context)).resolves.toEqual({
+      block: "This turn has reached the action ceiling",
+    });
+  });
+
   it("authorizes model calls only when the exact registry declares the model caller", async () => {
     const hook = beforeTool();
 

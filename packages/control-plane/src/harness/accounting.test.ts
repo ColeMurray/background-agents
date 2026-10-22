@@ -48,4 +48,16 @@ describe("the harness authoritative accounting", () => {
 
     expect(() => summarizeUsage(malformed)).toThrow("Invalid usage cost");
   });
+
+  it("rejects an aggregate cost that overflows instead of returning it", () => {
+    const malformed = {
+      models: {
+        "openai-codex/gpt": usage(1, 1, Number.MAX_VALUE),
+        "openai-codex/child": usage(1, 1, Number.MAX_VALUE),
+      },
+      tools: {},
+    } satisfies UsageState;
+
+    expect(() => summarizeUsage(malformed)).toThrow("Invalid usage cost");
+  });
 });
