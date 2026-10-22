@@ -84,6 +84,7 @@ export const PERMISSION_IDS = [
   "skills.read",
   "workspace.audit.read",
   "workspace.members.manage",
+  "workspace.members.merge",
   "workspace.members.read",
   "workspace.roles.read",
   "workspace.transfer_ownership",
@@ -181,9 +182,18 @@ export function isRegisteredPermission(value: string): value is PermissionId {
   return (PERMISSION_IDS as readonly string[]).includes(value);
 }
 
+/**
+ * Grants reserved for built-in roles. Merging users re-points sign-in identities, so it is held
+ * to the same non-delegable standard as ownership transfer.
+ */
+const BUILT_IN_ONLY_PERMISSIONS = new Set<PermissionId>([
+  "workspace.members.merge",
+  "workspace.transfer_ownership",
+]);
+
 /** Reports whether a permission may be delegated through a custom role. */
 export function isCustomRolePermission(permission: PermissionId): boolean {
-  return permission !== "workspace.transfer_ownership";
+  return !BUILT_IN_ONLY_PERMISSIONS.has(permission);
 }
 
 const roleNameSchema = z.string().min(1);
@@ -272,6 +282,97 @@ export const replaceMemberStatusInputSchema = z
     suspended: z.boolean(),
   })
   .strict();
+
+const canonicalUserIdSchema = z.string().refine(isCanonicalUserId, "Invalid canonical user ID");
+
+/** Validates a request to fold a source member's records into a target member. */
+export const memberMergeInputSchema = z
+  .object({
+    /** The member whose records move to the target; this user is deleted. */
+    sourceUserId: canonicalUserIdSchema,
+    /** The member that is kept and receives the source's records. */
+    targetUserId: canonicalUserIdSchema,
+  })
+  .strict()
+  .refine((input) => input.sourceUserId !== input.targetUserId, {
+    message: "Choose two different members",
+    path: ["sourceUserId"],
+  });
+
+/** Reasons a merge cannot proceed until an administrator changes member state. */
+export const MEMBER_MERGE_BLOCKERS = [
+  "role_assignment_missing",
+  "role_conflict",
+  "suspension_conflict",
+  "owner_suspended",
+  "owner_transfer_required",
+  "source_is_actor",
+] as const;
+
+/** What an administrator must change before a blocked merge can proceed. */
+export const MEMBER_MERGE_BLOCKER_MESSAGES: Record<(typeof MEMBER_MERGE_BLOCKERS)[number], string> =
+  {
+    role_assignment_missing: "Both accounts need a role before they can be merged.",
+    role_conflict: "These accounts have different roles. Give them the same role, then merge.",
+    suspension_conflict:
+      "One account is suspended and the other is not. Suspend or restore one so they match.",
+    owner_suspended: "Restore the Owner account you're keeping before merging.",
+    owner_transfer_required: "Only an Owner can merge Owner accounts.",
+    source_is_actor:
+      "You can't merge away the account you're signed in with. Keep this account instead.",
+  };
+
+/** Validates a merge blocker code. */
+export const memberMergeBlockerSchema = z.enum(MEMBER_MERGE_BLOCKERS);
+
+/** Validates one sign-in or chat identity linked to a member. */
+export const memberIdentitySchema = z
+  .object({
+    provider: z.string().min(1),
+    login: z.string().nullable(),
+    email: z.string().nullable(),
+  })
+  .strict();
+
+const memberMergeAccountSchema = z
+  .object({
+    member: workspaceMemberSchema,
+    identities: z.array(memberIdentitySchema),
+  })
+  .strict();
+
+const memberMergeCountsSchema = z.record(z.string(), z.number().int().nonnegative());
+
+/** Validates a dry-run merge preview: both members, any blocker, and per-record counts. */
+export const memberMergePreviewSchema = z
+  .object({
+    source: memberMergeAccountSchema,
+    target: memberMergeAccountSchema,
+    blocker: memberMergeBlockerSchema.nullable(),
+    /** Records that would change; null while a blocker prevents the merge. */
+    counts: memberMergeCountsSchema.nullable(),
+  })
+  .strict();
+
+/** Validates the outcome of an applied merge. */
+export const memberMergeResultSchema = z
+  .object({
+    sourceUserId: canonicalUserIdSchema,
+    targetUserId: canonicalUserIdSchema,
+    counts: memberMergeCountsSchema,
+  })
+  .strict();
+
+/** A request to merge one member into another. */
+export type MemberMergeInput = z.infer<typeof memberMergeInputSchema>;
+/** A reason a member merge is blocked. */
+export type MemberMergeBlocker = z.infer<typeof memberMergeBlockerSchema>;
+/** An identity linked to a member, such as a GitHub or Slack account. */
+export type MemberIdentity = z.infer<typeof memberIdentitySchema>;
+/** A dry-run preview of a member merge. */
+export type MemberMergePreview = z.infer<typeof memberMergePreviewSchema>;
+/** The outcome of an applied member merge. */
+export type MemberMergeResult = z.infer<typeof memberMergeResultSchema>;
 
 /** Administrative role data with effective grants and current assignment count. */
 export type RoleSummary = z.infer<typeof roleSummarySchema>;

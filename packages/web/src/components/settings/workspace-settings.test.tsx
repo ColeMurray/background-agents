@@ -24,6 +24,44 @@ afterEach(() => {
 });
 
 describe("WorkspaceSettings", () => {
+  it("offers account merging only with the merge permission", () => {
+    const administration = {
+      members: ["11111111111111111111111111111111", "22222222222222222222222222222222"].map(
+        (userId) => ({
+          userId,
+          displayName: null,
+          email: null,
+          suspendedAt: null,
+          role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
+        })
+      ),
+      roles: [],
+      loading: false,
+      error: undefined,
+      updateMember: vi.fn(),
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
+    };
+    vi.mocked(useWorkspaceAdministration).mockReturnValue(administration);
+    for (const canMerge of [false, true]) {
+      vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+        authorization: null,
+        loading: false,
+        error: null,
+        hasPermission: (permission) =>
+          permission === "workspace.members.read" ||
+          (canMerge && permission === "workspace.members.merge"),
+      });
+
+      render(<WorkspaceSettings />);
+
+      expect(screen.queryAllByRole("button", { name: "Merge accounts" })).toHaveLength(
+        canMerge ? 1 : 0
+      );
+      cleanup();
+    }
+  });
+
   it("shows assigned role names to members-only readers", () => {
     vi.mocked(useCurrentUserAuthorization).mockReturnValue({
       authorization: null,
@@ -45,6 +83,8 @@ describe("WorkspaceSettings", () => {
       loading: false,
       error: undefined,
       updateMember: vi.fn(),
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);
@@ -87,6 +127,8 @@ describe("WorkspaceSettings", () => {
       loading: false,
       error: undefined,
       updateMember: vi.fn(),
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);
@@ -118,6 +160,8 @@ describe("WorkspaceSettings", () => {
       loading: false,
       error: undefined,
       updateMember,
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);
@@ -171,6 +215,8 @@ describe("WorkspaceSettings", () => {
       loading: false,
       error: undefined,
       updateMember,
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);

@@ -6,9 +6,11 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
  * person (e.g. a Slack-attributed email beside a GitHub-subject row —
  * `auth.subject_email_collision` enumerates the live cases).
  *
- * Deliberately a library + operator script, not an HTTP endpoint: a merge
- * primitive on an authenticated surface adds authz/abuse surface for no
- * safety gain.
+ * Callers: the operator CLI (`scripts/merge-split-users.ts`) and the
+ * administrator merge flow (`authorization/member-merge.ts`). An
+ * administrator merge passes a `user` actor whose authorization guard is
+ * re-evaluated inside the atomic batch, so a revoked grant rolls the merge
+ * back rather than racing it.
  *
  * Guarantees:
  * - Dry-run by default in the CLI wrapper; `mergeUsers` itself takes an
@@ -42,18 +44,55 @@ function normalizeEmail(email: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
+/** Stable reasons a merge was refused before any write. */
+export type UserMergeErrorCode =
+  | "self_merge"
+  | "survivor_not_found"
+  | "role_assignment_missing"
+  | "role_conflict"
+  | "suspension_conflict"
+  | "owner_suspended";
+
 export class UserMergeError extends Error {
-  constructor(message: string) {
+  // A declared field, not a parameter property: the operator CLI loads this
+  // module under Node's type-stripping loader, which rejects the latter.
+  readonly code: UserMergeErrorCode;
+
+  constructor(code: UserMergeErrorCode, message: string) {
     super(message);
     this.name = "UserMergeError";
+    this.code = code;
   }
 }
+
+/** A parameterized SQL predicate evaluated inside the merge batch. */
+export interface UserMergeGuard {
+  readonly sql: string;
+  readonly values: readonly unknown[];
+}
+
+/**
+ * Who performs an executed merge. A `user` actor is recorded on the audit
+ * event, and its `guard` must still hold when the batch runs.
+ */
+export type UserMergeActor =
+  | { readonly kind: "operator" }
+  | {
+      readonly kind: "user";
+      readonly userId: string;
+      readonly requestId: string;
+      readonly guard: UserMergeGuard;
+    };
 
 export interface UserMergeOptions {
   readonly survivorId: string;
   readonly loserId: string;
   readonly dryRun?: boolean;
+  /** Defaults to the operator CLI. */
+  readonly actor?: UserMergeActor;
 }
+
+const OPERATOR_ACTOR: UserMergeActor = { kind: "operator" };
 
 const USER_MERGE_COUNT_KEYS = [
   "memoriesOwnedRepointed",
@@ -312,7 +351,7 @@ export async function mergeUsers(
 ): Promise<UserMergeResult> {
   const { survivorId, loserId } = options;
   if (survivorId === loserId) {
-    throw new UserMergeError("Survivor and loser must be different users");
+    throw new UserMergeError("self_merge", "Survivor and loser must be different users");
   }
   const survivor = await db
     .prepare(`SELECT id, email, suspended_at FROM users WHERE id = ?`)
@@ -323,7 +362,7 @@ export async function mergeUsers(
       suspended_at: number | null;
     }>();
   if (!survivor) {
-    throw new UserMergeError(`Survivor user ${survivorId} not found`);
+    throw new UserMergeError("survivor_not_found", `Survivor user ${survivorId} not found`);
   }
   // A missing loser row is not an error: re-running a completed merge must
   // be a no-op after an already-completed atomic merge.
@@ -362,16 +401,25 @@ export async function mergeUsers(
   const survivorRole = survivorAssignment.results[0];
   const loserRole = loserAssignment.results[0];
   if (!survivorRole || !loserRole) {
-    throw new UserMergeError("Both users must have explicit role assignments before merging");
+    throw new UserMergeError(
+      "role_assignment_missing",
+      "Both users must have explicit role assignments before merging"
+    );
   }
   if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
-    throw new UserMergeError("Resolve conflicting user roles before merging");
+    throw new UserMergeError("role_conflict", "Resolve conflicting user roles before merging");
   }
   if ((survivor.suspended_at === null) !== (loser.suspended_at === null)) {
-    throw new UserMergeError("Resolve conflicting user suspension states before merging");
+    throw new UserMergeError(
+      "suspension_conflict",
+      "Resolve conflicting user suspension states before merging"
+    );
   }
   if (loserRole?.role_key === "owner" && survivor.suspended_at !== null) {
-    throw new UserMergeError("The surviving Owner must be active before merging");
+    throw new UserMergeError(
+      "owner_suspended",
+      "The surviving Owner must be active before merging"
+    );
   }
   // The loser's email backfills an email-less survivor after the loser row's
   // deletion frees the unique slot; its verification state carries with it.
@@ -401,15 +449,34 @@ export async function mergeUsers(
 
   const auditId = crypto.randomUUID();
   const occurredAt = Date.now();
+  const actor = options.actor ?? OPERATOR_ACTOR;
+  const principal =
+    actor.kind === "user"
+      ? {
+          requestId: actor.requestId,
+          kind: "user",
+          actorUserId: actor.userId,
+          actorService: null,
+          reasonCode: "member_merge",
+          guard: actor.guard,
+        }
+      : {
+          requestId: `operator-cli:${auditId}`,
+          kind: "service",
+          actorUserId: null,
+          actorService: "operator-cli",
+          reasonCode: "operator_merge",
+          guard: { sql: "1", values: [] },
+        };
   // The NOT NULL occurred_at column turns a failed revalidation into a batch
   // error, rolling back every merge write. This closes the preflight/write
-  // window for role, suspension, and last-active-Owner invariants.
+  // window for role, suspension, last-active-Owner, and actor-grant invariants.
   add(
     "auditEventsCreated",
     db
       .prepare(
         `INSERT INTO authorization_audit_events
-            (id, occurred_at, request_id, principal_kind,
+            (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
              actor_service_snapshot, action, resource_type, resource_id,
              target_user_id_snapshot, reason_code, operation_result, metadata_json)
          VALUES (
@@ -427,9 +494,9 @@ export async function mergeUsers(
                AND survivor_assignment.role_id = loser_assignment.role_id
                AND (survivor.suspended_at IS NULL) = (loser.suspended_at IS NULL)
                AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
-           ) THEN ? ELSE NULL END,
-            'operator-cli:' || ?, 'service', 'operator-cli',
-            'workspace.user_merged', 'user', ?, ?, 'operator_merge', 'applied',
+           ) AND (${principal.guard.sql}) THEN ? ELSE NULL END,
+            ?, ?, ?, ?,
+            'workspace.user_merged', 'user', ?, ?, ?, 'applied',
             json_object(
               'before', json_object(
                 'survivor', json_object(
@@ -459,10 +526,15 @@ export async function mergeUsers(
         auditId,
         loserId,
         survivorId,
+        ...principal.guard.values,
         occurredAt,
-        auditId,
+        principal.requestId,
+        principal.kind,
+        principal.actorUserId,
+        principal.actorService,
         survivorId,
         loserId,
+        principal.reasonCode,
         survivorId,
         survivorId,
         survivorId,

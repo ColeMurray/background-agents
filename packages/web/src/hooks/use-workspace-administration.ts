@@ -2,9 +2,14 @@
 
 import useSWR, { useSWRConfig } from "swr";
 import {
+  memberMergePreviewSchema,
+  memberMergeResultSchema,
   roleListResponseSchema,
   workspaceMemberListResponseSchema,
   type EffectiveAuthorization,
+  type MemberMergeInput,
+  type MemberMergePreview,
+  type MemberMergeResult,
   type RoleSummary,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
@@ -22,6 +27,23 @@ async function fetchRoles(): Promise<RoleSummary[]> {
   const response = await browserApiFetch("/api/roles");
   if (!response.ok) throw new Error(`Roles request failed (${response.status})`);
   return roleListResponseSchema.parse(await response.json());
+}
+
+async function postMemberMerge(path: `/api/${string}`, input: MemberMergeInput): Promise<unknown> {
+  const response = await browserApiFetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      body && typeof body === "object" && "error" in body && typeof body.error === "string"
+        ? body.error
+        : `Member merge failed (${response.status})`;
+    throw new Error(message);
+  }
+  return body;
 }
 
 /**
@@ -109,12 +131,33 @@ export function useWorkspaceAdministration(input: { readMembers: boolean; readRo
     }
   }
 
+  async function previewMerge(merge: MemberMergeInput): Promise<MemberMergePreview> {
+    return memberMergePreviewSchema.parse(
+      await postMemberMerge("/api/members/merge/preview", merge)
+    );
+  }
+
+  async function mergeMembers(merge: MemberMergeInput): Promise<MemberMergeResult> {
+    const result = memberMergeResultSchema.parse(
+      await postMemberMerge("/api/members/merge", merge)
+    );
+    try {
+      // The source row is gone and role assignment counts changed; refetch both.
+      await Promise.all([members.mutate(), roles.mutate()]);
+    } catch {
+      // The merge already committed; a failed refresh must not read as a failed merge.
+    }
+    return result;
+  }
+
   return {
     members: members.data ?? [],
     roles: roles.data ?? [],
     loading: (input.readMembers && members.isLoading) || (input.readRoles && roles.isLoading),
     error: members.error ?? roles.error,
     updateMember,
+    previewMerge,
+    mergeMembers,
   };
 }
 

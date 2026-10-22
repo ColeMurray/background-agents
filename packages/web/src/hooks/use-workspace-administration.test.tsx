@@ -73,4 +73,73 @@ describe("useWorkspaceAdministration", () => {
 
     expect(clearAuthSessionCache).toHaveBeenCalledTimes(1);
   });
+
+  const mergeInput = {
+    sourceUserId: "22222222222222222222222222222222",
+    targetUserId: member.userId,
+  };
+
+  it("posts merge previews and merges, parsing the responses", async () => {
+    const workspaceMember = {
+      userId: member.userId,
+      displayName: "Ada",
+      email: "ada@example.com",
+      suspendedAt: null,
+      role: member.role,
+    };
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(
+        Response.json({
+          source: {
+            member: { ...workspaceMember, userId: mergeInput.sourceUserId },
+            identities: [{ provider: "slack", login: null, email: null }],
+          },
+          target: { member: workspaceMember, identities: [] },
+          blocker: null,
+          counts: { sessionsRepointed: 2 },
+        })
+      )
+      .mockResolvedValueOnce(Response.json({ ...mergeInput, counts: { sessionsRepointed: 2 } }));
+    const { result } = renderHook(
+      () => useWorkspaceAdministration({ readMembers: false, readRoles: false }),
+      { wrapper }
+    );
+
+    await expect(result.current.previewMerge(mergeInput)).resolves.toMatchObject({
+      counts: { sessionsRepointed: 2 },
+    });
+    await expect(act(() => result.current.mergeMembers(mergeInput))).resolves.toMatchObject({
+      counts: { sessionsRepointed: 2 },
+    });
+
+    expect(browserApiFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/members/merge/preview",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(mergeInput) })
+    );
+    expect(browserApiFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/members/merge",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(mergeInput) })
+    );
+  });
+
+  it("surfaces the server's reason when a merge is refused", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      Response.json(
+        { error: "Give both members the same role", code: "role_conflict" },
+        {
+          status: 409,
+        }
+      )
+    );
+    const { result } = renderHook(
+      () => useWorkspaceAdministration({ readMembers: false, readRoles: false }),
+      { wrapper }
+    );
+
+    await expect(result.current.mergeMembers(mergeInput)).rejects.toThrow(
+      "Give both members the same role"
+    );
+  });
 });
