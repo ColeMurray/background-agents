@@ -1,8 +1,8 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./index";
 import type * as taskModule from "./task";
 import { handleTask } from "./task";
-import { createEnv, createInteraction, toHex } from "./test-helpers";
+import { createEnv, createInteraction, createKv, toHex } from "./test-helpers";
 import type { Env } from "./types";
 
 vi.mock("./task", async (importOriginal) => ({
@@ -21,6 +21,10 @@ beforeAll(async () => {
   privateKey = pair.privateKey;
   const raw = (await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer;
   env = createEnv({ DISCORD_PUBLIC_KEY: toHex(raw) });
+});
+
+beforeEach(() => {
+  env.DISCORD_KV = createKv() as unknown as KVNamespace;
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -70,6 +74,17 @@ describe("POST /interactions", () => {
       env,
       expect.objectContaining({ prompt: "Make the icon black", repo: "octo/website" })
     );
+  });
+
+  it("ignores a command delivered twice", async () => {
+    await post(createInteraction());
+    const { json, waitUntil } = await post(createInteraction());
+    expect(json).toMatchObject({
+      type: 4,
+      data: { content: "This command was already received." },
+    });
+    expect(waitUntil).not.toHaveBeenCalled();
+    expect(vi.mocked(handleTask)).toHaveBeenCalledOnce();
   });
 
   it("tells members without the role privately", async () => {

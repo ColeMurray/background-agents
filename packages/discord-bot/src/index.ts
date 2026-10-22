@@ -23,7 +23,7 @@ import {
   type Env,
   type Interaction,
 } from "./types";
-import { verifyDiscordSignature } from "./verify";
+import { MAX_SIGNATURE_SKEW_MS, verifyDiscordSignature } from "./verify";
 
 const log = createLogger("interactions");
 
@@ -125,6 +125,9 @@ app.post("/interactions", async (c) => {
     case InteractionType.Autocomplete:
       return c.json(await handleAutocomplete(c.env, interaction, access));
     case InteractionType.ApplicationCommand:
+      if (await isReplay(c.env, interaction.id)) {
+        return c.json(ephemeral("This command was already received."));
+      }
       return c.json(
         handleCommand(c.env, interaction, access, allowedChannelIds, (promise) =>
           c.executionCtx.waitUntil(promise)
@@ -134,6 +137,19 @@ app.post("/interactions", async (c) => {
       return c.json(ephemeral("Unsupported interaction."));
   }
 });
+
+/**
+ * Best-effort dedupe for a command delivered twice inside the signature window.
+ * KV is not atomic, so two copies racing in parallel can both pass.
+ */
+async function isReplay(env: Env, interactionId: string): Promise<boolean> {
+  const key = `interaction:${interactionId}`;
+  if ((await env.DISCORD_KV.get(key)) !== null) return true;
+  await env.DISCORD_KV.put(key, "1", {
+    expirationTtl: Math.ceil((2 * MAX_SIGNATURE_SKEW_MS) / 1000),
+  });
+  return false;
+}
 
 app.route("/callbacks", callbacksRouter);
 
