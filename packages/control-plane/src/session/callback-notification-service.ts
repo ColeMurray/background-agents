@@ -1,8 +1,8 @@
 /**
- * CallbackNotificationService - Slack/Linear bot callback notifications.
+ * CallbackNotificationService - Slack/Linear/Discord bot callback notifications.
  *
  * Extracted from SessionDO to reduce its size. Handles:
- * - Notifying originating clients (Slack, Linear) on execution completion
+ * - Notifying originating clients (Slack, Linear, Discord) on execution completion
  * - Throttled tool-call progress callbacks
  * - HMAC payload signing for callback authentication
  */
@@ -10,10 +10,13 @@
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
   automationCallbackContextSchema,
+  discordCompletionCallbackPayloadSchema,
+  discordToolCallCallbackPayloadSchema,
   linearCompletionCallbackPayloadSchema,
   linearToolCallCallbackPayloadSchema,
   SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
+import type { z } from "zod";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import { slackPostGate, type SlackPostScope } from "../authorization/slack-post-gate";
 import type { Logger } from "../logger";
@@ -70,6 +73,37 @@ export interface CallbackServiceDeps {
  */
 const NOTIFIED_CALL_IDS_CAP = 500;
 const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
+
+/**
+ * Where a message source's callbacks go and how their payloads are checked
+ * before signing. A route without schemas forwards the raw context as-is;
+ * that is the Slack bot's legacy contract and the fallback for sources the
+ * table does not know (web, etc.).
+ */
+interface CallbackRoute {
+  destination: CallbackDestination;
+  binding: "SLACK_BOT" | "LINEAR_BOT" | "DISCORD_BOT";
+  completionSchema?: z.ZodType;
+  toolCallSchema?: z.ZodType;
+}
+
+const SLACK_CALLBACK_ROUTE: CallbackRoute = { destination: "slack-bot", binding: "SLACK_BOT" };
+
+const CALLBACK_ROUTES: Partial<Record<string, CallbackRoute>> = {
+  slack: SLACK_CALLBACK_ROUTE,
+  linear: {
+    destination: "linear-bot",
+    binding: "LINEAR_BOT",
+    completionSchema: linearCompletionCallbackPayloadSchema,
+    toolCallSchema: linearToolCallCallbackPayloadSchema,
+  },
+  discord: {
+    destination: "discord-bot",
+    binding: "DISCORD_BOT",
+    completionSchema: discordCompletionCallbackPayloadSchema,
+    toolCallSchema: discordToolCallCallbackPayloadSchema,
+  },
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -238,23 +272,19 @@ export class CallbackNotificationService {
    * decision, so destination and signing key cannot diverge (the CP signs
    * with the DESTINATION bot's secret). Automation callbacks
    * are routed to the automation scheduler before this is consulted. Sources
-   * other than linear and discord default to the slack bot for backward compatibility (web
-   * sources, etc.).
+   * missing from the table default to the slack bot for backward compatibility
+   * (web sources, etc.).
    */
   private resolveCallbackRoute(source: string | null): {
+    route: CallbackRoute;
     binding: FetchClient | undefined;
     secret: string | undefined;
   } {
-    const destination: CallbackDestination =
-      source === "linear" ? "linear-bot" : source === "discord" ? "discord-bot" : "slack-bot";
-    const bindings: Record<CallbackDestination, FetchClient | undefined> = {
-      "slack-bot": this.env.SLACK_BOT,
-      "linear-bot": this.env.LINEAR_BOT,
-      "discord-bot": this.env.DISCORD_BOT,
-    };
+    const route = (source !== null && CALLBACK_ROUTES[source]) || SLACK_CALLBACK_ROUTE;
     return {
-      binding: bindings[destination],
-      secret: callbackSigningSecret(this.env, destination),
+      route,
+      binding: this.env[route.binding],
+      secret: callbackSigningSecret(this.env, route.destination),
     };
   }
 
@@ -352,7 +382,7 @@ export class CallbackNotificationService {
         return;
       }
 
-      const { binding, secret } = this.resolveCallbackRoute(source);
+      const { route, binding, secret } = this.resolveCallbackRoute(source);
       if (!secret) {
         result.rejectReason = "no_secret";
         return;
@@ -371,23 +401,20 @@ export class CallbackNotificationService {
         timestamp,
         context: rawContext,
       };
-      const parsedCallback =
-        source === "linear"
-          ? linearCompletionCallbackPayloadSchema.safeParse(callbackData)
-          : undefined;
+      const parsedCallback = route.completionSchema?.safeParse(callbackData);
       if (parsedCallback && !parsedCallback.success) {
         result.rejectReason = "invalid_payload";
         return;
       }
       const payloadData = parsedCallback?.data ?? callbackData;
+      // Only Slack posts are gated on channel bindings; other bots own their destinations.
+      const gated = route.destination === "slack-bot";
       let rejectReason: string | undefined;
       const delivery = await retryDelivery<Response | null, Response>(
         async (signal) => {
           const denial =
             rejectReason ??
-            (source === "linear"
-              ? null
-              : await this.slackPostDenial(callbackSessionId, rawContext));
+            (gated ? await this.slackPostDenial(callbackSessionId, rawContext) : null);
           // D1 reads cannot be canceled; an expired attempt must not reach the wire.
           signal.throwIfAborted();
           // The bot can tombstone the thread even when closure delivery fails.
@@ -750,7 +777,7 @@ export class CallbackNotificationService {
       return;
     }
 
-    const { binding, secret } = this.resolveCallbackRoute(source);
+    const { route, binding, secret } = this.resolveCallbackRoute(source);
     if (!secret) {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -777,14 +804,15 @@ export class CallbackNotificationService {
     const callbackData = {
       sessionId,
       tool,
-      args: source === "linear" ? event.args : (event.args ?? EMPTY_TOOL_ARGS),
+      // Validated routes reject a call without arguments; the legacy Slack
+      // contract substitutes an empty record instead.
+      args: route.toolCallSchema ? event.args : (event.args ?? EMPTY_TOOL_ARGS),
       callId,
       status: event.status,
       timestamp: now,
       context: rawContext,
     };
-    const parsedPayload =
-      source === "linear" ? linearToolCallCallbackPayloadSchema.safeParse(callbackData) : undefined;
+    const parsedPayload = route.toolCallSchema?.safeParse(callbackData);
     if (parsedPayload && !parsedPayload.success) {
       this.log.warn("callback.tool_call", {
         message_id: messageId,
@@ -801,7 +829,7 @@ export class CallbackNotificationService {
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
 
-    if (source !== "linear") {
+    if (route.destination === "slack-bot") {
       try {
         const denial = await this.slackPostDenial(sessionId, rawContext);
         if (denial) {
