@@ -1630,6 +1630,11 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
+    "packages/control-plane/src/session/provider-account-resolution.test.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
+    },
     "packages/control-plane/src/session/provider-credential-service.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
