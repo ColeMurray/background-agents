@@ -488,15 +488,15 @@
       "code": ["packages/control-plane/src/session/provider-account-resolution.ts:100"],
       "tests": [
         {
-          "file": "packages/control-plane/src/harness-admission.test.ts",
-          "name": "checks current native model availability and resolved auth again at dispatch"
+          "file": "packages/control-plane/src/session/provider-account-resolution.test.ts",
+          "name": "binds a connected Settings default and preserves unattended API policy"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/provider-account-resolution.ts",
-        "find": "export async function resolveProviderAccountSelections(",
-        "replace": "export async function removedResolveProviderAccountSelections(",
-        "cmd": "npm test -w @open-inspect/control-plane -- harness-admission"
+        "find": "  if (input.unattended && providerDefault.unattendedMode === \"api_key\") {",
+        "replace": "  if (false && input.unattended && providerDefault.unattendedMode === \"api_key\") {",
+        "cmd": "npm test -w @open-inspect/control-plane -- provider-account-resolution"
       }
     },
     "E-2": {
@@ -504,15 +504,15 @@
       "code": ["packages/control-plane/src/session/provider-account-resolution.ts:78"],
       "tests": [
         {
-          "file": "packages/control-plane/src/harness-admission.test.ts",
-          "name": "checks current native model availability and resolved auth again at dispatch"
+          "file": "packages/control-plane/src/session/provider-account-resolution.test.ts",
+          "name": "keeps an explicit connected account ahead of unattended default policy"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/provider-account-resolution.ts",
-        "find": "export function resolveSessionProviderAuth(",
-        "replace": "export function removedResolveSessionProviderAuth(",
-        "cmd": "npm test -w @open-inspect/control-plane -- harness-admission"
+        "find": "  if (explicit?.mode === \"provider_account\") {",
+        "replace": "  if (false && explicit?.mode === \"provider_account\") {",
+        "cmd": "npm test -w @open-inspect/control-plane -- provider-account-resolution"
       }
     },
     "E-3": {
@@ -585,7 +585,7 @@
       "tests": [
         {
           "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
-          "name": "refuses to let anybody but the owner authorize a connection"
+          "name": "rechecks durable D1 authority before every broker tool call"
         }
       ],
       "mutation": {
@@ -709,7 +709,10 @@
     },
     "F-6": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/routes/session-children.ts:1"],
+      "code": [
+        "packages/control-plane/src/routes/session-child-spawn.ts:1",
+        "packages/control-plane/src/routes/session-children.ts:1"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/spawn-children.test.ts",
@@ -717,15 +720,18 @@
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/routes/session-children.ts",
-        "find": "export async function handlePromptChild(",
-        "replace": "export async function removedHandlePromptChild(",
+        "file": "packages/control-plane/src/routes/session-child-spawn.ts",
+        "find": "export async function handleSpawnChild(",
+        "replace": "export async function removedHandleSpawnChild(",
         "cmd": "npm run test:integration -w @open-inspect/control-plane -- spawn-children"
       }
     },
     "G-1": {
       "status": "PASS",
-      "code": ["packages/shared/src/migration-reservations.ts:31"],
+      "code": [
+        "packages/shared/src/overlay-migration-reservations.ts:1",
+        "packages/shared/src/migration-reservations.ts:31"
+      ],
       "tests": [
         {
           "file": "packages/shared/src/migration-reservations.test.ts",
@@ -733,7 +739,7 @@
         }
       ],
       "mutation": {
-        "file": "packages/shared/src/migration-reservations.ts",
+        "file": "packages/shared/src/overlay-migration-reservations.ts",
         "find": "export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION",
         "replace": "export const REMOVED_PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION",
         "cmd": "npm test -w @open-inspect/shared -- migration-reservations"

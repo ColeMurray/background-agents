@@ -410,6 +410,32 @@ describe("personal MCP connections API", () => {
     expect(revokeCorruptSnapshot.status).toBe(200);
   });
 
+  it("rechecks durable D1 authority before every broker tool call", async () => {
+    const server = await createRemoteServer();
+    const createdResponse = await serviceFetch("https://test.local/mcp-connections", {
+      method: "POST",
+      body: JSON.stringify({ serverId: server.id }),
+    });
+    const connection = await createdResponse.json<McpConnectionMetadata>();
+    const broker = mcpNamespace().getByName(connection.id);
+    await runInMcpConnectionDO(broker, (instance) =>
+      instance.initialize(connection.id, "11111111111111111111111111111111")
+    );
+
+    await env.DB.prepare("DELETE FROM mcp_connections WHERE id = ?").bind(connection.id).run();
+
+    await expect(
+      runInMcpConnectionDO(broker, (instance) =>
+        instance.callTool({
+          connectionId: connection.id,
+          ownerUserId: "11111111111111111111111111111111",
+          toolName: "list_issues",
+          arguments: {},
+        })
+      )
+    ).rejects.toThrow(/no longer authorized/i);
+  });
+
   it("keeps every Agents OAuth value AES-GCM encrypted and connection-isolated", async () => {
     const server = await createRemoteServer();
     const createdResponse = await serviceFetch("https://test.local/mcp-connections", {

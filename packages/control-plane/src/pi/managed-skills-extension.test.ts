@@ -5,7 +5,7 @@ import { createManagedSkillsExtension } from "./managed-skills-extension";
 import { skillSourceFromInstallation } from "./skill-source";
 
 vi.mock("agents/harness/pi", () => ({
-  skills: async () => ({
+  skills: vi.fn(async () => ({
     name: "agents.skills",
     tools: [
       {
@@ -29,7 +29,7 @@ vi.mock("agents/harness/pi", () => ({
       },
     ],
     sections: [],
-  }),
+  })),
 }));
 
 const source = skillSourceFromInstallation({
@@ -65,6 +65,7 @@ const api = { taskId: 1 } as ToolExecutionApi;
 describe("createManagedSkillsExtension", () => {
   it("activates a managed skill through Pi's output contract", async () => {
     const extension = await createManagedSkillsExtension([source]);
+    expect(extension.name).toBe("open-inspect.skills");
     const activate = extension.tools?.find((tool) => tool.name === "activate_skill");
     await expect(activate?.execute({ name: "review" }, api, context)).resolves.toMatchObject({
       output: [
@@ -75,6 +76,8 @@ describe("createManagedSkillsExtension", () => {
 
   it("reads only declared skill resources", async () => {
     const extension = await createManagedSkillsExtension([source]);
+    const { skills } = await import("agents/harness/pi");
+    expect(skills).toHaveBeenCalledWith([source]);
     const read = extension.tools?.find((tool) => tool.name === "read_skill_resource");
     await expect(
       read?.execute({ name: "review", path: "references/checklist.md" }, api, context)
