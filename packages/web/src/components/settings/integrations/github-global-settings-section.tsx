@@ -25,16 +25,7 @@ import { RadioCard } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { GitHubAutofixSettingsFields } from "./github-autofix-settings-fields";
 import { GitHubAutoReviewDeprecationNotice } from "./github-auto-review-deprecation-notice";
 import {
@@ -486,21 +477,14 @@ export function GlobalSettingsSection({
         )}
       </div>
 
-      <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
-            <AlertDialogDescription>
-              Reset all GitHub bot settings to defaults? The bot will respond to all repos with
-              auto-review enabled.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmReset}>Reset</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmationDialog
+        open={showResetDialog}
+        onOpenChange={setShowResetDialog}
+        title="Reset to defaults"
+        description="Reset all GitHub bot settings to defaults? The bot will respond to all repos with auto-review enabled."
+        actionLabel="Reset"
+        onConfirm={handleConfirmReset}
+      />
     </IntegrationSettingsSection>
   );
 }
