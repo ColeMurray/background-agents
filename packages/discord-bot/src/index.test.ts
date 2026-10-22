@@ -27,7 +27,7 @@ afterEach(() => vi.clearAllMocks());
 
 async function post(payload: unknown, options: { sign?: boolean } = {}) {
   const body = JSON.stringify(payload);
-  const timestamp = "1700000000";
+  const timestamp = String(Math.floor(Date.now() / 1000));
   const signature = toHex(
     await crypto.subtle.sign(
       { name: "Ed25519" },

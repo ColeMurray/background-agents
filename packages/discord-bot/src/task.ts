@@ -271,7 +271,7 @@ export async function handleTask(env: Env, request: TaskRequest): Promise<void> 
       return;
     }
     log.error("task.failed", { trace_id: traceId, error });
-    const message = error instanceof Error ? error.message : "Unexpected error";
-    await reply(`⚠️ Couldn't start the task: ${message}`).catch(() => undefined);
+    // The reply is public; internal error text stays in the logs.
+    await reply(`⚠️ Couldn't start the task. Trace ID: \`${traceId}\``).catch(() => undefined);
   }
 }

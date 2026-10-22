@@ -200,7 +200,7 @@ describe("handleTask", () => {
     expect(discordCalls()[0].body.content).toContain("Pick a repository");
   });
 
-  it("reports control-plane failures in the reply", async () => {
+  it("reports control-plane failures without leaking their details", async () => {
     const repos = cpFetch.getMockImplementation()!;
     cpFetch.mockImplementation(async (env, request, init) =>
       request.url === "https://internal/sessions"
@@ -214,9 +214,9 @@ describe("handleTask", () => {
       repo: "octo/website",
     });
 
-    expect(discordCalls()[0].body.content).toBe(
-      "⚠️ Couldn't start the task: Could not create a session (403): assignment_required"
-    );
+    const content = discordCalls()[0].body.content;
+    expect(content).toMatch(/^⚠️ Couldn't start the task\. Trace ID: `[0-9a-f-]{36}`$/);
+    expect(content).not.toContain("assignment_required");
   });
 
   it("still sends the prompt when the thread cannot be created", async () => {

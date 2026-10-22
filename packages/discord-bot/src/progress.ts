@@ -4,8 +4,12 @@
  * Each prompt gets one status message that is edited in place as the control
  * plane reports tool calls (at most one callback every few seconds), then
  * marked finished on completion. The message id and start time travel in the
- * prompt's callback context, so the bot keeps no state of its own and a
- * follow-up sent while a prompt runs cannot be confused with it.
+ * prompt's callback context, so a follow-up sent while a prompt runs cannot be
+ * confused with it.
+ *
+ * Tool-call and completion edits run in separate requests with no ordering, so
+ * finishing records the final text in KV first. A step that sees it skips its
+ * edit, and one already in flight puts the final text back afterwards.
  */
 
 import { summarizeToolCall } from "@open-inspect/shared/completion/extractor";
@@ -15,6 +19,13 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 
 const log = createLogger("progress");
+
+/** Outlives the control plane's last tool-call callback for a prompt. */
+const FINISHED_MARKER_TTL_SECONDS = 60 * 60;
+
+function finishedKey(statusMessage: DiscordStatusMessage): string {
+  return `status-finished:${statusMessage.id}`;
+}
 
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
@@ -79,6 +90,7 @@ export async function recordStep(
 ): Promise<void> {
   const { channelId, statusMessage } = params;
   try {
+    if ((await env.DISCORD_KV.get(finishedKey(statusMessage))) !== null) return;
     await Promise.all([
       editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, {
         content: formatStatus(
@@ -89,6 +101,12 @@ export async function recordStep(
       }),
       sendTypingIndicator(env.DISCORD_BOT_TOKEN, channelId),
     ]);
+    const finished = await env.DISCORD_KV.get(finishedKey(statusMessage));
+    if (finished !== null) {
+      await editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, {
+        content: finished,
+      });
+    }
   } catch (error) {
     log.warn("progress.step_failed", { channel_id: channelId, error });
   }
@@ -100,10 +118,17 @@ export async function finishProgress(
   params: { channelId: string; statusMessage: DiscordStatusMessage; success: boolean }
 ): Promise<void> {
   const { channelId, statusMessage } = params;
+  const content = formatFinished(statusMessage.startedAt, params.success, Date.now());
   try {
-    await editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, {
-      content: formatFinished(statusMessage.startedAt, params.success, Date.now()),
+    await env.DISCORD_KV.put(finishedKey(statusMessage), content, {
+      expirationTtl: FINISHED_MARKER_TTL_SECONDS,
     });
+  } catch (error) {
+    // Without the marker a late step may still win; the finish edit must go out regardless.
+    log.warn("progress.finish_marker_failed", { channel_id: channelId, error });
+  }
+  try {
+    await editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, { content });
   } catch (error) {
     log.warn("progress.finish_failed", { channel_id: channelId, error });
   }

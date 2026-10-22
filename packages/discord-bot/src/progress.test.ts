@@ -82,6 +82,32 @@ describe("progress lifecycle", () => {
     expect(calls().at(-1)!.body.content).toMatch(/^✅ \*\*Finished\*\* in \d+s$/);
   });
 
+  it("skips a step that arrives after the prompt finished", async () => {
+    const env = createEnv();
+    const statusMessage = { id: "status-1", startedAt: Date.now() };
+    await finishProgress(env, { channelId: "thread-1", statusMessage, success: true });
+    discordFetch.mockClear();
+
+    await recordStep(env, { channelId: "thread-1", statusMessage, tool: "Bash", args: {} });
+    expect(discordFetch).not.toHaveBeenCalled();
+  });
+
+  it("restores the finished text when a step edit lands after finishing", async () => {
+    const env = createEnv();
+    const statusMessage = { id: "status-1", startedAt: Date.now() };
+    discordFetch.mockImplementation(async (_url: string, init: RequestInit) => {
+      // The step's PATCH resolves only after completion has run.
+      if (init.method === "PATCH" && String(init.body).includes("Working")) {
+        await finishProgress(env, { channelId: "thread-1", statusMessage, success: true });
+      }
+      return new Response(JSON.stringify({ id: "status-1" }), { status: 200 });
+    });
+
+    await recordStep(env, { channelId: "thread-1", statusMessage, tool: "Bash", args: {} });
+    const edits = calls().filter((call) => call.method === "PATCH");
+    expect(edits.at(-1)!.body.content).toMatch(/^✅ \*\*Finished\*\*/);
+  });
+
   it("returns nothing and never throws when Discord fails", async () => {
     discordFetch.mockResolvedValue(new Response("down", { status: 500 }));
     await expect(startProgress(createEnv(), "thread-1")).resolves.toBeUndefined();

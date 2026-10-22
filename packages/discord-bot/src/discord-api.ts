@@ -14,14 +14,23 @@ const DISCORD_API = "https://discord.com/api/v10";
 export const MAX_MESSAGE_LENGTH = 2000;
 
 class DiscordApiError extends Error {
+  readonly path: string;
+
   constructor(
-    readonly path: string,
+    path: string,
     readonly status: number,
     readonly body: string
   ) {
-    super(`Discord API ${path} failed with ${status}`);
+    const safePath = redactPath(path);
+    super(`Discord API ${safePath} failed with ${status}`);
     this.name = "DiscordApiError";
+    this.path = safePath;
   }
+}
+
+/** Interaction webhook paths embed a live interaction token; never surface it. */
+function redactPath(path: string): string {
+  return path.replace(/^\/webhooks\/([^/]+)\/[^/]+/, "/webhooks/$1/<token>");
 }
 
 export interface MessagePayload {

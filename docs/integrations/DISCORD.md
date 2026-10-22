@@ -42,6 +42,16 @@ Each follow-up `/task` in the thread gets its own status message.
 Discord provides no email address to bots, so a Discord user is not linked to their web account.
 Pull requests from Discord tasks are opened by the GitHub App.
 
+### Teams
+
+Discord channels cannot be bound to a team yet, so Discord works with workspace-owned sessions only:
+
+- Tasks are created without a team. If the workspace requires a team on create, `/task` fails.
+- The repository autocomplete lists every repository the deployment can access, not a team's grants.
+  A repository the user cannot use fails when the task starts.
+- Progress and results are posted only while the session is workspace-visible and owns no team. If
+  someone makes the session private or moves it to a team, the bot stops posting to the thread.
+
 ## Billing: Claude subscription or API key
 
 Sessions run on the **Claude Agent** harness (`discord_bot_harness = "claude"`), which can use a
@@ -120,3 +130,6 @@ Optional settings:
   or the five-minute cache has not refreshed yet.
 - **`/task` in a thread asks for a repository**: the thread is not a task thread, or its mapping
   expired (30 days). Start a new task from the channel.
+- **"Couldn't start the task. Trace ID: …"**: search the worker logs for that `trace_id`. The
+  details are kept out of the channel on purpose.
+- **Updates stop after changing a session's visibility or team**: expected, see Teams.

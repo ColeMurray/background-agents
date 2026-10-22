@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { toHex } from "./test-helpers";
-import { verifyDiscordSignature } from "./verify";
+import { MAX_SIGNATURE_SKEW_MS, verifyDiscordSignature } from "./verify";
 
 let publicKey: string;
 let privateKey: CryptoKey;
@@ -20,19 +20,47 @@ beforeAll(async () => {
   publicKey = toHex((await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer);
 });
 
+const SIGNED_AT_MS = 1_700_000_000_000;
+
 describe("verifyDiscordSignature", () => {
   it("accepts a signature over timestamp + body", async () => {
     const body = '{"type":1}';
     const signature = await sign(`1700000000${body}`);
     await expect(
-      verifyDiscordSignature({ publicKey, signature, timestamp: "1700000000", body })
+      verifyDiscordSignature({
+        publicKey,
+        signature,
+        timestamp: "1700000000",
+        body,
+        nowMs: SIGNED_AT_MS,
+      })
     ).resolves.toBe(true);
   });
 
   it("rejects a tampered body", async () => {
     const signature = await sign('1700000000{"type":1}');
     await expect(
-      verifyDiscordSignature({ publicKey, signature, timestamp: "1700000000", body: '{"type":2}' })
+      verifyDiscordSignature({
+        publicKey,
+        signature,
+        timestamp: "1700000000",
+        body: '{"type":2}',
+        nowMs: SIGNED_AT_MS,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it("rejects a valid signature with a stale timestamp", async () => {
+    const body = '{"type":1}';
+    const signature = await sign(`1700000000${body}`);
+    await expect(
+      verifyDiscordSignature({
+        publicKey,
+        signature,
+        timestamp: "1700000000",
+        body,
+        nowMs: SIGNED_AT_MS + MAX_SIGNATURE_SKEW_MS + 1000,
+      })
     ).resolves.toBe(false);
   });
 
