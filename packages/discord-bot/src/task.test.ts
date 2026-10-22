@@ -178,6 +178,26 @@ describe("handleTask", () => {
     });
   });
 
+  it("rejects a different repository inside a task thread", async () => {
+    const kv = createKv({
+      "thread:thread-1": JSON.stringify({
+        sessionId: "s1",
+        repoFullName: "octo/website",
+        model: "anthropic/claude-opus-5",
+        createdAt: 1,
+      }),
+    });
+
+    await handleTask(createEnv({ DISCORD_KV: kv as unknown as KVNamespace }), {
+      interaction: createGuildCommand({ channel_id: "thread-1" }),
+      prompt: "Fix the API instead",
+      repo: "acme/api",
+    });
+
+    expect(cpCalls()).toHaveLength(0);
+    expect(discordCalls()[0].body.content).toContain("This thread works on `octo/website`");
+  });
+
   it("rejects repositories the GitHub App cannot access", async () => {
     await handleTask(createEnv(), {
       interaction: createGuildCommand(),

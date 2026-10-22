@@ -205,6 +205,11 @@ async function resolveTarget(
   const channelId = request.interaction.channel_id;
   const existing = await lookupThreadSession(env, channelId);
   if (!existing) return createTarget(env, request, identity, reply, traceId);
+  if (request.repo && request.repo.trim().toLowerCase() !== existing.repoFullName.toLowerCase()) {
+    throw new TaskRejected(
+      `This thread works on \`${existing.repoFullName}\`. Start a new task from the channel to use another repository.`
+    );
+  }
 
   await reply(
     `↪️ Follow-up from <@${identity.userId}> sent to the session.\n${quote(request.prompt)}`

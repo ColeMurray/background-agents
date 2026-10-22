@@ -81,6 +81,14 @@ describe("repo helpers", () => {
     expect(repoChoices(repos, "")).toHaveLength(3);
   });
 
+  it("leaves out names longer than a Discord choice allows", () => {
+    const long = { owner: "octo", name: "r".repeat(100), fullName: `octo/${"r".repeat(100)}` };
+    expect(repoChoices([...repos, long], "octo").map((choice) => choice.value)).toEqual([
+      "octo/website",
+      "octo/tools",
+    ]);
+  });
+
   it("resolves exact names only", () => {
     expect(findRepo(repos, "Octo/Tools")).toEqual(repos[1]);
     expect(findRepo(repos, "tools")).toBeUndefined();

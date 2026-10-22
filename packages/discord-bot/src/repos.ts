@@ -16,6 +16,9 @@ const REPOS_CACHE_TTL_SECONDS = 300;
 /** Discord shows at most this many autocomplete choices. */
 const MAX_CHOICES = 25;
 
+/** Discord rejects the whole response if any choice name or value is longer. */
+const MAX_CHOICE_LENGTH = 100;
+
 /**
  * A repository as cached for `/task`. Owner and name stay separate because an
  * owner may be a nested namespace; `fullName` is only what the user types.
@@ -54,10 +57,14 @@ export async function listRepos(env: Env, traceId?: string): Promise<TaskRepo[]>
   return repos;
 }
 
-/** Case-insensitive match on any part of `owner/name`. */
+/**
+ * Case-insensitive match on any part of `owner/name`. Names too long for a
+ * choice are left out rather than breaking the list; they can still be typed.
+ */
 export function repoChoices(repos: TaskRepo[], query: string): { name: string; value: string }[] {
   const needle = query.trim().toLowerCase();
   return repos
+    .filter((repo) => repo.fullName.length <= MAX_CHOICE_LENGTH)
     .filter((repo) => repo.fullName.toLowerCase().includes(needle))
     .slice(0, MAX_CHOICES)
     .map((repo) => ({ name: repo.fullName, value: repo.fullName }));
