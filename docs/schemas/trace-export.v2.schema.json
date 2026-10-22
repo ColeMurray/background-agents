@@ -190,6 +190,7 @@
                   "error",
                   "execution_complete",
                   "browser_activity",
+                  "cross_session_message",
                   "context_compacted",
                   "push_complete",
                   "push_error",
