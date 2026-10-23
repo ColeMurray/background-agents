@@ -427,6 +427,8 @@ def test_boat_builder_repeats_a_lost_create_under_the_same_key(monkeypatch):
     assert len(transport.calls) == 3 and len(keys) == 1
     assert keys.pop() == f"openinspect-image-build-{api.run_id}"
     assert all(call[2]["noEnv"] is True for call in transport.calls)
+    # Private from the create on: Boat sets it before the sandbox has a machine.
+    assert all(call[2]["visibility"] == "private" for call in transport.calls)
 
 
 def test_boat_builder_does_not_repeat_a_rejected_create(monkeypatch):
@@ -520,14 +522,14 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert (
         'export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";' in lifecycle
     )
-    # A create stages the file under /tmp, which the snapshot mount over the home
-    # directory does not cover, and the setup script copies it into the
-    # workspace before it execs the launcher; a resume writes it into place.
+    # The control plane writes the file there on create and resume alike: Boat
+    # holds a write to a starting sandbox until it is ready. The create's setup
+    # script only execs the launcher.
+    assert "path: BOAT_TUNNEL_ENV_FILE_PATH," in provider
     assert (
-        'export const BOAT_TUNNEL_ENV_STAGING_PATH = "/tmp/openinspect-tunnels.env";' in lifecycle
+        "export const BOAT_SETUP_SCRIPT = `#!/bin/bash\\nexec ${BOAT_LAUNCHER_PATH}\\n`;"
+        in lifecycle
     )
-    assert "cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH}" in lifecycle
-    assert "BOAT_TUNNEL_ENV_STAGING_PATH\n" in provider
     assert 'ensure_link /workspace "$OI_USER_HOME/workspace"' in launcher
     assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
     assert "flock -n 9" in launcher

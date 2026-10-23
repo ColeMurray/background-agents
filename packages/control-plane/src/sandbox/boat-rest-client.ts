@@ -48,7 +48,9 @@ export const BOAT_SANDBOX_STATES = [
 ] as const;
 export type BoatSandboxState = (typeof BOAT_SANDBOX_STATES)[number];
 
-const TIMEOUT_CREATE_MS = 60_000;
+// A create that hosts ports waits for the sandbox's machine first, up to 60 s
+// on Boat's side, before it answers.
+const TIMEOUT_CREATE_MS = 90_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_UPDATE_MS = 15_000;
 const TIMEOUT_STOP_MS = 30_000;
@@ -57,7 +59,9 @@ const TIMEOUT_RESUME_MS = 60_000;
 const TIMEOUT_DELETE_MS = 30_000;
 const TIMEOUT_COMMAND_START_MS = 30_000;
 const TIMEOUT_COMMAND_STATUS_MS = 15_000;
-const TIMEOUT_WRITE_FILE_MS = 30_000;
+// A write to a sandbox that is still starting waits until it is ready, up to
+// 60 s on Boat's side, so the file lands on the disk the sandbox keeps.
+const TIMEOUT_WRITE_FILE_MS = 75_000;
 const TIMEOUT_HOST_PORT_MS = 30_000;
 const TIMEOUT_NAMED_SNAPSHOT_MS = 30_000;
 /** Headroom over a synchronous command's own timeout for transport and queueing. */
@@ -144,6 +148,35 @@ const hostedPortSchema = z.object({
 
 export type BoatHostedPort = z.infer<typeof hostedPortSchema>;
 
+/**
+ * What a create answers for one port it was asked to host: the route, as
+ * `POST /sandboxes/{id}/host` answers it, or `error` and `message` when that
+ * port alone could not be hosted (the sandbox is created regardless).
+ */
+const createHostedPortSchema = z.object({
+  port: z.number().int(),
+  url: z.string().optional(),
+  isProtected: z.boolean().optional(),
+  access: z.string().optional(),
+  error: z.string().optional(),
+  message: z.string().optional(),
+});
+
+export type BoatCreateHostedPort = z.infer<typeof createHostedPortSchema>;
+
+const createdEnvelopeSchema = z.object({
+  sandbox: boatSandboxSchema,
+  /** Present when the create was asked to host ports, in request order. */
+  hostedPorts: z.array(createHostedPortSchema).optional(),
+});
+
+/** A created sandbox, with what Boat answered for each port the create hosted. */
+export interface BoatCreatedSandbox {
+  sandbox: BoatSandbox;
+  /** In the order the create asked for them; empty when it asked for none. */
+  hostedPorts: BoatCreateHostedPort[];
+}
+
 const fileWrittenSchema = z.object({
   path: z.string(),
   size: z.number().int(),
@@ -215,6 +248,29 @@ export interface BoatCreateSandboxParams {
    * A session's launch rides here, so the runtime starts with the machine.
    */
   setupScript?: string;
+  /** Display name on Boat's dashboard, at most 120 characters. */
+  name?: string;
+  /**
+   * Who may use a sandbox an organization pays for. Boat sets it before the
+   * sandbox gets a machine, so a `private` sandbox is never shared, not even
+   * for a moment; a personal sandbox is private whatever this says.
+   */
+  visibility?: "private" | "shared";
+  /**
+   * Ports to route with the create, each as {@link BoatRestClient.hostPort}
+   * would. Boat waits for the sandbox's machine (usually under a second, at
+   * most 60 s), routes them all and answers their URLs, so they are reachable
+   * the moment a service listens.
+   */
+  hostedPorts?: BoatHostPortRequest[];
+}
+
+/** One port to route on a public HTTPS URL. */
+export interface BoatHostPortRequest {
+  port: number;
+  /** An ungated URL instead of one that requires the `_token` query parameter. */
+  public: boolean;
+  title?: string;
 }
 
 export class BoatApiError extends Error {
@@ -297,6 +353,15 @@ interface RequestOptions {
   redact?: (message: string) => string;
 }
 
+/** The wire form of a port to host, shared by the create and `POST /host`. */
+function hostPortBody(request: BoatHostPortRequest): Record<string, unknown> {
+  return {
+    port: request.port,
+    public: request.public,
+    ...(request.title ? { title: request.title } : {}),
+  };
+}
+
 export class BoatRestClient {
   private readonly baseUrl: string;
 
@@ -312,14 +377,17 @@ export class BoatRestClient {
    * and none of the account's secrets (`noEnv`). The 202 answer carries the
    * sandbox while it provisions; poll {@link getSandbox} for readiness.
    */
-  async createSandbox(params: BoatCreateSandboxParams, signal?: AbortSignal): Promise<BoatSandbox> {
+  async createSandbox(
+    params: BoatCreateSandboxParams,
+    signal?: AbortSignal
+  ): Promise<BoatCreatedSandbox> {
     const startMs = Date.now();
     try {
       const response = await this.requestJson(
         "POST",
         "/sandboxes",
         TIMEOUT_CREATE_MS,
-        sandboxEnvelopeSchema,
+        createdEnvelopeSchema,
         {
           body: {
             type: params.type,
@@ -330,6 +398,11 @@ export class BoatRestClient {
             snapshots: true,
             monitoring: params.monitoring,
             ...(params.setupScript !== undefined ? { setupScript: params.setupScript } : {}),
+            ...(params.name !== undefined ? { name: params.name } : {}),
+            ...(params.visibility !== undefined ? { visibility: params.visibility } : {}),
+            ...(params.hostedPorts !== undefined
+              ? { hostedPorts: params.hostedPorts.map(hostPortBody) }
+              : {}),
           },
           headers: { "Idempotency-Key": params.idempotencyKey },
           signal,
@@ -338,7 +411,7 @@ export class BoatRestClient {
           redact: (message) => scrubEnvValues(message, params.env),
         }
       );
-      return response.sandbox;
+      return { sandbox: response.sandbox, hostedPorts: response.hostedPorts ?? [] };
     } finally {
       log.info("boat.create_sandbox", {
         duration_ms: Date.now() - startMs,
@@ -361,8 +434,8 @@ export class BoatRestClient {
 
   /**
    * `PATCH /sandboxes/{id}`: a new `ttlSeconds` makes the auto-stop deadline
-   * now + `ttlSeconds`; `name` is the display name Boat's dashboard shows
-   * (create assigns one of its own, so it is set afterwards).
+   * now + `ttlSeconds`; `name` is the display name Boat's dashboard shows,
+   * which a create can also set from the start.
    */
   async updateSandbox(
     id: string,
@@ -521,7 +594,7 @@ export class BoatRestClient {
    */
   async hostPort(
     id: string,
-    options: { port: number; public: boolean; title?: string },
+    options: BoatHostPortRequest,
     signal?: AbortSignal
   ): Promise<BoatHostedPort> {
     return this.requestJson(
@@ -529,14 +602,7 @@ export class BoatRestClient {
       `/sandboxes/${encodeURIComponent(id)}/host`,
       TIMEOUT_HOST_PORT_MS,
       hostedPortSchema,
-      {
-        body: {
-          port: options.port,
-          public: options.public,
-          ...(options.title ? { title: options.title } : {}),
-        },
-        signal,
-      }
+      { body: hostPortBody(options), signal }
     );
   }
 

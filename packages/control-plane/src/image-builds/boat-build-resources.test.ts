@@ -9,9 +9,11 @@ import {
   BOAT_NAMED_SNAPSHOT_NAME_PATTERN,
   BoatApiError,
   BoatNotFoundError,
+  type BoatCreateSandboxParams,
 } from "../sandbox/boat-rest-client";
 import { SandboxProviderError } from "../sandbox/provider";
 import {
+  boatCreated,
   boatSandbox,
   fastTimings,
   mockClient,
@@ -76,17 +78,13 @@ function envFileWritten(client: ReturnType<typeof mockClient>): Record<string, s
 }
 
 describe("BoatImageBuildResources triggerImageBuild", () => {
-  it("creates the sandbox with the boot markers alone, binds it once private, delivers the env, then launches", async () => {
+  it("creates the sandbox named, private and with the boot markers alone, binds it, delivers the env, then launches", async () => {
     const client = mockClient({
-      createSandbox: vi.fn(async () =>
-        boatSandbox({ state: "provisioning", visibility: "shared" })
+      createSandbox: vi.fn(async (params: BoatCreateSandboxParams) =>
+        boatCreated(params, { visibility: "private" })
       ),
     });
     const order: string[] = [];
-    vi.mocked(client.unshareSandbox).mockImplementation(async () => {
-      order.push("private");
-      return boatSandbox({ visibility: "private" });
-    });
     vi.mocked(client.getSandbox).mockImplementation(async () => {
       order.push("ready");
       return boatSandbox();
@@ -111,6 +109,10 @@ describe("BoatImageBuildResources triggerImageBuild", () => {
       from: "open-inspect-abc123",
       monitoring: false,
       idempotencyKey: await boatIdempotencyKey("test", buildConfig.buildId, "build-env-acme/repo"),
+      // Boat sets both before the sandbox has a machine, so neither needs a
+      // call of its own afterwards.
+      name: expect.stringMatching(/^openinspect-test-build-env-acme\/repo-\d+$/),
+      visibility: "private",
     });
     // Nothing of the build rides the create request: a named snapshot saved
     // from this sandbox inherits these markers and nothing else.
@@ -122,7 +124,8 @@ describe("BoatImageBuildResources triggerImageBuild", () => {
       SANDBOX_VERSION: BOAT_SANDBOX_VERSION,
     });
 
-    expect(order).toEqual(["private", "bind", "ready", "env", "launch"]);
+    expect(order).toEqual(["bind", "ready", "env", "launch"]);
+    expect(client.unshareSandbox).not.toHaveBeenCalled();
     expect(onProviderSessionCreated).toHaveBeenCalledWith("bx_abcdefgh");
 
     const env = envFileWritten(client);
@@ -153,9 +156,7 @@ describe("BoatImageBuildResources triggerImageBuild", () => {
       "bx_abcdefgh",
       `OI_REPO_IMAGE_PROVIDER_SESSION_ID=bx_abcdefgh ${BOAT_LAUNCHER_PATH}`
     );
-    expect(client.updateSandbox).toHaveBeenCalledWith("bx_abcdefgh", {
-      name: expect.stringMatching(/^openinspect-test-build-env-acme\/repo-\d+$/),
-    });
+    expect(client.updateSandbox).not.toHaveBeenCalled();
     expect(client.hostPort).not.toHaveBeenCalled();
     expect(client.deleteSandbox).not.toHaveBeenCalled();
   });
@@ -177,10 +178,29 @@ describe("BoatImageBuildResources triggerImageBuild", () => {
     expect(vi.mocked(unsized.createSandbox).mock.calls[0][0].type).toBe("small");
   });
 
+  it("makes a sandbox the create answered as shared private before binding it", async () => {
+    const client = mockClient({
+      createSandbox: vi.fn(async (params: BoatCreateSandboxParams) =>
+        boatCreated(params, { visibility: "shared" })
+      ),
+    });
+    const order: string[] = [];
+    vi.mocked(client.unshareSandbox).mockImplementation(async () => {
+      order.push("private");
+      return boatSandbox({ visibility: "private" });
+    });
+    const onProviderSessionCreated = vi.fn(async () => {
+      order.push("bind");
+    });
+    await createResources(client).triggerImageBuild({ ...buildConfig, onProviderSessionCreated });
+    expect(order).toEqual(["private", "bind"]);
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
+  });
+
   it("deletes a sandbox it cannot make private, before anything is bound or delivered", async () => {
     const client = mockClient({
-      createSandbox: vi.fn(async () =>
-        boatSandbox({ state: "provisioning", visibility: "shared" })
+      createSandbox: vi.fn(async (params: BoatCreateSandboxParams) =>
+        boatCreated(params, { visibility: "shared" })
       ),
       unshareSandbox: vi.fn(async () => boatSandbox({ visibility: "shared" })),
     });
@@ -196,7 +216,9 @@ describe("BoatImageBuildResources triggerImageBuild", () => {
 
   it("refuses to bind or launch a sandbox id outside the expected alphabet", async () => {
     const client = mockClient({
-      createSandbox: vi.fn(async () => boatSandbox({ id: "bx_abc; rm -rf /", state: "ready" })),
+      createSandbox: vi.fn(async (params: BoatCreateSandboxParams) =>
+        boatCreated(params, { id: "bx_abc; rm -rf /", state: "ready" })
+      ),
     });
     const onProviderSessionCreated = vi.fn(async () => {});
     await expect(

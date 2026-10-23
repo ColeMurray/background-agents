@@ -121,7 +121,7 @@ export class BoatImageBuildResources {
     let created: BoatSandbox | undefined;
     let handedOff = false;
     try {
-      created = await this.lifecycle.createSandbox({
+      ({ sandbox: created } = await this.lifecycle.createSandbox({
         type: resolveBoatMachineType(config.resources, this.config.defaultMachineType),
         ttlSeconds: resolveBoatTtlSeconds(config.providerSessionTimeoutSeconds),
         // The boot markers alone: the env itself follows once the sandbox is
@@ -134,7 +134,11 @@ export class BoatImageBuildResources {
           identity.sandboxId
         ),
         monitoring: false,
-      });
+        // Named and private from the create on: Boat sets the visibility
+        // before the sandbox has a machine.
+        name: boatSandboxName(this.config.deploymentName, identity.sandboxName),
+        visibility: "private",
+      }));
       // Refused before it is bound: the bind persists the id as the build's
       // provider session, and the launch interpolates it into a command.
       assertSafeBoatSandboxId(created.id);
@@ -142,10 +146,6 @@ export class BoatImageBuildResources {
       handedOff = true;
       await config.onProviderSessionCreated(created.id);
       await this.lifecycle.waitForReady(created.id);
-      await this.lifecycle.nameSandbox(
-        created.id,
-        boatSandboxName(this.config.deploymentName, identity.sandboxName)
-      );
       await this.client.writeFile(created.id, {
         path: BOAT_IMAGE_BUILD_ENV_FILE_PATH,
         content: shellEnvFile(envVars),

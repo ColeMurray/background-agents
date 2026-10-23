@@ -124,8 +124,7 @@ boat_api_key = ""              # sensitive — runtime REST API key (also auths 
 boat_base_snapshot = ""        # e.g., "open-inspect"
 # boat_api_url = "https://boat.dev/api/v1"
 # boat_org = ""                # Optional organization wallet; empty uses the active one.
-#                              # Set that organization's default visibility to private
-#                              # (boat org default-visibility private) before use.
+#                              # Sandboxes are created private, whatever its default.
 # Machine size for sessions that request no CPU or memory; a request picks the
 # smallest size that fits it. One of small, default, large, xlarge.
 # boat_sandbox_type = "default"

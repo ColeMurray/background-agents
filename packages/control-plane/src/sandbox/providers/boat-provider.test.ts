@@ -2,19 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
 import {
-  BOAT_LAUNCH_MARKER_PATH,
   BOAT_LAUNCHER_PATH,
   BOAT_SANDBOX_VERSION,
   BOAT_SETUP_SCRIPT,
   boatIdempotencyKey,
 } from "../boat-lifecycle";
-import {
-  BOAT_TUNNEL_ENV_FILE_PATH,
-  BOAT_TUNNEL_ENV_STAGING_PATH,
-  BoatSandboxProvider,
-} from "./boat-provider";
+import { BOAT_TUNNEL_ENV_FILE_PATH, BoatSandboxProvider } from "./boat-provider";
 import {
   baseCreateConfig,
+  boatCreated,
   boatSandbox,
   createEnv,
   mockClient,
@@ -28,6 +24,7 @@ import {
   BoatCancelledError,
   BoatConflictError,
   BoatNotFoundError,
+  type BoatCreateSandboxParams,
 } from "../boat-rest-client";
 import { RequestDeadlineError } from "../request-deadline";
 
@@ -42,7 +39,7 @@ describe("BoatSandboxProvider", () => {
   beforeEach(() => vi.clearAllMocks());
 
   describe("createSandbox", () => {
-    it("deploys from the base snapshot, exposes access and has Boat start the launcher", async () => {
+    it("deploys from the base snapshot named, private and routed in one request, and has Boat start the launcher", async () => {
       const client = mockClient();
       const provider = createProvider(client, providerConfig);
       const result = await provider.createSandbox(baseCreateConfig);
@@ -72,24 +69,19 @@ describe("BoatSandboxProvider", () => {
           "sandbox-logical"
         ),
         monitoring: false,
-      });
-      expect(params).not.toHaveProperty("name");
-      expect(client.updateSandbox).toHaveBeenCalledWith("bx_abcdefgh", {
         name: "openinspect-test-sandbox-logical",
+        visibility: "private",
+        hostedPorts: [{ port: 8080, public: true, title: "code-server" }],
       });
-      expect(client.hostPort).toHaveBeenCalledWith("bx_abcdefgh", {
-        port: 8080,
-        public: true,
-        title: "code-server",
-      });
-      // The launch rides on the create: Boat runs the setup script the moment
-      // the machine is up, and it execs the launcher once the control plane has
-      // released the launch, so no start command follows.
+      // The create named the sandbox, made it private and routed its port, so
+      // nothing follows it but the readiness reads.
+      expect(client.updateSandbox).not.toHaveBeenCalled();
+      expect(client.unshareSandbox).not.toHaveBeenCalled();
+      expect(client.hostPort).not.toHaveBeenCalled();
+      // The launch rides on the create too: Boat runs the setup script the
+      // moment the machine is up, so no start command follows.
       expect(params.setupScript).toBe(BOAT_SETUP_SCRIPT);
-      expect(client.writeFile).toHaveBeenCalledWith("bx_abcdefgh", {
-        path: BOAT_LAUNCH_MARKER_PATH,
-        content: "released\n",
-      });
+      expect(client.writeFile).not.toHaveBeenCalled();
       expect(client.startDetachedCommand).not.toHaveBeenCalled();
       expect(client.deleteSandbox).not.toHaveBeenCalled();
     });
@@ -127,7 +119,7 @@ describe("BoatSandboxProvider", () => {
       expect(env).not.toHaveProperty("GITHUB_TOKEN");
     });
 
-    it("defaults noVNC to 6081, keeps tunnels protected and stages the tunnel env file", async () => {
+    it("defaults noVNC to 6081, keeps tunnels protected and writes the tunnel env file into the workspace", async () => {
       const client = mockClient();
       const result = await createProvider(client, providerConfig).createSandbox({
         ...baseCreateConfig,
@@ -151,73 +143,55 @@ describe("BoatSandboxProvider", () => {
         "5173": "https://sub-5173.on.boat.dev?_token=tok5173",
         "3000": "https://sub-3000.on.boat.dev?_token=tok3000",
       });
-      expect(client.hostPort).toHaveBeenCalledWith("bx_abcdefgh", {
-        port: 6081,
-        public: true,
-        title: "noVNC",
-      });
-      expect(client.hostPort).toHaveBeenCalledWith("bx_abcdefgh", {
-        port: 3000,
-        public: false,
-        title: "tunnel 3000",
-      });
-      // A create stages the file under /tmp for the setup script to copy into
-      // the workspace: a write under the home directory before the machine is
-      // up is hidden once Boat mounts the snapshot over it.
+      // Every service and tunnel port rides the create, the services public
+      // behind their own logins and the tunnels behind Boat's token.
+      expect(vi.mocked(client.createSandbox).mock.calls[0][0].hostedPorts).toEqual([
+        { port: 8080, public: true, title: "code-server" },
+        { port: 7680, public: true, title: "terminal" },
+        { port: 6081, public: true, title: "noVNC" },
+        { port: 5173, public: false, title: "tunnel 5173" },
+        { port: 3000, public: false, title: "tunnel 3000" },
+      ]);
+      expect(client.hostPort).not.toHaveBeenCalled();
+      // Straight into the workspace: Boat holds a write to a starting sandbox
+      // until it is ready, so the file lands on the disk the sandbox keeps.
+      expect(client.writeFile).toHaveBeenCalledOnce();
       expect(client.writeFile).toHaveBeenCalledWith("bx_abcdefgh", {
-        path: BOAT_TUNNEL_ENV_STAGING_PATH,
+        path: BOAT_TUNNEL_ENV_FILE_PATH,
         content:
           "TUNNEL_SANDBOX_ID=sandbox-logical\n" +
           "TUNNEL_3000=https://sub-3000.on.boat.dev?_token=tok3000\n" +
           "TUNNEL_5173=https://sub-5173.on.boat.dev?_token=tok5173\n",
       });
-      expect(client.writeFile).not.toHaveBeenCalledWith(
-        "bx_abcdefgh",
-        expect.objectContaining({ path: BOAT_TUNNEL_ENV_FILE_PATH })
-      );
-      // The tunnel env file is staged before the launch is released, and the
-      // launch is released before the first readiness read: the runtime can
-      // start neither before the file nor after this side has stopped looking.
-      const writes = vi.mocked(client.writeFile).mock;
-      const tunnelWrite = writes.calls.findIndex(
-        ([, file]) => file.path === BOAT_TUNNEL_ENV_STAGING_PATH
-      );
-      const markerWrite = writes.calls.findIndex(
-        ([, file]) => file.path === BOAT_LAUNCH_MARKER_PATH
-      );
-      expect(writes.invocationCallOrder[tunnelWrite]).toBeLessThan(
-        writes.invocationCallOrder[markerWrite]
-      );
-      expect(writes.invocationCallOrder[markerWrite]).toBeLessThan(
-        vi.mocked(client.getSandbox).mock.invocationCallOrder[0]
-      );
     });
 
-    it("leaves a personal sandbox alone and makes a shared organization sandbox private first", async () => {
+    it("asks for a private sandbox and makes one the create answered as shared private before use", async () => {
       const personal = mockClient();
       await createProvider(personal).createSandbox(baseCreateConfig);
+      expect(vi.mocked(personal.createSandbox).mock.calls[0][0].visibility).toBe("private");
       expect(personal.unshareSandbox).not.toHaveBeenCalled();
 
       const shared = mockClient({
-        createSandbox: vi.fn(async () =>
-          boatSandbox({ state: "provisioning", visibility: "shared" })
+        createSandbox: vi.fn(async (params: BoatCreateSandboxParams) =>
+          boatCreated(params, { visibility: "shared" })
         ),
       });
-      const result = await createProvider(shared).createSandbox(baseCreateConfig);
+      const result = await createProvider(shared).createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { tunnelPorts: [3000] },
+      });
       expect(result.providerObjectId).toBe("bx_abcdefgh");
       expect(shared.unshareSandbox).toHaveBeenCalledWith("bx_abcdefgh");
-      // Private before anything else happens to the sandbox.
+      // Private before anything else reaches the sandbox.
       const unshareOrder = vi.mocked(shared.unshareSandbox).mock.invocationCallOrder[0];
       expect(unshareOrder).toBeLessThan(vi.mocked(shared.getSandbox).mock.invocationCallOrder[0]);
-      expect(unshareOrder).toBeLessThan(vi.mocked(shared.hostPort).mock.invocationCallOrder[0]);
-      // And the launch is released only after that.
       expect(unshareOrder).toBeLessThan(vi.mocked(shared.writeFile).mock.invocationCallOrder[0]);
     });
 
     it("deletes a shared organization sandbox it cannot make private", async () => {
       const client = mockClient({
-        createSandbox: vi.fn(async () =>
-          boatSandbox({ state: "provisioning", visibility: "shared" })
+        createSandbox: vi.fn(async (params: BoatCreateSandboxParams) =>
+          boatCreated(params, { visibility: "shared" })
         ),
         unshareSandbox: vi.fn(async () => boatSandbox({ visibility: "shared" })),
       });
@@ -229,38 +203,46 @@ describe("BoatSandboxProvider", () => {
       expect((error as SandboxProviderError).message).toContain("stayed shared");
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
       expect(client.startDetachedCommand).not.toHaveBeenCalled();
-      // No launch marker: the setup script never execs the launcher.
+      // Nothing more reaches a sandbox that is not private.
       expect(client.writeFile).not.toHaveBeenCalled();
     });
 
-    it("fails the create and deletes the sandbox when the launch cannot be released", async () => {
+    it("fails the create and deletes the sandbox when the tunnel env file cannot be written", async () => {
       const client = mockClient({
         writeFile: vi.fn(async () => {
           throw new BoatApiError("agent unavailable", 503);
         }),
       });
       const error = await createProvider(client, providerConfig)
-        .createSandbox(baseCreateConfig)
+        .createSandbox({ ...baseCreateConfig, sandboxSettings: { tunnelPorts: [3000] } })
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(SandboxProviderError);
-      expect(client.writeFile).toHaveBeenCalledTimes(3);
-      expect(client.getSandbox).not.toHaveBeenCalled();
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
     });
 
-    it("keeps a failed dashboard label from failing the create", async () => {
+    it("hosts a port the create could not route with a call of its own", async () => {
       const client = mockClient({
-        updateSandbox: vi.fn(async () => {
-          throw new BoatApiError("busy", 409, "sandbox_busy");
-        }),
+        createSandbox: vi.fn(async (params: BoatCreateSandboxParams) => ({
+          ...boatCreated(params),
+          hostedPorts: [{ port: 8080, error: "host_failed", message: "route not ready" }],
+        })),
       });
-      const result = await createProvider(client).createSandbox(baseCreateConfig);
-      expect(result.providerObjectId).toBe("bx_abcdefgh");
-      expect(client.deleteSandbox).not.toHaveBeenCalled();
+      const result = await createProvider(client, providerConfig).createSandbox(baseCreateConfig);
+      expect(client.hostPort).toHaveBeenCalledOnce();
+      expect(client.hostPort).toHaveBeenCalledWith("bx_abcdefgh", {
+        port: 8080,
+        public: true,
+        title: "code-server",
+      });
+      expect(result.codeServerUrl).toBe("https://sub-8080.on.boat.dev");
     });
 
     it("keeps a failed access route from hiding the live sandbox", async () => {
       const client = mockClient({
+        createSandbox: vi.fn(async (params: BoatCreateSandboxParams) => ({
+          ...boatCreated(params),
+          hostedPorts: [{ port: 8080, error: "host_failed" }],
+        })),
         hostPort: vi.fn(async () => {
           throw new BoatApiError("route failed", 500);
         }),
@@ -301,17 +283,19 @@ describe("BoatSandboxProvider", () => {
       expect(createEnv(client).SANDBOX_TIMEOUT_SECONDS).toBe("2592000");
     });
 
-    it("repeats a create whose response was lost under the same idempotency key", async () => {
+    it("repeats a create whose response was lost with the same key and body", async () => {
       const createSandbox = vi
         .fn()
         .mockRejectedValueOnce(new BoatApiError("upstream", 503))
-        .mockResolvedValueOnce(boatSandbox({ state: "provisioning" }));
+        .mockImplementationOnce(async (params: BoatCreateSandboxParams) => boatCreated(params));
       const client = mockClient({ createSandbox });
-      await createProvider(client, providerConfig).createSandbox(baseCreateConfig);
+      const result = await createProvider(client, providerConfig).createSandbox(baseCreateConfig);
       expect(createSandbox).toHaveBeenCalledTimes(2);
-      expect(createSandbox.mock.calls[0][0].idempotencyKey).toBe(
-        createSandbox.mock.calls[1][0].idempotencyKey
-      );
+      // Boat answers a repeat with the first sandbox only when both match.
+      expect(createSandbox.mock.calls[1][0]).toEqual(createSandbox.mock.calls[0][0]);
+      // The repeat answers the routes too, so no port is hosted again.
+      expect(result.codeServerUrl).toBe("https://sub-8080.on.boat.dev");
+      expect(client.hostPort).not.toHaveBeenCalled();
     });
 
     it("does not retry a start-rate limit and classifies it transient", async () => {
@@ -442,14 +426,15 @@ describe("BoatSandboxProvider", () => {
       });
       expect(client.resumeSandbox).toHaveBeenCalledWith("bx_abcdefgh", { ttlSeconds: 3600 });
       expect(client.updateSandbox).not.toHaveBeenCalled();
-      // The machine is up on a resume, so the file goes straight into place.
+      // A resume cannot route ports with its request, so each is hosted again.
+      expect(client.hostPort).toHaveBeenCalledWith("bx_abcdefgh", {
+        port: 3000,
+        public: false,
+        title: "tunnel 3000",
+      });
       expect(client.writeFile).toHaveBeenCalledWith(
         "bx_abcdefgh",
         expect.objectContaining({ path: BOAT_TUNNEL_ENV_FILE_PATH })
-      );
-      expect(client.writeFile).not.toHaveBeenCalledWith(
-        "bx_abcdefgh",
-        expect.objectContaining({ path: BOAT_TUNNEL_ENV_STAGING_PATH })
       );
       expect(client.startDetachedCommand).toHaveBeenCalledWith("bx_abcdefgh", BOAT_LAUNCHER_PATH);
     });

@@ -25,6 +25,13 @@ see the lock the first boot held and started a second runtime. The two then took
 session's connection every few seconds, and a turn could be reported complete twice. The lock now
 lives in `/tmp`, so the resumed launcher finds the runtime running and leaves it be.
 
+**Fewer steps to start a Boat sandbox.** Boat's create request now takes the sandbox's name, its
+visibility and the ports to route, so the control plane sends them with the create instead of
+renaming, unsharing and hosting each port afterwards. A sandbox billed to an organization is private
+before it has a machine, so it is never shared, not even for a moment. Boat also holds a file write
+to a starting sandbox until the sandbox is ready, so the tunnel env file now goes straight into the
+workspace and the setup script starts the launcher as soon as the machine is up.
+
 ## October 22, 2026
 
 **Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A

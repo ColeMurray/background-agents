@@ -1,11 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertBoatEnvWithinLimits,
-  BOAT_LAUNCH_MARKER_PATH,
   BOAT_LAUNCHER_PATH,
   BOAT_SETUP_SCRIPT,
   BOAT_TUNNEL_ENV_FILE_PATH,
-  BOAT_TUNNEL_ENV_STAGING_PATH,
   BoatSandboxLifecycle,
   boatIdempotencyKey,
   resolveBoatMachineType,
@@ -85,27 +83,13 @@ describe("BoatSandboxLifecycle archive", () => {
 });
 
 describe("BOAT_SETUP_SCRIPT", () => {
-  it("waits for the marker, copies the staged tunnel env file into the workspace, then execs the launcher", () => {
-    const marker = BOAT_SETUP_SCRIPT.indexOf(`[ -f ${BOAT_LAUNCH_MARKER_PATH} ]`);
-    const staged = BOAT_SETUP_SCRIPT.indexOf(`[ -f ${BOAT_TUNNEL_ENV_STAGING_PATH} ]`);
-    const copy = BOAT_SETUP_SCRIPT.indexOf(
-      `cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH}`
-    );
-    const exec = BOAT_SETUP_SCRIPT.indexOf(`exec ${BOAT_LAUNCHER_PATH}`);
-    expect(marker).toBeGreaterThan(-1);
-    expect(staged).toBeGreaterThan(marker);
-    expect(copy).toBeGreaterThan(staged);
-    expect(exec).toBeGreaterThan(copy);
-    // A copy that fails ends the setup script non-zero instead of starting a
-    // runtime that would wait for URLs the create has already handed out.
-    const copyFailure = BOAT_SETUP_SCRIPT.indexOf(
-      'echo "tunnel env file copy failed" >&2; exit 1;'
-    );
-    expect(copyFailure).toBeGreaterThan(copy);
-    expect(copyFailure).toBeLessThan(exec);
-    // The staging path is outside the home directory, which Boat's snapshot
-    // mount covers; the destination is where the runtime reads the file.
-    expect(BOAT_TUNNEL_ENV_STAGING_PATH.startsWith("/tmp/")).toBe(true);
+  it("execs the launcher the moment the machine is up, with nothing to wait for", () => {
+    // The create makes the sandbox private before it has a machine, and the
+    // runtime waits for its tunnel env file itself, so nothing gates the launch.
+    const [shebang, ...commands] = BOAT_SETUP_SCRIPT.trimEnd().split("\n");
+    expect(shebang).toBe("#!/bin/bash");
+    expect(commands).toEqual([`exec ${BOAT_LAUNCHER_PATH}`]);
+    // Where the runtime reads the file the control plane writes.
     expect(BOAT_TUNNEL_ENV_FILE_PATH).toBe("/home/user/workspace/.tunnels.env");
   });
 });

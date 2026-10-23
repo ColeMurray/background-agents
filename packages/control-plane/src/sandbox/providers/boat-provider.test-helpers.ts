@@ -1,7 +1,13 @@
 import { expect, vi } from "vitest";
 import type { BoatLifecycleTimings } from "../boat-lifecycle";
 import { BoatSandboxProvider, type BoatProviderConfig } from "./boat-provider";
-import type { BoatNamedSnapshot, BoatRestClient, BoatSandbox } from "../boat-rest-client";
+import type {
+  BoatCreatedSandbox,
+  BoatCreateSandboxParams,
+  BoatNamedSnapshot,
+  BoatRestClient,
+  BoatSandbox,
+} from "../boat-rest-client";
 
 export const providerConfig: BoatProviderConfig = {
   scmProvider: "github",
@@ -25,6 +31,31 @@ export function boatSandbox(overrides: Partial<BoatSandbox> = {}): BoatSandbox {
   };
 }
 
+/** A route the way the mock Boat hosts it: a public port ungated, any other behind a token. */
+function boatRoute(port: number, isPublic: boolean) {
+  return {
+    port,
+    url: isPublic
+      ? `https://sub-${port}.on.boat.dev`
+      : `https://sub-${port}.on.boat.dev?_token=tok${port}`,
+    isProtected: !isPublic,
+    access: isPublic ? "public" : "private",
+  };
+}
+
+/** What the mock create answers: the sandbox, and a route for each port it was asked to host. */
+export function boatCreated(
+  params: Pick<BoatCreateSandboxParams, "hostedPorts"> | undefined,
+  overrides: Partial<BoatSandbox> = {}
+): BoatCreatedSandbox {
+  return {
+    sandbox: boatSandbox({ state: "provisioning", ...overrides }),
+    hostedPorts: (params?.hostedPorts ?? []).map((request) =>
+      boatRoute(request.port, request.public)
+    ),
+  };
+}
+
 function boatNamedSnapshot(overrides: Partial<BoatNamedSnapshot> = {}): BoatNamedSnapshot {
   return {
     name: "oi-img-acme-repo-0123456789abcdef",
@@ -40,7 +71,7 @@ function boatNamedSnapshot(overrides: Partial<BoatNamedSnapshot> = {}): BoatName
 export function mockClient(overrides: Partial<BoatRestClient> = {}): BoatRestClient {
   return {
     config: { apiUrl: "https://boat.dev/api/v1", apiKey: "secret" },
-    createSandbox: vi.fn(async () => boatSandbox({ state: "provisioning" })),
+    createSandbox: vi.fn(async (params: BoatCreateSandboxParams) => boatCreated(params)),
     getSandbox: vi.fn(async () => boatSandbox()),
     updateSandbox: vi.fn(async () => boatSandbox()),
     stopSandbox: vi.fn(async () => boatSandbox({ state: "archiving" })),
@@ -62,14 +93,9 @@ export function mockClient(overrides: Partial<BoatRestClient> = {}): BoatRestCli
     ),
     getNamedSnapshot: vi.fn(async (name: string) => boatNamedSnapshot({ name })),
     deleteNamedSnapshot: vi.fn(async () => {}),
-    hostPort: vi.fn(async (_id: string, options: { port: number; public: boolean }) => ({
-      port: options.port,
-      url: options.public
-        ? `https://sub-${options.port}.on.boat.dev`
-        : `https://sub-${options.port}.on.boat.dev?_token=tok${options.port}`,
-      isProtected: !options.public,
-      access: options.public ? "public" : "private",
-    })),
+    hostPort: vi.fn(async (_id: string, options: { port: number; public: boolean }) =>
+      boatRoute(options.port, options.public)
+    ),
     ...overrides,
   } as unknown as BoatRestClient;
 }

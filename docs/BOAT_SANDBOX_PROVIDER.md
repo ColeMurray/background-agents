@@ -49,28 +49,25 @@ digits and dashes in total, so keep the prefix to 46 characters or fewer.
 ### What a stop keeps
 
 A Boat snapshot saves `/home`, new top-level directories and your changes under `/etc`, `/usr`,
-`/opt`, `/var`, `/root` and `/srv`. It never saves `/tmp` or `~/.cache`, and a resume lands on a new
-machine. The launcher therefore points the runtime's cross-boot state (`OPENINSPECT_STATE_DIR`, the
-harness session id and the repository manifest with the session-start commits) at
-`/home/user/.openinspect/state`, so the agent's conversation and the Changes baseline survive a
-resume. Files the agent writes under `/tmp` do not, and tool caches under `~/.cache` are rebuilt on
-the next machine.
+`/opt`, `/var`, `/root` and `/srv`. It never saves `/tmp` or `~/.cache`. A resume usually lands on a
+new machine; only one within about ten minutes of the stop can get the parked machine back, with
+`/tmp` and the running runtime intact. The launcher therefore points the runtime's cross-boot state
+(`OPENINSPECT_STATE_DIR`, the harness session id and the repository manifest with the session-start
+commits) at `/home/user/.openinspect/state`, so the agent's conversation and the Changes baseline
+survive a resume either way. Files the agent writes under `/tmp` do not survive a resume on a new
+machine, and tool caches under `~/.cache` are rebuilt there.
 
 ### Billing to an organization
 
 When sandboxes are billed to a Boat organization (`boat_org`, or an organization set as the
-account's active wallet), every member of the organization can see them, and a sandbox that starts
-`shared` can be used by every member: commands, files, ports. A session sandbox's env holds the
-sandbox auth token and the user's secrets, so the provider makes a sandbox that reports itself
-`shared` private (`POST /sandboxes/{id}/unshare`) before it waits for it, and the snapshot build
-does the same for its build and verification sandboxes. An image build's sandbox is made private
-before the build's env is even delivered to it (see [Prebuilt Images](#prebuilt-images)). A sandbox
-that cannot be made private fails the spawn and is deleted. Set the organization's default for new
-sandboxes to private first, so no sandbox is ever shared for even a moment:
-
-```bash
-boat org default-visibility private
-```
+account's active wallet), every member of the organization can see them, and a `shared` sandbox can
+be used by every member: commands, files, ports. A session sandbox's env holds the sandbox auth
+token and the user's secrets, so every create asks Boat for a private sandbox: session sandboxes,
+image builds (see [Prebuilt Images](#prebuilt-images)) and the snapshot build's own sandboxes alike.
+Boat sets the visibility before the sandbox has a machine, so it is never shared, not even for a
+moment. A sandbox that still reports itself `shared` is made private
+(`POST /sandboxes/{id}/unshare`) before it is used, and one that cannot be fails the spawn and is
+deleted.
 
 Personal accounts need nothing: their sandboxes are visible to the owner only.
 
@@ -133,17 +130,14 @@ runtime the same way Open-Inspect does on every other provider:
 
 1. the sandbox is created with `noEnv` (none of the Boat account's own secrets or logins) and the
    per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, the sandbox auth token, user secrets —
-   which Boat applies to every process the sandbox starts, and a create-time setup script that Boat
-   runs as the sandbox user the moment the machine is up; the script waits for a launch marker, then
-   execs the baked launcher
-2. while the machine is still provisioning, the enabled service ports (code-server, terminal, noVNC)
-   and the configured tunnel ports are routed to `https://<subdomain>-<port>.on.boat.dev` URLs,
-   tunnel URLs are staged in `/tmp/openinspect-tunnels.env`, and the control plane then writes the
-   launch marker (`/tmp/openinspect-launch`); the setup script copies the staged file to
-   `/workspace/.tunnels.env` before it execs the launcher, so the runtime starts neither before the
-   sandbox is private nor before its tunnel file exists. The file is staged rather than written into
-   the workspace because Boat mounts the snapshot over the home directory while the machine comes
-   up, which hides anything written there earlier; `/tmp` is outside the snapshot
+   which Boat applies to every process the sandbox starts. The same request names the sandbox, makes
+   it private, routes the enabled service ports (code-server, terminal, noVNC) and the configured
+   tunnel ports to `https://<subdomain>-<port>.on.boat.dev` URLs, and carries a setup script that
+   Boat runs as the sandbox user the moment the machine is up, which execs the baked launcher
+2. the control plane writes the tunnel URLs to `/workspace/.tunnels.env`. Boat holds a write to a
+   sandbox that is still starting until the sandbox is ready, so the file lands on the disk the
+   sandbox keeps, and the runtime waits for it before it runs `start.sh`. A port the create could
+   not route is hosted again with its own call
 3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
    toolchain, takes a single-instance lock in `/tmp`, and execs the supervisor
    (`python -m sandbox_runtime.entrypoint`) with its output in

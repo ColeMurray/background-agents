@@ -160,14 +160,14 @@ class BoatApi:
         return json.loads(payload) if payload else {}
 
     def create_sandbox(self, purpose: str, body: dict[str, Any]) -> dict[str, Any]:
-        """Create with none of the account's secrets, under one key per purpose and run."""
+        """Create private, with none of the account's secrets, under one key per purpose and run."""
         key = f"openinspect-image-{purpose}-{self.run_id}"
         for attempt in range(1, CREATE_ATTEMPTS + 1):
             try:
                 response = self.request(
                     "POST",
                     "/sandboxes",
-                    {"noEnv": True, "snapshots": True, **body},
+                    {"noEnv": True, "snapshots": True, "visibility": "private", **body},
                     headers={"Idempotency-Key": key},
                 )
                 break
@@ -195,7 +195,11 @@ class BoatApi:
             raise
 
     def ensure_private(self, sandbox: dict[str, Any]) -> dict[str, Any]:
-        """An organization-billed sandbox starts shared; nobody else may touch the image."""
+        """Nobody else may touch the image: unshare one that still reports itself shared.
+
+        The create asks for a private sandbox, which Boat sets before the
+        sandbox has a machine; this catches one Boat answered shared regardless.
+        """
         if sandbox.get("visibility") != "shared":
             return sandbox
         updated = self.request("POST", f"/sandboxes/{sandbox['id']}/unshare")["sandbox"]

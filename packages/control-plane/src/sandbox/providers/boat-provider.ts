@@ -6,7 +6,8 @@
  * per-sandbox env (secrets included) rides `POST /sandboxes` `env`, which Boat
  * applies to every process the sandbox starts, and the baked launcher rides
  * the same request as Boat's setup script, so Boat starts it the moment the
- * machine is up (a resume starts it again with a detached command). The
+ * machine is up (a resume starts it again with a detached command). The same
+ * request names the sandbox, makes it private and routes its ports. The
  * launcher execs the runtime entrypoint. Readiness is the uniform contract:
  * the sandbox bridge phones home, and the connecting timeout fails the
  * session otherwise.
@@ -31,12 +32,12 @@
  * wait for a running machine, privacy, the launch, the archive — are
  * boat-lifecycle.ts.
  *
- * A sandbox an organization pays for starts `shared` unless the organization's
- * default says otherwise, and every member of a shared sandbox can run
- * commands in it. The session env holds the sandbox auth token and user
- * secrets, so a sandbox that reports itself shared is made private before
- * anything else happens to it, and the create fails closed if that cannot be
- * done.
+ * A sandbox an organization pays for starts `shared` under an organization
+ * default that says so, and every member of a shared sandbox can run commands
+ * in it. The session env holds the sandbox auth token and user secrets, so the
+ * create asks for a private sandbox, which Boat sets before the sandbox has a
+ * machine. One that still reports itself shared is made private before it is
+ * used, and the create fails closed if that cannot be done.
  */
 
 import {
@@ -48,6 +49,9 @@ import type { SourceControlProviderName } from "../../source-control";
 import {
   BoatConflictError,
   BoatNotFoundError,
+  type BoatCreatedSandbox,
+  type BoatCreateHostedPort,
+  type BoatHostPortRequest,
   type BoatMachineType,
   type BoatRestClient,
   type BoatSandbox,
@@ -68,7 +72,6 @@ import {
   type BoatArchiveOutcome,
   type BoatLifecycleTimings,
   BOAT_TUNNEL_ENV_FILE_PATH,
-  BOAT_TUNNEL_ENV_STAGING_PATH,
 } from "../boat-lifecycle";
 import {
   buildSandboxEnvVars,
@@ -114,12 +117,18 @@ export const BOAT_RESERVED_PORTS: ReadonlySet<number> = new Set([
 /** noVNC's shared default (6080) is a Boat port, so Boat sandboxes default to the next one. */
 export const BOAT_DEFAULT_VNC_PORT = 6081;
 
-export { BOAT_TUNNEL_ENV_FILE_PATH, BOAT_TUNNEL_ENV_STAGING_PATH } from "../boat-lifecycle";
+export { BOAT_TUNNEL_ENV_FILE_PATH } from "../boat-lifecycle";
 // Mirrors TUNNEL_ENV_SANDBOX_ID_KEY in sandbox_runtime/constants.py: tags the
 // tunnel env file with the sandbox it was written for, so the supervisor's
 // stale-file cleanup keeps a fresh write instead of deleting it.
 const TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID";
 const EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS";
+
+/** One port a session routes, and what it is for. */
+interface BoatPortRequest extends BoatHostPortRequest {
+  kind: "codeServer" | "terminal" | "vnc" | "tunnel";
+  title: string;
+}
 
 export interface BoatProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -188,7 +197,8 @@ export class BoatSandboxProvider implements SandboxProvider {
         ttlSeconds
       );
 
-      let created: BoatSandbox;
+      const portRequests = this.portRequests(portPlan);
+      let created: BoatCreatedSandbox;
       try {
         created = await this.lifecycle.createSandbox({
           type: machineType,
@@ -207,8 +217,17 @@ export class BoatSandboxProvider implements SandboxProvider {
           monitoring: false,
           // Boat runs this the moment the machine is up, with the env above
           // applied, so the boot never waits for this side to notice readiness.
-          // The script execs the launcher once the launch marker below lands.
           setupScript: BOAT_SETUP_SCRIPT,
+          // Named, private and routed by the create itself: Boat sets the
+          // visibility before the sandbox has a machine, and answers the
+          // routes once it has one.
+          name: boatSandboxName(this.providerConfig.deploymentName, config.sandboxId),
+          visibility: "private",
+          hostedPorts: portRequests.map(({ port, public: isPublic, title }) => ({
+            port,
+            public: isPublic,
+            title,
+          })),
         });
       } catch (error) {
         // Boat answers a `from` that names no snapshot with 404
@@ -222,36 +241,26 @@ export class BoatSandboxProvider implements SandboxProvider {
         }
         throw error;
       }
-      boatSandboxId = created.id;
-      await this.lifecycle.ensurePrivate(created);
+      boatSandboxId = created.sandbox.id;
+      await this.lifecycle.ensurePrivate(created.sandbox);
 
-      // All of this usually lands while the machine is still provisioning:
-      // Boat takes routes, names and file writes before the machine is live.
-      // The tunnel env file goes to its staging path under `/tmp`, because a
-      // write under the home directory this early is hidden once Boat mounts
-      // the snapshot over it; the setup script copies it into the workspace.
-      // The dashboard name is cosmetic and never fails a launch, so it rides
-      // alongside the port hosting instead of ahead of it.
-      const [access] = await Promise.all([
+      // A port the create could not host is hosted on its own, and the tunnel
+      // env file goes straight into the workspace: Boat holds a write to a
+      // starting sandbox until it is ready, and the runtime waits for the file
+      // before running start.sh, so neither has to precede the launch.
+      const [access, ready] = await Promise.all([
         this.exposeAccess(
           boatSandboxId,
           config.sandboxId,
-          portPlan,
+          portRequests,
           { codeServerPassword, vncPassword },
-          BOAT_TUNNEL_ENV_STAGING_PATH
+          created.hostedPorts
         ),
-        this.nameSandbox(boatSandboxId, config.sandboxId),
+        this.lifecycle.waitForReady(boatSandboxId),
       ]);
-      // Private, and the tunnel env file staged: the setup script Boat starts
-      // at machine-up may now copy the file into place and exec the launcher.
-      await this.lifecycle.releaseLaunch(boatSandboxId);
-      const releasedAtMs = Date.now();
-
-      const ready = await this.lifecycle.waitForReady(boatSandboxId);
-      // The launcher started when the machine came up or when the launch was
-      // released, whichever was later; watch it briefly from there for an
-      // early exit, as the detached start did.
-      await this.lifecycle.confirmLaunch(boatSandboxId, Math.max(releasedAtMs, Date.now()));
+      // Boat started the launcher when the machine came up; watch it briefly
+      // from there for an early exit, as the detached start did.
+      await this.lifecycle.confirmLaunch(boatSandboxId, Date.now());
 
       return {
         sandboxId: config.sandboxId,
@@ -334,17 +343,19 @@ export class BoatSandboxProvider implements SandboxProvider {
               this.providerConfig.sandboxAccessPasswordSecret
             )
           : undefined;
-        // The machine is up, so the tunnel env file can go straight into place.
+        // A resume cannot route ports with the request that brings the
+        // sandbox back, so each one is hosted again, which answers the URLs it
+        // had; the machine is up, and the tunnel env file goes into place.
         const access = await this.exposeAccess(
           config.providerObjectId,
           config.sandboxId,
-          portPlan,
-          { codeServerPassword, vncPassword },
-          BOAT_TUNNEL_ENV_FILE_PATH
+          this.portRequests(portPlan),
+          { codeServerPassword, vncPassword }
         );
-        // A resumed machine runs nothing, and the create's setup script does
-        // not run again: the launcher is started here, and, finding the
-        // completed-boot marker, boots the runtime in restored mode.
+        // The create's setup script does not run again. The launcher is
+        // started here: on a new machine it finds the completed-boot marker
+        // and boots the runtime in restored mode, and on the parked machine of
+        // a quick resume it finds the runtime still running and leaves it be.
         await this.lifecycle.launchRuntime(config.providerObjectId);
 
         return {
@@ -498,32 +509,12 @@ export class BoatSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Route the enabled service ports and the configured tunnel ports to public
-   * URLs, and tell the runtime where its tunnels are.
-   *
-   * The three services carry their own authentication (code-server password,
-   * terminal token, VNC password) and the web app embeds the terminal in an
-   * iframe, where Boat's token cookie would be a blocked third-party cookie;
-   * their routes are public. A user tunnel runs whatever the agent started and
-   * stays behind Boat's token: its URL carries `_token`, which a browser
-   * exchanges for a cookie on the first visit.
-   *
-   * Access URLs are user-facing extras, not how a session runs: each route is
-   * resolved independently so one failure cannot hide the live sandbox.
+   * The ports a session routes, and what each is for: the enabled services,
+   * on public URLs because their own logins guard them, then the user's tunnel
+   * ports, which keep Boat's `_token`.
    */
-  private async exposeAccess(
-    boatSandboxId: string,
-    logicalSandboxId: string,
-    portPlan: SandboxPortPlan,
-    passwords: { codeServerPassword?: string; vncPassword?: string },
-    tunnelEnvPath: string
-  ): Promise<BoatAccess> {
-    const requests: Array<{
-      kind: "codeServer" | "terminal" | "vnc" | "tunnel";
-      port: number;
-      public: boolean;
-      title: string;
-    }> = [];
+  private portRequests(portPlan: SandboxPortPlan): BoatPortRequest[] {
+    const requests: BoatPortRequest[] = [];
     if (portPlan.codeServerPort !== undefined) {
       requests.push({
         kind: "codeServer",
@@ -546,15 +537,49 @@ export class BoatSandboxProvider implements SandboxProvider {
     for (const port of portPlan.extraTunnelPorts) {
       requests.push({ kind: "tunnel", port, public: false, title: `tunnel ${port}` });
     }
+    return requests;
+  }
+
+  /**
+   * Route every requested port, assemble the access the session gets, and
+   * write the tunnel env file into the workspace. A port the create routed is
+   * taken from its answer; any other, including one the create could not
+   * host, is hosted with its own call, as Boat prescribes for that case. A
+   * port that still fails is logged and left out: the session runs without
+   * that link rather than not at all.
+   */
+  private async exposeAccess(
+    boatSandboxId: string,
+    logicalSandboxId: string,
+    requests: BoatPortRequest[],
+    passwords: { codeServerPassword?: string; vncPassword?: string },
+    hostedByCreate: BoatCreateHostedPort[] = []
+  ): Promise<BoatAccess> {
+    const routedByCreate = new Map<number, string>();
+    for (const hosted of hostedByCreate) {
+      if (hosted.url) {
+        routedByCreate.set(hosted.port, hosted.url);
+        continue;
+      }
+      log.warn("boat.create_host_port_failed", {
+        sandbox_id: logicalSandboxId,
+        port: hosted.port,
+        error: hosted.error ?? null,
+        detail: hosted.message ?? null,
+      });
+    }
 
     const routes = await Promise.allSettled(
-      requests.map((request) =>
-        this.client.hostPort(boatSandboxId, {
+      requests.map(async (request) => {
+        const routed = routedByCreate.get(request.port);
+        if (routed !== undefined) return routed;
+        const hosted = await this.client.hostPort(boatSandboxId, {
           port: request.port,
           public: request.public,
           title: request.title,
-        })
-      )
+        });
+        return hosted.url;
+      })
     );
 
     const access: BoatAccess = {};
@@ -570,7 +595,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         });
         continue;
       }
-      const url = route.value.url;
+      const url = route.value;
       if (request.kind === "codeServer") {
         access.codeServerUrl = url;
         access.codeServerPassword = passwords.codeServerPassword;
@@ -584,7 +609,7 @@ export class BoatSandboxProvider implements SandboxProvider {
     }
     if (Object.keys(tunnelUrls).length > 0) {
       access.tunnelUrls = tunnelUrls;
-      await this.writeTunnelEnvFile(boatSandboxId, logicalSandboxId, tunnelUrls, tunnelEnvPath);
+      await this.writeTunnelEnvFile(boatSandboxId, logicalSandboxId, tunnelUrls);
     }
     return access;
   }
@@ -592,8 +617,7 @@ export class BoatSandboxProvider implements SandboxProvider {
   private async writeTunnelEnvFile(
     boatSandboxId: string,
     logicalSandboxId: string,
-    tunnelUrls: Record<string, string>,
-    path: string
+    tunnelUrls: Record<string, string>
   ): Promise<void> {
     const lines = [
       `${TUNNEL_ENV_SANDBOX_ID_KEY}=${logicalSandboxId}`,
@@ -602,17 +626,9 @@ export class BoatSandboxProvider implements SandboxProvider {
         .map(([port, url]) => `TUNNEL_${port}=${url}`),
     ];
     await this.client.writeFile(boatSandboxId, {
-      path,
+      path: BOAT_TUNNEL_ENV_FILE_PATH,
       content: lines.join("\n") + "\n",
     });
-  }
-
-  /** Label the sandbox in Boat's dashboard with the deployment and the logical sandbox id. */
-  private nameSandbox(boatSandboxId: string, logicalSandboxId: string): Promise<void> {
-    return this.lifecycle.nameSandbox(
-      boatSandboxId,
-      boatSandboxName(this.providerConfig.deploymentName, logicalSandboxId)
-    );
   }
 }
 

@@ -94,7 +94,7 @@ describe("BoatRestClient", () => {
   it("createSandbox posts a no-env deploy from the named snapshot under an idempotency key", async () => {
     const client = new BoatRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse(sandboxBody({ state: "provisioning" }), 202));
-    const sandbox = await client.createSandbox({
+    const { sandbox, hostedPorts } = await client.createSandbox({
       type: "default",
       ttlSeconds: 7200,
       env: { SANDBOX_ID: "sandbox-logical" },
@@ -103,6 +103,7 @@ describe("BoatRestClient", () => {
       monitoring: false,
     });
     expect(sandbox.state).toBe("provisioning");
+    expect(hostedPorts).toEqual([]);
     const { url, init } = lastRequest();
     expect(url).toBe("https://boat.dev/api/v1/sandboxes");
     expect(init.headers["Idempotency-Key"]).toBe("openinspect-key");
@@ -133,6 +134,58 @@ describe("BoatRestClient", () => {
     expect(JSON.parse(String(lastRequest().init.body))).toMatchObject({
       setupScript: "#!/bin/bash\nexec /home/user/openinspect/launcher.sh\n",
     });
+  });
+
+  it("createSandbox names, privatizes and routes in the same request and returns the routes", async () => {
+    const client = new BoatRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(
+      jsonResponse(
+        {
+          ...sandboxBody({ state: "provisioned", visibility: "private" }),
+          type: "sandbox.created",
+          status: "provisioning",
+          hostedPorts: [
+            {
+              port: 8080,
+              url: "https://sub-8080.on.boat.dev",
+              isProtected: false,
+              access: "public",
+              localhost: false,
+            },
+            { port: 3000, error: "host_failed", message: "route not ready" },
+          ],
+        },
+        202
+      )
+    );
+    const created = await client.createSandbox({
+      type: "default",
+      ttlSeconds: 7200,
+      env: {},
+      from: "open-inspect-abc",
+      idempotencyKey: "openinspect-key",
+      monitoring: false,
+      name: "openinspect-test-sandbox-logical",
+      visibility: "private",
+      hostedPorts: [
+        { port: 8080, public: true, title: "code-server" },
+        { port: 3000, public: false },
+      ],
+    });
+    expect(JSON.parse(String(lastRequest().init.body))).toMatchObject({
+      name: "openinspect-test-sandbox-logical",
+      visibility: "private",
+      hostedPorts: [
+        { port: 8080, public: true, title: "code-server" },
+        { port: 3000, public: false },
+      ],
+    });
+    expect(created.sandbox.visibility).toBe("private");
+    // A port the create could not host comes back with its error, not a URL.
+    expect(created.hostedPorts).toEqual([
+      { port: 8080, url: "https://sub-8080.on.boat.dev", isProtected: false, access: "public" },
+      { port: 3000, error: "host_failed", message: "route not ready" },
+    ]);
   });
 
   it("scrubs create env values out of a provider error", async () => {
