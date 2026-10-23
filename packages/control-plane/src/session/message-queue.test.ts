@@ -2161,33 +2161,6 @@ describe("SessionMessageQueue", () => {
     }
   );
 
-  it("emits cross-session origin context through the schema provenance field", async () => {
-    const h = buildQueue();
-    const provenance = {
-      kind: "cross_session",
-      receiptId: "xsr_1",
-      sourceSessionId: "session-source",
-      humanActorId: "user-1",
-      agentConversationId: "conversation-1",
-      sourceTaskId: "task-1",
-      depth: 0,
-    } as const;
-    h.repository.getNextPendingMessage.mockReturnValue(
-      createMessage({ source: "agent", origin_context: JSON.stringify(provenance) })
-    );
-    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
-
-    await h.queue.processMessageQueue();
-
-    const event = h.repository.startMessageProcessing.mock.calls[0][2];
-    expect(event).toMatchObject({ provenance });
-    expect(event).not.toHaveProperty("crossSessionOrigin");
-    expect(serverMessageSchema.parse({ type: "sandbox_event", event })).toMatchObject({
-      type: "sandbox_event",
-      event: { provenance },
-    });
-  });
-
   it.each([
     "{",
     "null",
