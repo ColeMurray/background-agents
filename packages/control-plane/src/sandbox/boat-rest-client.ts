@@ -48,9 +48,14 @@ export const BOAT_SANDBOX_STATES = [
 ] as const;
 export type BoatSandboxState = (typeof BOAT_SANDBOX_STATES)[number];
 
-// A create that hosts ports waits for the sandbox's machine first, up to 60 s
-// on Boat's side, before it answers.
-const TIMEOUT_CREATE_MS = 90_000;
+/**
+ * The longest Boat holds a request for a sandbox that is still starting: a
+ * create that hosts ports waits this long for the sandbox's machine, and a
+ * file write this long for the sandbox to be ready.
+ */
+const BOAT_START_WAIT_MS = 60_000;
+// A create that hosts ports answers only once the sandbox's machine is there.
+const TIMEOUT_CREATE_MS = BOAT_START_WAIT_MS + 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_UPDATE_MS = 15_000;
 const TIMEOUT_STOP_MS = 30_000;
@@ -59,9 +64,9 @@ const TIMEOUT_RESUME_MS = 60_000;
 const TIMEOUT_DELETE_MS = 30_000;
 const TIMEOUT_COMMAND_START_MS = 30_000;
 const TIMEOUT_COMMAND_STATUS_MS = 15_000;
-// A write to a sandbox that is still starting waits until it is ready, up to
-// 60 s on Boat's side, so the file lands on the disk the sandbox keeps.
-const TIMEOUT_WRITE_FILE_MS = 75_000;
+// A write to a sandbox that is still starting is held until it is ready, so
+// the file lands on the disk the sandbox keeps.
+const TIMEOUT_WRITE_FILE_MS = BOAT_START_WAIT_MS + 15_000;
 const TIMEOUT_HOST_PORT_MS = 30_000;
 const TIMEOUT_NAMED_SNAPSHOT_MS = 30_000;
 /** Headroom over a synchronous command's own timeout for transport and queueing. */
@@ -259,8 +264,8 @@ export interface BoatCreateSandboxParams {
   /**
    * Ports to route with the create, each as {@link BoatRestClient.hostPort}
    * would. Boat waits for the sandbox's machine (usually under a second, at
-   * most 60 s), routes them all and answers their URLs, so they are reachable
-   * the moment a service listens.
+   * most BOAT_START_WAIT_MS), routes them all and answers their URLs, so they
+   * are reachable the moment a service listens.
    */
   hostedPorts?: BoatHostPortRequest[];
 }

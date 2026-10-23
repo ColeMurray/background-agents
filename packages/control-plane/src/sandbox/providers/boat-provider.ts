@@ -6,9 +6,9 @@
  * per-sandbox env (secrets included) rides `POST /sandboxes` `env`, which Boat
  * applies to every process the sandbox starts, and the baked launcher rides
  * the same request as Boat's setup script, so Boat starts it the moment the
- * machine is up (a resume starts it again with a detached command). The same
- * request names the sandbox, makes it private and routes its ports. The
- * launcher execs the runtime entrypoint. Readiness is the uniform contract:
+ * machine is up and this side has released the launch (a resume starts it
+ * again with a detached command). The same request names the sandbox, makes
+ * it private and routes its ports. The launcher execs the runtime entrypoint. Readiness is the uniform contract:
  * the sandbox bridge phones home, and the connecting timeout fails the
  * session otherwise.
  *
@@ -217,6 +217,7 @@ export class BoatSandboxProvider implements SandboxProvider {
           monitoring: false,
           // Boat runs this the moment the machine is up, with the env above
           // applied, so the boot never waits for this side to notice readiness.
+          // The script execs the launcher once the launch marker below lands.
           setupScript: BOAT_SETUP_SCRIPT,
           // Named, private and routed by the create itself: Boat sets the
           // visibility before the sandbox has a machine, and answers the
@@ -246,21 +247,25 @@ export class BoatSandboxProvider implements SandboxProvider {
 
       // A port the create could not host is hosted on its own, and the tunnel
       // env file goes straight into the workspace: Boat holds a write to a
-      // starting sandbox until it is ready, and the runtime waits for the file
-      // before running start.sh, so neither has to precede the launch.
-      const [access, ready] = await Promise.all([
-        this.exposeAccess(
-          boatSandboxId,
-          config.sandboxId,
-          portRequests,
-          { codeServerPassword, vncPassword },
-          created.hostedPorts
-        ),
-        this.lifecycle.waitForReady(boatSandboxId),
-      ]);
-      // Boat started the launcher when the machine came up; watch it briefly
-      // from there for an early exit, as the detached start did.
-      await this.lifecycle.confirmLaunch(boatSandboxId, Date.now());
+      // starting sandbox until it is ready, so it lands on the disk the
+      // sandbox keeps.
+      const access = await this.exposeAccess(
+        boatSandboxId,
+        config.sandboxId,
+        portRequests,
+        { codeServerPassword, vncPassword },
+        created.hostedPorts
+      );
+      // Known private, and the tunnel env file in place: the setup script Boat
+      // started at machine-up may now exec the launcher.
+      await this.lifecycle.releaseLaunch(boatSandboxId);
+      const releasedAtMs = Date.now();
+
+      const ready = await this.lifecycle.waitForReady(boatSandboxId);
+      // The launcher started when the machine came up or when the launch was
+      // released, whichever was later; watch it briefly from there for an
+      // early exit, as the detached start did.
+      await this.lifecycle.confirmLaunch(boatSandboxId, Math.max(releasedAtMs, Date.now()));
 
       return {
         sandboxId: config.sandboxId,

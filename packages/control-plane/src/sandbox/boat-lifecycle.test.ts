@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertBoatEnvWithinLimits,
+  BOAT_LAUNCH_MARKER_PATH,
   BOAT_LAUNCHER_PATH,
   BOAT_SETUP_SCRIPT,
   BOAT_TUNNEL_ENV_FILE_PATH,
@@ -83,13 +84,16 @@ describe("BoatSandboxLifecycle archive", () => {
 });
 
 describe("BOAT_SETUP_SCRIPT", () => {
-  it("execs the launcher the moment the machine is up, with nothing to wait for", () => {
-    // The create makes the sandbox private before it has a machine, and the
-    // runtime waits for its tunnel env file itself, so nothing gates the launch.
-    const [shebang, ...commands] = BOAT_SETUP_SCRIPT.trimEnd().split("\n");
-    expect(shebang).toBe("#!/bin/bash");
-    expect(commands).toEqual([`exec ${BOAT_LAUNCHER_PATH}`]);
-    // Where the runtime reads the file the control plane writes.
+  it("execs the launcher once the launch marker is there and fails if it never arrives", () => {
+    expect(BOAT_SETUP_SCRIPT).toContain(
+      `if [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; then exec ${BOAT_LAUNCHER_PATH}; fi`
+    );
+    expect(BOAT_SETUP_SCRIPT).toContain('echo "launch marker never arrived" >&2');
+    // Under /tmp, which no Boat snapshot keeps: no image or restored disk can
+    // carry a marker that would let a launch outrun this side.
+    expect(BOAT_LAUNCH_MARKER_PATH.startsWith("/tmp/")).toBe(true);
+    // Nothing is copied: the control plane writes the tunnel env file in place.
+    expect(BOAT_SETUP_SCRIPT).not.toContain("cp ");
     expect(BOAT_TUNNEL_ENV_FILE_PATH).toBe("/home/user/workspace/.tunnels.env");
   });
 });

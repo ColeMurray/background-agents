@@ -524,12 +524,10 @@ def test_boat_launcher_matches_the_control_plane_contract():
     )
     # The control plane writes the file there on create and resume alike: Boat
     # holds a write to a starting sandbox until it is ready. The create's setup
-    # script only execs the launcher.
+    # script waits for the launch marker, then execs the launcher.
     assert "path: BOAT_TUNNEL_ENV_FILE_PATH," in provider
-    assert (
-        "export const BOAT_SETUP_SCRIPT = `#!/bin/bash\\nexec ${BOAT_LAUNCHER_PATH}\\n`;"
-        in lifecycle
-    )
+    assert 'export const BOAT_LAUNCH_MARKER_PATH = "/tmp/openinspect-launch";' in lifecycle
+    assert "then exec ${BOAT_LAUNCHER_PATH}; fi" in lifecycle
     assert 'ensure_link /workspace "$OI_USER_HOME/workspace"' in launcher
     assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
     assert "flock -n 9" in launcher

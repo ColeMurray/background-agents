@@ -394,7 +394,8 @@ Things to know:
 - **A create whose response is lost** is repeated under the same idempotency key, and Boat answers
   with the first sandbox. Should every attempt lose its response, the sandbox holds nothing of the
   build (its env never arrived), stops by itself at its TTL, and Boat deletes its data 14 days
-  later; Boat's create API has no name or label the control plane could find it by sooner.
+  later. The create names the sandbox, but nothing looks a sandbox up by that name to reclaim it
+  sooner.
 - **Starts.** Each build spends one Boat sandbox start against the plan's start limits; the save and
   the deploys from the image spend none beyond each session's own.
 

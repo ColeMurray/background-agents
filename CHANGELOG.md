@@ -30,7 +30,7 @@ visibility and the ports to route, so the control plane sends them with the crea
 renaming, unsharing and hosting each port afterwards. A sandbox billed to an organization is private
 before it has a machine, so it is never shared, not even for a moment. Boat also holds a file write
 to a starting sandbox until the sandbox is ready, so the tunnel env file now goes straight into the
-workspace and the setup script starts the launcher as soon as the machine is up.
+workspace instead of being staged under `/tmp` for the setup script to copy.
 
 ## October 22, 2026
 

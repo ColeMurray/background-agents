@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
 import {
+  BOAT_LAUNCH_MARKER_PATH,
   BOAT_LAUNCHER_PATH,
   BOAT_SANDBOX_VERSION,
   BOAT_SETUP_SCRIPT,
@@ -73,15 +74,19 @@ describe("BoatSandboxProvider", () => {
         visibility: "private",
         hostedPorts: [{ port: 8080, public: true, title: "code-server" }],
       });
-      // The create named the sandbox, made it private and routed its port, so
-      // nothing follows it but the readiness reads.
+      // The create named the sandbox, made it private and routed its port.
       expect(client.updateSandbox).not.toHaveBeenCalled();
       expect(client.unshareSandbox).not.toHaveBeenCalled();
       expect(client.hostPort).not.toHaveBeenCalled();
       // The launch rides on the create too: Boat runs the setup script the
-      // moment the machine is up, so no start command follows.
+      // moment the machine is up, and it execs the launcher once the control
+      // plane has released the launch, so no start command follows.
       expect(params.setupScript).toBe(BOAT_SETUP_SCRIPT);
-      expect(client.writeFile).not.toHaveBeenCalled();
+      expect(client.writeFile).toHaveBeenCalledOnce();
+      expect(client.writeFile).toHaveBeenCalledWith("bx_abcdefgh", {
+        path: BOAT_LAUNCH_MARKER_PATH,
+        content: "released\n",
+      });
       expect(client.startDetachedCommand).not.toHaveBeenCalled();
       expect(client.deleteSandbox).not.toHaveBeenCalled();
     });
@@ -155,13 +160,56 @@ describe("BoatSandboxProvider", () => {
       expect(client.hostPort).not.toHaveBeenCalled();
       // Straight into the workspace: Boat holds a write to a starting sandbox
       // until it is ready, so the file lands on the disk the sandbox keeps.
-      expect(client.writeFile).toHaveBeenCalledOnce();
-      expect(client.writeFile).toHaveBeenCalledWith("bx_abcdefgh", {
-        path: BOAT_TUNNEL_ENV_FILE_PATH,
-        content:
-          "TUNNEL_SANDBOX_ID=sandbox-logical\n" +
-          "TUNNEL_3000=https://sub-3000.on.boat.dev?_token=tok3000\n" +
-          "TUNNEL_5173=https://sub-5173.on.boat.dev?_token=tok5173\n",
+      // Then the launch marker, and only then the first readiness read: the
+      // runtime can start neither before the file nor after this side has
+      // stopped looking.
+      const writes = vi.mocked(client.writeFile).mock;
+      expect(writes.calls.map(([, file]) => file)).toEqual([
+        {
+          path: BOAT_TUNNEL_ENV_FILE_PATH,
+          content:
+            "TUNNEL_SANDBOX_ID=sandbox-logical\n" +
+            "TUNNEL_3000=https://sub-3000.on.boat.dev?_token=tok3000\n" +
+            "TUNNEL_5173=https://sub-5173.on.boat.dev?_token=tok5173\n",
+        },
+        { path: BOAT_LAUNCH_MARKER_PATH, content: "released\n" },
+      ]);
+      expect(writes.invocationCallOrder[1]).toBeLessThan(
+        vi.mocked(client.getSandbox).mock.invocationCallOrder[0]
+      );
+    });
+
+    it("releases the launch only once the tunnel env file is written, however long Boat holds it", async () => {
+      let finishTunnelWrite: () => void = () => undefined;
+      const client = mockClient({
+        writeFile: vi.fn(async (_id: string, file: { path: string }) => {
+          if (file.path === BOAT_TUNNEL_ENV_FILE_PATH) {
+            await new Promise<void>((resolve) => {
+              finishTunnelWrite = resolve;
+            });
+          }
+        }),
+      });
+      const creating = createProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { tunnelPorts: [3000] },
+      });
+      await vi.waitFor(() =>
+        expect(client.writeFile).toHaveBeenCalledWith(
+          "bx_abcdefgh",
+          expect.objectContaining({ path: BOAT_TUNNEL_ENV_FILE_PATH })
+        )
+      );
+      // Boat holds the write until the sandbox is ready; the launch waits for it.
+      expect(client.writeFile).not.toHaveBeenCalledWith(
+        "bx_abcdefgh",
+        expect.objectContaining({ path: BOAT_LAUNCH_MARKER_PATH })
+      );
+      finishTunnelWrite();
+      await creating;
+      expect(client.writeFile).toHaveBeenLastCalledWith("bx_abcdefgh", {
+        path: BOAT_LAUNCH_MARKER_PATH,
+        content: "released\n",
       });
     });
 
@@ -182,7 +230,8 @@ describe("BoatSandboxProvider", () => {
       });
       expect(result.providerObjectId).toBe("bx_abcdefgh");
       expect(shared.unshareSandbox).toHaveBeenCalledWith("bx_abcdefgh");
-      // Private before anything else reaches the sandbox.
+      // Private before anything else reaches the sandbox, and so before the
+      // launch is released: the runtime never runs in a shared sandbox.
       const unshareOrder = vi.mocked(shared.unshareSandbox).mock.invocationCallOrder[0];
       expect(unshareOrder).toBeLessThan(vi.mocked(shared.getSandbox).mock.invocationCallOrder[0]);
       expect(unshareOrder).toBeLessThan(vi.mocked(shared.writeFile).mock.invocationCallOrder[0]);
@@ -203,7 +252,7 @@ describe("BoatSandboxProvider", () => {
       expect((error as SandboxProviderError).message).toContain("stayed shared");
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
       expect(client.startDetachedCommand).not.toHaveBeenCalled();
-      // Nothing more reaches a sandbox that is not private.
+      // No launch marker: the setup script never execs the launcher.
       expect(client.writeFile).not.toHaveBeenCalled();
     });
 
@@ -217,6 +266,26 @@ describe("BoatSandboxProvider", () => {
         .createSandbox({ ...baseCreateConfig, sandboxSettings: { tunnelPorts: [3000] } })
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(SandboxProviderError);
+      // The launch is never released, so no runtime starts without its URLs.
+      expect(client.writeFile).not.toHaveBeenCalledWith(
+        "bx_abcdefgh",
+        expect.objectContaining({ path: BOAT_LAUNCH_MARKER_PATH })
+      );
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+    });
+
+    it("fails the create and deletes the sandbox when the launch cannot be released", async () => {
+      const client = mockClient({
+        writeFile: vi.fn(async () => {
+          throw new BoatApiError("agent unavailable", 503);
+        }),
+      });
+      const error = await createProvider(client, providerConfig)
+        .createSandbox(baseCreateConfig)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect(client.writeFile).toHaveBeenCalledTimes(3);
+      expect(client.getSandbox).not.toHaveBeenCalled();
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
     });
 
