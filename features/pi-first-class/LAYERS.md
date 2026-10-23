@@ -503,7 +503,7 @@ here is cherry-picked from either. This branch is `compound/pi-overlay`, its his
 
 ### The type and lint escapes (TEST-3)
 
-The branch adds 154 type or lint escapes. Every one of them is listed here with the reason it is
+The branch adds 152 type or lint escapes. Every one of them is listed here with the reason it is
 there.
 
 The three assertions in `packages/control-plane/test/integration/session-do-access.ts` are confined
