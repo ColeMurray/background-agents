@@ -710,10 +710,37 @@ async def test_skills_failure_is_attributed_while_memory_still_finishes(tmp_path
 
     supervisor.harness_process.start.assert_not_awaited()
     assert "memory" in events
-    by_phase = {}
-    for line in _lines():
-        if line["phase"] in ("skills", "memory"):
-            by_phase.setdefault(line["phase"], []).append(line["status"])
-    assert by_phase == {"skills": ["started", "failed"], "memory": ["started", "completed"]}
+    lines = [line for line in _lines() if line["phase"] in ("skills", "memory")]
+    # Memory's lines outran the skills failure, so the failure is written once
+    # more as the newest line and the fatal report carries that sequence: the
+    # control plane keeps only the newest one.
+    assert [(line["phase"], line["status"]) for line in lines] == [
+        ("skills", "started"),
+        ("skills", "failed"),
+        ("memory", "started"),
+        ("memory", "completed"),
+        ("skills", "failed"),
+    ]
     reported = supervisor._report_fatal_error.await_args.args
     assert isinstance(reported[1], BootPhaseError) and reported[1].phase == "skills"
+    assert reported[1].boot_seq == lines[-1]["seq"] > lines[-2]["seq"]
+    assert lines[-1]["detail"] == "catalog unavailable"
+
+
+async def test_failure_that_is_already_the_newest_line_is_not_republished(tmp_path):
+    events = []
+    supervisor = _supervisor(tmp_path, events)
+    supervisor.memory = MagicMock()
+    supervisor.memory.materialize = AsyncMock(side_effect=RuntimeError("Unavailable"))
+
+    assert await supervisor.run() is False
+
+    lines = [line for line in _lines() if line["phase"] in ("skills", "memory")]
+    assert [(line["phase"], line["status"]) for line in lines] == [
+        ("skills", "started"),
+        ("skills", "completed"),
+        ("memory", "started"),
+        ("memory", "failed"),
+    ]
+    reported = supervisor._report_fatal_error.await_args.args
+    assert reported[1].phase == "memory" and reported[1].boot_seq == lines[-1]["seq"]
