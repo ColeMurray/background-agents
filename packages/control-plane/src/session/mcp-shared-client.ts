@@ -1,5 +1,7 @@
 import { Client } from "@modelcontextprotocol/client";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { collectCredentialValues, containsCredentialValue } from "../mcp/credential-values";
+import { assertMcpEgress } from "../mcp/egress-policy";
 
 /**
  * The shared MCP lane.
@@ -20,6 +22,8 @@ export interface McpSharedServer {
   readonly name: string;
   readonly type: "local" | "remote";
   readonly url?: string;
+  /** The exact host from the stored server configuration. */
+  readonly endpointHost: string;
   readonly headers?: Record<string, string>;
   readonly env?: Record<string, string>;
 }
@@ -45,6 +49,11 @@ export async function callSharedMcpTool(
     // runs it; this lane cannot.
     throw new Error("This shared MCP server is not reachable from the session");
   }
+  // Validate the candidate before constructing a transport or handing static
+  // headers to it. Shared and personal MCP use the same enforceable egress
+  // policy rather than creating a second source of authority.
+  assertMcpEgress({ endpointHost: server.endpointHost }, server.url);
+  const credentialValues = collectCredentialValues(server.headers, server.env);
   const client = new Client({ name: "open-inspect", version: "0.1.0" });
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
     requestInit: { headers: server.headers ?? {} },
@@ -53,6 +62,9 @@ export async function callSharedMcpTool(
   try {
     await client.connect(transport, { signal: deadline });
     const result = await client.callTool({ name: toolName, arguments: args }, { signal: deadline });
+    if (containsCredentialValue(result.content, credentialValues)) {
+      throw new Error("The MCP tool returned unsafe content");
+    }
     return result.content ?? null;
   } catch {
     // The provider's own string stays inside the platform.

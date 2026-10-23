@@ -741,6 +741,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             name: server.name,
             type: server.type,
             url: server.url,
+            endpointHost: new URL(metadata.url ?? "https://mcp.invalid").host,
             headers: server.headers,
             env: server.env,
           },
