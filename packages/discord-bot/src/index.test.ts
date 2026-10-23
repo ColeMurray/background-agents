@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import app from "./index";
 import type * as taskModule from "./task";
 import { handleTask } from "./task";
@@ -86,6 +86,22 @@ describe("POST /interactions", () => {
     expect(waitUntil).not.toHaveBeenCalled();
     expect(vi.mocked(handleTask)).toHaveBeenCalledOnce();
   });
+
+  it.each(["get", "put"] as const)(
+    "still defers the command when the replay check's KV %s fails",
+    async (method) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      onTestFinished(() => warn.mockRestore());
+      vi.mocked(env.DISCORD_KV[method]).mockRejectedValueOnce(new Error("kv down"));
+      const { json, waitUntil } = await post(createInteraction());
+      expect(json).toEqual({ type: 5 });
+      expect(waitUntil).toHaveBeenCalledOnce();
+      expect(vi.mocked(handleTask)).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('"msg":"interactions.replay_check_failed"')
+      );
+    }
+  );
 
   it("tells members without the role privately", async () => {
     const base = createInteraction();

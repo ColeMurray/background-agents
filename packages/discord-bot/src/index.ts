@@ -140,14 +140,19 @@ app.post("/interactions", async (c) => {
 
 /**
  * Best-effort dedupe for a command delivered twice inside the signature window.
- * KV is not atomic, so two copies racing in parallel can both pass.
+ * KV is not atomic, so two copies racing in parallel can both pass. A KV
+ * failure skips dedupe, so the command proceeds.
  */
 async function isReplay(env: Env, interactionId: string): Promise<boolean> {
   const key = `interaction:${interactionId}`;
-  if ((await env.DISCORD_KV.get(key)) !== null) return true;
-  await env.DISCORD_KV.put(key, "1", {
-    expirationTtl: Math.ceil((2 * MAX_SIGNATURE_SKEW_MS) / 1000),
-  });
+  try {
+    if ((await env.DISCORD_KV.get(key)) !== null) return true;
+    await env.DISCORD_KV.put(key, "1", {
+      expirationTtl: Math.ceil((2 * MAX_SIGNATURE_SKEW_MS) / 1000),
+    });
+  } catch (error) {
+    log.warn("interactions.replay_check_failed", { interaction_id: interactionId, error });
+  }
   return false;
 }
 
