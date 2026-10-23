@@ -24,6 +24,9 @@ TOKEN_FIELDS = (
     "totalTokens",
 )
 MAX_SAFE_TOKEN_COUNT = 2**53 - 1
+TOOL_ITEM_KINDS = frozenset(
+    {"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch"}
+)
 PLAN_STEP_STATUSES = {
     "pending": "pending",
     "inProgress": "in_progress",
@@ -89,7 +92,7 @@ def _native_message(error: Any) -> str:
     return _clip(message) if isinstance(message, str) else ""
 
 
-def _failure_message(error: Any) -> str:
+def failure_message(error: Any) -> str:
     """An actionable message for a failed turn's native ``TurnError``."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
     mapped = FAILURE_MESSAGES.get(info) if isinstance(info, str) else None
@@ -146,6 +149,85 @@ def _token_counts(value: Any) -> dict[str, int] | None:
     ):
         return None
     return counts
+
+
+def project_usage(
+    usage: Any,
+    baseline: dict[str, int],
+    previous: dict[str, int],
+    *,
+    baseline_known: bool,
+) -> tuple[dict[str, int] | None, dict[str, Any] | None]:
+    """A cumulative native usage update as ``(total, turn tokens)``.
+
+    ``total`` is ``None`` when the update is invalid or regresses below
+    ``previous``. ``tokens`` is ``None`` while the baseline is unknown: the
+    update re-establishes a baseline instead of billing it.
+    """
+    total = _token_counts(usage.get("total") if isinstance(usage, dict) else None)
+    if total is None or any(total[k] < previous[k] for k in TOKEN_FIELDS):
+        return None, None
+    if not baseline_known:
+        return total, None
+    counts = _token_counts({k: total[k] - baseline[k] for k in TOKEN_FIELDS})
+    if counts is None:
+        return None, None
+    read, write = counts["cachedInputTokens"], counts["cacheWriteInputTokens"]
+    reasoning = counts["reasoningOutputTokens"]
+    # Native input includes cached reads and writes, native output includes
+    # reasoning. Neutral buckets are disjoint.
+    return total, {
+        "input": counts["inputTokens"] - read - write,
+        "output": counts["outputTokens"] - reasoning,
+        "reasoning": reasoning,
+        "cache": {"read": read, "write": write},
+        "total": counts["totalTokens"],
+    }
+
+
+def tool_call_event(
+    method: str, item: dict[str, Any], message_id: str, turn_id: str
+) -> dict[str, Any] | None:
+    """Project a native tool item lifecycle notification onto a bridge ``tool_call``."""
+    kind = item.get("type")
+    if kind not in TOOL_ITEM_KINDS:
+        return None
+    tool = {
+        "commandExecution": "bash",
+        "fileChange": "apply_patch",
+        "webSearch": "websearch",
+    }.get(kind)
+    if not tool:
+        namespace = item.get("namespace") or item.get("server")
+        tool = str(item.get("tool") or "tool")
+        if namespace and namespace != "oi":
+            tool = f"mcp__{namespace}__{tool}"
+    args = item.get("arguments") or {
+        key: item[key] for key in ("command", "cwd", "changes", "query") if key in item
+    }
+    if kind == "webSearch":
+        action = item.get("action") or {}
+        if action.get("type") in {"openPage", "findInPage"}:
+            tool = "webfetch"
+            fields = ("url", "pattern")
+        else:
+            fields = ("query", "queries")
+        args = {key: action[key] for key in fields if action.get(key) is not None}
+        if tool == "websearch" and not args.get("query"):
+            args["query"] = item.get("query", "")
+    # Transport sizing belongs to EventForwarder (event_size.truncate_tool_call).
+    status = "running" if method == "item/started" else "completed"
+    if item.get("status") in {"failed", "declined"} or item.get("success") is False:
+        status = "error"
+    return {
+        "type": "tool_call",
+        "messageId": message_id,
+        "callId": f"codex:{turn_id}:{item.get('id')}",
+        "tool": tool,
+        "args": args,
+        "status": status,
+        "output": _tool_output(kind, item),
+    }
 
 
 def _tool_output(kind: str, item: dict[str, Any]) -> str:
@@ -341,35 +423,22 @@ class CodexTurnEvents:
             summary = AUTH_RECOVERY_SUMMARIES[method].format(provider)
             return self._warning(_with_detail(summary, params.get("message")))
         if method == "thread/tokenUsage/updated":
-            usage = params.get("tokenUsage")
-            total = _token_counts(usage.get("total") if isinstance(usage, dict) else None)
-            if (
-                not self.usage_valid
-                or total is None
-                or any(total[k] < self.total[k] for k in TOKEN_FIELDS)
-            ):
+            if not self.usage_valid:
                 return self._invalid_usage()
-            counts = {k: total[k] - self.baseline[k] for k in TOKEN_FIELDS}
-            if self.baseline_known and _token_counts(counts) is None:
+            # A contained cancellation can leave native history ahead of the
+            # last observed total: an unknown baseline is re-established, not billed.
+            total, tokens = project_usage(
+                params.get("tokenUsage"),
+                self.baseline,
+                self.total,
+                baseline_known=self.baseline_known,
+            )
+            if total is None:
                 return self._invalid_usage()
             self.total = total
             self.has_usage = True
-            if not self.baseline_known:
-                # A contained cancellation can leave native history ahead of
-                # the last observed total. Re-establish a baseline, not a bill.
-                return [self.finish()]
-            read, write = counts["cachedInputTokens"], counts["cacheWriteInputTokens"]
-            # Native input includes cached reads and writes, native output
-            # includes reasoning. Neutral buckets are disjoint.
-            input_tokens = counts["inputTokens"] - read - write
-            reasoning = counts["reasoningOutputTokens"]
-            self.tokens = {
-                "input": input_tokens,
-                "output": counts["outputTokens"] - reasoning,
-                "reasoning": reasoning,
-                "cache": {"read": read, "write": write},
-                "total": counts["totalTokens"],
-            }
+            if tokens is not None:
+                self.tokens = tokens
             return [self.finish()]
         if method == "turn/plan/updated":
             # Each update is a distinct call: upserts keep a callId's first
@@ -408,53 +477,9 @@ class CodexTurnEvents:
                 self.text = {}
                 self._last_text = ""
                 return events
-            elif kind in {
-                "commandExecution",
-                "fileChange",
-                "mcpToolCall",
-                "dynamicToolCall",
-                "webSearch",
-            }:
-                tool = {
-                    "commandExecution": "bash",
-                    "fileChange": "apply_patch",
-                    "webSearch": "websearch",
-                }.get(kind)
-                if not tool:
-                    namespace = item.get("namespace") or item.get("server")
-                    tool = str(item.get("tool") or "tool")
-                    if namespace and namespace != "oi":
-                        tool = f"mcp__{namespace}__{tool}"
-                args = item.get("arguments") or {
-                    key: item[key] for key in ("command", "cwd", "changes", "query") if key in item
-                }
-                if kind == "webSearch":
-                    action = item.get("action") or {}
-                    if action.get("type") in {"openPage", "findInPage"}:
-                        tool = "webfetch"
-                        fields = ("url", "pattern")
-                    else:
-                        fields = ("query", "queries")
-                    args = {key: action[key] for key in fields if action.get(key) is not None}
-                    if tool == "websearch" and not args.get("query"):
-                        args["query"] = item.get("query", "")
-                # Transport sizing belongs to EventForwarder (event_size.truncate_tool_call).
-                output = _tool_output(kind, item)
-                status = "running" if method == "item/started" else "completed"
-                if item.get("status") in {"failed", "declined"} or item.get("success") is False:
-                    status = "error"
-                return [
-                    {
-                        "type": "tool_call",
-                        "messageId": self.message_id,
-                        "callId": f"codex:{self.turn_id}:{item_id}",
-                        "tool": tool,
-                        "args": args,
-                        "status": status,
-                        "output": output,
-                    }
-                ]
-        # Raw reasoning and unrelated collaborator events are not assistant text.
+            elif event := tool_call_event(method, item, self.message_id, self.turn_id):
+                return [event]
+        # Raw reasoning is not assistant text; sub-agent items belong to CodexSubagents.
         return []
 
     def _invalid_usage(self) -> list[dict[str, Any]]:
@@ -470,7 +495,7 @@ class CodexTurnEvents:
     def _failed(self, error: Any) -> list[dict[str, Any]]:
         if self.error is not None:
             return []
-        self.error = _failure_message(error)
+        self.error = failure_message(error)
         return [{"type": "error", "error": self.error, "messageId": self.message_id}]
 
     def _warning(self, message: Any) -> list[dict[str, Any]]:

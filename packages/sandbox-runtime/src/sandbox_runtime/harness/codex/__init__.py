@@ -40,6 +40,7 @@ from .env import (
     validate_native_state,
 )
 from .events import TURN_FAILED_MESSAGE, CodexRateLimits, CodexTurnEvents
+from .subagents import CodexSubagents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
@@ -47,6 +48,9 @@ if TYPE_CHECKING:
 
 STATE_VERSION = 1
 STOP_TIMEOUT_SECONDS = 5.0
+ABORT_TIMEOUT_SECONDS = 1.0
+# A host tool call can overtake the queued notification that identifies its turn.
+TOOL_OWNERSHIP_WAIT_SECONDS = 30.0
 
 
 class _InactivityTimeout(Exception):
@@ -99,6 +103,10 @@ class CodexHarness:
         self._epoch = ""
         self._total: dict[str, int] = {}
         self._usage_baseline_known = True
+        # Sub-agents of the running prompt.
+        self._subagents: CodexSubagents | None = None
+        # Notified after each projected frame, for tool calls awaiting ownership.
+        self._frames = asyncio.Condition()
         # Account quota state outlives a turn; each turn projects into it.
         self._rate_limits = CodexRateLimits()
         self._manifest_path = config.state_dir / "openinspect-state.json"
@@ -422,13 +430,25 @@ class CodexHarness:
                     rate_limits=self._rate_limits,
                     baseline_known=baseline_known,
                 )
+                subagents = CodexSubagents(prompt.message_id, self.session_id, self._turn_id, model)
+                self._subagents = subagents
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
-                # start response. Only this epoch/thread/turn is projected.
-                while state.status is None:
+                # start response. Only this epoch/thread/turn and the sub-agents
+                # rooted at it are projected. As with the other harnesses'
+                # sub-agents, the prompt settles only once its sub-agents finish;
+                # a parent turn that did not complete stops them.
+                stopping = False
+                while state.status is None or subagents.busy:
+                    if state.status not in (None, "completed") and not stopping:
+                        stopping = True
+                        await self._interrupt(subagents.stop())
                     frame = await self._next_notification()
-                    for event in state.accept(frame):
+                    for event in (*state.accept(frame), *subagents.accept(frame)):
                         await emit(event)
+                    await self._interrupt(subagents.take_interrupts())
+                    async with self._frames:
+                        self._frames.notify_all()
                     if self._total != state.total:
                         self._total = state.total
                         self._persist()
@@ -522,6 +542,9 @@ class CodexHarness:
             self._usage_baseline_known = False
             raise
         finally:
+            self._subagents = None
+            async with self._frames:
+                self._frames.notify_all()
             self._submitting = False
             self._turn_known.set()
             self._turn_id = None
@@ -586,29 +609,61 @@ class CodexHarness:
                 return {"accessToken": token.access_token, "chatgptAccountId": token.account_id}
         if method == "item/tool/call":
             if self._submitting and self._turn_id is None:
-                await asyncio.wait_for(self._turn_known.wait(), 30)
-            if (
-                self._tools is None
-                or params.get("threadId") != self.session_id
-                or not self._turn_id
-                or params.get("turnId") != self._turn_id
-            ):
+                await asyncio.wait_for(self._turn_known.wait(), TOOL_OWNERSHIP_WAIT_SECONDS)
+            thread_id, turn_id = params.get("threadId"), params.get("turnId")
+            owned = bool(self._turn_id) and (thread_id, turn_id) == (self.session_id, self._turn_id)
+            if not owned and thread_id != self.session_id:
+                owned = await self._subagent_owns(thread_id, turn_id)
+            if self._tools is None or not owned:
                 raise RuntimeError("Tool request is not owned by the active turn")
             return await self._tools.call(params)
         if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
             return {"decision": "decline"}
         raise RuntimeError("Interactive or unknown host requests are not supported")
 
+    async def _subagent_owns(self, thread_id: Any, turn_id: Any) -> bool:
+        """Whether a tool call comes from a running sub-agent turn of the active prompt."""
+        subagents = self._subagents
+        if subagents is None:
+            return False
+
+        def decided() -> bool:
+            return (
+                self._subagents is not subagents
+                or subagents.owns(thread_id, turn_id)
+                or subagents.refuses(thread_id)
+            )
+
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(TOOL_OWNERSHIP_WAIT_SECONDS), self._frames:
+                await self._frames.wait_for(decided)
+        return self._subagents is subagents and subagents.owns(thread_id, turn_id)
+
+    async def _interrupt(self, turns: list[tuple[str, str]]) -> None:
+        """Interrupt native turns; one that already ended is rejected harmlessly."""
+        assert self._client is not None
+        for thread_id, turn_id in turns:
+            with contextlib.suppress(CodexRpcError):
+                await self._client.request(
+                    "turn/interrupt", {"threadId": thread_id, "turnId": turn_id}
+                )
+
     async def abort(self) -> bool:
-        if self._client and self._turn_id:
+        if not (self._client and self._turn_id):
+            return False
+        turns = [(self.session_id, self._turn_id)]
+        if self._subagents is not None:
+            turns.extend(self._subagents.stop())
+        requested = False
+        for thread_id, turn_id in turns:
             with contextlib.suppress(CodexTransportError, CodexRpcError):
                 await self._client.request(
                     "turn/interrupt",
-                    {"threadId": self.session_id, "turnId": self._turn_id},
-                    timeout_seconds=1,
+                    {"threadId": thread_id, "turnId": turn_id},
+                    timeout_seconds=ABORT_TIMEOUT_SECONDS,
                 )
-                return True
-        return False
+                requested = True
+        return requested
 
     async def stop_execution(self, timeout_seconds: float) -> bool:
         # Never wait for the open/authentication lock before containing a process.
