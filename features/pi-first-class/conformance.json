@@ -23,7 +23,7 @@
     "A2": {
       "status": "PASS",
       "code": [
-        "packages/control-plane/src/session/message-queue.ts:546",
+        "packages/control-plane/src/session/message-queue.ts:533",
         "packages/control-plane/src/session/snapshot-reader.ts:63",
         "packages/shared/src/harnesses.ts:105"
       ],
