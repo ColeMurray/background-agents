@@ -75,10 +75,11 @@ export class PiProjectionOutbox {
     }
     return this.sql.transaction(async (transaction) => {
       await transaction.run(
-        `INSERT OR IGNORE INTO oi_pi_projection_outbox (
+        `INSERT INTO oi_pi_projection_outbox (
              sequence, operation_id, display_id, source_id, event_json, created_at
            ) SELECT COALESCE(MAX(sequence), 0) + 1, ?, ?, ?, ?, ?
-             FROM oi_pi_projection_outbox WHERE operation_id = ?`,
+             FROM oi_pi_projection_outbox WHERE operation_id = ?
+           ON CONFLICT(operation_id, source_id) DO NOTHING`,
         operationId,
         displayId,
         sourceId,
@@ -125,8 +126,9 @@ export class PiProjectionOutbox {
   ): Promise<void> {
     await this.assertTables();
     await this.sql.run(
-      `INSERT OR IGNORE INTO oi_pi_projection_finalization
-         (operation_id, cost_usd, usage_json, captured_at) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO oi_pi_projection_finalization
+         (operation_id, cost_usd, usage_json, captured_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(operation_id) DO NOTHING`,
       operationId,
       accounting.costUsd,
       JSON.stringify(accounting.usage),

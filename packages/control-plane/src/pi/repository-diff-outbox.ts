@@ -256,9 +256,10 @@ export class RepositoryDiffOutbox {
   private async ensureRow(): Promise<void> {
     await this.assertTable();
     await this.sql.run(
-      `INSERT OR IGNORE INTO oi_pi_repository_diff_outbox
+      `INSERT INTO oi_pi_repository_diff_outbox
          (singleton, generation, recapture_required, updated_at)
-       VALUES (1, 0, 0, ?)`,
+       VALUES (1, 0, 0, ?)
+       ON CONFLICT(singleton) DO NOTHING`,
       this.now()
     );
   }

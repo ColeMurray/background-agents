@@ -307,26 +307,24 @@ it("recognizes an accepted native control as active bridge authority", async () 
   expect(response.headers.get("Cache-Control")).toBe("no-store");
 });
 
-it("routes bounded same-session agent controls through active SessionDO authority", async () => {
-  const { handler, agentControls } = harness({ activeControl: true });
-  const response = await handler.agentControl(
-    new Request("http://session/internal/pi-agent-control", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
-      body: JSON.stringify({
-        sessionId: "other-session",
-        requestId: "agent-request-1",
-        action: "follow_up",
-        conversationId: 2,
-        content: "focus",
-      }),
-    })
-  );
-  expect(response.status).toBe(200);
-  const forwarded = agentControls.handle.mock.calls[0]?.[0];
-  await expect(forwarded?.json()).resolves.toMatchObject({
-    actorId: "pi:message-1",
-    source: "pi",
-    control: { sessionId: "session-1", action: "follow_up", conversationId: 2 },
-  });
-});
+it.each(["submit", "send", "follow_up"] as const)(
+  "refuses the direct model-producing %s control instead of forwarding parallel work",
+  async (action) => {
+    const { handler, agentControls } = harness({ activeControl: true });
+    const response = await handler.agentControl(
+      new Request("http://session/internal/pi-agent-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+        body: JSON.stringify({
+          sessionId: "other-session",
+          requestId: "agent-request-1",
+          action,
+          conversationId: 2,
+          content: "focus",
+        }),
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(agentControls.handle).not.toHaveBeenCalled();
+  }
+);
