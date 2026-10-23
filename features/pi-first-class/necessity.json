@@ -130,6 +130,11 @@
       "need": ["DEV:external-actions"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
+    "packages/control-plane/src/db/automation-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves unknown persisted automation harnesses remain raw so execution admission fails closed instead of falling back."
+    },
     "packages/control-plane/src/db/automation-store.ts": {
       "layer": "core-seam",
       "need": ["A2", "F-3"],
@@ -399,6 +404,11 @@
       "layer": "overlay",
       "need": ["DEV:personal-mcp"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/mcp/credential-values.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "E-5"],
+      "why": "Proves shared and personal MCP credential values, including stripped authorization tokens, cannot reach model output."
     },
     "packages/control-plane/src/mcp/credential-values.ts": {
       "layer": "core-seam",
@@ -1270,6 +1280,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/scheduler/scheduler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "F-3"],
+      "why": "Proves fan-out resolves one unattended provider-auth snapshot and reuses it for every child launch."
+    },
     "packages/control-plane/src/scheduler/scheduler.ts": {
       "layer": "core-seam",
       "need": ["A2", "F-3"],
@@ -1835,6 +1850,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/session/schema-extension-registry.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "G-2"],
+      "why": "Proves duplicate extension migration ids fail fatally while an exactly identical owned registration remains idempotent."
+    },
     "packages/control-plane/src/session/schema-extension-registry.ts": {
       "layer": "core-seam",
       "need": ["G-2"],
@@ -1889,6 +1909,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/user-env-resolver.ts": {
+      "layer": "overlay-hook",
+      "need": ["A2", "OI:harness-seam"],
+      "why": "Refuses unknown persisted harness ids before selecting any sandbox provider environment behavior."
     },
     "packages/control-plane/src/session/xai-token-refresh-service.test.ts": {
       "layer": "core-support",
@@ -2040,11 +2065,6 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
-    "packages/control-plane/test/integration/memories-access.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test"],
-      "why": "Proves memory commit-time fencing follows the canonical promptable statuses shared by sandbox and in-process harnesses."
-    },
     "packages/control-plane/test/integration/mcp-connections.test.ts": {
       "layer": "overlay",
       "need": ["SUPPORT:test"],
@@ -2054,6 +2074,11 @@
       "layer": "overlay",
       "need": ["SUPPORT:test"],
       "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/test/integration/memories-access.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves memory commit-time fencing follows the canonical promptable statuses shared by sandbox and in-process harnesses."
     },
     "packages/control-plane/test/integration/pi-end-to-end.test.ts": {
       "layer": "core-support",
@@ -2129,6 +2154,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Proves the bounded no-partial contract from origin/main:packages/control-plane/src/routes/session-export.ts:1-16,155-180 and origin/main:docs/TRACE_EXPORT.md:48-64."
+    },
+    "packages/control-plane/test/integration/session-snapshot.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves snapshots refuse unknown persisted harness ids rather than exposing an OpenCode fallback."
     },
     "packages/control-plane/test/integration/slack-ingress-session.test.ts": {
       "layer": "core-support",
@@ -2440,11 +2470,6 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
-    "packages/shared/src/models.ts": {
-      "layer": "core-seam",
-      "need": ["OI:harness-seam"],
-      "why": "Keeps runtime-catalog capability metadata in the existing authoritative model catalog so every harness uses one admission source."
-    },
     "packages/shared/src/migration-reservations.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -2454,6 +2479,11 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/models.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Keeps runtime-catalog capability metadata in the existing authoritative model catalog so every harness uses one admission source."
     },
     "packages/shared/src/overlay-migration-reservations.ts": {
       "layer": "overlay",
@@ -2759,11 +2789,6 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
-    },
-    "packages/web/vercel.json": {
-      "layer": "core-support",
-      "need": ["SUPPORT:deploy"],
-      "why": "Keeps the web project's framework and deployment region local while Terraform plans remain network-independent."
     },
     "packages/web/src/app/(app)/(sidebar)/automations/new/page.test.tsx": {
       "layer": "core-support",
@@ -3220,6 +3245,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/web/vercel.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Keeps the web project's framework and deployment region local while Terraform plans remain network-independent."
+    },
     "scripts/attest-execution-isolation.mjs": {
       "layer": "core-support",
       "need": ["SUPPORT:build"],
@@ -3264,6 +3294,11 @@
       "layer": "overlay",
       "need": ["DEV:personal-mcp"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "scripts/stage-mcp-connection-do.test.mjs": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test", "DEV:personal-mcp"],
+      "why": "Exercises every staged McpConnectionDO migration state and rejects unsafe one-phase registration."
     },
     "scripts/terraform-plan-comment.test.mjs": {
       "layer": "core-support",
@@ -3335,6 +3370,11 @@
       "need": ["SUPPORT:deploy"],
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
+    "terraform/environments/production/mcp-overlay.tf": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp", "SUPPORT:deploy"],
+      "why": "Declares the off-by-default feature, binding-retention, and encryption inputs owned by personal MCP."
+    },
     "terraform/environments/production/moved.tf": {
       "layer": "core-support",
       "need": ["SUPPORT:deploy"],
@@ -3349,6 +3389,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test", "SUPPORT:deploy"],
       "why": "Verifies both Vercel packages retain their Next.js framework and deployment region after Terraform stops owning them."
+    },
+    "terraform/environments/production/tests/personal_mcp_foundation.tftest.hcl": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test", "DEV:personal-mcp"],
+      "why": "Proves the personal MCP foundation is absent by default and fully registered only with explicit staged inputs."
     },
     "terraform/environments/production/tests/pi_browser.tftest.hcl": {
       "layer": "core-support",
@@ -3464,41 +3509,6 @@
       "layer": "core-support",
       "need": ["SUPPORT:build"],
       "why": "This build support file is required to compile or verify the added packages and generated contracts."
-    },
-    "packages/control-plane/src/session/schema-extension-registry.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test", "G-2"],
-      "why": "Proves duplicate extension migration ids fail fatally while an exactly identical owned registration remains idempotent."
-    },
-    "scripts/stage-mcp-connection-do.test.mjs": {
-      "layer": "overlay",
-      "need": ["SUPPORT:test", "DEV:personal-mcp"],
-      "why": "Exercises every staged McpConnectionDO migration state and rejects unsafe one-phase registration."
-    },
-    "terraform/environments/production/mcp-overlay.tf": {
-      "layer": "overlay",
-      "need": ["DEV:personal-mcp", "SUPPORT:deploy"],
-      "why": "Declares the off-by-default feature, binding-retention, and encryption inputs owned by personal MCP."
-    },
-    "packages/control-plane/src/session/user-env-resolver.ts": {
-      "layer": "overlay-hook",
-      "need": ["A2", "OI:harness-seam"],
-      "why": "Refuses unknown persisted harness ids before selecting any sandbox provider environment behavior."
-    },
-    "packages/control-plane/test/integration/session-snapshot.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test", "A2"],
-      "why": "Proves snapshots refuse unknown persisted harness ids rather than exposing an OpenCode fallback."
-    },
-    "terraform/environments/production/tests/personal_mcp_foundation.tftest.hcl": {
-      "layer": "overlay",
-      "need": ["SUPPORT:test", "DEV:personal-mcp"],
-      "why": "Proves the personal MCP foundation is absent by default and fully registered only with explicit staged inputs."
-    },
-    "packages/control-plane/src/scheduler/scheduler.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test", "F-3"],
-      "why": "Proves fan-out resolves one unattended provider-auth snapshot and reuses it for every child launch."
     }
   }
 }
