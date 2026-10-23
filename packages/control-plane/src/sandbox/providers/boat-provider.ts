@@ -242,11 +242,13 @@ export class BoatSandboxProvider implements SandboxProvider {
       // Private, and the tunnel env file in place: the setup script Boat starts
       // at machine-up may now exec the launcher.
       await this.lifecycle.releaseLaunch(boatSandboxId);
+      const releasedAtMs = Date.now();
 
       const ready = await this.lifecycle.waitForReady(boatSandboxId);
-      // A launcher that died at once has reported by now, and its reason is
-      // in the same record.
-      await this.lifecycle.confirmLaunch(boatSandboxId);
+      // The launcher started when the machine came up or when the launch was
+      // released, whichever was later; watch it briefly from there for an
+      // early exit, as the detached start did.
+      await this.lifecycle.confirmLaunch(boatSandboxId, Math.max(releasedAtMs, Date.now()));
 
       return {
         sandboxId: config.sandboxId,

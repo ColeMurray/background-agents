@@ -8,7 +8,7 @@ import {
   BOAT_SETUP_SCRIPT,
   boatIdempotencyKey,
 } from "../boat-lifecycle";
-import { BOAT_TUNNEL_ENV_FILE_PATH } from "./boat-provider";
+import { BOAT_TUNNEL_ENV_FILE_PATH, BoatSandboxProvider } from "./boat-provider";
 import {
   baseCreateConfig,
   boatSandbox,
@@ -16,6 +16,7 @@ import {
   mockClient,
   providerConfig,
   createProvider,
+  fastTimings,
 } from "./boat-provider.test-helpers";
 import { PrebuiltImageUnavailableError, SandboxProviderError } from "../provider";
 import {
@@ -333,6 +334,27 @@ describe("BoatSandboxProvider", () => {
       expect((error as SandboxProviderError).errorType).toBe("permanent");
       expect((error as SandboxProviderError).message).toContain("exit code 1");
       expect((error as SandboxProviderError).message).toContain("runtime toolchain missing");
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+    });
+
+    it("still catches a launcher that exits just after the readiness read", async () => {
+      const client = mockClient({
+        getSandbox: vi
+          .fn()
+          .mockResolvedValueOnce(boatSandbox({ setupStatus: "running" }))
+          .mockResolvedValueOnce(boatSandbox({ setupStatus: "running" }))
+          .mockResolvedValue(
+            boatSandbox({ setupStatus: "failed", setupError: "exit code 1: bad launcher" })
+          ),
+      });
+      // A wide enough settle window for the watch to read more than once.
+      const provider = new BoatSandboxProvider(client, providerConfig, {
+        ...fastTimings,
+        launchSettleMs: 200,
+      });
+      const error = await provider.createSandbox(baseCreateConfig).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect((error as SandboxProviderError).message).toContain("bad launcher");
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
     });
 

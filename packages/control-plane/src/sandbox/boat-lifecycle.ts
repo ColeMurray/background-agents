@@ -551,26 +551,36 @@ export class BoatSandboxLifecycle {
   }
 
   /**
-   * Read how Boat's create-time launch is doing. Only `failed` is a verdict:
-   * the launcher exited, and `setupError` says how. `running` is the normal
-   * steady state, since the launcher never returns; readiness beyond that is
-   * the bridge's phone-home and the connecting timeout, as on every provider.
-   * Create-time only: a resumed sandbox still carries its create's status,
-   * which says nothing about the machine the resume brought up.
+   * Watch Boat's create-time launch briefly for an early exit, as the
+   * detached start did: from the moment the launcher can have started (the
+   * later of machine-up and the marker write) until the settle window closes,
+   * any exit is a failed launch and `setupError` says how. `running` is the
+   * normal steady state, since the launcher never returns; readiness beyond
+   * the window is the bridge's phone-home and the connecting timeout, as on
+   * every provider. Create-time only: a resumed sandbox still carries its
+   * create's status, which says nothing about the machine the resume brought
+   * up.
    */
-  async confirmLaunch(boatSandboxId: string): Promise<void> {
-    const sandbox = await this.client.getSandbox(boatSandboxId);
-    if (sandbox.setupStatus === "failed") {
-      const detail = (sandbox.setupError ?? "").trim().slice(-400);
-      throw new SandboxProviderError(
-        `Boat runtime launcher failed${detail ? `: ${detail}` : ""}`,
-        "permanent"
-      );
+  async confirmLaunch(boatSandboxId: string, launchedAtMs: number): Promise<void> {
+    const settleUntilMs = launchedAtMs + this.timings.launchSettleMs;
+    for (;;) {
+      const sandbox = await this.client.getSandbox(boatSandboxId);
+      if (sandbox.setupStatus === "failed" || sandbox.setupStatus === "done") {
+        const detail = (sandbox.setupError ?? "").trim().slice(-400);
+        throw new SandboxProviderError(
+          `Boat runtime launcher exited${detail ? `: ${detail}` : ""}`,
+          "permanent"
+        );
+      }
+      if (Date.now() >= settleUntilMs) {
+        log.info("boat.runtime_started", {
+          sandbox_id: boatSandboxId,
+          setup_status: sandbox.setupStatus ?? null,
+        });
+        return;
+      }
+      await delayUnlessCancelled(this.timings.launchPollIntervalMs);
     }
-    log.info("boat.runtime_started", {
-      sandbox_id: boatSandboxId,
-      setup_status: sandbox.setupStatus ?? null,
-    });
   }
 
   /**
