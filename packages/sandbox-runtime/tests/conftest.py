@@ -1,5 +1,6 @@
 """Shared test fixtures and utilities for sandbox-runtime tests."""
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -173,6 +174,19 @@ class ScriptedHarness:
         self.session_id = self.session_id or "oc-session-new"
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
+        fresh = self.session_id is None
+        if fresh:
+            if prompt.recovery:
+                prompt.recovery.creating()
+            await self.create_session()
+        if prompt.recovery:
+            assert self.session_id is not None
+            prompt = replace(
+                prompt,
+                text=await prompt.recovery.prepare(self.session_id, prompt.text, fresh=fresh),
+            )
+            prompt.recovery.submitting()
+            prompt.recovery.accepted()
         self.prompts.append(prompt)
         if self.stream is None:
             return TurnOutcome.ok()

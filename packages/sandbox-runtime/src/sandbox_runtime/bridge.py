@@ -49,6 +49,7 @@ from .constants import (
     REPO_MANIFEST_FILE_PATH,
     runtime_state_dir,
 )
+from .conversation_recovery import ConversationRecovery, recovery_state_path
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .event_size import MAX_EVENT_BYTES, event_size_bytes
@@ -268,6 +269,10 @@ class AgentBridge:
     @property
     def harness(self) -> AgentHarness | None:
         return self.boot_attach.harness
+
+    @property
+    def _recovery_pending_file(self) -> Path:
+        return recovery_state_path(self.session_id_file)
 
     @property
     def agent_session_id(self) -> str | None:
@@ -809,6 +814,12 @@ class AgentBridge:
                     max_duration_seconds=max(
                         turn_deadline - asyncio.get_running_loop().time(), 0.0
                     ),
+                    recovery=ConversationRecovery(
+                        self.session_id_file,
+                        cmd.get("recoveryContext") or {},
+                        self._send_event,
+                        turn_deadline,
+                    ),
                 ),
                 emit,
             )
@@ -902,8 +913,9 @@ class AgentBridge:
         """The harness and hydrated attachments a turn needs, within the prompt's deadline.
 
         Everything before the turn spends the prompt's own budget: the wait
-        for a booting sandbox, the git identity, the vendor session and the
-        attachment downloads. A prompt whose deadline passes here fails the
+        for a booting sandbox, the git identity and attachment downloads.
+        The harness owns native conversation preparation within the remaining
+        budget. A prompt whose deadline passes here fails the
         way a turn that never finishes would, and `stop` cancels it like any
         running turn.
         """
@@ -916,7 +928,6 @@ class AgentBridge:
                 self._assert_authenticated_generation()
                 harness = self._require_harness()
                 await self._configure_git_identity(parse_prompt_git_author(author_data))
-                await self._ensure_agent_session(harness)
                 session_attachments, rejected_attachments = parse_session_image_attachments(
                     raw_attachments
                 )
@@ -943,14 +954,6 @@ class AgentBridge:
     def _assert_authenticated_generation(self) -> None:
         if self._reauthenticating_generation:
             raise RuntimeError("harness_reauthenticating")
-
-    async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
-        """Create the vendor session on first use and persist its id."""
-        harness = harness if harness is not None else self._require_harness()
-        if harness.session_id:
-            return
-        await harness.create_session()
-        await self._save_session_id(harness)
 
     async def _handle_stop(self) -> None:
         """Handle stop command - cancel prompt task and ask the harness to abort."""

@@ -178,6 +178,10 @@ function buildQueue(
       () => null as { id: string; created_at: number } | null
     ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
+    getRecoveryContext: vi.fn(() => ({
+      messages: [{ role: "user" as const, content: "Use X, never Y." }],
+      truncated: false,
+    })),
     getMessageById: vi.fn(() => null as MessageRow | null),
     startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
     updateMessageToProcessing: vi.fn(),
@@ -306,7 +310,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    repository
   );
 
   return {
@@ -335,6 +340,28 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it("sends durable recovery context with a follow-up to an attached replacement", async () => {
+    const h = buildQueue();
+    const socket = {} as WebSocket;
+    h.wsManager.getSandboxSocket.mockReturnValue(socket);
+    h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage({ content: "Continue." }));
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.getRecoveryContext).toHaveBeenCalledWith("msg-1");
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      socket,
+      expect.objectContaining({
+        type: "prompt",
+        content: "Continue.",
+        recoveryContext: {
+          messages: [{ role: "user", content: "Use X, never Y." }],
+          truncated: false,
+        },
+      })
+    );
+  });
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

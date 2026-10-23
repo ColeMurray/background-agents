@@ -14,10 +14,17 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    StreamEvent,
+    TextBlock,
+    UserMessage,
+)
 
 from ..attachment_processor import (
     MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
@@ -451,6 +458,11 @@ class ClaudeHarness:
         deadline = loop.time() + max_duration
         try:
             async with asyncio.timeout_at(deadline):
+                fresh = self.session_id is None
+                if fresh:
+                    if prompt.recovery:
+                        prompt.recovery.creating()
+                    await self.create_session()
                 client = await self._ensure_client(model, prompt.reasoning_effort)
         except HarnessStartError:
             raise
@@ -470,6 +482,14 @@ class ClaudeHarness:
         )
         try:
             async with asyncio.timeout_at(deadline):
+                recovery = prompt.recovery
+                if recovery:
+                    assert self.session_id is not None
+                    prompt = replace(
+                        prompt,
+                        text=await recovery.prepare(self.session_id, prompt.text, fresh=fresh),
+                    )
+                    recovery.submitting()
                 await client.query(self._user_messages(prompt))
                 stream = aiter(client.receive_messages())
                 while True:
@@ -483,6 +503,10 @@ class ClaudeHarness:
                     translation = self._translator.translate(
                         state, message, interrupted=self._interrupted
                     )
+                    if prompt.recovery and _acknowledges_prompt(
+                        message, prompt.text, injected=state.injected
+                    ):
+                        prompt.recovery.accepted()
                     self._trajectory.emit(translation)
                     for event in translation.events:
                         await emit(event)
@@ -625,6 +649,22 @@ class ClaudeHarness:
             # Lets the result of this prompt be told apart from injected turns.
             "origin": {"kind": "human"},
         }
+
+
+def _acknowledges_prompt(message: Message, text: str, *, injected: bool) -> bool:
+    if injected or getattr(message, "parent_tool_use_id", None):
+        return False
+    if isinstance(message, UserMessage):
+        if isinstance(message.content, str):
+            return message.content == text
+        return any(isinstance(block, TextBlock) and block.text == text for block in message.content)
+    if isinstance(message, StreamEvent):
+        return message.event.get("type") in (
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+        )
+    return isinstance(message, AssistantMessage)
 
 
 class _InactivityTimeout(Exception):

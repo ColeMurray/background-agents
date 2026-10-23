@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from .base import (
@@ -93,7 +94,7 @@ class OpencodeHarness:
         self.session_id = created
         self.log.info("opencode.session.ensure", opencode_session_id=created, action="created")
 
-    def stream_events(self, prompt: HarnessPrompt) -> Any:
+    def stream_events(self, prompt: HarnessPrompt, *, fresh: bool = False) -> Any:
         """The raw translated event stream for one prompt (test seam)."""
         if not self.session_id:
             raise RuntimeError("OpenCode session not initialized")
@@ -105,13 +106,30 @@ class OpencodeHarness:
             reasoning_effort=prompt.reasoning_effort,
             attachments=list(prompt.attachments),
             max_duration_seconds=prompt.max_duration_seconds,
+            recovery=prompt.recovery,
+            fresh=fresh,
         )
 
     async def run_prompt(self, prompt: HarnessPrompt, emit: EventSink) -> TurnOutcome:
         error_message: str | None = None
         message_cost_usd: float | None = None
         try:
-            async for event in self.stream_events(prompt):
+            duration = (
+                self.limits.prompt_max_duration_seconds
+                if prompt.max_duration_seconds is None
+                else prompt.max_duration_seconds
+            )
+            deadline = asyncio.get_running_loop().time() + duration
+            async with asyncio.timeout_at(deadline):
+                fresh = self.session_id is None
+                if fresh:
+                    if prompt.recovery:
+                        prompt.recovery.creating()
+                    await self.create_session()
+            prompt = replace(
+                prompt, max_duration_seconds=max(deadline - asyncio.get_running_loop().time(), 0.0)
+            )
+            async for event in self.stream_events(prompt, fresh=fresh):
                 if event.get("type") == "error":
                     error_message = str(event.get("error") or "Unknown error")
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
@@ -119,6 +137,8 @@ class OpencodeHarness:
                 await emit(event)
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            return TurnOutcome.failed("Prompt exceeded its time budget before native submission")
         except Exception as error:
             self.log.error("harness.prompt_error", exc=error, message_id=prompt.message_id)
             return TurnOutcome.failed(str(error), message_cost_usd=message_cost_usd)

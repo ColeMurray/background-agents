@@ -31,6 +31,10 @@ class SSEInactivityTimeoutError(Exception):
     """Raised when no SSE data arrives within the inactivity deadline."""
 
 
+class PromptRejectedError(RuntimeError):
+    """A definite HTTP rejection: the native conversation did not accept the input."""
+
+
 class OpenCodeClient:
     """HTTP/SSE transport for the local OpenCode server.
 
@@ -140,7 +144,12 @@ class OpenCodeClient:
                 status_code=prompt_response.status_code,
                 error_body=error_body,
             )
-            raise RuntimeError(f"Async prompt failed: {prompt_response.status_code} - {error_body}")
+            error_type = (
+                PromptRejectedError
+                if 400 <= prompt_response.status_code < 500 and prompt_response.status_code != 408
+                else RuntimeError
+            )
+            raise error_type(f"Async prompt failed: {prompt_response.status_code} - {error_body}")
 
     async def request_stop(self, opencode_session_id: str | None, *, reason: str) -> bool:
         """Best-effort abort of the active OpenCode prompt (saves LLM compute)."""

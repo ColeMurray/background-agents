@@ -15,6 +15,14 @@ type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
+export const MAX_RECOVERY_CONTEXT_CHARS = 64_000;
+export const MAX_RECOVERY_CONTEXT_MESSAGES = 100;
+
+export interface ConversationRecoveryContext {
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  truncated: boolean;
+}
+
 /**
  * Data for creating an event. Type is open because sandboxes emit additional
  * event types beyond the shared EventType union.
@@ -56,6 +64,59 @@ export class EventRepository {
     private readonly sql: SqlStorage,
     private readonly transactionSync: TransactionSync
   ) {}
+
+  /** Text fallback for a runtime that could not resume its native conversation. */
+  getRecoveryContext(currentMessageId: string): ConversationRecoveryContext {
+    // Budget in SQLite before extracting text: only the newest text plus one
+    // truncation sentinel crosses into the DO heap. SQLite counts code points;
+    // the loop below also enforces the UTF-16 budget used by TypeScript.
+    // Queued prompts have no user_message event yet.
+    const rows = this.sql
+      .exec(
+        `WITH recent_ids AS MATERIALIZED (
+           SELECT id, type, created_at, timeline_sequence
+           FROM events INDEXED BY idx_events_recovery_chronology
+           WHERE type IN ('user_message', 'token') AND message_id != ?
+           ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?
+         ), recent AS (
+           SELECT recent_ids.*, length(json_extract(events.data, '$.content')) AS chars
+           FROM recent_ids JOIN events ON events.id = recent_ids.id
+         ), budgeted AS (
+           SELECT *, COALESCE(SUM(chars) OVER (
+             ORDER BY created_at DESC, timeline_sequence DESC
+             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+           ), 0) AS newer_chars
+           FROM recent
+         )
+         SELECT budgeted.type,
+                substr(json_extract(events.data, '$.content'), -(? - newer_chars)) AS content
+         FROM budgeted JOIN events ON events.id = budgeted.id
+         WHERE newer_chars <= ?
+         ORDER BY budgeted.created_at DESC, budgeted.timeline_sequence DESC`,
+        currentMessageId,
+        MAX_RECOVERY_CONTEXT_MESSAGES + 1,
+        MAX_RECOVERY_CONTEXT_CHARS + 1,
+        MAX_RECOVERY_CONTEXT_CHARS
+      )
+      .toArray() as Array<{ type: string; content: string | null }>;
+    const messages: ConversationRecoveryContext["messages"] = [];
+    let remaining = MAX_RECOVERY_CONTEXT_CHARS;
+    let truncated = rows.length > MAX_RECOVERY_CONTEXT_MESSAGES;
+    for (const row of rows.slice(0, MAX_RECOVERY_CONTEXT_MESSAGES)) {
+      if (!row.content) continue;
+      if (remaining === 0) {
+        truncated = true;
+        break;
+      }
+      let content = row.content.slice(-remaining);
+      // Do not split a UTF-16 surrogate pair at the text budget boundary.
+      if (/^[\uDC00-\uDFFF]/.test(content)) content = content.slice(1);
+      truncated ||= content.length < row.content.length;
+      remaining -= content.length;
+      messages.push({ role: row.type === "user_message" ? "user" : "assistant", content });
+    }
+    return { messages: messages.reverse(), truncated };
+  }
 
   createEvent(data: CreateEventData): void {
     this.sql.exec(
