@@ -165,9 +165,6 @@ function isAuthoritativeInProcessAbort(status: InProcessHarnessOperationStatus):
 
 function piControlTimelineContent(control: PiHumanControl): string {
   switch (control.action) {
-    case "send":
-    case "follow_up":
-      return control.content;
     case "handoff":
       return control.handoff;
     case "cancel_exact":

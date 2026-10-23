@@ -555,59 +555,6 @@ describe("PiSessionDO", () => {
     expect(malformedResult).not.toBe("accepted");
   });
 
-  it("survives a restart while a native control submission is in flight", async () => {
-    const { sessionName, stub } = await initializedPiStub("pi-control-restart");
-    await stub.status(sessionName);
-
-    // A follow-up starts its own run, so the submission is in flight when
-    // the object is evicted. It was never admitted as a message of this
-    // session, so it has no operation metadata.
-    const deadlineMs = Date.now() + 60_000;
-    const accepted = await controlPi(stub, {
-      sessionId: sessionName,
-      requestId: "control-restart-1",
-      action: "follow_up",
-      content: "keep going",
-      executionDeadlineMs: deadlineMs,
-    });
-    expect(accepted.state).toBe("accepted");
-    const stored = await runInDurableObject(stub, async (_instance, state) => {
-      const records = await state.storage.list<{
-        deadlineMs: number;
-        target: { kind: string; id: number; conversationId: number };
-      }>({ prefix: "open-inspect:control-completion:" });
-      const [key, record] = [...records.entries()][0]!;
-      await state.storage.put(key, { ...record, deadlineMs: Date.now() - 1 });
-      return record;
-    });
-    expect(stored).toMatchObject({
-      deadlineMs,
-      target: { kind: "submission", id: expect.any(Number), conversationId: expect.any(Number) },
-    });
-
-    await expect(
-      runInPiSessionDO(stub, (_instance, state) => state.abort("test: control eviction"))
-    ).rejects.toThrow();
-    const restored = piStub(sessionName);
-
-    // The restart must not fail: a control submission with no operation
-    // metadata is not the event relay's business.
-    await restored.status(sessionName);
-    await vi.waitFor(
-      async () => {
-        await expect(
-          runInPiSessionDO(restored, async (instance) => {
-            const submission = await (
-              await instance.harness.pi()
-            ).submission(stored.target.id as never, BACKGROUND_CONTEXT);
-            return submission?.wait(BACKGROUND_CONTEXT);
-          })
-        ).resolves.toMatchObject({ status: "unanswered", reason: expect.any(String) });
-      },
-      { timeout: 5_000 }
-    );
-  });
-
   it("retains installed workspace tools but emergency-denies new mutations after Pi eviction", async () => {
     const { sessionName, stub: sessionStub } = await initSession({
       sessionName: `pi-emergency-workspace-${crypto.randomUUID()}`,
@@ -930,7 +877,6 @@ describe("PiSessionDO", () => {
       ],
     });
     const stub = piStub(sessionName);
-    const sessionStub = env.SESSION.getByName(sessionName);
     await expect(
       new ProviderCredentialService(
         env.DB,
@@ -939,15 +885,26 @@ describe("PiSessionDO", () => {
     ).resolves.toMatchObject({ credentialVersion: 1 });
     await stub.status(sessionName);
     await runInPiSessionDO(stub, async (instance) => {
-      const installed = (instance as unknown as { models: MutableModels }).models.getProvider(
-        PI_MODEL_PROVIDER_ID
-      );
+      const models = (instance as unknown as { models: MutableModels }).models;
+      const installed = models.getProvider(PI_MODEL_PROVIDER_ID);
       expect(installed?.stream).not.toBe(faux.provider.stream);
+      const direct = fauxProvider();
+      direct.setResponses([
+        {
+          ...fauxAssistantMessage("controlled answer"),
+          usage: {
+            input: 10,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 12,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        },
+      ]);
+      models.setProvider(direct.provider);
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
-      await root.configure(
-        { model: { provider: "openai-codex", modelId: "gpt-5.6-sol" } },
-        BACKGROUND_CONTEXT
-      );
+      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
     });
     const list = await controlPi(stub, {
       sessionId: sessionName,
@@ -955,68 +912,20 @@ describe("PiSessionDO", () => {
       action: "list_conversations",
     });
     expect(list).toMatchObject({ state: "completed" });
-    const submittedResponse = await sessionStub.fetch(
-      new Request(`http://session${SessionInternalPaths.piControl}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          actorId: "user-1",
-          canonicalUserId: "user-1",
-          source: "web",
-          control: {
-            sessionId: sessionName,
-            requestId: "control-submit-1",
-            action: "send",
-            content: "private sentinel prompt",
-          },
-        }),
-      })
-    );
-    const submitted = await submittedResponse.json<PiRuntimeControlResult>();
-    expect(submitted).toMatchObject({ state: "accepted" });
-    await runInPiSessionDO(stub, async (instance) => {
-      await expect(
-        instance.control({
-          sessionId: sessionName,
-          requestId: "follow-config",
-          action: "follow_up",
-          content: "queued B",
-          model: "openai/gpt-5.6-sol",
-        })
-      ).rejects.toThrow(/cannot start another turn/i);
-    });
-    const submissionId = (submitted.result as { submissionId: number }).submissionId;
-    await runInPiSessionDO(stub, async (instance) => {
+    const submissionId = await runInPiSessionDO(stub, async (instance) => {
       const pi = await instance.harness.pi();
-      const submission = await pi.submission(submissionId as never, BACKGROUND_CONTEXT);
-      expect(submission).toBeDefined();
-      const result = await submission!.wait(BACKGROUND_CONTEXT);
-      expect(result).toMatchObject({ status: "done" });
-    });
-    await runInPiSessionDO(stub, async (instance) => {
-      const totals = await (
-        instance as unknown as {
-          accountingTotals(): Promise<{
-            usage: {
-              input: number;
-              output: number;
-              cacheRead: number;
-              cacheWrite: number;
-              total: number;
-            };
-            costUsd: number;
-          }>;
-        }
-      ).accountingTotals();
-      expect(totals.usage.total).toBeGreaterThan(0);
-      expect(totals.costUsd).toBeCloseTo(
-        (totals.usage.input * 4 +
-          totals.usage.output * 20 +
-          totals.usage.cacheRead * 0.4 +
-          totals.usage.cacheWrite * 5) /
-          1_000_000,
-        10
+      const root = await pi.root(BACKGROUND_CONTEXT);
+      const submission = await root.submit(
+        {
+          type: "input",
+          content: "private sentinel prompt",
+          requestId: "inspection-fixture",
+        },
+        BACKGROUND_CONTEXT
       );
+      const result = await submission.wait(BACKGROUND_CONTEXT);
+      expect(result).toMatchObject({ status: "done" });
+      return submission.id;
     });
     const conversations = list.result as Array<{ id: number }>;
     const rootId = conversations[0]!.id;
@@ -1163,79 +1072,8 @@ describe("PiSessionDO", () => {
     });
   });
 
-  it("projects a human control once into SessionDO while keeping Pi assistant state subordinate", async () => {
-    const faux = createFauxCodexProvider({
-      models: [
-        {
-          id: "gpt-5.6-sol",
-          name: "Faux gpt-5.6-sol",
-          cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
-        },
-      ],
-      responses: [
-        {
-          ...fauxAssistantMessage("native answer"),
-          usage: {
-            input: 10,
-            output: 2,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 12,
-            cost: { input: 999, output: 999, cacheRead: 0, cacheWrite: 0, total: 1_998 },
-          },
-        },
-      ],
-    });
-    piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
-    const now = Date.now();
-    const accountId = crypto.randomUUID().replaceAll("-", "");
-    await env.DB.prepare(
-      `INSERT INTO model_provider_accounts
-         (id, provider, display_name, external_account_id, status, created_at, updated_at)
-       VALUES (?, 'openai', 'OpenAI', 'acct', 'active', ?, ?)`
-    )
-      .bind(accountId, now, now)
-      .run();
-    await new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!).create({
-      providerAccountId: accountId,
-      provider: "openai",
-      credentialSchemaVersion: 1,
-      payload: {
-        refreshToken: "openai-refresh-secret",
-        accessToken: "openai-access-secret",
-        accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
-      },
-      accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1_000,
-      now,
-    });
-    await ensureActiveUser("user-1");
-    const { sessionName } = await initSession({
-      sessionName: `pi-control-completion-${crypto.randomUUID()}`,
-      harness: "pi",
-      model: "openai/gpt-5.6-sol",
-      repoOwner: null,
-      repoName: null,
-      repoId: null,
-      providerAuth: [
-        {
-          provider: "openai",
-          authMode: "provider_account",
-          providerAccountId: accountId,
-          selectionSource: "explicit",
-        },
-        { provider: "xai", authMode: "api_key", selectionSource: "explicit" },
-        { provider: "anthropic", authMode: "api_key", selectionSource: "explicit" },
-      ],
-    });
-    const stub = piStub(sessionName);
-    await stub.status(sessionName);
-    await runInPiSessionDO(stub, async (instance) => {
-      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
-      await root.configure(
-        { model: { provider: "openai-codex", modelId: "gpt-5.6-sol" } },
-        BACKGROUND_CONTEXT
-      );
-    });
+  it("refuses direct model-producing Pi controls without creating parallel work", async () => {
+    const { sessionName } = await initializedPiStub("pi-control-model-refusal");
     const sessionStub = env.SESSION.getByName(sessionName);
     const response = await sessionStub.fetch(
       new Request(`http://session${SessionInternalPaths.piControl}`, {
@@ -1254,74 +1092,21 @@ describe("PiSessionDO", () => {
         }),
       })
     );
-    expect(response.status).toBe(202);
-    await vi.waitFor(async () => {
-      await expect(
-        queryDO(
-          sessionStub,
-          "SELECT state FROM pi_control_receipts WHERE request_id = ?",
-          "native-submit-1"
-        )
-      ).resolves.toEqual([{ state: "completed" }]);
-    });
-    await expect(
-      queryDO<{ id: string; author_id: string; content: string; status: string }>(
-        sessionStub,
-        "SELECT id, author_id, content, status FROM messages WHERE id = ?",
-        "pi-control:native-submit-1"
-      )
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: "pi-control:native-submit-1",
-        content: "native input",
-        status: "completed",
-      }),
-    ]);
-    const timelineEvents = await queryDO<{ data: string }>(
-      sessionStub,
-      "SELECT data FROM events WHERE id = ?",
-      "user_message:pi-control:native-submit-1"
-    );
-    expect(timelineEvents).toHaveLength(1);
-    expect(JSON.parse(timelineEvents[0]!.data)).toMatchObject({
-      type: "user_message",
-      content: "native input",
-      piControl: { action: "send" },
-    });
-    expect(timelineEvents[0]!.data).not.toContain("native answer");
-    expect(
-      (
-        await sessionStub.fetch(
-          new Request(`http://session${SessionInternalPaths.piControl}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              actorId: "user-1",
-              source: "web",
-              control: {
-                sessionId: sessionName,
-                requestId: "native-submit-1",
-                action: "send",
-                content: "native input",
-                model: "openai/gpt-5.6-sol",
-              },
-            }),
-          })
-        )
-      ).status
-    ).toBe(200);
+    expect(response.status).toBe(400);
     await expect(
       queryDO<{ count: number }>(
         sessionStub,
-        "SELECT COUNT(*) AS count FROM events WHERE id = ?",
-        "user_message:pi-control:native-submit-1"
+        "SELECT COUNT(*) AS count FROM pi_control_receipts WHERE request_id = ?",
+        "native-submit-1"
       )
-    ).resolves.toEqual([{ count: 1 }]);
-    const [{ total_cost: totalCost }] = await queryDO<{ total_cost: number }>(
-      sessionStub,
-      "SELECT total_cost FROM session"
-    );
-    expect(totalCost).toBeGreaterThan(0);
+    ).resolves.toEqual([{ count: 0 }]);
+    await expect(
+      queryDO<{ count: number }>(
+        sessionStub,
+        "SELECT COUNT(*) AS count FROM messages WHERE id = ?",
+        "pi-control:native-submit-1"
+      )
+    ).resolves.toEqual([{ count: 0 }]);
   });
 
   it("broadcasts one attributed Pi control event to multiple existing session collaborators", async () => {
@@ -1382,65 +1167,35 @@ describe("PiSessionDO", () => {
     expect(second.ws.readyState).toBe(WebSocket.OPEN);
   });
 
-  it("refuses follow-up controls while another turn is active", async () => {
-    const { sessionName, stub } = await initializedPiStub("pi-control-attribution");
-    await stub.status(sessionName);
-    await runInPiSessionDO(stub, async (instance) => {
-      const faux = fauxProvider({ tokensPerSecond: 1 });
-      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
-      faux.setResponses([
-        fauxAssistantMessage("slow answer"),
-        fauxAssistantMessage("follow-up answer"),
-      ]);
-      const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
-      await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
-    });
-    await controlPi(stub, {
-      sessionId: sessionName,
-      requestId: "active-a",
-      action: "submit",
-      content: "A",
-    });
-    await runInPiSessionDO(stub, async (instance) => {
-      await vi.waitFor(async () =>
-        expect(
-          (await (await instance.harness.pi()).inspect(BACKGROUND_CONTEXT)).submissions.some(
-            (submission) =>
-              submission.requestId?.endsWith("active-a") && submission.status === "placed"
-          )
-        ).toBe(true)
-      );
-    });
-    await runInPiSessionDO(stub, async (instance) => {
-      await expect(
-        instance.control({
-          sessionId: sessionName,
-          requestId: "steer-b",
-          action: "follow_up",
-          content: "B",
-        })
-      ).rejects.toThrow("Busy Pi controls cannot start another turn");
-      await expect(
-        instance.control({
-          sessionId: sessionName,
-          requestId: "follow-c",
-          action: "follow_up",
-          content: "C",
-        })
-      ).rejects.toThrow("Busy Pi controls cannot start another turn");
-    });
-    await runInPiSessionDO(stub, async (instance) => {
-      const submissions = (
-        await (await instance.harness.pi()).inspect(BACKGROUND_CONTEXT)
-      ).submissions.filter((submission) => submission.requestId?.endsWith("active-a"));
-      expect(submissions).toHaveLength(1);
-    });
-    await controlPi(stub, {
-      sessionId: sessionName,
-      requestId: "cancel-a",
-      action: "cancel_exact",
-      operationId: "active-a",
-    });
+  it("refuses direct follow-up controls instead of creating a parallel turn", async () => {
+    const { sessionName } = await initializedPiStub("pi-control-attribution");
+    const sessionStub = env.SESSION.getByName(sessionName);
+    const response = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.piControl}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: "user-1",
+          canonicalUserId: "user-1",
+          source: "web",
+          control: {
+            sessionId: sessionName,
+            requestId: "follow-c",
+            action: "follow_up",
+            content: "C",
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(
+      queryDO<{ count: number }>(
+        sessionStub,
+        "SELECT COUNT(*) AS count FROM messages WHERE id = ?",
+        "pi-control:follow-c"
+      )
+    ).resolves.toEqual([{ count: 0 }]);
   });
 
   it("opens Pi without constructing Computer for an idle root conversation", async () => {

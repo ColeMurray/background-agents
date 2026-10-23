@@ -18,8 +18,8 @@ const mockSessionIndexStore = {
   list: vi.fn(),
   listInbox: vi.fn(),
   listInboxSnapshot: vi.fn(),
-  delete: vi.fn(),
   get: vi.fn(),
+  delete: vi.fn(),
   updateReadState: vi.fn(),
 };
 
@@ -193,6 +193,7 @@ describe("session index routes", () => {
       in_progress: emptyInboxResult,
       finished: emptyInboxResult,
     });
+    mockSessionIndexStore.get.mockResolvedValue(null);
     mockSessionIndexStore.updateReadState.mockResolvedValue({
       sessionId: "session-1",
       outcome: "marked_read",
@@ -200,6 +201,34 @@ describe("session index routes", () => {
       latestMessageId: "message-1",
       version: 1_000,
     });
+  });
+
+  it("destroys the session runtime before deleting its D1 index row", async () => {
+    const order: string[] = [];
+    mockSessionIndexStore.get.mockResolvedValue({ harness: "pi" });
+    mockSessionIndexStore.delete.mockImplementation(async () => {
+      order.push("d1");
+    });
+    const destroy = vi.fn(async (_sessionId: string, request: Request) => {
+      expect(new URL(request.url).pathname).toBe("/internal/destroy");
+      order.push("runtime");
+      return new Response(null, { status: 204 });
+    });
+    const env = createTestEnv({
+      SESSION: destroy as Env["SESSION"],
+    });
+
+    const response = await handleDeleteSession(
+      new Request("https://test.local/sessions/session-1", { method: "DELETE" }),
+      env,
+      { id: "session-1" },
+      createCtx(USER_PRINCIPAL)
+    );
+
+    expect(response.status).toBe(200);
+    expect(order).toEqual(["runtime", "d1"]);
+    expect(destroy).toHaveBeenCalledWith("session-1", expect.any(Request));
+    expect(mockSessionIndexStore.delete).toHaveBeenCalledWith("session-1");
   });
 
   it("defaults invalid pagination values before querying the store", async () => {

@@ -119,7 +119,7 @@ describe("PiControlHandler", () => {
         actorId: "user-1",
         canonicalUserId: "canonical-user-1",
         source: "web",
-        control: { sessionId: "other", requestId: "request-1", action: "follow_up", content: "x" },
+        control: { sessionId: "other", requestId: "request-1", action: "reset" },
       }),
     });
     expect((await h.handler.handle(mismatched)).status).toBe(409);
@@ -132,8 +132,8 @@ describe("PiControlHandler", () => {
         control: {
           sessionId: "session-1",
           requestId: "request-1",
-          action: "follow_up",
-          content: "different",
+          action: "handoff",
+          handoff: "different",
         },
       }),
     });
@@ -240,8 +240,7 @@ describe("PiControlHandler", () => {
         control: {
           sessionId: "session-1",
           requestId: "internal-control",
-          action: "follow_up",
-          content: "focus",
+          action: "reset",
         },
       }),
     });
@@ -303,8 +302,8 @@ describe("PiControlHandler", () => {
           control: {
             sessionId: "session-1",
             requestId: "reused-control",
-            action: "follow_up",
-            content: "different content",
+            action: "handoff",
+            handoff: "different content",
           },
         }),
       })

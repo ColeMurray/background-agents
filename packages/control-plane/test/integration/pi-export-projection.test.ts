@@ -205,17 +205,25 @@ describe("the Pi projection the export reads", () => {
     );
     const terminal = events.find((event) => event.type === "execution_complete");
     expect(childRead!.timeline_sequence).toBeLessThan(terminal!.timeline_sequence);
-    await expect(
-      runInDurableObject(piStub as unknown as DurableObjectStub, (instance) =>
-        (instance as unknown as PiSessionDO).control({
-          sessionId: session.sessionName,
-          requestId: "late-child-message",
-          action: "send",
-          conversationId: Number(childUsage[0]!.child_session_id),
-          content: "this must not reopen a finished child",
-        })
-      )
-    ).rejects.toThrow("Task-owned Pi conversation is no longer active");
+    const lateChildMessage = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.piControl}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          actorId: "user-1",
+          canonicalUserId: "user-1",
+          source: "web",
+          control: {
+            sessionId: session.sessionName,
+            requestId: "late-child-message",
+            action: "send",
+            conversationId: Number(childUsage[0]!.child_session_id),
+            content: "this must not reopen a finished child",
+          },
+        }),
+      })
+    );
+    expect(lateChildMessage.status).toBe(400);
 
     const compactResponse = await sessionStub.fetch(
       new Request(`http://session${SessionInternalPaths.piControl}`, {

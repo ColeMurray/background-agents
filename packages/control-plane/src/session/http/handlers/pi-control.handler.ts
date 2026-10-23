@@ -31,8 +31,6 @@ const READ_ACTIONS = new Set([
   "inspect",
 ]);
 const HUMAN_CONTROL_ACTIONS = new Set([
-  "send",
-  "follow_up",
   "cancel_exact",
   "retry_parked",
   "fork",
@@ -40,7 +38,7 @@ const HUMAN_CONTROL_ACTIONS = new Set([
   "handoff",
   "compact",
 ]);
-const MODEL_CONTROL_ACTIONS = new Set(["submit", "send", "follow_up", "compact"]);
+const MODEL_CONTROL_ACTIONS = new Set(["compact"]);
 
 export class PiControlHandler {
   constructor(

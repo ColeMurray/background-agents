@@ -101,25 +101,6 @@ export const piRuntimeControlSchema = z
     controlBase.extend({ action: z.literal("get_conversation"), conversationId }),
     controlBase.extend({ action: z.literal("get_last_message"), conversationId }),
     controlBase.extend({ action: z.literal("inspect_agents") }),
-    ...(["submit", "send", "follow_up"] as const).map((action) =>
-      controlBase.extend({
-        action: z.literal(action),
-        conversationId: conversationId.optional(),
-        content: z.string().min(1).max(20_000),
-        model: z.string().min(1).optional(),
-        reasoningEffort: z.string().nullable().optional(),
-        /**
-         * The operation the turn belongs to.
-         *
-         * The session records the turn as a message before the runtime is
-         * called, so the turn's operation id is that message's id. The
-         * runtime uses it for the turn, so every capability call that names
-         * the operation — the credential, the projection, the events —
-         * names the same one the session knows.
-         */
-        operationId: operationId.optional(),
-      })
-    ),
     controlBase.extend({
       action: z.literal("cancel_exact"),
       conversationId: conversationId.optional(),
@@ -163,13 +144,10 @@ export const piRuntimeControlSchema = z
     "Exact cancel target is required"
   );
 export type PiRuntimeControl = z.infer<typeof piRuntimeControlSchema>;
-type PiMessageControl = Extract<PiRuntimeControl, { content: string }>;
-export type PiHumanControl =
-  | (PiMessageControl & { action: "send" | "follow_up" })
-  | Extract<
-      PiRuntimeControl,
-      { action: "cancel_exact" | "retry_parked" | "fork" | "reset" | "handoff" | "compact" }
-    >;
+export type PiHumanControl = Extract<
+  PiRuntimeControl,
+  { action: "cancel_exact" | "retry_parked" | "fork" | "reset" | "handoff" | "compact" }
+>;
 export interface PiRuntimeControlResult {
   requestId: string;
   state: "completed" | "accepted" | "indeterminate";
