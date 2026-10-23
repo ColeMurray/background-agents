@@ -381,7 +381,11 @@ sessionRuntimeProxyRoutes.get(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requireSession("read", {
-      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+      actorlessGrants: [
+        { service: "slack-bot" },
+        { service: "linear-bot" },
+        { service: "discord-bot" },
+      ],
     }),
   }),
   (c) =>
@@ -395,7 +399,11 @@ sessionRuntimeProxyRoutes.get(
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
     authorization: requireSession("read", {
-      actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
+      actorlessGrants: [
+        { service: "slack-bot" },
+        { service: "linear-bot" },
+        { service: "discord-bot" },
+      ],
     }),
   }),
   (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.artifacts }))

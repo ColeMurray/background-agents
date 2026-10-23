@@ -84,9 +84,9 @@ Open-Inspect uses Terraform to automate deployment across multiple cloud provide
 
 **How this guide is organized**: Steps 1–10 are the minimal deploy path: one web platform, the
 default Modal sandbox provider, a GitHub App for repository access and sign-in, and the Slack,
-Linear, and GitHub bots turned off. The [Optional Sections](#optional-sections) after Step 10 cover
-alternative sandbox providers, Google login, Slack, Linear, the GitHub bot, a custom domain, CI/CD,
-branding, updating, and troubleshooting.
+Linear, Discord, and GitHub bots turned off. The [Optional Sections](#optional-sections) after Step
+10 cover alternative sandbox providers, Google login, Slack, Linear, Discord, the GitHub bot, a
+custom domain, CI/CD, branding, updating, and troubleshooting.
 
 ---
 
@@ -111,6 +111,7 @@ the matching optional section:
 | [Boat](https://boat.dev) _(optional)_                   | Sandbox infrastructure when `sandbox_provider = "boat"`         |
 | [Slack](https://api.slack.com/apps) _(optional)_        | Slack bot integration                                           |
 | [Linear](https://linear.app) _(optional)_               | Linear Agent integration                                        |
+| [Discord](https://discord.com/developers) _(optional)_  | Discord `/task` bot integration                                 |
 | GitHub App Webhooks _(optional)_                        | GitHub bot (PR reviews)                                         |
 
 ### Required Tools
@@ -507,6 +508,14 @@ linear_client_id       = ""          # From the Linear app (required if enabled)
 linear_client_secret   = ""          # From the Linear app (required if enabled)
 linear_webhook_secret  = ""          # From the Linear app (required if enabled)
 
+# Discord Bot (set enable_discord_bot = true to deploy the interactions worker)
+enable_discord_bot          = false
+discord_application_id      = ""     # From the Discord app (required if enabled)
+discord_public_key          = ""     # From the Discord app (required if enabled)
+discord_bot_token           = ""     # From the Discord app (required if enabled)
+discord_allowed_role_ids    = ""     # Comma-separated role IDs (required if enabled)
+discord_allowed_channel_ids = ""     # Comma-separated channel IDs; empty accepts any channel
+
 # API Keys. Optional: leave blank to add model credentials as secrets in the web
 # app instead. Required only when the Slack/Linear classifier runs on Anthropic.
 anthropic_api_key = ""
@@ -821,6 +830,7 @@ Your core deployment is complete. Everything below is optional; follow only the 
 - [Enable Google Login](#enable-google-login-optional)
 - [Slack Bot](#slack-bot-optional)
 - [Linear Agent](#linear-agent-optional)
+- [Discord Bot](#discord-bot-optional)
 - [GitHub Bot](#github-bot-optional)
 - [Custom Domain for the Web App](#custom-domain-for-the-web-app-optional)
 - [Set Up CI/CD](#set-up-cicd-optional)
@@ -1202,6 +1212,49 @@ For configuration and troubleshooting, see [Linear Integration](./integrations/L
 
 ---
 
+## Discord Bot (Optional)
+
+Skip this section if you don't need the Discord `/task` command.
+
+### Create a Discord Application
+
+1. Create an application in the
+   [Discord Developer Portal](https://discord.com/developers/applications) and record its
+   **Application ID**, **Public Key**, and **Bot Token**.
+2. Add the bot to your server and copy the IDs of the role and channel allowed to submit tasks. The
+   full walkthrough, including the bot permissions, is in
+   [Discord Integration → Setup](./integrations/DISCORD.md#setup).
+3. Set `enable_discord_bot = true`, `discord_application_id`, `discord_public_key`,
+   `discord_bot_token`, and `discord_allowed_role_ids` in `terraform.tfvars`, then run
+   `terraform apply`.
+
+The interactions endpoint and the slash command are configured after deployment in
+[Connect Discord](#connect-discord).
+
+### Connect Discord
+
+1. In the Discord Developer Portal, set **General Information → Interactions Endpoint URL** to the
+   worker's interactions URL. Discord verifies it when you save.
+
+   ```bash
+   terraform output -raw discord_bot_interactions_url
+   ```
+
+2. Register the `/task` command with your server:
+
+   ```bash
+   DISCORD_APPLICATION_ID=... DISCORD_BOT_TOKEN=... DISCORD_GUILD_ID=... \
+     npm run register-commands -w @open-inspect/discord-bot
+   ```
+
+3. So Discord sessions can run on a Claude subscription instead of an API key, connect a Claude
+   account in **Settings → Accounts** and set it as the default for **Automated sessions**.
+
+Test it with `/task prompt: <something small> repo: <owner/name>` in an allowed channel. For usage
+and troubleshooting, see [Discord Integration](./integrations/DISCORD.md).
+
+---
+
 ## GitHub Bot (Optional)
 
 The GitHub bot handles PR review assignments and @mention commands. To deploy it, set these in
@@ -1329,6 +1382,11 @@ ENABLE_GITHUB_BOT
 GH_BOT_USERNAME
 ENABLE_LINEAR_BOT
 LINEAR_CLIENT_ID
+ENABLE_DISCORD_BOT
+DISCORD_APPLICATION_ID
+DISCORD_PUBLIC_KEY
+DISCORD_ALLOWED_ROLE_IDS
+DISCORD_ALLOWED_CHANNEL_IDS
 
 # Access control and branding
 TEAMS_ENFORCEMENT
@@ -1443,6 +1501,11 @@ Secrets for credentials:
 | `LINEAR_CLIENT_SECRET`             | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`            | Linear webhook signing secret (required if Linear enabled)                                  |
 | `LINEAR_API_KEY`                   | Optional Linear API key used as a comment-posting fallback                                  |
+| `ENABLE_DISCORD_BOT`               | `true` to deploy Discord bot, `false` to skip (default: `false`)                            |
+| `DISCORD_APPLICATION_ID`           | Discord application ID (required if Discord enabled)                                        |
+| `DISCORD_PUBLIC_KEY`               | Discord application public key (required if Discord enabled)                                |
+| `DISCORD_BOT_TOKEN`                | Discord bot token (required if Discord enabled)                                             |
+| `DISCORD_ALLOWED_ROLE_IDS`         | Comma-separated role IDs allowed to run `/task` (required if Discord enabled)               |
 | `ANTHROPIC_API_KEY`                | Optional; reaches Modal sandboxes; classifier fallback                                      |
 | `CLASSIFICATION_ANTHROPIC_API_KEY` | Optional classifier-only Anthropic key; never reaches sandboxes                             |
 | `CLASSIFICATION_OPENAI_API_KEY`    | Classifier OpenAI key (required when `classification_model` is an OpenAI id)                |

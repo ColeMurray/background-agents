@@ -12,6 +12,8 @@ import type { FetchClient } from "../platform-ports";
 import type { SlackPostScope } from "../authorization/slack-post-gate";
 import { verifyCallbackSignature } from "@open-inspect/shared/auth";
 import {
+  discordCompletionCallbackSchema,
+  discordToolCallCallbackSchema,
   linearCompletionCallbackSchema,
   linearToolCallCallbackSchema,
   slackCallbackContextSchema,
@@ -24,6 +26,16 @@ const LINEAR_CALLBACK_CONTEXT = {
   issueIdentifier: "ENG-1",
   issueUrl: "https://linear.app/acme/issue/ENG-1",
   model: "anthropic/claude-haiku-4-5",
+};
+
+const DISCORD_CALLBACK_CONTEXT = {
+  source: "discord",
+  channelId: "chan-1",
+  threadId: "thread-1",
+  userId: "user-1",
+  repoFullName: "acme/api",
+  model: "anthropic/claude-opus-5",
+  statusMessage: { id: "status-1", startedAt: 1_700_000_000_000 },
 };
 
 const SLACK_CALLBACK_CONTEXT = {
@@ -69,6 +81,7 @@ function createTestHarness(overrides?: {
 
   const slackBot = createMockFetcher();
   const linearBot = createMockFetcher();
+  const discordBot = createMockFetcher();
   const sleep = vi.fn(async () => {});
   const slackPostScope = {
     getSession: vi.fn<SlackPostScope["getSession"]>().mockResolvedValue({
@@ -83,8 +96,10 @@ function createTestHarness(overrides?: {
   const env: CallbackServiceEnv = {
     SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
     SERVICE_AUTH_SECRET_LINEAR_BOT: "test-secret",
+    SERVICE_AUTH_SECRET_DISCORD_BOT: "test-secret",
     SLACK_BOT: slackBot,
     LINEAR_BOT: linearBot,
+    DISCORD_BOT: discordBot,
     ...overrides?.env,
   };
 
@@ -106,6 +121,7 @@ function createTestHarness(overrides?: {
     env,
     slackBot,
     linearBot,
+    discordBot,
     sleep,
     slackPostScope,
   };
@@ -715,6 +731,66 @@ describe("CallbackNotificationService", () => {
       expect(harness.linearBot.fetch).not.toHaveBeenCalled();
       expect(harness.sleep).not.toHaveBeenCalled();
       expect(harness.slackPostScope.getSession).not.toHaveBeenCalled();
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({ reject_reason: "invalid_payload", attempts: 0 })
+      );
+    });
+
+    it("routes validated Discord completions to DISCORD_BOT", async () => {
+      harness.repository.getMessageCallbackContext.mockReturnValue({
+        callback_context: JSON.stringify(DISCORD_CALLBACK_CONTEXT),
+        source: "discord",
+      });
+      harness.slackPostScope.getSession.mockResolvedValue({
+        ownerTeamId: null,
+        visibility: "workspace",
+      });
+      harness.discordBot.fetch.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.discordBot.fetch).toHaveBeenCalledTimes(1);
+      expect(harness.slackBot.fetch).not.toHaveBeenCalled();
+      expect(harness.slackPostScope.getSession).toHaveBeenCalledWith("session-123");
+      expect(harness.slackPostScope.getChannelBinding).not.toHaveBeenCalled();
+      const body = JSON.parse(String(harness.discordBot.fetch.mock.calls[0][1]?.body));
+      expect(body.context).toEqual(DISCORD_CALLBACK_CONTEXT);
+      expect(discordCompletionCallbackSchema.safeParse(body).success).toBe(true);
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it.each([
+      { visibility: "private" as const, ownerTeamId: null, reason: "private_session" },
+      { visibility: "workspace" as const, ownerTeamId: "team-a", reason: "channel_team_mismatch" },
+    ])(
+      "withholds Discord completions for unpublishable sessions ($reason)",
+      async ({ visibility, ownerTeamId, reason }) => {
+        harness.repository.getMessageCallbackContext.mockReturnValue({
+          callback_context: JSON.stringify(DISCORD_CALLBACK_CONTEXT),
+          source: "discord",
+        });
+        harness.slackPostScope.getSession.mockResolvedValue({ ownerTeamId, visibility });
+
+        await harness.service.notifyComplete("msg-1", true);
+
+        expect(harness.discordBot.fetch).not.toHaveBeenCalled();
+        expect(harness.log.info).toHaveBeenCalledWith(
+          "callback.complete_delivery",
+          expect.objectContaining({ reject_reason: reason })
+        );
+      }
+    );
+
+    it("rejects invalid Discord completion payloads without retrying", async () => {
+      harness.repository.getMessageCallbackContext.mockReturnValue({
+        callback_context: JSON.stringify({ source: "discord", channelId: "chan-1" }),
+        source: "discord",
+      });
+
+      await harness.service.notifyComplete("msg-1", true);
+
+      expect(harness.discordBot.fetch).not.toHaveBeenCalled();
       expect(harness.log.info).toHaveBeenCalledWith(
         "callback.complete_delivery",
         expect.objectContaining({ reject_reason: "invalid_payload", attempts: 0 })
@@ -1438,6 +1514,80 @@ describe("CallbackNotificationService", () => {
       expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
       expect(harness.slackPostScope.getSession).not.toHaveBeenCalled();
       expect(harness.slackPostScope.getChannelBinding).not.toHaveBeenCalled();
+    });
+
+    it("routes validated Discord tool calls to DISCORD_BOT", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(DISCORD_CALLBACK_CONTEXT),
+        source: "discord",
+      });
+      harness.slackPostScope.getSession.mockResolvedValue({
+        ownerTeamId: null,
+        visibility: "workspace",
+      });
+      harness.discordBot.fetch.mockResolvedValue(new Response("ok", { status: 200 }));
+
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "read",
+        args: { filePath: "src/app.ts" },
+        callId: "call-1",
+        status: "running",
+      });
+
+      expect(harness.discordBot.fetch).toHaveBeenCalledWith(
+        "https://internal/callbacks/tool_call",
+        expect.objectContaining({ method: "POST" })
+      );
+      expect(harness.slackPostScope.getChannelBinding).not.toHaveBeenCalled();
+      const body = JSON.parse(String(harness.discordBot.fetch.mock.calls[0][1]?.body));
+      expect(body.context.statusMessage).toEqual({ id: "status-1", startedAt: 1_700_000_000_000 });
+      expect(discordToolCallCallbackSchema.safeParse(body).success).toBe(true);
+      expect(await verifyCallbackSignature(body, "test-secret")).toBe(true);
+    });
+
+    it("withholds Discord tool calls for private sessions", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(DISCORD_CALLBACK_CONTEXT),
+        source: "discord",
+      });
+      harness.slackPostScope.getSession.mockResolvedValue({
+        ownerTeamId: null,
+        visibility: "private",
+      });
+
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "read",
+        args: { filePath: "src/app.ts" },
+        callId: "call-1",
+        status: "running",
+      });
+
+      expect(harness.discordBot.fetch).not.toHaveBeenCalled();
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "callback.tool_call",
+        expect.objectContaining({ outcome: "rejected", reject_reason: "private_session" })
+      );
+    });
+
+    it("skips Discord callbacks whose tool arguments are missing", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: JSON.stringify(DISCORD_CALLBACK_CONTEXT),
+        source: "discord",
+      });
+
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "bash",
+        callId: "call-1",
+      });
+
+      expect(harness.discordBot.fetch).not.toHaveBeenCalled();
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "callback.tool_call",
+        expect.objectContaining({ outcome: "skipped", skip_reason: "invalid_payload" })
+      );
     });
 
     it("skips Linear callbacks whose tool arguments are missing", async () => {

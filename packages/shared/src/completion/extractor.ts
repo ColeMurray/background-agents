@@ -423,24 +423,41 @@ function isArtifactInEventRange(
 }
 
 /**
- * Summarize a tool call for display.
+ * Argument keys that name the file a tool works on, across harnesses: Claude
+ * Agent sends `file_path`, OpenCode sends `filePath`, and MCP-style tools vary.
+ */
+const TOOL_CALL_FILE_ARG_KEYS = ["file_path", "filePath", "filepath", "path", "file"] as const;
+
+/** The file a tool call targets, whichever harness named the argument. */
+export function toolCallFilePath(args: Record<string, unknown>): string | undefined {
+  for (const key of TOOL_CALL_FILE_ARG_KEYS) {
+    const value = args[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Summarize a tool call for display. Tool names are matched case-insensitively
+ * because Claude Agent reports `Read` where OpenCode reports `read`.
  */
 export function summarizeToolCall(data: Record<string, unknown>): ToolCallSummary {
   const tool = String(data.tool ?? "Unknown");
   const args = recordOrUndefined(data.args) ?? {};
+  const file = toolCallFilePath(args) ?? "file";
 
-  switch (tool) {
-    case "Read":
-      return { tool, summary: `Read ${args.file_path ?? "file"}` };
-    case "Edit":
-      return { tool, summary: `Edited ${args.file_path ?? "file"}` };
-    case "Write":
-      return { tool, summary: `Created ${args.file_path ?? "file"}` };
-    case "Bash": {
+  switch (tool.toLowerCase()) {
+    case "read":
+      return { tool, summary: `Read ${file}` };
+    case "edit":
+      return { tool, summary: `Edited ${file}` };
+    case "write":
+      return { tool, summary: `Created ${file}` };
+    case "bash": {
       const cmd = String(args.command ?? "").slice(0, 40);
       return { tool, summary: `Ran: ${cmd}${cmd.length >= 40 ? "..." : ""}` };
     }
-    case "Grep":
+    case "grep":
       return { tool, summary: `Searched for "${args.pattern ?? ""}"` };
     default:
       return { tool, summary: `Used ${tool}` };

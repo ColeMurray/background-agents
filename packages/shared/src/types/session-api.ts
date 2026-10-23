@@ -98,14 +98,38 @@ export const linearStartCallbackSchema = z.strictObject({
 
 export type LinearStartCallback = z.infer<typeof linearStartCallbackSchema>;
 
-export const linearCompletionCallbackPayloadSchema = z.strictObject({
-  sessionId: nonEmptyStringSchema,
-  messageId: nonEmptyStringSchema,
-  success: z.boolean(),
-  error: z.string().optional(),
-  timestamp: z.number().refine(Number.isFinite),
-  context: linearCallbackContextSchema,
-});
+/**
+ * The control plane's completion callback, unsigned. Each bot instantiates it
+ * with its own context schema; the control plane validates outbound payloads
+ * with the same instance, so producer and consumer cannot drift.
+ */
+export function completionCallbackPayloadSchema<TContext extends z.ZodType>(context: TContext) {
+  return z.strictObject({
+    sessionId: nonEmptyStringSchema,
+    messageId: nonEmptyStringSchema,
+    success: z.boolean(),
+    error: z.string().optional(),
+    timestamp: z.number().refine(Number.isFinite),
+    context,
+  });
+}
+
+/** The control plane's throttled tool-call progress callback, unsigned. */
+export function toolCallCallbackPayloadSchema<TContext extends z.ZodType>(context: TContext) {
+  return z.strictObject({
+    sessionId: nonEmptyStringSchema,
+    tool: nonEmptyStringSchema,
+    args: z.record(z.string(), z.unknown()),
+    callId: nonEmptyStringSchema,
+    status: z.string().optional(),
+    timestamp: z.number().refine(Number.isFinite),
+    context,
+  });
+}
+
+export const linearCompletionCallbackPayloadSchema = completionCallbackPayloadSchema(
+  linearCallbackContextSchema
+);
 
 export const linearCompletionCallbackSchema = linearCompletionCallbackPayloadSchema.extend({
   signature: nonEmptyStringSchema,
@@ -113,21 +137,65 @@ export const linearCompletionCallbackSchema = linearCompletionCallbackPayloadSch
 
 export type LinearCompletionCallback = z.infer<typeof linearCompletionCallbackSchema>;
 
-export const linearToolCallCallbackPayloadSchema = z.strictObject({
-  sessionId: nonEmptyStringSchema,
-  tool: nonEmptyStringSchema,
-  args: z.record(z.string(), z.unknown()),
-  callId: nonEmptyStringSchema,
-  status: z.string().optional(),
-  timestamp: z.number().refine(Number.isFinite),
-  context: linearCallbackContextSchema,
-});
+export const linearToolCallCallbackPayloadSchema = toolCallCallbackPayloadSchema(
+  linearCallbackContextSchema
+);
 
 export const linearToolCallCallbackSchema = linearToolCallCallbackPayloadSchema.extend({
   signature: nonEmptyStringSchema,
 });
 
 export type LinearToolCallCallback = z.infer<typeof linearToolCallCallbackSchema>;
+
+/**
+ * Where a Discord `/task` reply goes. The bot answers in a thread it opened on
+ * its own acknowledgement message; `threadId` is absent only when the thread
+ * could not be created, and the bot then replies in `channelId` directly.
+ *
+ * `statusMessage` is the live progress message the bot posted for this prompt.
+ * It travels in the context, which the control plane echoes on every callback,
+ * so the bot needs no state of its own to find the right message — a follow-up
+ * sent while a prompt runs gets its own context and its own message.
+ */
+export const discordCallbackContextSchema = z.strictObject({
+  source: z.literal("discord"),
+  channelId: nonEmptyStringSchema,
+  threadId: nonEmptyStringSchema.optional(),
+  userId: nonEmptyStringSchema,
+  repoFullName: nonEmptyStringSchema,
+  model: nonEmptyStringSchema,
+  /** Absent when posting the status message failed; progress is then skipped. */
+  statusMessage: z
+    .strictObject({
+      id: nonEmptyStringSchema,
+      /** Epoch milliseconds the prompt was sent; the status line shows elapsed time. */
+      startedAt: z.number().refine(Number.isFinite),
+    })
+    .optional(),
+});
+
+export type DiscordCallbackContext = z.infer<typeof discordCallbackContextSchema>;
+export type DiscordStatusMessage = NonNullable<DiscordCallbackContext["statusMessage"]>;
+
+export const discordCompletionCallbackPayloadSchema = completionCallbackPayloadSchema(
+  discordCallbackContextSchema
+);
+
+export const discordCompletionCallbackSchema = discordCompletionCallbackPayloadSchema.extend({
+  signature: nonEmptyStringSchema,
+});
+
+export type DiscordCompletionCallback = z.infer<typeof discordCompletionCallbackSchema>;
+
+export const discordToolCallCallbackPayloadSchema = toolCallCallbackPayloadSchema(
+  discordCallbackContextSchema
+);
+
+export const discordToolCallCallbackSchema = discordToolCallCallbackPayloadSchema.extend({
+  signature: nonEmptyStringSchema,
+});
+
+export type DiscordToolCallCallback = z.infer<typeof discordToolCallCallbackSchema>;
 
 export const automationCallbackContextSchema = z.object({
   source: z.literal("automation"),
@@ -141,6 +209,7 @@ export type AutomationCallbackContext = z.infer<typeof automationCallbackContext
 export const callbackContextSchema = z.union([
   slackCallbackContextSchema,
   linearCallbackContextSchema,
+  discordCallbackContextSchema,
   automationCallbackContextSchema,
 ]);
 
