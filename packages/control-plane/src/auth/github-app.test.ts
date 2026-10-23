@@ -10,6 +10,8 @@ import {
   listInstallationRepositories,
   listRepositoryBranches,
 } from "./github-app";
+import { GitHubSourceControlProvider } from "../source-control/providers/github-provider";
+import { resolveWebhookRepository } from "../automation/webhook-repository";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 
 class FakeCacheStore implements CacheStore {
@@ -535,5 +537,73 @@ describe("github-app utilities", () => {
         listRepositoryBranches(config, "open-inspect", "background-agents", { cacheStore })
       ).rejects.toThrow("Failed to list branches: invalid response");
     });
+  });
+});
+
+describe("GitHub installation lookup failures in webhook resolution", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it.each<{ label: string; status: number; headers: Record<string, string>; message: string }>([
+    {
+      label: "primary",
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0" },
+      message: "Request temporarily unavailable",
+    },
+    {
+      label: "retry-after",
+      status: 403,
+      headers: { "retry-after": "60" },
+      message: "Please try again later",
+    },
+    {
+      label: "secondary",
+      status: 403,
+      headers: {},
+      message: "You have exceeded a secondary rate limit",
+    },
+    { label: "429", status: 429, headers: {}, message: "Too many requests" },
+    { label: "503", status: 503, headers: {}, message: "Service unavailable" },
+  ])(
+    "keeps $label failures retryable through the actual GitHub provider",
+    async ({ label, status, headers, message }) => {
+      const cacheStore = new FakeCacheStore();
+      const config = cachedTokenConfig(`webhook-rate-${label}`);
+      await cacheInstallationToken(cacheStore, config);
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(new Response(JSON.stringify({ message }), { status, headers }));
+      const provider = new GitHubSourceControlProvider({ appConfig: config, cacheStore });
+      const branchLookup = vi.spyOn(provider, "getBranchHead");
+      await expect(
+        resolveWebhookRepository(
+          { repoOwnerPath: "$.owner", repoNamePath: "$.name" },
+          { owner: "acme", name: "api" },
+          provider
+        )
+      ).rejects.toMatchObject({
+        status: 503,
+        cause: expect.objectContaining({ httpStatus: status, errorType: "transient" }),
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(branchLookup).not.toHaveBeenCalled();
+    }
+  );
+  it.each([403, 404])("keeps a genuine %s access denial non-retryable", async (status) => {
+    const cacheStore = new FakeCacheStore();
+    const config = cachedTokenConfig(`webhook-denied-${status}`);
+    await cacheInstallationToken(cacheStore, config);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ message: "Resource not accessible by integration" }), {
+        status,
+      })
+    );
+    const provider = new GitHubSourceControlProvider({ appConfig: config, cacheStore });
+    await expect(
+      resolveWebhookRepository(
+        { repoOwnerPath: "$.owner", repoNamePath: "$.name" },
+        { owner: "acme", name: "api" },
+        provider
+      )
+    ).rejects.toMatchObject({ status: 403 });
   });
 });

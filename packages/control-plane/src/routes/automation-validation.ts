@@ -376,3 +376,21 @@ export function validateSlackTriggerConfig(
   }
   return null;
 }
+
+/** Payload targets resolve exactly one repository and cannot compete with stored targets. */
+export function validatePayloadRepositoryConfig(
+  triggerType: AutomationTriggerType,
+  config: TriggerConfig | null | undefined,
+  repositoryCount: number,
+  environmentCount: number
+): void {
+  if (!config?.repositoryFromPayload) return;
+  if (triggerType !== "webhook") {
+    throw new TargetSelectionError("repositoryFromPayload is only valid for webhook automations");
+  }
+  if (repositoryCount || environmentCount) {
+    throw new TargetSelectionError(
+      "repositoryFromPayload cannot be combined with repositories or environmentIds"
+    );
+  }
+}

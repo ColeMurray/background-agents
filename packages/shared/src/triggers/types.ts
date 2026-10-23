@@ -3,6 +3,7 @@
  */
 
 import { z } from "zod";
+import { repositoryPairInputSchema } from "../types/repositories";
 
 // ─── Trigger Configuration ───────────────────────────────────────────────────
 
@@ -128,9 +129,26 @@ export type ConditionConfigMap = {
   [K in ConditionType]: Omit<Extract<TriggerCondition, { type: K }>, "type">;
 };
 
+/** Generic webhook extraction uses the same dot paths as JSON-path conditions. */
+const payloadPathSchema = z
+  .string()
+  .max(512)
+  .regex(/^\$\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/);
+
+export const webhookRepositoryFromPayloadSchema = z.object({
+  repoOwnerPath: payloadPathSchema,
+  repoNamePath: payloadPathSchema,
+  branchPath: payloadPathSchema.optional(),
+  fallbackBranch: z.string().trim().min(1).max(255).optional(),
+  /** Omission permits any repository accessible to the configured SCM installation. */
+  allowedRepositories: z.array(repositoryPairInputSchema).min(1).max(100).optional(),
+});
+export type WebhookRepositoryFromPayload = z.infer<typeof webhookRepositoryFromPayloadSchema>;
+
 /** Trigger settings stored as JSON in D1. */
 export const triggerConfigSchema = z.object({
   conditions: z.array(triggerConditionSchema),
+  repositoryFromPayload: webhookRepositoryFromPayloadSchema.optional(),
 });
 
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;

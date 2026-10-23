@@ -92,10 +92,15 @@ import {
   resolveRepositorySelection,
   validateSlackTriggerConfig,
   validateTargetCounts,
+  validatePayloadRepositoryConfig,
   validateTeamExecutor,
 } from "./automation-validation";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { authorizeSessionTarget } from "./session-target-authorization";
+import {
+  bindAutomationTargetGuard,
+  isAutomationTargetConflict,
+} from "../db/automation-target-guard";
 import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 const logger = createLogger("router:automations");
@@ -178,6 +183,12 @@ async function handleCreateAutomation(
     requestedEnvironmentIds =
       environmentSelection.kind === "replace" ? environmentSelection.environmentIds : [];
     validateTargetCounts(triggerType, requestedRepositories.length, requestedEnvironmentIds.length);
+    validatePayloadRepositoryConfig(
+      triggerType,
+      body.triggerConfig,
+      requestedRepositories.length,
+      requestedEnvironmentIds.length
+    );
   } catch (e) {
     if (e instanceof TargetSelectionError) return e.response();
     throw e;
@@ -636,6 +647,26 @@ async function handleUpdateAutomation(
   });
   if (environmentAuthorizationError) return environmentAuthorizationError;
 
+  const finalTriggerConfig =
+    body.triggerConfig === undefined ? existingTriggerConfig : body.triggerConfig;
+  if (finalTriggerConfig?.repositoryFromPayload) {
+    try {
+      validatePayloadRepositoryConfig(
+        existingTriggerType,
+        finalTriggerConfig,
+        selection.kind === "replace"
+          ? selection.repositories.length
+          : (await store.getRepositoriesForAutomation(id)).length,
+        environmentSelection.kind === "replace"
+          ? environmentSelection.environmentIds.length
+          : (await store.getEnvironmentsForAutomation(id)).length
+      );
+    } catch (e) {
+      if (e instanceof TargetSelectionError) return e.response();
+      throw e;
+    }
+  }
+
   // The count rules span both selections, so when EITHER is replaced they are
   // validated against the automation's FINAL state (the replacement plus the
   // other side's existing rows). Edits that touch neither selection skip this
@@ -839,8 +870,39 @@ async function handleUpdateAutomation(
       ...slackStore.bindChannelStatements(id, extractSlackChannels(body.triggerConfig))
     );
   }
+  if (
+    body.triggerConfig !== undefined ||
+    replacementRepositories !== null ||
+    replacementEnvironmentIds !== null
+  ) {
+    statements.push(
+      ...bindAutomationTargetGuard(
+        db,
+        id,
+        body.triggerConfig === undefined
+          ? existing.trigger_config
+          : body.triggerConfig === null
+            ? null
+            : JSON.stringify(body.triggerConfig),
+        Boolean(finalTriggerConfig?.repositoryFromPayload)
+      )
+    );
+  }
   if (statements.length > 0) {
-    await ctx.db.batch(statements);
+    try {
+      await ctx.db.batch(statements);
+    } catch (mutationError) {
+      if (isAutomationTargetConflict(mutationError)) {
+        return json(
+          {
+            error: "Automation targets changed concurrently; reload and retry",
+            code: "automation_conflict",
+          },
+          409
+        );
+      }
+      throw mutationError;
+    }
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);

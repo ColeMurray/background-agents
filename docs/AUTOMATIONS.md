@@ -137,6 +137,66 @@ curl -X POST "https://<your-worker-url>/webhooks/automation/<automation-id>" \
   -d '{"event":"deploy.failed","service":"api","environment":"prod"}'
 ```
 
+### Resolving the Repository from the Payload
+
+Use the automation API (`POST /automations` or `PUT /automations/:id`) to configure
+`triggerConfig.repositoryFromPayload` on a webhook automation. Keep `repositories` and
+`environmentIds` empty. The form preserves this API configuration when editing other fields and
+shows a disabled payload-target state instead of the fixed-target picker. Change target mode through
+the API.
+
+```json
+{
+  "name": "Investigate CI failures",
+  "instructions": "Investigate the reported CI failure and fix it.",
+  "triggerType": "webhook",
+  "repositories": [],
+  "environmentIds": [],
+  "triggerConfig": {
+    "conditions": [],
+    "repositoryFromPayload": {
+      "repoOwnerPath": "$.repository.owner",
+      "repoNamePath": "$.repository.name",
+      "branchPath": "$.branch",
+      "fallbackBranch": "main",
+      "allowedRepositories": [{ "repoOwner": "acme", "repoName": "api" }]
+    }
+  }
+}
+```
+
+For example, send `{ "repository": { "owner": "acme", "name": "api" }, "branch": "release/next" }`.
+Paths support dot notation (`$.key.nested_key`), without array indexing, wildcards, or recursive
+descent. Owner and name must resolve to non-empty strings; nested owner namespaces are supported.
+Identifiers are trimmed and compared case-insensitively.
+
+`allowedRepositories` is optional. When supplied it restricts both the requested and canonical
+repository identity. Every resolved repository must also be accessible to the configured SCM
+installation. Without an allowlist, the installation's accessible repository set is the boundary.
+The executor must have repository-use permission, and team automations require a matching team
+grant. These checks happen before a session is created.
+
+`branchPath` and `fallbackBranch` are optional. An absent or null branch uses `fallbackBranch`, then
+the resolved repository's default branch. A supplied empty or non-string branch is an error. The
+chosen branch must exist in the resolved repository; tags and commit SHAs are not branch selectors.
+Resolution failures return `WEBHOOK_REPOSITORY_RESOLUTION_FAILED`: HTTP 400 for missing/invalid
+fields or branches, 403 for inaccessible or disallowed repositories, and 503 for unavailable SCM
+lookups. Rejected repository/branch resolutions create no invocation, run, or session. If execution
+authorization is revoked after admission, the webhook returns 403 and retains an unauthorized run
+without creating a session.
+
+Each delivery selects one repository. The run history and session snapshot record its resolved
+repository and branch, and the agent context includes both alongside the original payload (subject
+to the existing payload truncation). Duplicate `idempotencyKey` values return the original
+invocation without resolving the target again. A `sessionKey` follow-up must resolve to that
+session's repository and branch; a mismatch returns HTTP 409. Manual triggering requires a webhook
+payload and is refused for this mode. Automations without `repositoryFromPayload` retain their
+fixed-target behavior.
+
+Configuration and target edits are checked together inside the database transaction. If a concurrent
+edit would combine payload mode with fixed targets, the entire save is rolled back and returns HTTP
+409 with code `automation_conflict`. Reload the automation before retrying.
+
 ### What the Agent Receives
 
 For each accepted request, Open-Inspect prepends a context block to your instructions that includes:
@@ -249,7 +309,8 @@ another delivery.
 
 | Status | Meaning                                                                                                                 |
 | ------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid JSON body, or an invalid `sessionKey`                                                                           |
+| `400`  | Invalid JSON body, invalid `sessionKey`, or invalid payload repository/branch                                           |
+| `403`  | Resolved repository is disallowed, inaccessible, or unauthorized for the executor/team                                  |
 | `401`  | Missing or invalid API key                                                                                              |
 | `404`  | Automation not found or not a webhook automation                                                                        |
 | `409`  | The `sessionKey` session cannot take prompts: `SESSION_NOT_PROMPTABLE`, `BUDGET_EXHAUSTED`, `SANDBOX_RECOVERY_REQUIRED` |

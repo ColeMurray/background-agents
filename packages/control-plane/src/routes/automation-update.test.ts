@@ -1168,3 +1168,49 @@ describe("automation read, update, and delete routes", () => {
     });
   });
 });
+
+describe("payload repository configuration on update", () => {
+  const repositoryFromPayload = { repoOwnerPath: "$.repo.owner", repoNamePath: "$.repo.name" };
+  const config = { conditions: [], repositoryFromPayload };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    applyMockDefaults();
+    mockStore.getById.mockResolvedValue({
+      ...sampleRow,
+      trigger_type: "webhook",
+      schedule_cron: null,
+    });
+  });
+  it("persists payload configuration", async () => {
+    const response = await callRoute("PUT", "/automations/auto-1", {
+      body: { triggerConfig: config },
+    });
+    expect(response.status).toBe(200);
+    expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+      "auto-1",
+      expect.objectContaining({ trigger_config: JSON.stringify(config) })
+    );
+  });
+  it("rejects enabling payload resolution alongside a stored target", async () => {
+    mockStore.getRepositoriesForAutomation.mockResolvedValue([
+      { repo_owner: "acme", repo_name: "api", repo_id: 101, base_branch: "main" },
+    ]);
+    const response = await callRoute("PUT", "/automations/auto-1", {
+      body: { triggerConfig: config },
+    });
+    expect(response.status).toBe(400);
+    expect(mockBatch).not.toHaveBeenCalled();
+  });
+  it("rejects adding a fixed target alongside stored payload resolution", async () => {
+    mockStore.getById.mockResolvedValue({
+      ...sampleRow,
+      trigger_type: "webhook",
+      trigger_config: JSON.stringify(config),
+    });
+    const response = await callRoute("PUT", "/automations/auto-1", {
+      body: { environmentIds: ["env_one"] },
+    });
+    expect(response.status).toBe(400);
+    expect(mockBatch).not.toHaveBeenCalled();
+  });
+});

@@ -906,3 +906,37 @@ describe("automation create route", () => {
     });
   });
 });
+
+describe("payload repository configuration on create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    applyMockDefaults();
+  });
+  const repositoryFromPayload = { repoOwnerPath: "$.repo.owner", repoNamePath: "$.repo.name" };
+  const body = {
+    name: "CI",
+    instructions: "Investigate",
+    triggerType: "webhook",
+    triggerConfig: { conditions: [], repositoryFromPayload },
+  };
+
+  it("persists the payload target configuration", async () => {
+    const response = await callRoute("POST", "/automations", { body });
+    expect(response.status).toBe(201);
+    expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger_config: JSON.stringify(body.triggerConfig) })
+    );
+  });
+  it.each([
+    { ...body, triggerType: "sentry" },
+    { ...body, repositories: [{ repoOwner: "acme", repoName: "api" }] },
+    { ...body, environmentIds: ["env_one"] },
+  ])("rejects incompatible payload target configuration", async (body) => {
+    const response = await callRoute("POST", "/automations", { body });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("repositoryFromPayload"),
+    });
+    expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+  });
+});

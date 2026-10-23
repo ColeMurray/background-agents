@@ -47,6 +47,7 @@ export interface AutomationTriggerDraft {
   eventType: string;
   conditions: TriggerCondition[];
   sentryClientSecret: string;
+  repositoryFromPayload?: TriggerConfig["repositoryFromPayload"];
 }
 
 export interface AutomationAgentDraft {
@@ -110,6 +111,7 @@ export function createAutomationFormDraft(
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
+      repositoryFromPayload: initialValues.triggerConfig?.repositoryFromPayload,
       sentryClientSecret: "",
     },
     agent: {
@@ -191,6 +193,13 @@ function findInvalidEvaluation({
     ) {
       return { valid: false, reason: "invalid-schedule" };
     }
+  }
+  if (
+    draft.trigger.type === "webhook" &&
+    draft.trigger.repositoryFromPayload &&
+    (repositoryCount > 0 || environmentCount > 0)
+  ) {
+    return { valid: false, reason: "invalid-target-selection" };
   }
   const targetError = validateAutomationTargetCounts(
     draft.trigger.type,
@@ -285,7 +294,12 @@ function buildSubmissionValues({
     };
   }
 
-  values.triggerConfig = { conditions: draft.trigger.conditions };
+  values.triggerConfig = {
+    conditions: draft.trigger.conditions,
+    ...(draft.trigger.type === "webhook" && draft.trigger.repositoryFromPayload
+      ? { repositoryFromPayload: draft.trigger.repositoryFromPayload }
+      : {}),
+  };
   if (draft.trigger.eventType) values.eventType = draft.trigger.eventType;
   if (draft.trigger.type === "sentry" && mode === "create") {
     values.sentryClientSecret = draft.trigger.sentryClientSecret.trim();

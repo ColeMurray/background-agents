@@ -111,3 +111,6 @@ export type {
   SlackChannelMeta,
   SlackChannelConditionParseResult,
 } from "./slack";
+
+export { webhookRepositoryFromPayloadSchema } from "./types";
+export type { WebhookRepositoryFromPayload } from "./types";
