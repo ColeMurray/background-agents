@@ -55,6 +55,13 @@ def test_binary_checksum_and_minimum_tool_version_are_required():
         validate_toolchain(tools)
 
 
+def test_npm_overrides_require_exact_versions():
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    tools["npmOverrides"]["toml"] = "^5.0.1"
+    with pytest.raises(ValueError, match="exact release versions"):
+        validate_toolchain(tools)
+
+
 def test_codex_pin_matches_protocol_and_requires_checksum():
     tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
     source = (

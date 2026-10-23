@@ -80,6 +80,8 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         raise ValueError("OpenCode is below the image toolchain minimum")
     for name in ("agentBrowser", "pnpm", "bun", "zod", "python"):
         version(tools[name])
+    for pin in tools["npmOverrides"].values():
+        version(pin)
     if not re.fullmatch(r"[a-f0-9]{64}", tools.get("agentBrowserSha256", "")):
         raise ValueError("agent-browser native binary must have a SHA-256 pin")
     archives = [

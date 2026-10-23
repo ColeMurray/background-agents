@@ -34,6 +34,7 @@ def update_locks(root: Path, *, check: bool = False) -> None:
                     "private": True,
                     "type": "module",
                     "dependencies": dependencies,
+                    "overrides": tools["npmOverrides"],
                 },
                 indent=2,
             )
