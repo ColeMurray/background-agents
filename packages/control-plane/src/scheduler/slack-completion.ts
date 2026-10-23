@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import type { AutomationRunRow } from "../db/automation-store";
 
 const slackRunMetadataSchema = z.object({
   channel: z.string(),
@@ -92,4 +93,15 @@ export function buildSlackSkipNotification(params: {
     user: params.actorUserId,
     threadTs: params.threadTs ?? params.ts,
   };
+}
+
+/**
+ * Repository label for user-facing surfaces (Slack), read from the run's
+ * firing-time snapshot — the automation row's selection may have been edited
+ * since this run started.
+ */
+export function formatRunRepositoryLabel(
+  run: Pick<AutomationRunRow, "repo_owner" | "repo_name"> | null | undefined
+): string {
+  return run?.repo_owner && run?.repo_name ? `${run.repo_owner}/${run.repo_name}` : "No repository";
 }

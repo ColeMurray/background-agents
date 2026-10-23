@@ -3673,6 +3673,40 @@ describe("Scheduler", () => {
       expect(promptCallCount(fetchMock)).toBe(0);
     });
 
+    it("scopes a shared Slack skip notice to one event on a reused scheduler", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([
+        sampleSlackAutomation,
+        { ...sampleSlackAutomation, id: "auto-slack-second" },
+      ]);
+      mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ status: "running" }));
+      const slackFetch = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("ok")
+      );
+      const scheduler = createScheduler(
+        createEnv({
+          SLACK_BOT: { fetch: slackFetch },
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        } as Partial<Env>)
+      );
+
+      expect(await scheduler.event(makeSlackEvent())).toMatchObject({ skipped: 2, triggered: 0 });
+      expect(slackFetch).toHaveBeenCalledTimes(1);
+      expect(String(slackFetch.mock.calls[0]![0])).toContain("/callbacks/automation-skip");
+
+      // A deduplication in the next event must not inherit the earlier skip notice.
+      mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-original");
+      expect(await scheduler.event(makeSlackEvent())).toMatchObject({ skipped: 2, triggered: 0 });
+      expect(slackFetch).toHaveBeenCalledTimes(1);
+
+      // A fresh concurrency skip still gets its own single notice.
+      mockStore.getInvocationIdByTriggerKey.mockResolvedValue(null);
+      expect(await scheduler.event(makeSlackEvent({ triggerKey: "slack:next" }))).toMatchObject({
+        skipped: 2,
+        triggered: 0,
+      });
+      expect(slackFetch).toHaveBeenCalledTimes(2);
+    });
+
     it("deduplicates a redelivered event via the invocation trigger-key index", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       mockStore.getLatestContinuableRun.mockResolvedValue(null);
@@ -3829,6 +3863,59 @@ describe("Scheduler", () => {
 
       beforeEach(() => {
         mockStore.getById.mockResolvedValue(sampleWebhookAutomation);
+      });
+
+      it("releases a follow-up reservation when persisted conditions are invalid", async () => {
+        mockStore.getById.mockResolvedValue({ ...sampleWebhookAutomation, trigger_config: "{" });
+
+        expect(await createScheduler().event(webhookEvent({}, "invalid-config"))).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: [],
+        });
+        const [claim] = mockStore.claimFollowUpReceipt.mock.calls[0]!;
+        expect(mockStore.releaseFollowUpReceipt).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:idem:invalid-config",
+          claim.claimId
+        );
+        expect(mockStore.getLatestContinuableRun).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("resolves an accepted follow-up before checking changed conditions", async () => {
+        mockStore.getById.mockResolvedValue(iterateOnly);
+        mockStore.claimFollowUpReceipt.mockResolvedValue({
+          kind: "accepted",
+          invocationId: "inv-accepted",
+        });
+
+        expect(await createScheduler().event(webhookEvent({ mode: "demo" }, "accepted"))).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-accepted"],
+        });
+        expect(mockStore.releaseFollowUpReceipt).not.toHaveBeenCalled();
+        expect(mockStore.getLatestContinuableRun).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("refuses a pending follow-up reservation without consuming or releasing it", async () => {
+        mockStore.claimFollowUpReceipt.mockResolvedValue({
+          kind: "pending",
+          invocationId: "inv-pending",
+        });
+
+        await expect(createScheduler().event(webhookEvent({}, "pending"))).rejects.toMatchObject({
+          name: "SessionFollowUpRefusedError",
+          invocationId: "inv-pending",
+          status: null,
+        });
+        expect(mockStore.releaseFollowUpReceipt).not.toHaveBeenCalled();
+        expect(mockStore.getLatestContinuableRun).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       });
 
       it("continues the session an earlier delivery with the same key started", async () => {
