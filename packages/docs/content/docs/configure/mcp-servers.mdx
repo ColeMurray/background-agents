@@ -104,6 +104,7 @@ A selection takes effect the next time a session's sandbox starts; a running ses
 
 - OpenCode: enabled servers in scope are written into the session's OpenCode configuration when the agent starts.
 - Claude Agent: the same servers are passed to the harness. OpenInspect's own tools reach Claude Agent through a built-in server named `oi`, separate from the servers you register.
+- Codex: the same servers are passed to Codex as its native MCP server settings.
 
 Server commands, arguments, and credentials are passed through as configured, and each server's tool selection is applied as described in [Limit the tools an agent sees](#limit-the-tools-an-agent-sees). Changes apply to new sessions; a running session keeps the server set it started with.
 

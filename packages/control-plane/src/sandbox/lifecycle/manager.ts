@@ -1108,9 +1108,6 @@ export class SandboxLifecycleManager
     return false;
   }
 
-  /**
-   * Restore a sandbox from a filesystem snapshot.
-   */
   /** Tells the user which restricted MCP servers a restored, older runtime was not given. */
   private recordWithheldMcpServers(names: string[], snapshotImageId: string): void {
     try {
@@ -1126,6 +1123,9 @@ export class SandboxLifecycleManager
     }
   }
 
+  /**
+   * Restore a sandbox from a filesystem snapshot.
+   */
   private async restoreFromSnapshot(
     snapshotImageId: string,
     snapshotRuntimeVersion: string
