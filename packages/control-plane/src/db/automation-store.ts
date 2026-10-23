@@ -10,7 +10,6 @@ import {
   DEFAULT_HARNESS,
   HARNESS_IDS,
   getHarnessCapabilities,
-  getValidHarnessOrDefault,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import type {
@@ -333,7 +332,10 @@ export function toAutomation(
     triggerType,
     scheduleCron: row.schedule_cron,
     scheduleTz: row.schedule_tz,
-    harness: getValidHarnessOrDefault(row.harness),
+    // Preserve an unrecognized stored value across rollback. Execution resolves
+    // stored harnesses with getStoredHarnessOrRefuse and must see the raw value
+    // in order to fail closed rather than silently run under OpenCode.
+    harness: row.harness,
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     enabled: isAutomationEnabled(row.enabled),
