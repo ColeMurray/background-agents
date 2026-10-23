@@ -7,6 +7,13 @@ export interface PiEventTranslationState {
   tools?: Map<string, PiToolTranslationState>;
 }
 
+interface TranslationEnvelope {
+  sessionId: string;
+  operationId: string;
+  timestamp: number;
+  subtask?: { conversationId: number; parentCallId: string };
+}
+
 interface PiToolTranslationState {
   tool: string;
   args: Record<string, unknown>;
@@ -20,7 +27,7 @@ const REDACTED = "[redacted]";
 export function translatePiEvents(
   events: readonly AgentEvent[],
   state: PiEventTranslationState,
-  envelope: { sessionId: string; operationId: string; timestamp: number }
+  envelope: TranslationEnvelope
 ): SandboxIngressEvent[] {
   const translated: SandboxIngressEvent[] = [];
   let textChanged = false;
@@ -97,7 +104,7 @@ export function translatePiEvents(
       case "message_end": {
         const message = event.entry.model?.[0];
         if (message?.role !== "assistant") break;
-        const stepId = `pi-entry:${String(event.entry.id ?? envelope.operationId)}`;
+        const stepId = scopedStepId(event.entry.id ?? envelope.operationId, envelope);
         const text = assistantText(message);
         if (text && text !== state.text) {
           state.text = text;
@@ -109,6 +116,7 @@ export function translatePiEvents(
           timestamp: envelope.timestamp,
           messageId: envelope.operationId,
           stepId,
+          ...subtaskFields(envelope),
         });
         translated.push({
           type: "step_finish",
@@ -129,6 +137,7 @@ export function translatePiEvents(
             total: message.usage.totalTokens,
           },
           reason: message.stopReason,
+          ...subtaskFields(envelope),
         });
         break;
       }
@@ -222,7 +231,7 @@ function snapshotToolStatus(snapshot: SnapshotEvent, entryId: unknown): "complet
 
 function tokenEvent(
   content: string,
-  envelope: { sessionId: string; operationId: string; timestamp: number }
+  envelope: TranslationEnvelope
 ): Extract<SandboxIngressEvent, { type: "token" }> {
   return {
     type: "token",
@@ -237,7 +246,7 @@ function tokenEvent(
 function settledSnapshotEvents(
   snapshot: SnapshotEvent,
   state: PiEventTranslationState,
-  envelope: { sessionId: string; operationId: string; timestamp: number }
+  envelope: TranslationEnvelope
 ): SandboxIngressEvent[] {
   let start = -1;
   for (let index = snapshot.entries.length - 1; index >= 0; index--) {
@@ -257,13 +266,14 @@ function settledSnapshotEvents(
         state.text = text;
         projected.push(tokenEvent(text, envelope));
       }
-      const stepId = `pi-entry:${String(entry.id ?? envelope.operationId)}`;
+      const stepId = scopedStepId(entry.id ?? envelope.operationId, envelope);
       projected.push({
         type: "step_start",
         sandboxId: `pi:${envelope.sessionId}`,
         timestamp: envelope.timestamp,
         messageId: envelope.operationId,
         stepId,
+        ...subtaskFields(envelope),
       });
       projected.push({
         type: "step_finish",
@@ -279,6 +289,7 @@ function settledSnapshotEvents(
           total: message.usage.totalTokens,
         },
         reason: message.stopReason,
+        ...subtaskFields(envelope),
       });
       for (const part of message.content) {
         if (part.type !== "toolCall") continue;
@@ -327,8 +338,16 @@ function toolEvent(
   state: PiToolTranslationState,
   callId: string,
   status: string,
-  envelope: { sessionId: string; operationId: string; timestamp: number }
+  envelope: TranslationEnvelope
 ): Extract<SandboxIngressEvent, { type: "tool_call" }> {
+  const scopedCallId = envelope.subtask
+    ? `pi-child:${envelope.subtask.conversationId}:${callId}`
+    : callId;
+  const parentCallId = state.taskCallId
+    ? envelope.subtask
+      ? `pi-child:${envelope.subtask.conversationId}:${state.taskCallId}`
+      : state.taskCallId
+    : envelope.subtask?.parentCallId;
   return {
     type: "tool_call",
     sandboxId: `pi:${envelope.sessionId}`,
@@ -336,12 +355,28 @@ function toolEvent(
     messageId: envelope.operationId,
     tool: state.tool,
     args: redactToolArguments(state.tool, state.args),
-    callId,
+    callId: scopedCallId,
     status,
     ...(state.output ? { output: redactToolOutput(state.tool, state.output) } : {}),
-    ...(state.isSubtask ? { isSubtask: true } : {}),
-    ...(state.taskCallId ? { taskCallId: state.taskCallId } : {}),
+    ...(state.isSubtask || envelope.subtask ? { isSubtask: true } : {}),
+    ...(envelope.subtask ? { childSessionId: String(envelope.subtask.conversationId) } : {}),
+    ...(parentCallId ? { taskCallId: parentCallId } : {}),
   };
+}
+
+function subtaskFields(envelope: TranslationEnvelope) {
+  return envelope.subtask
+    ? {
+        isSubtask: true as const,
+        childSessionId: String(envelope.subtask.conversationId),
+        taskCallId: envelope.subtask.parentCallId,
+      }
+    : {};
+}
+
+function scopedStepId(value: unknown, envelope: TranslationEnvelope): string {
+  const id = `pi-entry:${String(value)}`;
+  return envelope.subtask ? `pi-child:${envelope.subtask.conversationId}:${id}` : id;
 }
 
 function redactToolArguments(tool: string, args: Record<string, unknown>): Record<string, unknown> {

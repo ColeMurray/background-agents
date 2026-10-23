@@ -19,6 +19,17 @@ export interface InProcessHarnessReceipt {
   rejected?: string;
 }
 
+/** Model-producing maintenance that remains owned by SessionMessageQueue. */
+export type InProcessHarnessControl = {
+  kind: "compact-context";
+  conversationId?: string;
+  instructions?: string;
+};
+
+export interface InProcessHarnessControlPrompt extends InProcessHarnessPrompt {
+  control: InProcessHarnessControl;
+}
+
 export interface InProcessHarnessCapabilitySnapshot {
   version: number;
   capabilities: Readonly<Record<string, FeatureCapabilityMode>>;
@@ -26,7 +37,7 @@ export interface InProcessHarnessCapabilitySnapshot {
 
 export type InProcessHarnessOperationStatus =
   | { status: "not_found" }
-  | { status: "queued" | "running" | "parked" }
+  | { status: "queued" | "running" | "sleeping" | "parked" }
   | {
       status: "settled";
       result: { status: "done" | "unanswered"; reason?: string };
@@ -37,6 +48,7 @@ export interface InProcessHarnessRuntime {
   readonly harness: HarnessId;
   initialize(sessionId: string, snapshot: InProcessHarnessCapabilitySnapshot): Promise<void>;
   submit(input: InProcessHarnessPrompt): Promise<InProcessHarnessReceipt>;
+  submitControl(input: InProcessHarnessControlPrompt): Promise<InProcessHarnessReceipt>;
   lookup(sessionId: string, operationId: string): Promise<InProcessHarnessOperationStatus>;
   abort(sessionId: string, operationId?: string): Promise<boolean>;
   preserveForArchive(sessionId: string): Promise<void>;

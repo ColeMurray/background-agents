@@ -835,14 +835,14 @@ describe("session runtime proxy routes", () => {
         env
       );
 
-      expect(messaging.status).toBe(202);
+      expect(messaging.status).toBe(400);
       // A collaborator may not reshape the agent's durable conversation.
       expect(forked.status).toBe(400);
       await expect(forked.json()).resolves.toMatchObject({
         error: "Pi control action is not allowed on this route",
       });
       expect(lifecycle.status).toBe(403);
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
     });
 
     it("admits the agent's lifecycle to a session owner", async () => {
@@ -874,7 +874,7 @@ describe("session runtime proxy routes", () => {
       expect(requests).toHaveLength(5);
     });
 
-    it("forwards canonical browser identity into SessionDO", async () => {
+    it("denies browser messaging controls that bypass the canonical queue", async () => {
       const requests: Request[] = [];
       const fetch = vi.fn(async (request: Request) => {
         requests.push(request);
@@ -890,16 +890,11 @@ describe("session runtime proxy routes", () => {
         createEnv(fetch)
       );
 
-      expect(response.status).toBe(202);
-      expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.piControl);
-      await expect(requests[0].json()).resolves.toMatchObject({
-        actorId: "user-1",
-        canonicalUserId: "user-1",
-        source: "web",
-      });
+      expect(response.status).toBe(400);
+      expect(requests).toEqual([]);
     });
 
-    it("forwards verified Slack actor identity and only explicit Slack actions", async () => {
+    it("denies Slack messaging controls that bypass the canonical queue", async () => {
       authenticateAs({
         kind: "service",
         service: "slack-bot",
@@ -938,14 +933,9 @@ describe("session runtime proxy routes", () => {
         env
       );
 
-      expect(allowed.status).toBe(202);
-      await expect(requests[0].json()).resolves.toMatchObject({
-        actorId: "slack:U0123",
-        canonicalUserId: "user-1",
-        source: "slack",
-      });
-      expect(denied.status).toBe(403);
-      expect(fetch).toHaveBeenCalledOnce();
+      expect(allowed.status).toBe(400);
+      expect(denied.status).toBe(400);
+      expect(fetch).not.toHaveBeenCalled();
     });
   });
 

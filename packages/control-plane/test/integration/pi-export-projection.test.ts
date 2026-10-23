@@ -72,10 +72,15 @@ describe("the Pi projection the export reads", () => {
         },
       ],
       responses: [
+        fauxAssistantMessage(fauxToolCall("subagent", { task: "inspect independently" }), {
+          stopReason: "toolUse",
+        }),
         fauxAssistantMessage(fauxToolCall("read", { path: "/workspace/missing.txt" }), {
           stopReason: "toolUse",
         }),
-        fauxAssistantMessage("there are no other agents"),
+        fauxAssistantMessage("child answer"),
+        fauxAssistantMessage("parent answer"),
+        fauxAssistantMessage("summary"),
       ],
     });
     piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
@@ -119,41 +124,133 @@ describe("the Pi projection the export reads", () => {
 
     // The session runs the turn.
     const response = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.prompt}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authorId: "user-1",
+          canonicalUserId: "user-1",
+          source: "web",
+          clientRequestId: "projection-1",
+          content: "write the notes",
+        }),
+      })
+    );
+    expect(response.status).toBe(200);
+    const { messageId } = await response.json<{ messageId: string }>();
+    await vi.waitFor(
+      async () => {
+        await expect(
+          queryDO(sessionStub, "SELECT status FROM messages WHERE id = ?", messageId)
+        ).resolves.toEqual([{ status: "completed" }]);
+      },
+      { timeout: 10_000 }
+    );
+
+    // The session's own events: the tool call and the terminal completion.
+    // These are exactly the rows the export reads.
+    const events = await queryDO<{ type: string; data: string; timeline_sequence: number }>(
+      sessionStub,
+      "SELECT type, data, timeline_sequence FROM events WHERE message_id = ? ORDER BY timeline_sequence",
+      messageId
+    );
+    const types = events.map((event) => event.type);
+    expect(types).toContain("tool_call");
+    expect(types).toContain("execution_complete");
+    const childRead = events.find((event) => {
+      const data = JSON.parse(event.data) as Record<string, unknown>;
+      return data.type === "tool_call" && data.tool === "read" && data.isSubtask === true;
+    });
+    expect(childRead).toBeDefined();
+    expect(JSON.parse(childRead!.data)).toMatchObject({
+      isSubtask: true,
+      taskCallId: expect.any(String),
+    });
+    const childUsage = await queryDO<{
+      id: string;
+      is_subtask: number;
+      child_session_id: string;
+      task_call_id: string;
+    }>(
+      sessionStub,
+      "SELECT id, is_subtask, child_session_id, task_call_id FROM step_usage WHERE message_id = ? AND is_subtask = 1",
+      messageId
+    );
+    expect(childUsage.length).toBeGreaterThan(0);
+    expect(new Set(childUsage.map((usage) => usage.id)).size).toBe(childUsage.length);
+    expect(childUsage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          child_session_id: expect.any(String),
+          task_call_id: expect.any(String),
+        }),
+      ])
+    );
+    const terminal = events.find((event) => event.type === "execution_complete");
+    expect(childRead!.timeline_sequence).toBeLessThan(terminal!.timeline_sequence);
+    await expect(
+      runInDurableObject(piStub as unknown as DurableObjectStub, (instance) =>
+        (instance as unknown as PiSessionDO).control({
+          sessionId: session.sessionName,
+          requestId: "late-child-message",
+          action: "send",
+          conversationId: Number(childUsage[0]!.child_session_id),
+          content: "this must not reopen a finished child",
+        })
+      )
+    ).rejects.toThrow("Task-owned Pi conversation is no longer active");
+
+    const compactResponse = await sessionStub.fetch(
       new Request(`http://session${SessionInternalPaths.piControl}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actorId: "user-1",
+          canonicalUserId: "user-1",
           source: "web",
           control: {
             sessionId: session.sessionName,
-            requestId: "projection-1",
-            action: "send",
-            content: "write the notes",
+            requestId: "compact-projection-1",
+            action: "compact",
+            instructions: "retain decisions",
           },
         }),
       })
     );
-    expect(response.status).toBe(202);
-    await vi.waitFor(async () => {
-      await expect(
-        queryDO(
-          sessionStub,
-          "SELECT state, error_code FROM pi_control_receipts WHERE request_id = ?",
-          "projection-1"
-        )
-      ).resolves.toEqual([{ state: "completed", error_code: null }]);
-    });
-
-    // The session's own events: the tool call and the terminal completion.
-    // These are exactly the rows the export reads.
-    const events = await queryDO<{ type: string }>(
+    expect(compactResponse.status).toBe(202);
+    await vi.waitFor(
+      async () => {
+        await expect(
+          queryDO(
+            sessionStub,
+            "SELECT status FROM messages WHERE id = ?",
+            "pi-control:compact-projection-1"
+          )
+        ).resolves.toEqual([{ status: "completed" }]);
+      },
+      { timeout: 10_000 }
+    );
+    const compactEvents = await queryDO<{ type: string }>(
       sessionStub,
       "SELECT type FROM events WHERE message_id = ? ORDER BY timeline_sequence",
-      "pi-control:projection-1"
+      "pi-control:compact-projection-1"
     );
-    const types = events.map((event) => event.type);
-    expect(types).toContain("tool_call");
-    expect(types).toContain("execution_complete");
+    const compactTypes = compactEvents.map((event) => event.type);
+    expect(compactTypes.filter((type) => type === "context_compacted")).toHaveLength(1);
+    expect(compactTypes.indexOf("context_compacted")).toBeLessThan(
+      compactTypes.indexOf("execution_complete")
+    );
+    const compactUsage = await queryDO<{ created_at: number; message_cost_usd: number }>(
+      sessionStub,
+      "SELECT created_at, message_cost_usd FROM step_usage WHERE message_id = ?",
+      "pi-control:compact-projection-1"
+    );
+    expect(compactUsage).toHaveLength(1);
+    const compactTerminal = await queryDO<{ created_at: number }>(
+      sessionStub,
+      "SELECT created_at FROM events WHERE message_id = ? AND type = 'execution_complete'",
+      "pi-control:compact-projection-1"
+    );
+    expect(compactUsage[0]!.created_at).toBeLessThanOrEqual(compactTerminal[0]!.created_at);
   });
 });

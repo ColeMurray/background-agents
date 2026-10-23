@@ -281,6 +281,10 @@ function buildQueue(
       accepted: true,
       rejected: undefined as string | undefined,
     })),
+    submitControl: vi.fn(async (input) => ({
+      operationId: input.messageId,
+      accepted: true,
+    })),
     abort: vi.fn(async () => true),
     lookup: vi.fn<PiRuntimeDispatch["lookup"]>(async () => ({ status: "running" })),
     status: vi.fn(async () => ({ busy: false, pending: 0 })),
@@ -465,6 +469,62 @@ describe("SessionMessageQueue", () => {
         duration_ms: expect.any(Number),
       })
     );
+  });
+
+  it("dispatches a persisted compaction control only after the canonical message claim", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(
+      createMessage({
+        id: "pi-control:compact-1",
+        in_process_control: JSON.stringify({
+          kind: "compact-context",
+          conversationId: "1",
+          instructions: "retain decisions",
+        }),
+      })
+    );
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "pi-control:compact-1",
+      expect.any(Number),
+      expect.any(Object)
+    );
+    expect(h.piRuntime.submitControl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "pi-control:compact-1",
+        control: {
+          kind: "compact-context",
+          conversationId: "1",
+          instructions: "retain decisions",
+        },
+      })
+    );
+    expect(h.piRuntime.submit).not.toHaveBeenCalled();
+  });
+
+  it("fails a malformed persisted control without starting provider work", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValueOnce(
+      createMessage({ in_process_control: '{"kind":"unknown"}' })
+    );
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, error: "Invalid queued in-process control" }),
+      expect.any(Number),
+      "pending"
+    );
+    expect(h.piRuntime.submit).not.toHaveBeenCalled();
+    expect(h.piRuntime.submitControl).not.toHaveBeenCalled();
   });
 
   it("keeps ambiguous Pi admission processing and emits the started callback", async () => {

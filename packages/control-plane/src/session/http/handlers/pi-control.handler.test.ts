@@ -32,6 +32,10 @@ function fixture(overrides: Record<string, unknown> = {}) {
   const setSessionBudget = vi.fn();
   const receipts = new PiControlRepository(storage.sql);
   const recordHumanControl = vi.fn();
+  const enqueueModelControl = vi.fn(async () => ({
+    messageId: "pi-control:request-1",
+    deduplicated: false,
+  }));
   const recordTerminal = vi.fn();
   const operations = { begin: vi.fn(), transition: vi.fn(), get: vi.fn(() => null) };
   const handler = new PiControlHandler(
@@ -45,6 +49,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     runtime,
     { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() } as never,
     recordHumanControl,
+    enqueueModelControl,
     recordTerminal,
     operations
   );
@@ -55,6 +60,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     addSessionCost,
     setSessionBudget,
     recordHumanControl,
+    enqueueModelControl,
     recordTerminal,
     operations,
   };
@@ -67,7 +73,7 @@ function request(requestId = "request-1") {
       actorId: "user-1",
       canonicalUserId: "canonical-user-1",
       source: "web",
-      control: { sessionId: "session-1", requestId, action: "follow_up", content: "focus" },
+      control: { sessionId: "session-1", requestId, action: "reset" },
     }),
   });
 }
@@ -133,7 +139,7 @@ describe("PiControlHandler", () => {
     });
     expect((await h.handler.handle(changed)).status).toBe(409);
   });
-  it("terminalizes callbacks and applies their cost exactly once", async () => {
+  it("terminalizes callbacks and leaves cost to canonical event ingestion", async () => {
     const h = fixture({ max_cost_usd: 0.2 });
     expect((await h.handler.handle(request())).status).toBe(202);
     const completion = () =>
@@ -147,8 +153,8 @@ describe("PiControlHandler", () => {
     await expect((await h.handler.complete(completion())).json()).resolves.toEqual({
       status: "already_recorded",
     });
-    expect(h.addSessionCost).toHaveBeenCalledOnce();
-    expect(h.setSessionBudget).toHaveBeenCalledExactlyOnceWith(0.2, true, expect.any(Number));
+    expect(h.addSessionCost).not.toHaveBeenCalled();
+    expect(h.setSessionBudget).not.toHaveBeenCalled();
     expect(h.receipts.get("request-1")?.state).toBe("completed");
   });
   it("records a projected control turn's terminal event when its completion arrives", async () => {
@@ -181,6 +187,36 @@ describe("PiControlHandler", () => {
     });
   });
 
+  it("recovers a queued control completion when restart interrupted operation linking", async () => {
+    const h = fixture();
+    h.receipts.admit(
+      {
+        requestId: "restart-gap",
+        requestHash: "a".repeat(64),
+        action: "compact",
+        actorId: "user-1",
+        source: "web",
+      },
+      Date.now()
+    );
+
+    const response = await h.handler.complete(
+      new Request("http://session/internal/pi-control-completion", {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "pi-control:restart-gap",
+          status: "completed",
+          costUsd: 0,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(h.recordTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "pi-control:restart-gap", success: true })
+    );
+  });
+
   it("projects human controls with verified actor metadata but not internal Pi controls", async () => {
     const human = fixture();
     expect((await human.handler.handle(request("human-control"))).status).toBe(202);
@@ -190,7 +226,7 @@ describe("PiControlHandler", () => {
         source: "web",
         requestId: "human-control",
         requestFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-        control: expect.objectContaining({ action: "follow_up", content: "focus" }),
+        control: expect.objectContaining({ action: "reset" }),
       })
     );
 
@@ -211,6 +247,37 @@ describe("PiControlHandler", () => {
     });
     expect((await internal.handler.handle(internalRequest)).status).toBe(202);
     expect(internal.recordHumanControl).not.toHaveBeenCalled();
+  });
+
+  it("queues manual compaction through the canonical message queue instead of dispatching it directly", async () => {
+    const h = fixture();
+    const compact = new Request("http://session/internal/pi-control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actorId: "user-1",
+        canonicalUserId: "canonical-user-1",
+        source: "web",
+        control: {
+          sessionId: "session-1",
+          requestId: "compact-queued",
+          action: "compact",
+          conversationId: 1,
+          instructions: "retain decisions",
+        },
+      }),
+    });
+
+    const response = await h.handler.handle(compact);
+
+    expect(response.status).toBe(202);
+    expect(h.enqueueModelControl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "compact-queued",
+        control: expect.objectContaining({ action: "compact", instructions: "retain decisions" }),
+      })
+    );
+    expect(h.runtime.control).not.toHaveBeenCalled();
   });
   it("does not re-execute a human control after its bounded receipt was pruned", async () => {
     const h = fixture();

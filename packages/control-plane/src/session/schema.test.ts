@@ -4,6 +4,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import {
+  IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
@@ -39,6 +40,10 @@ it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
     {
       id: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
       feature: "sandboxExecution",
+    },
+    {
+      id: IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
+      feature: "coreAuthority",
     },
   ]);
 });

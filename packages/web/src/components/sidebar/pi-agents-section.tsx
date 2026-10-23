@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type RefObject } from "react";
+import { useState } from "react";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { formatSessionCost } from "@/lib/session-cost";
 import { usePiAgents, type PiAgentSnapshot } from "@/hooks/use-pi-agents";
@@ -23,10 +23,9 @@ interface PiAgentsSectionProps {
 type ConfirmedAction =
   | { kind: "fork"; agent: PiAgentSnapshot }
   | { kind: "reset"; agent: PiAgentSnapshot }
-  | { kind: "handoff"; agent: PiAgentSnapshot; message: string }
   | { kind: "compact"; agent: PiAgentSnapshot };
 type AgentAction = Parameters<ReturnType<typeof usePiAgents>["run"]>[0];
-type ExecuteAgentAction = (action: AgentAction, success: string, clear?: boolean) => Promise<void>;
+type ExecuteAgentAction = (action: AgentAction, success: string) => Promise<void>;
 
 const actionClass =
   "min-h-11 rounded-sm border border-border px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none";
@@ -64,23 +63,19 @@ function PiAgentsWorkspace({
   run: ReturnType<typeof usePiAgents>["run"];
 }) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [actionFailed, setActionFailed] = useState(false);
   const [confirmedAction, setConfirmedAction] = useState<ConfirmedAction | null>(null);
-  const messageRef = useRef<HTMLTextAreaElement>(null);
   const selected = agents.find((agent) => agent.conversationId === selectedId) ?? agents[0]!;
 
-  const execute = async (action: Parameters<typeof run>[0], success: string, clear = false) => {
+  const execute = async (action: Parameters<typeof run>[0], success: string) => {
     setPending(true);
     setAnnouncement("");
     setActionFailed(false);
     try {
       await run(action);
-      if (clear) setMessage("");
       setAnnouncement(success);
-      messageRef.current?.focus();
     } catch (actionError) {
       setActionFailed(true);
       setAnnouncement(actionError instanceof Error ? actionError.message : "Agent action failed");
@@ -94,10 +89,9 @@ function PiAgentsWorkspace({
     setConfirmedAction(null);
     if (!action) return;
     const plan = confirmedActionPlan(action);
-    if (plan) await execute(plan.action, plan.success, plan.clear);
+    if (plan) await execute(plan.action, plan.success);
   };
 
-  const canSend = capabilities.collaborate && message.trim().length > 0 && !pending;
   const confirmCopy = confirmedAction ? confirmationCopy(confirmedAction.kind) : null;
 
   return (
@@ -115,24 +109,15 @@ function PiAgentsWorkspace({
 
       <AgentPicker agents={agents} selected={selected} onSelect={setSelectedId} />
       <AgentSummary agent={selected} />
-      {capabilities.collaborate && (
-        <AgentMessageComposer
+      {!selected.owner && (
+        <AgentConversationActions
           agent={selected}
-          message={message}
-          messageRef={messageRef}
-          canSend={canSend}
-          onMessageChange={setMessage}
-          execute={execute}
+          capabilities={capabilities}
+          pending={pending}
+          onConfirm={setConfirmedAction}
         />
       )}
-      <AgentConversationActions
-        agent={selected}
-        capabilities={capabilities}
-        message={message}
-        pending={pending}
-        onConfirm={setConfirmedAction}
-      />
-      {capabilities.lifecycle && selected.tasks.length > 0 && (
+      {capabilities.lifecycle && !selected.owner && selected.tasks.length > 0 && (
         <AgentTaskList agent={selected} pending={pending} execute={execute} />
       )}
 
@@ -189,16 +174,6 @@ function confirmedActionPlan(
       return {
         action: { action: "reset", conversationId: confirmed.agent.conversationId },
         success: "Agent context reset",
-      };
-    case "handoff":
-      return {
-        action: {
-          action: "handoff",
-          conversationId: confirmed.agent.conversationId,
-          handoff: confirmed.message,
-        },
-        success: "Agent context handed off",
-        clear: true,
       };
     case "compact":
       return {
@@ -258,69 +233,14 @@ function AgentSummary({ agent }: { agent: PiAgentSnapshot }) {
   );
 }
 
-function AgentMessageComposer({
-  agent,
-  message,
-  messageRef,
-  canSend,
-  onMessageChange,
-  execute,
-}: {
-  agent: PiAgentSnapshot;
-  message: string;
-  messageRef: RefObject<HTMLTextAreaElement | null>;
-  canSend: boolean;
-  onMessageChange: (message: string) => void;
-  execute: ExecuteAgentAction;
-}) {
-  const send = (action: "send" | "follow_up", success: string) =>
-    execute({ action, conversationId: agent.conversationId, content: message }, success, true);
-  return (
-    <div className="space-y-2">
-      <label htmlFor="pi-agent-message" className="text-xs font-medium">
-        Message selected agent
-      </label>
-      <textarea
-        ref={messageRef}
-        id="pi-agent-message"
-        value={message}
-        maxLength={20_000}
-        rows={3}
-        onChange={(event) => onMessageChange(event.target.value)}
-        className="w-full resize-y rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          className={actionClass}
-          disabled={!canSend || agent.status !== "idle"}
-          onClick={() => void send("send", "Message sent")}
-        >
-          Send
-        </button>
-        <button
-          type="button"
-          className={actionClass}
-          disabled={!canSend}
-          onClick={() => void send("follow_up", "Follow-up queued")}
-        >
-          Follow up now
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function AgentConversationActions({
   agent,
   capabilities,
-  message,
   pending,
   onConfirm,
 }: {
   agent: PiAgentSnapshot;
   capabilities: SessionCapabilities;
-  message: string;
   pending: boolean;
   onConfirm: (action: ConfirmedAction) => void;
 }) {
@@ -347,24 +267,14 @@ function AgentConversationActions({
         </button>
       )}
       {capabilities.lifecycle && (
-        <>
-          <button
-            type="button"
-            className={actionClass}
-            disabled={pending}
-            onClick={() => onConfirm({ kind: "reset", agent })}
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            className={actionClass}
-            disabled={!message.trim() || pending}
-            onClick={() => onConfirm({ kind: "handoff", agent, message: message.trim() })}
-          >
-            Handoff
-          </button>
-        </>
+        <button
+          type="button"
+          className={actionClass}
+          disabled={pending}
+          onClick={() => onConfirm({ kind: "reset", agent })}
+        >
+          Reset
+        </button>
       )}
     </div>
   );
@@ -426,12 +336,6 @@ function confirmationCopy(kind: ConfirmedAction["kind"]) {
         title: "Reset this conversation?",
         description: "The next turn will start with a fresh active context.",
         action: "Reset context",
-      };
-    case "handoff":
-      return {
-        title: "Hand off with this message?",
-        description: "The current context will reset and the message will seed the next turn.",
-        action: "Hand off",
       };
   }
 }

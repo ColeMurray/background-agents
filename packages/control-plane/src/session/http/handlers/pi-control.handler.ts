@@ -13,6 +13,7 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { PiControlRepository } from "../../pi-control-repository";
 import type { PiOperationRepository } from "../../pi-operation-repository";
 import { EXECUTION_DEADLINE_GRACE_MS } from "../../../scheduler/scheduler";
+import { piControlRequestIdFromMessageId } from "../../pi-control-message-id";
 
 const CONTROL_TIMEOUT_MS = 15_000;
 const envelopeSchema = z.strictObject({
@@ -43,12 +44,9 @@ const MODEL_CONTROL_ACTIONS = new Set(["submit", "send", "follow_up", "compact"]
 
 export class PiControlHandler {
   constructor(
-    private readonly sessions: Pick<
-      SessionCoreRepository,
-      "getSession" | "addSessionCost" | "setSessionBudget" | "transaction"
-    >,
+    private readonly sessions: Pick<SessionCoreRepository, "getSession">,
     private readonly receipts: PiControlRepository,
-    private readonly runtime: Pick<PiRuntimeDispatch, "control" | "abort"> | undefined,
+    private readonly runtime: Pick<PiRuntimeDispatch, "control"> | undefined,
     private readonly log: Logger,
     private readonly recordHumanControl: (input: {
       actorId: string;
@@ -58,12 +56,18 @@ export class PiControlHandler {
       requestFingerprint: string;
       control: PiHumanControl;
     }) => { conflict: boolean; deduplicated: boolean; messageId?: string },
+    private readonly enqueueModelControl: (input: {
+      actorId: string;
+      canonicalUserId?: string | null;
+      source: "web" | "slack";
+      requestId: string;
+      control: Extract<PiHumanControl, { action: "compact" }>;
+    }) => Promise<{ messageId: string; deduplicated: boolean }>,
     /**
      * Record the terminal event of a control turn.
      *
-     * A control turn is not owned by the session's message queue, so the
-     * runtime's completion is the only place its terminal event can come
-     * from. The callback writes the event idempotently and broadcasts it.
+     * The runtime's completion closes both canonical queued compactions and
+     * non-model lifecycle controls idempotently through the normal event path.
      */
     private readonly recordTerminal: (input: {
       operationId: string;
@@ -71,7 +75,7 @@ export class PiControlHandler {
       error?: string;
       costUsd: number;
       now: number;
-    }) => void,
+    }) => Promise<void>,
     /**
      * The session's record of the turns the runtime is running.
      *
@@ -80,7 +84,8 @@ export class PiControlHandler {
      * events will name.
      */
     private readonly operations?: Pick<PiOperationRepository, "begin" | "transition" | "get">,
-    private readonly getExecutionTimeoutMs: () => number = () => CONTROL_TIMEOUT_MS
+    private readonly getExecutionTimeoutMs: () => number = () => CONTROL_TIMEOUT_MS,
+    private readonly dispatchQueuedControl: () => Promise<void> = async () => {}
   ) {}
   async handle(request: Request): Promise<Response> {
     const parsed = envelopeSchema.safeParse(await request.json().catch(() => null));
@@ -126,6 +131,64 @@ export class PiControlHandler {
       return Response.json({ error: "Pi control request id conflict" }, { status: 409 });
     }
     const receipt = admission.receipt;
+    if ((source === "web" || source === "slack") && control.action === "compact") {
+      if (!admission.created) {
+        const current = this.receipts.get(control.requestId) ?? receipt;
+        return Response.json(
+          { requestId: current.requestId, state: current.state, result: current.result },
+          { status: current.state === "accepted" || current.state === "processing" ? 202 : 200 }
+        );
+      }
+      try {
+        const queued = await this.enqueueModelControl({
+          actorId,
+          canonicalUserId,
+          source,
+          requestId: control.requestId,
+          control,
+        });
+        if (queued.deduplicated) {
+          this.receipts.settle(
+            control.requestId,
+            "failed",
+            undefined,
+            "expired_idempotency_receipt",
+            Date.now()
+          );
+          return Response.json(
+            { error: "Pi control receipt expired; use a new request id" },
+            { status: 409 }
+          );
+        }
+        this.receipts.attachOperation(control.requestId, queued.messageId);
+        this.receipts.settle(
+          control.requestId,
+          "accepted",
+          { messageId: queued.messageId },
+          undefined,
+          Date.now()
+        );
+        await this.dispatchQueuedControl();
+        return Response.json(
+          {
+            requestId: control.requestId,
+            state: "accepted",
+            result: { messageId: queued.messageId },
+          },
+          { status: 202 }
+        );
+      } catch (error) {
+        this.receipts.settle(
+          control.requestId,
+          "failed",
+          undefined,
+          isDeterministicControlError(error) ? "rejected" : "queue_unavailable",
+          Date.now()
+        );
+        const status = isDeterministicControlError(error) ? 409 : 503;
+        return Response.json({ error: "Pi compaction could not be queued" }, { status });
+      }
+    }
     let projection: { conflict: boolean; deduplicated: boolean; messageId?: string } | undefined;
     if ((source === "web" || source === "slack") && isHumanControl(control)) {
       try {
@@ -230,9 +293,6 @@ export class PiControlHandler {
       this.receipts.prune();
       return Response.json(result, { status: result.state === "accepted" ? 202 : 200 });
     } catch (error) {
-      if (error instanceof Error && error.message.includes("timed out") && operationId) {
-        await this.runtime.abort(control.sessionId, operationId).catch(() => false);
-      }
       const deterministic = read || isDeterministicControlError(error);
       const state = deterministic ? "failed" : "indeterminate";
       const code =
@@ -247,7 +307,7 @@ export class PiControlHandler {
       // indeterminate outcome may still run; its completion carries the
       // terminal event.
       if (deterministic && operationId) {
-        this.recordTerminal({
+        await this.recordTerminal({
           operationId,
           success: false,
           error: code,
@@ -279,21 +339,20 @@ export class PiControlHandler {
     if (!session || session.harness !== "pi")
       return Response.json({ error: "Session does not use Pi Durable" }, { status: 409 });
     const now = Date.now();
-    const completion = this.sessions.transaction(() => {
-      const result = this.receipts.complete(
-        parsed.data.requestId,
-        parsed.data.status,
-        parsed.data.errorCode,
-        now
-      );
-      if (result.changed && parsed.data.costUsd > 0) {
-        const totalCost = this.sessions.addSessionCost(parsed.data.costUsd, now);
-        if (session.max_cost_usd !== null && totalCost >= session.max_cost_usd) {
-          this.sessions.setSessionBudget(session.max_cost_usd, true, now);
-        }
-      }
-      return result;
-    });
+    let linkedReceipt =
+      this.receipts.get(parsed.data.requestId) ??
+      this.receipts.getByOperationId(parsed.data.requestId) ??
+      this.receipts.get(piControlRequestIdFromMessageId(parsed.data.requestId) ?? "");
+    if (linkedReceipt && !linkedReceipt.operationId) {
+      this.receipts.attachOperation(linkedReceipt.requestId, parsed.data.requestId);
+      linkedReceipt = this.receipts.get(linkedReceipt.requestId);
+    }
+    const completion = this.receipts.complete(
+      linkedReceipt?.requestId ?? parsed.data.requestId,
+      parsed.data.status,
+      parsed.data.errorCode,
+      now
+    );
     if (!completion.receipt)
       return Response.json({ error: "Pi control receipt not found" }, { status: 404 });
     // The receipt is settled; the turn's message still needs its terminal
@@ -301,7 +360,7 @@ export class PiControlHandler {
     // the event upsert is idempotent and a retry may be all that survives a
     // crash between the receipt and the timeline.
     if (completion.receipt.operationId) {
-      this.recordTerminal({
+      await this.recordTerminal({
         operationId: completion.receipt.operationId,
         success: parsed.data.status === "completed",
         ...(parsed.data.errorCode ? { error: parsed.data.errorCode } : {}),

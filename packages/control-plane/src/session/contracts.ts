@@ -105,6 +105,7 @@ export const SessionInternalPaths = {
   archive: "/internal/archive",
   unarchive: "/internal/unarchive",
   expireDraft: "/internal/expire-draft",
+  destroy: "/internal/destroy",
   verifySandboxToken: "/internal/verify-sandbox-token",
   openaiTokenRefresh: "/internal/openai-token-refresh",
   piCredential: "/internal/pi-credential",

@@ -1,6 +1,7 @@
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { ParticipantRow } from "./types";
+import type { InProcessHarnessControl } from "../harness/in-process-runtime";
 
 export interface PromptMessageData {
   clientRequestId?: string;
@@ -22,6 +23,8 @@ export interface EnqueuePromptCoreData {
   clientRequestId?: string;
   /** Typed provenance for a message that came from somewhere else. */
   originContext?: Record<string, unknown>;
+  inProcessControl?: InProcessHarnessControl;
+  messageId?: string;
 }
 
 export interface EnqueuedPrompt {

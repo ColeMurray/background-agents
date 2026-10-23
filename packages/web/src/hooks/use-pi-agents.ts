@@ -8,7 +8,6 @@ import { piAgentsEnvelopeSchema, type PiAgentsEnvelope } from "@/lib/pi-agents";
 export type { PiAgentSnapshot } from "@/lib/pi-agents";
 
 type PiAgentAction =
-  | { action: "send" | "follow_up"; conversationId: number; content: string }
   | { action: "cancel_exact"; taskId: number }
   | { action: "fork"; conversationId: number; entryId: number }
   | { action: "reset"; conversationId: number }

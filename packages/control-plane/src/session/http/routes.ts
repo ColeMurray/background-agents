@@ -47,6 +47,7 @@ export interface SessionInternalRouteHandlers {
   archive: SessionInternalRouteHandler;
   unarchive: SessionInternalRouteHandler;
   expireDraft: SessionInternalRouteHandler;
+  destroy: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
   piCredential: SessionInternalRouteHandler;
@@ -146,6 +147,7 @@ export function createSessionInternalRoutes(
     { method: "POST", path: SessionInternalPaths.archive, handler: handlers.archive },
     { method: "POST", path: SessionInternalPaths.unarchive, handler: handlers.unarchive },
     { method: "POST", path: SessionInternalPaths.expireDraft, handler: handlers.expireDraft },
+    { method: "POST", path: SessionInternalPaths.destroy, handler: handlers.destroy },
     {
       method: "POST",
       path: SessionInternalPaths.verifySandboxToken,

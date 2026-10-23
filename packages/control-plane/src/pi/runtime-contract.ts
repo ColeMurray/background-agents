@@ -79,16 +79,12 @@ export const piRuntimeResultSchema = z.object({
 
 export type PiRuntimeOperationStatus =
   | { status: "not_found" }
-  | { status: "queued" }
-  | { status: "running" }
-  | { status: "parked" }
+  | { status: "queued" | "running" | "sleeping" | "parked" }
   | { status: "settled"; result: PiRuntimeResult };
 
 export const piRuntimeOperationStatusSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("not_found") }),
-  z.object({ status: z.literal("queued") }),
-  z.object({ status: z.literal("running") }),
-  z.object({ status: z.literal("parked") }),
+  z.object({ status: z.enum(["queued", "running", "sleeping", "parked"]) }),
   z.object({ status: z.literal("settled"), result: piRuntimeResultSchema }),
 ]) satisfies z.ZodType<PiRuntimeOperationStatus>;
 

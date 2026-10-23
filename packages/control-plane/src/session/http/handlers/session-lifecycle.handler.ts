@@ -71,7 +71,10 @@ export class SessionLifecycleHandler {
     private readonly durableObjectId: string,
     private readonly cancelSession: () => Promise<void>,
     private readonly inProcessLifecycle:
-      | Pick<InProcessHarnessRuntime, "harness" | "preserveForArchive" | "restoreFromArchive">
+      | Pick<
+          InProcessHarnessRuntime,
+          "harness" | "preserveForArchive" | "restoreFromArchive" | "destroy"
+        >
       | undefined
   ) {}
 
@@ -285,5 +288,18 @@ export class SessionLifecycleHandler {
     }
 
     return Response.json({ status: "cancelled" });
+  }
+
+  /** Destroy runtime-owned state before the global index forgets the session. */
+  async destroy(): Promise<Response> {
+    const session = this.sessionCoreRepository.getSession();
+    if (!session) return Response.json({ status: "absent" });
+    const sessionId = session.session_name || session.id;
+    if (this.inProcessLifecycle?.harness === session.harness) {
+      await this.inProcessLifecycle.destroy(sessionId);
+    } else if (this.sandboxRepository.getSandbox()) {
+      await this.sandboxLifecycle.cancelSandbox();
+    }
+    return Response.json({ status: "destroyed" });
   }
 }

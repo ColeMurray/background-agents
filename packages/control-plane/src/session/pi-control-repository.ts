@@ -36,6 +36,12 @@ export class PiControlRepository {
       errorCode: row.error_code == null ? null : String(row.error_code),
     };
   }
+  getByOperationId(operationId: string): PiControlReceipt | null {
+    const row = this.sql
+      .exec("SELECT request_id FROM pi_control_receipts WHERE operation_id=?", operationId)
+      .toArray()[0] as { request_id?: unknown } | undefined;
+    return typeof row?.request_id === "string" ? this.get(row.request_id) : null;
+  }
   admit(
     input: {
       requestId: string;

@@ -41,6 +41,8 @@ import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session
 import { parseQuery } from "./query";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { D1QueryParameterLimitError } from "../db/query-limits";
+import { createSessionRuntimeClient } from "../session/runtime-client";
+import { SessionInternalPaths } from "../session/contracts";
 import {
   effectiveSessionCapabilities,
   teamsEnforcementMode,
@@ -467,12 +469,16 @@ export async function handleDeleteSession(
 
   const sessionStore = new SessionIndexStore(ctx.db);
   const session = await sessionStore.get(sessionId);
-  if (session?.harness === "pi") {
-    if (!env.PI_SESSION) return json({ error: "Pi Durable runtime unavailable" }, 503);
+  if (session) {
     try {
-      await env.PI_SESSION.destroy(sessionId);
+      const cleanup = await createSessionRuntimeClient(env, ctx).fetch(
+        sessionId,
+        SessionInternalPaths.destroy,
+        { method: "POST" }
+      );
+      if (!cleanup.ok) return json({ error: "Session runtime cleanup unavailable" }, 503);
     } catch {
-      return json({ error: "Pi Durable cleanup unavailable" }, 503);
+      return json({ error: "Session runtime cleanup unavailable" }, 503);
     }
   }
   await sessionStore.delete(sessionId);

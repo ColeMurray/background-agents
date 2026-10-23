@@ -9,6 +9,7 @@ import {
   defineTool,
   section,
   type EntryId,
+  type ConversationId,
   type Extension,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
@@ -27,6 +28,18 @@ interface OpenInspectExtensionOptions {
     args: Record<string, JsonValue | undefined>,
     signal?: AbortSignal
   ): Promise<JsonValue>;
+}
+
+interface SubagentProjection {
+  finish(): Promise<void>;
+}
+
+interface SubagentExtensionOptions {
+  observeChild?(input: {
+    conversationId: ConversationId;
+    parentCallId: string;
+    context: Context;
+  }): Promise<SubagentProjection>;
 }
 
 const repositoryTarget = {
@@ -128,7 +141,7 @@ export function createOpenInspectExtension(options: OpenInspectExtensionOptions)
 }
 
 /** Separate extension so a child can lose only recursive delegation and retain its other tools. */
-export function createSubagentExtension(): Extension {
+export function createSubagentExtension(options: SubagentExtensionOptions = {}): Extension {
   const selection = defineExtension({ name: SUBAGENT_EXTENSION_NAME });
   return defineExtension({
     name: SUBAGENT_EXTENSION_NAME,
@@ -137,7 +150,7 @@ export function createSubagentExtension(): Extension {
         tag: false,
       }),
     ],
-    tools: [createSubagentTool(selection)],
+    tools: [createSubagentTool(selection, options)],
   });
 }
 
@@ -166,7 +179,7 @@ function bindRepositoryTool(
   };
 }
 
-function createSubagentTool(extension: Extension) {
+function createSubagentTool(extension: Extension, options: SubagentExtensionOptions) {
   return defineTool({
     name: "subagent",
     description: "Delegate one self-contained analysis task to a durable foreground subagent.",
@@ -212,32 +225,41 @@ function createSubagentTool(extension: Extension) {
       await api.details({ conversationId: childId }, context);
       const child = await api.conversation(childId, context);
       if (!child) throw new Error("Subagent conversation is unavailable");
+      const projection = await options.observeChild?.({
+        conversationId: childId,
+        parentCallId: api.callId,
+        context,
+      });
       const timeoutSignal = AbortSignal.timeout(SUBAGENT_TIMEOUT_MS);
       const runContext = withAbortSignal(timeoutSignal, context);
-      const submission = await child.submit(
-        {
-          type: "input",
-          content: task,
-          requestId: `subagent:${api.taskId}`,
-        },
-        runContext
-      );
-      const settled = await submission.wait(runContext).catch(async (error: unknown) => {
-        await submission.abort(BACKGROUND_CONTEXT).catch(() => "settled" as const);
-        await child.abort(BACKGROUND_CONTEXT, { background: true }).catch(() => undefined);
-        if (timeoutSignal.aborted && !context.abortSignal?.aborted) {
-          throw new Error("Subagent timed out", { cause: error });
+      try {
+        const submission = await child.submit(
+          {
+            type: "input",
+            content: task,
+            requestId: `subagent:${api.taskId}`,
+          },
+          runContext
+        );
+        const settled = await submission.wait(runContext).catch(async (error: unknown) => {
+          await submission.abort(BACKGROUND_CONTEXT).catch(() => "settled" as const);
+          await child.abort(BACKGROUND_CONTEXT, { background: true }).catch(() => undefined);
+          if (timeoutSignal.aborted && !context.abortSignal?.aborted) {
+            throw new Error("Subagent timed out", { cause: error });
+          }
+          throw error;
+        });
+        if (settled.status !== "done" || settled.type !== "input") {
+          throw new Error(`Subagent failed: ${settled.status}`);
         }
-        throw error;
-      });
-      if (settled.status !== "done" || settled.type !== "input") {
-        throw new Error(`Subagent failed: ${settled.status}`);
+        const answer = await answerText(api, settled.answer, context);
+        return {
+          output: [{ type: "text", text: answer }],
+          details: { conversationId: childId },
+        };
+      } finally {
+        await projection?.finish();
       }
-      const answer = await answerText(api, settled.answer, context);
-      return {
-        output: [{ type: "text", text: answer }],
-        details: { conversationId: childId },
-      };
     },
   });
 }

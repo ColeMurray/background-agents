@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS messages (
   autofix_feedback_key TEXT,                        -- Stable provider feedback identity for idempotency
   autofix_pr_key TEXT,                              -- Stable provider PR identity for rolling attempt limits
   origin_context TEXT,                              -- Typed JSON describing the external feedback origin
+  in_process_control TEXT,                          -- Harness-neutral queued control JSON
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
@@ -357,6 +358,7 @@ CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 
 import { createLogger } from "../logger";
 import {
+  IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_PI_PROJECTION_MIGRATION_ID,
@@ -945,6 +947,12 @@ const CORE_MIGRATIONS: readonly SchemaMigration[] = [
         runMigration(sql, statement);
       }
     },
+  },
+  {
+    id: IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
+    description: "Persist canonical queued controls for in-process harnesses",
+    feature: "coreAuthority",
+    run: "ALTER TABLE messages ADD COLUMN in_process_control TEXT",
   },
 ];
 

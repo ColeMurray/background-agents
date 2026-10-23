@@ -77,6 +77,7 @@ export interface CreateMessageData {
   autofixFeedbackKey?: string | null;
   autofixPrKey?: string | null;
   originContext?: string | null;
+  inProcessControl?: string | null;
   status: MessageStatus;
   createdAt: number;
 }
@@ -431,8 +432,8 @@ export class MessageRepository {
       `INSERT INTO messages (
          id, author_id, content, source, model, reasoning_effort, attachments,
          callback_context, client_request_id, request_fingerprint, autofix_feedback_key,
-         autofix_pr_key, origin_context, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         autofix_pr_key, origin_context, in_process_control, status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -446,6 +447,7 @@ export class MessageRepository {
       data.autofixFeedbackKey ?? null,
       data.autofixPrKey ?? null,
       data.originContext ?? null,
+      data.inProcessControl ?? null,
       data.status,
       data.createdAt
     );

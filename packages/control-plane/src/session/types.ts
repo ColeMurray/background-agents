@@ -129,6 +129,7 @@ export const messageRowSchema = z.object({
   autofix_feedback_key: z.string().nullable(),
   autofix_pr_key: z.string().nullable(),
   origin_context: z.string().nullable(),
+  in_process_control: z.string().nullable().optional(),
   status: messageStatusSchema,
   error_message: z.string().nullable(),
   stop_confirmation_deadline: z.number().nullable(),

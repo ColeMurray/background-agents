@@ -22,7 +22,7 @@ describe("usePiAgents", () => {
     expect(browserApiFetch).not.toHaveBeenCalled();
   });
 
-  it("loads through SWR and refreshes after an explicit action", async () => {
+  it("loads through SWR and refreshes after a lifecycle action", async () => {
     vi.mocked(browserApiFetch)
       .mockResolvedValueOnce(
         Response.json({
@@ -48,10 +48,10 @@ describe("usePiAgents", () => {
       .mockResolvedValueOnce(Response.json({ state: "completed", result: { agents: [] } }));
     const { result } = renderHook(() => usePiAgents("session-1", true), { wrapper });
     await waitFor(() => expect(result.current.agents).toHaveLength(1));
-    await result.current.run({ action: "send", conversationId: 1, content: "check tests" });
+    await result.current.run({ action: "compact", conversationId: 1 });
     expect(browserApiFetch).toHaveBeenNthCalledWith(
       2,
-      "/api/sessions/session-1/pi/control",
+      "/api/sessions/session-1/pi/lifecycle-control",
       expect.objectContaining({ method: "POST" })
     );
     await waitFor(() => expect(result.current.agents).toEqual([]));

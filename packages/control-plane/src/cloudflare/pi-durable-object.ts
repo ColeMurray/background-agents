@@ -32,6 +32,7 @@ import {
   type TaskId,
   type SubmissionId,
   type UserInput,
+  watchEvents,
 } from "@earendil-works/pi-durable";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
@@ -284,6 +285,8 @@ interface NativeControlCompletion {
   readonly operationId?: string;
   readonly baseline: UsageAccountingSnapshot;
   readonly suppressCost: boolean;
+  readonly deadlineMs?: number;
+  readonly projection?: "compaction";
   /**
    * The turn a queued follow-up was submitted behind.
    *
@@ -292,7 +295,7 @@ interface NativeControlCompletion {
    */
   readonly runningOperationId?: string;
   readonly target:
-    | { readonly kind: "submission"; readonly id: number }
+    | { readonly kind: "submission"; readonly id: number; readonly conversationId: number }
     | { readonly kind: "task"; readonly id: number };
 }
 /** OpenCode-free, sandbox-free Pi runtime for one Open-Inspect session. */
@@ -391,7 +394,24 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         repositories: sessionContext.repositories,
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
       });
-      const delegation = createSubagentExtension();
+      const delegation = createSubagentExtension({
+        observeChild: async ({ conversationId, parentCallId, context }) => {
+          const [sessionId, operationId] = await Promise.all([
+            this.ctx.storage.get<string>(SESSION_ID_KEY),
+            this.currentOperationId(),
+          ]);
+          if (!sessionId || !operationId) {
+            throw new Error("Subagent projection has no active owning operation");
+          }
+          return this.observeSubagent(
+            sessionId,
+            operationId,
+            conversationId,
+            parentCallId,
+            context
+          );
+        },
+      });
       let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const workspaceMutations = new WorkspaceMutationFifo();
       const overlay = createRegisteredPiRuntimeExtensions(
@@ -795,11 +815,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const completionRecords = await this.ctx.storage.list<NativeControlCompletion>({
       prefix: CONTROL_COMPLETION_PREFIX,
     });
+    for (const record of completionRecords.values()) {
+      await this.restoreNativeControlDeadline(record);
+      this.ctx.waitUntil(this.resumeNativeControlCompletion(record));
+    }
     await Promise.all([
-      ...[...completionRecords.values()].map((record) => {
-        this.ctx.waitUntil(this.resumeNativeControlCompletion(record));
-        return Promise.resolve();
-      }),
       ...pending.map(async (operation) => {
         // A control submission recorded before operation metadata existed
         // (an upgrade, or a crash between admission and the record) has
@@ -905,6 +925,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     const operationId = await this.attributedOperationId(ROOT_SESSION);
     if (!sessionId || !operationId) return refusedBudgetState();
+    if (await this.nativeControlDeadlineExpired(operationId)) return refusedBudgetState();
     try {
       const response = await this.env.SESSION.getByName(sessionId).fetch(
         new Request(`http://session${SessionInternalPaths.budgetState}`, {
@@ -933,6 +954,23 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     } catch {
       return refusedBudgetState();
     }
+  }
+
+  private async nativeControlDeadlineExpired(operationId: string): Promise<boolean> {
+    const records = await this.ctx.storage.list<NativeControlCompletion>({
+      prefix: CONTROL_COMPLETION_PREFIX,
+    });
+    for (const record of records.values()) {
+      if (
+        (record.operationId ?? record.requestId) === operationId &&
+        record.deadlineMs !== undefined &&
+        record.deadlineMs <= Date.now()
+      ) {
+        await this.abortNativeControlTarget(record);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1232,25 +1270,43 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               submission.requestId === nativeControlSubmissionRequestId(operationId)) &&
             (!input.conversationId || submission.conversationId === input.conversationId)
         );
-        if (!matched)
+        if (!matched?.requestId)
           return {
             requestId: input.requestId,
             state: "completed",
             result: { outcome: "not_found" },
           };
-        const outcome = await pi.abortSubmission(
-          matched.id,
-          BACKGROUND_CONTEXT,
-          input.conversationId as ConversationId | undefined
-        );
+        const outcome = (await this.harness.abort({
+          session: String(matched.conversationId),
+          operationId: matched.requestId,
+        }))
+          ? "aborted"
+          : "settled";
         return { requestId: input.requestId, state: "completed", result: { outcome } };
       }
       if (input.submissionId) {
-        const outcome = await pi.abortSubmission(
+        const submission = await pi.submission(
           input.submissionId as SubmissionId,
-          BACKGROUND_CONTEXT,
-          input.conversationId as ConversationId | undefined
+          BACKGROUND_CONTEXT
         );
+        if (!submission) {
+          return {
+            requestId: input.requestId,
+            state: "completed",
+            result: { outcome: "not_found" },
+          };
+        }
+        const inspected = (await pi.inspect(BACKGROUND_CONTEXT)).submissions.find(
+          (candidate) => candidate.id === input.submissionId
+        );
+        const outcome =
+          inspected?.requestId &&
+          (await this.harness.abort({
+            session: String(inspected.conversationId),
+            operationId: inspected.requestId,
+          }))
+            ? "aborted"
+            : "settled";
         return { requestId: input.requestId, state: "completed", result: { outcome } };
       }
       if (input.taskId) {
@@ -1277,24 +1333,20 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const operationId = input.operationId ?? input.requestId;
       this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
       this.activeOperationByConversation.set(ROOT_SESSION, operationId);
-      this.armTurnDeadline(
-        operationId,
-        input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS
-      );
+      if (input.operationId) {
+        const model = canonicalModelOf((await conversation.agent(BACKGROUND_CONTEXT)).model);
+        await this.rememberOperation({ messageId: operationId, model }, baseline);
+        await this.startEventRelay(input.sessionId, operationId);
+      }
       const taskId = await conversation.compact(input.instructions, BACKGROUND_CONTEXT);
-      this.armTurnDeadline(
-        operationId,
-        input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS,
-        async () => {
-          await pi.abortTask(taskId as TaskId, BACKGROUND_CONTEXT);
-        }
-      );
       await this.scheduleNativeControlCompletion({
         sessionId: input.sessionId,
         requestId: input.requestId,
         operationId,
         baseline,
         suppressCost: false,
+        deadlineMs: input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS,
+        projection: "compaction",
         target: { kind: "task", id: taskId },
       });
       return {
@@ -1325,6 +1377,16 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     }
     if (!(input.action === "submit" || input.action === "send" || input.action === "follow_up"))
       throw new Error("Unsupported Pi control action");
+    const conversationRecord = await pi.commit(
+      (tx) => tx.conversation(conversation.id),
+      BACKGROUND_CONTEXT
+    );
+    if (conversationRecord?.owner) {
+      const owner = await pi.getTask(conversationRecord.owner.taskId, BACKGROUND_CONTEXT);
+      if (!owner || owner.state.status === "terminal") {
+        throw new Error("Task-owned Pi conversation is no longer active");
+      }
+    }
     return this.onSubmissionControlLine(async () => {
       const inspection = await pi.inspect(BACKGROUND_CONTEXT);
       if (inspection.tasks.length >= 4) throw new Error("Pi active task limit reached");
@@ -1377,10 +1439,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       if (operationId) {
         this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
         this.activeOperationByConversation.set(ROOT_SESSION, operationId);
-        this.armTurnDeadline(
-          operationId,
-          input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS
-        );
         const agent = await conversation.agent(BACKGROUND_CONTEXT);
         const model = input.model ?? canonicalModelOf(agent.model);
         await this.rememberOperation({ messageId: operationId, model }, baseline);
@@ -1407,7 +1465,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         ...(input.action === "follow_up" && conversationBusy
           ? { runningOperationId: (await this.attributedOperationId(ROOT_SESSION)) ?? undefined }
           : {}),
-        target: { kind: "submission", id: submission.id },
+        deadlineMs: input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS,
+        target: { kind: "submission", id: submission.id, conversationId: conversation.id },
       });
       return {
         requestId: input.requestId,
@@ -1428,11 +1487,15 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   private async scheduleNativeControlCompletion(record: NativeControlCompletion): Promise<void> {
     await this.ctx.storage.put(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`, record);
+    await this.restoreNativeControlDeadline(record);
     this.ctx.waitUntil(this.resumeNativeControlCompletion(record));
   }
 
   private async resumeNativeControlCompletion(record: NativeControlCompletion): Promise<void> {
     const pi = await this.harness.pi();
+    if (record.deadlineMs !== undefined && record.deadlineMs <= Date.now()) {
+      await this.abortNativeControlTarget(record);
+    }
     let status: "completed" | "failed";
     let operationId: string | undefined;
     if (record.target.kind === "submission") {
@@ -1450,8 +1513,24 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     this.turnDeadlines.delete(deadlineOperationId);
     // A control turn has no projector job — its receipt is the terminal path —
     // so the relay and outbox close here, before the receipt is reported.
-    if (operationId && (await this.operationMetadata(operationId))) {
-      await this.finalizeControlProjection(operationId);
+    const projectedOperationId = operationId ?? record.operationId;
+    if (projectedOperationId && (await this.operationMetadata(projectedOperationId))) {
+      if (record.projection === "compaction" && status === "completed") {
+        const event = {
+          type: "context_compacted",
+          sandboxId: `pi:${record.sessionId}`,
+          timestamp: Date.now() / 1_000,
+          messageId: projectedOperationId,
+        } satisfies Extract<SandboxIngressEvent, { type: "context_compacted" }>;
+        this.projectionOutbox.enqueue(
+          piProjectionIdentity(projectedOperationId, event, `compaction_end:${record.target.id}`),
+          projectedOperationId,
+          event,
+          Date.now(),
+          `final:compaction_end:${record.target.id}`
+        );
+      }
+      await this.finalizeControlProjection(projectedOperationId);
     }
     const current = await this.accountingTotals();
     const costBaseline = record.runningOperationId
@@ -1478,6 +1557,32 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!response.ok && response.status !== 404)
       throw new Error(`Pi control completion rejected (${response.status})`);
     await this.ctx.storage.delete(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`);
+  }
+
+  private async restoreNativeControlDeadline(record: NativeControlCompletion): Promise<void> {
+    if (record.deadlineMs === undefined) return;
+    const operationId = record.operationId ?? record.requestId;
+    if (record.deadlineMs <= Date.now()) {
+      await this.abortNativeControlTarget(record);
+      return;
+    }
+    this.armTurnDeadline(operationId, record.deadlineMs, () =>
+      this.abortNativeControlTarget(record)
+    );
+  }
+
+  private async abortNativeControlTarget(record: NativeControlCompletion): Promise<void> {
+    const pi = await this.harness.pi();
+    if (record.target.kind === "task") {
+      await pi.abortTask(record.target.id as TaskId, BACKGROUND_CONTEXT).catch(() => "terminal");
+      return;
+    }
+    await this.harness
+      .abort({
+        session: String(record.target.conversationId),
+        operationId: nativeControlSubmissionRequestId(record.operationId ?? record.requestId),
+      })
+      .catch(() => false);
   }
 
   /**
@@ -2815,6 +2920,89 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     void stream.closed.then(() => {
       if (this.eventStream === stream) this.eventStream = undefined;
     });
+  }
+
+  /** Project one foreground child beneath its owning subagent tool. */
+  private async observeSubagent(
+    sessionId: string,
+    operationId: string,
+    conversationId: ConversationId,
+    parentCallId: string,
+    context: Parameters<typeof watchEvents>[2]
+  ): Promise<{ finish(): Promise<void> }> {
+    const pi = await this.harness.pi();
+    const stream = await watchEvents(pi, conversationId, context);
+    const state: PiEventTranslationState = { text: "", tools: new Map() };
+    let work: Promise<void> = Promise.resolve();
+    const route = (events: readonly AgentEvent[], final = false) => {
+      work = work.then(async () => {
+        const metadata = await this.operationMetadata(operationId);
+        if (!metadata) throw new Error("Subagent operation metadata is unavailable");
+        const translated = translatePiEvents(events, state, {
+          sessionId,
+          operationId,
+          timestamp: Date.now() / 1_000,
+          subtask: { conversationId, parentCallId },
+        }).filter((event) => event.type !== "token");
+        const accounting = events.some(
+          (event) =>
+            event.type === "usage_changed" ||
+            event.type === "snapshot" ||
+            event.type === "message_end" ||
+            event.type === "tool_execution_end"
+        )
+          ? await this.observeOperationAccounting(operationId)
+          : undefined;
+        for (const event of translated) {
+          const sourceIdentity = `${final ? "final:" : ""}child:${conversationId}:${piProjectionIdentity(
+            operationId,
+            event
+          )}`;
+          this.projectionOutbox.enqueue(
+            piProjectionIdentity(operationId, event, sourceIdentity),
+            operationId,
+            this.priceStepEvent(event, metadata.model, accounting?.costUsd),
+            Date.now(),
+            sourceIdentity
+          );
+        }
+        if (accounting?.changed) {
+          const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
+          this.projectionOutbox.enqueue(
+            piProjectionIdentity(operationId, event),
+            operationId,
+            event,
+            Date.now(),
+            `child:${conversationId}:accounting:${accounting.costUsd}`
+          );
+          await this.recordProjectedCost(operationId, accounting.costUsd);
+        }
+      });
+      return work;
+    };
+    stream.start(async (events) => route(events));
+    return {
+      finish: async () => {
+        await stream.stop();
+        await work;
+        const conversation = await pi.conversation(conversationId, BACKGROUND_CONTEXT);
+        if (!conversation) throw new Error("Subagent conversation is unavailable");
+        const entries: EntryRecord[] = [];
+        let cursor: Parameters<typeof conversation.entries>[2];
+        for (;;) {
+          const page = await conversation.entries(
+            { order: "ascending" },
+            100,
+            cursor,
+            BACKGROUND_CONTEXT
+          );
+          entries.push(...page.items);
+          if (page.next === undefined) break;
+          cursor = page.next;
+        }
+        await route([settledOperationSnapshot(entries)], true);
+      },
+    };
   }
 
   private async captureFinalProjection(operationId: string): Promise<void> {

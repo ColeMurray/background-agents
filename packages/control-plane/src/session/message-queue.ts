@@ -57,6 +57,7 @@ import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
 import type { PiHumanControl } from "../pi/runtime-contract";
 import type {
+  InProcessHarnessControl,
   InProcessHarnessOperationStatus,
   InProcessHarnessReceipt,
   InProcessHarnessRuntime,
@@ -139,7 +140,9 @@ export class HarnessModelIncompatibleError extends Error {
 
 export async function fingerprintWebPrompt(
   participantId: string,
-  data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments">
+  data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments"> & {
+    inProcessControl?: InProcessHarnessControl;
+  }
 ): Promise<string> {
   const canonicalRequest = JSON.stringify({
     participantId,
@@ -147,6 +150,7 @@ export async function fingerprintWebPrompt(
     model: data.model ?? null,
     reasoningEffort: data.reasoningEffort ?? null,
     attachmentIds: data.attachments?.map((attachment) => attachment.attachmentId) ?? [],
+    inProcessControl: data.inProcessControl ?? null,
   });
   return hashToken(canonicalRequest);
 }
@@ -175,7 +179,12 @@ function piControlTimelineContent(control: PiHumanControl): string {
     case "reset":
       return "Reset a Pi agent conversation.";
     case "compact":
-      return "Requested Pi conversation compaction.";
+      return [
+        `Requested conversation${control.conversationId ? ` ${control.conversationId}` : ""} compaction.`,
+        control.instructions,
+      ]
+        .filter(Boolean)
+        .join("\n");
   }
 }
 
@@ -185,6 +194,21 @@ function completionBarrier(): { promise: Promise<void>; resolve(): void } {
     resolve = complete;
   });
   return { promise, resolve };
+}
+
+function parseInProcessControl(value: string | null | undefined): InProcessHarnessControl | null {
+  if (!value) return null;
+  const parsed = JSON.parse(value) as Partial<InProcessHarnessControl>;
+  if (parsed.kind !== "compact-context") throw new Error("Invalid in-process control kind");
+  if (parsed.conversationId !== undefined && typeof parsed.conversationId !== "string")
+    throw new Error("Invalid in-process control conversation");
+  if (parsed.instructions !== undefined && typeof parsed.instructions !== "string")
+    throw new Error("Invalid in-process control instructions");
+  return {
+    kind: "compact-context",
+    ...(parsed.conversationId === undefined ? {} : { conversationId: parsed.conversationId }),
+    ...(parsed.instructions === undefined ? {} : { instructions: parsed.instructions }),
+  };
 }
 
 function resolveParticipantGitIdentity(
@@ -490,6 +514,46 @@ export class SessionMessageQueue {
       deduplicated: admission === "duplicate",
       conflict: admission === "conflict",
     };
+  }
+
+  /** Admit manual compaction as ordinary FIFO work; the caller starts the queue after linking its receipt. */
+  async enqueuePiControlMessage(input: {
+    actorId: string;
+    canonicalUserId?: string | null;
+    source: "web" | "slack";
+    requestId: string;
+    control: Extract<PiHumanControl, { action: "compact" }>;
+  }): Promise<{ messageId: string; deduplicated: boolean }> {
+    this.assertPromptableSession();
+    const messageId = piControlMessageId(input.requestId);
+    if (!this.messageRepository.getMessageByClientRequestId(messageId)) {
+      this.assertBudgetAvailable();
+      this.assertQueueCapacity();
+    }
+    let participant = this.participantService.getByUserId(input.actorId);
+    participant ??= this.participantService.create(
+      input.actorId,
+      input.actorId,
+      input.canonicalUserId ?? undefined
+    );
+    const enqueued = await this.enqueuePromptCore({
+      participant,
+      userId: input.actorId,
+      content: piControlTimelineContent(input.control),
+      source: input.source,
+      clientRequestId: messageId,
+      messageId,
+      inProcessControl: {
+        kind: "compact-context",
+        ...(input.control.conversationId === undefined
+          ? {}
+          : { conversationId: String(input.control.conversationId) }),
+        ...(input.control.instructions === undefined
+          ? {}
+          : { instructions: input.control.instructions }),
+      },
+    });
+    return { messageId: enqueued.messageId, deduplicated: enqueued.deduplicated };
   }
 
   async cancelQueuedPrompt(
@@ -798,7 +862,18 @@ export class SessionMessageQueue {
     const attachments = parseStoredSessionAttachments(message.attachments, () =>
       this.log.error("prompt.invalid_stored_attachments")
     );
-    const userMessageEvent = this.createUserMessageEvent(
+    let inProcessControl: InProcessHarnessControl | null;
+    try {
+      inProcessControl = parseInProcessControl(message.in_process_control);
+    } catch {
+      if (this.failMessage(message, "Invalid queued in-process control", now, "pending")) {
+        this.broadcastPromptQueue();
+        await this.sessionStatus.reconcileAfterExecution(false);
+        await this.processMessageQueue();
+      }
+      return;
+    }
+    const baseUserMessageEvent = this.createUserMessageEvent(
       author,
       message.content,
       message.id,
@@ -806,6 +881,17 @@ export class SessionMessageQueue {
       attachments,
       message.origin_context
     );
+    const userMessageEvent = inProcessControl
+      ? {
+          ...baseUserMessageEvent,
+          piControl: {
+            action: "compact" as const,
+            ...(inProcessControl.conversationId === undefined
+              ? {}
+              : { conversationId: Number(inProcessControl.conversationId) }),
+          },
+        }
+      : baseUserMessageEvent;
     if (!this.mayDispatch()) return;
     if (!this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent)) return;
     this.log.info("pi.latency", {
@@ -855,7 +941,7 @@ export class SessionMessageQueue {
         sandbox_avoided: 1,
       });
       try {
-        receipt = await this.inProcessRuntime.submit({
+        const common = {
           sessionId: session.session_name || session.id,
           messageId: message.id,
           content: message.content,
@@ -869,7 +955,10 @@ export class SessionMessageQueue {
           // Metadata only: the in-process runtime fetches the bytes from the
           // session that owns them, the way a sandbox harness does.
           ...(attachments ? { attachments } : {}),
-        });
+        };
+        receipt = inProcessControl
+          ? await this.inProcessRuntime.submitControl({ ...common, control: inProcessControl })
+          : await this.inProcessRuntime.submit(common);
       } catch (error) {
         submissionError = error;
       }
@@ -1085,7 +1174,12 @@ export class SessionMessageQueue {
         }
         return;
       }
-      if (status.status === "queued" || status.status === "running" || status.status === "parked") {
+      if (
+        status.status === "queued" ||
+        status.status === "running" ||
+        status.status === "sleeping" ||
+        status.status === "parked"
+      ) {
         this.piOperations.transition(operationId, ["dispatching", "ambiguous"], "admitted", now);
         return;
       }
@@ -1364,9 +1458,10 @@ export class SessionMessageQueue {
     );
     const attachments = resolvedAttachments?.attachments;
     const messageId =
-      data.source === "slack" && data.clientRequestId?.startsWith("slack-message-")
+      data.messageId ??
+      (data.source === "slack" && data.clientRequestId?.startsWith("slack-message-")
         ? data.clientRequestId
-        : generateId();
+        : generateId());
     const now = Date.now();
 
     let messageModel: string | null = null;
@@ -1414,6 +1509,7 @@ export class SessionMessageQueue {
           attachments: attachments ? JSON.stringify(attachments) : null,
           callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
           originContext: data.originContext ? JSON.stringify(data.originContext) : null,
+          inProcessControl: data.inProcessControl ? JSON.stringify(data.inProcessControl) : null,
           clientRequestId: data.clientRequestId ?? null,
           requestFingerprint: requestFingerprint ?? null,
           status: "pending",

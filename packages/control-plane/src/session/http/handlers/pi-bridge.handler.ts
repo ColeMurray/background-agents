@@ -28,8 +28,6 @@ const PI_AGENT_CONTROL_ACTIONS = new Set([
   "list_conversations",
   "inspect_agents",
   "get_last_message",
-  "send",
-  "follow_up",
   "cancel_agent",
 ]);
 

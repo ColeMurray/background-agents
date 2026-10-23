@@ -10,7 +10,8 @@ import { SessionLifecycleHandler } from "./session-lifecycle.handler";
 function createHandler(
   harness: "opencode" | "pi" = "opencode",
   hasSandbox = false,
-  status: "active" | "archived" = "active"
+  status: "active" | "archived" = "active",
+  inProcessHarness: "opencode" | "pi" = "pi"
 ) {
   const beginTransition = vi.fn<SessionStatusService["beginTransition"]>();
   const confirmIndexStatus = vi.fn<SessionStatusService["confirmIndexStatus"]>();
@@ -18,6 +19,7 @@ function createHandler(
   const cancelSandbox = vi.fn(async () => undefined);
   const preservePiArchive = vi.fn(async () => undefined);
   const restoreFromArchive = vi.fn(async () => undefined);
+  const destroy = vi.fn(async () => undefined);
   const settleFromMessageState = vi.fn(async () => "completed" as const);
   const handler = new SessionLifecycleHandler(
     { getSession: () => createMockSession({ harness, status }) } as SessionCoreRepository,
@@ -32,7 +34,12 @@ function createHandler(
     { cancelSandbox, preserveForArchive },
     "session-do-id",
     vi.fn(),
-    { harness: "pi", preserveForArchive: preservePiArchive, restoreFromArchive }
+    {
+      harness: inProcessHarness,
+      preserveForArchive: preservePiArchive,
+      restoreFromArchive,
+      destroy,
+    }
   );
   return {
     handler,
@@ -42,6 +49,7 @@ function createHandler(
     cancelSandbox,
     preservePiArchive,
     restoreFromArchive,
+    destroy,
     settleFromMessageState,
   };
 }
@@ -104,6 +112,22 @@ describe("SessionLifecycleHandler.archive", () => {
 
     expect((await handler.archive()).status).toBe(200);
     expect(preserveForArchive).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SessionLifecycleHandler.destroy", () => {
+  it("destroys a non-Pi in-process runtime through the neutral lifecycle port", async () => {
+    const { handler, destroy, cancelSandbox } = createHandler(
+      "opencode",
+      false,
+      "active",
+      "opencode"
+    );
+
+    await expect(handler.destroy()).resolves.toHaveProperty("status", 200);
+
+    expect(destroy).toHaveBeenCalledWith(expect.any(String));
+    expect(cancelSandbox).not.toHaveBeenCalled();
   });
 });
 

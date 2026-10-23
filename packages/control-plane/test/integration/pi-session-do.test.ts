@@ -562,13 +562,28 @@ describe("PiSessionDO", () => {
     // A follow-up starts its own run, so the submission is in flight when
     // the object is evicted. It was never admitted as a message of this
     // session, so it has no operation metadata.
+    const deadlineMs = Date.now() + 60_000;
     const accepted = await controlPi(stub, {
       sessionId: sessionName,
       requestId: "control-restart-1",
       action: "follow_up",
       content: "keep going",
+      executionDeadlineMs: deadlineMs,
     });
     expect(accepted.state).toBe("accepted");
+    const stored = await runInDurableObject(stub, async (_instance, state) => {
+      const records = await state.storage.list<{
+        deadlineMs: number;
+        target: { kind: string; id: number; conversationId: number };
+      }>({ prefix: "open-inspect:control-completion:" });
+      const [key, record] = [...records.entries()][0]!;
+      await state.storage.put(key, { ...record, deadlineMs: Date.now() - 1 });
+      return record;
+    });
+    expect(stored).toMatchObject({
+      deadlineMs,
+      target: { kind: "submission", id: expect.any(Number), conversationId: expect.any(Number) },
+    });
 
     await expect(
       runInPiSessionDO(stub, (_instance, state) => state.abort("test: control eviction"))
@@ -577,7 +592,20 @@ describe("PiSessionDO", () => {
 
     // The restart must not fail: a control submission with no operation
     // metadata is not the event relay's business.
-    await expect(restored.status(sessionName)).resolves.toMatchObject({ busy: true });
+    await restored.status(sessionName);
+    await vi.waitFor(
+      async () => {
+        await expect(
+          runInPiSessionDO(restored, async (instance) => {
+            const submission = await (
+              await instance.harness.pi()
+            ).submission(stored.target.id as never, BACKGROUND_CONTEXT);
+            return submission?.wait(BACKGROUND_CONTEXT);
+          })
+        ).resolves.toMatchObject({ status: "unanswered", reason: expect.any(String) });
+      },
+      { timeout: 5_000 }
+    );
   });
 
   it("retains installed workspace tools but emergency-denies new mutations after Pi eviction", async () => {

@@ -16,6 +16,7 @@ import {
   PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
   PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID,
+  IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
   assertMigrationReservation,
   validateMigrationArtifacts,
   validateMigrationReservations,
@@ -39,7 +40,8 @@ describe("Pi migration reservations", () => {
       PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
       PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
       PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
-    ]).toEqual([1, 2, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 9002]);
+      IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
+    ]).toEqual([1, 2, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 9002, 67]);
     expect(MIGRATION_RESERVATIONS).toEqual([
       {
         store: "pi_do",
@@ -100,6 +102,12 @@ describe("Pi migration reservations", () => {
         version: PI_SESSION_DO_SANDBOX_EXECUTION_AUTHORITY_MIGRATION_ID,
         feature: "sandboxExecution",
         purpose: "sandbox execution authority, cancellation, and retention",
+      },
+      {
+        store: "session_do",
+        version: IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
+        feature: "coreAuthority",
+        purpose: "canonical queued controls for in-process harnesses",
       },
       {
         store: "d1",

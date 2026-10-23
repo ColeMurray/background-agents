@@ -13,28 +13,18 @@ import {
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
 const requestIdSchema = z.string().min(1).max(128);
-const SLACK_CONTROL_ACTIONS = new Set(["follow_up"]);
 function forward(control: unknown, sessionId: string, ctx: SessionRouteContext) {
   const candidate = typeof control === "object" && control !== null ? control : {};
   const parsed = piRuntimeControlSchema.safeParse({ ...candidate, sessionId });
   if (!parsed.success) return error("Invalid Pi control request", 400);
   const principal = ctx.principal;
-  if (
-    principal?.kind === "service" &&
-    (principal.service !== "slack-bot" || !SLACK_CONTROL_ACTIONS.has(parsed.data.action))
-  ) {
+  if (principal?.kind === "service") {
     return error("Service is not authorized for this Pi control", 403);
   }
   const authority =
     principal?.kind === "user"
       ? { actorId: principal.userId, canonicalUserId: principal.userId, source: "web" }
-      : principal?.kind === "service" && principal.service === "slack-bot" && principal.actor
-        ? {
-            actorId: principal.actor.participantUserId,
-            canonicalUserId: principal.actor.canonicalUserId,
-            source: "slack",
-          }
-        : null;
+      : null;
   if (!authority) return error("Pi controls require an authorized actor", 403);
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.piControl, {
     method: "POST",
@@ -48,7 +38,10 @@ function forward(control: unknown, sessionId: string, ctx: SessionRouteContext) 
  * Messaging only: a collaborator who may post a message may follow up, and
  * nothing more.
  */
-const COLLABORATION_ACTIONS = new Set(["send", "follow_up"]);
+// Model-producing messages belong to SessionMessageQueue. The ordinary prompt
+// route is the only public way to start a turn; Pi controls never form a
+// parallel admission lane.
+const COLLABORATION_ACTIONS = new Set<string>();
 /**
  * The actions that reshape the agent's durable conversation.
  *

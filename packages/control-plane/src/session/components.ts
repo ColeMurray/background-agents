@@ -976,7 +976,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     env.PI_SESSION,
     log,
     (input) => messageQueue.recordPiControlMessage(input),
-    (terminal) => {
+    (input) => messageQueue.enqueuePiControlMessage(input),
+    async (terminal) => {
       const event = {
         type: "execution_complete",
         sandboxId: `pi:${getPublicSessionId()}`,
@@ -986,11 +987,11 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         messageCostUsd: terminal.costUsd,
         ...(terminal.success ? {} : { error: terminal.error ?? "Pi execution did not complete" }),
       } satisfies Extract<SandboxEvent, { type: "execution_complete" }>;
-      messageRepository.recordControlCompletion(terminal.operationId, event, terminal.now);
-      messenger.broadcast({ type: "sandbox_event", event });
+      await processPiEvent(event);
     },
     piOperations,
-    getExecutionTimeoutMs
+    getExecutionTimeoutMs,
+    () => messageQueue.processMessageQueue()
   );
   const visiblePiTokens = new Set<string>();
   const piEventHandler = new HarnessEventHandler(
@@ -1417,6 +1418,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     archive: () => sessionLifecycleHandler.archive(),
     unarchive: () => sessionLifecycleHandler.unarchive(),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
+    destroy: () => sessionLifecycleHandler.destroy(),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),
     openaiTokenRefresh: (_request, _url, requestLog) =>
