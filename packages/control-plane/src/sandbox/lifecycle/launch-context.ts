@@ -6,9 +6,14 @@ import {
   type McpServerConfig,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
-import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
+import {
+  parseRuntimeVersionNumber,
+  repoImageBuildScope,
+  type ImageBuildScope,
+} from "../../image-builds/model";
 import type { Logger } from "../../logger";
 import { sessionHasRepository, type SessionRow } from "../../session/types";
+import { MIN_MCP_TOOL_ALLOWLIST_RUNTIME_GENERATION } from "../runtime-manifest";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -59,6 +64,12 @@ export interface SandboxLaunchContextDependencies {
   getLogger: () => Pick<Logger, "info" | "warn">;
 }
 
+export interface LoadedMcpServers {
+  servers: McpServerConfig[] | undefined;
+  /** Names of restricted servers left out because the runtime cannot enforce their allowlists. */
+  withheld: string[];
+}
+
 export type AgentLaunchFields = Pick<CreateSandboxConfig, "harness" | "provider" | "model">;
 
 export interface RepositoryLaunchInputs {
@@ -82,6 +93,11 @@ export function resolveImageBuildScope(
   return sessionHasRepository(session) && repositories.length === 1
     ? repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName)
     : null;
+}
+
+function supportsMcpToolAllowlists(runtimeVersion: string): boolean {
+  const generation = parseRuntimeVersionNumber(runtimeVersion);
+  return generation !== null && generation >= MIN_MCP_TOOL_ALLOWLIST_RUNTIME_GENERATION;
 }
 
 /**
@@ -210,26 +226,47 @@ export class SandboxLaunchContext {
     }
   }
 
+  /**
+   * `runtimeVersion` is the runtime that will read the servers: the selected
+   * prebuilt image's (the current runtime's when none is selected), or the
+   * snapshot's on restore. Restricted servers are withheld from a runtime that
+   * predates tool allowlists or whose version cannot be parsed, since it would
+   * give them every tool.
+   */
   async loadMcpServers(
-    repositories: SessionRepositoryInfo[]
-  ): Promise<McpServerConfig[] | undefined> {
+    repositories: SessionRepositoryInfo[],
+    runtimeVersion: string
+  ): Promise<LoadedMcpServers> {
     try {
-      if (!this.config.mcpServerLookup) return undefined;
-      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
+      if (!this.config.mcpServerLookup) return { servers: undefined, withheld: [] };
+      const loaded = await this.config.mcpServerLookup.getDecryptedForSession(
         repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
       );
+      const withheld = supportsMcpToolAllowlists(runtimeVersion)
+        ? []
+        : loaded.filter((server) => server.toolAllowlist != null).map((server) => server.name);
+      const servers = withheld.length
+        ? loaded.filter((server) => server.toolAllowlist == null)
+        : loaded;
+      if (withheld.length) {
+        this.getLogger().warn("MCP servers with a tool allowlist withheld from an older runtime", {
+          event: "mcp.restricted_servers_withheld",
+          runtime_version: runtimeVersion,
+          names: withheld,
+        });
+      }
       this.getLogger().info("MCP servers loaded", {
         event: "mcp.loaded",
-        count: servers?.length ?? 0,
-        names: servers?.map((s) => s.name) ?? [],
+        count: servers.length,
+        names: servers.map((s) => s.name),
       });
-      return servers?.length ? servers : undefined;
+      return { servers: servers.length ? servers : undefined, withheld };
     } catch (err) {
       this.getLogger().warn("Failed to load MCP servers", {
         event: "mcp.load_failed",
         error: String(err),
       });
-      return undefined;
+      return { servers: undefined, withheld: [] };
     }
   }
 

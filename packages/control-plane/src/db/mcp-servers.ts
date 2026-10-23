@@ -2,6 +2,7 @@ import {
   mcpServerCommandSchema,
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
+  mcpToolAllowlistSchema,
   type McpServerConfig,
   type McpServerMetadata,
   type ValidatedCreateMcpServerInput,
@@ -36,6 +37,7 @@ interface McpServerRow {
   url: string | null;
   env: string;
   repo_scope: string | null;
+  tool_allowlist: string | null;
   enabled: number;
   created_at: number;
   updated_at: number;
@@ -49,6 +51,33 @@ function parseRepoScopes(raw: string | null): string[] | null {
   } catch {
     return [raw];
   }
+}
+
+/**
+ * NULL means every tool. A stored value that no longer parses exposes no tools
+ * rather than all of them, so a damaged row cannot widen what the agent sees.
+ */
+function parseToolAllowlist(raw: string | null, serverId: string): string[] | null {
+  if (raw == null) return null;
+  let parsed: unknown;
+  let reason = "invalid_shape";
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    reason = "invalid_json";
+  }
+  const result = mcpToolAllowlistSchema.safeParse(parsed);
+  if (result.success) return result.data;
+  log.warn("MCP server tool allowlist unreadable; exposing no tools", {
+    event: "mcp_server.tool_allowlist_unreadable",
+    server_id: serverId,
+    reason,
+  });
+  return [];
+}
+
+function serializeToolAllowlist(tools: string[] | null | undefined): string | null {
+  return tools == null ? null : JSON.stringify(tools);
 }
 
 function safeJsonParseCommand(raw: string | null): string[] | undefined {
@@ -101,6 +130,7 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
     url: type === "remote" ? (row.url ?? undefined) : undefined,
     ...envOrHeaders,
     repoScopes: parseRepoScopes(row.repo_scope),
+    toolAllowlist: parseToolAllowlist(row.tool_allowlist, row.id),
     enabled: row.enabled === 1,
   };
 }
@@ -118,6 +148,7 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
     hasEnv: type === "local" && hasCredentials,
     hasHeaders: type === "remote" && hasCredentials,
     repoScopes: parseRepoScopes(row.repo_scope),
+    toolAllowlist: parseToolAllowlist(row.tool_allowlist, row.id),
     enabled: row.enabled === 1,
   };
 }
@@ -204,8 +235,8 @@ export class McpServerStore {
     try {
       await this.db
         .prepare(
-          `INSERT INTO mcp_servers (id, name, type, command, url, env, repo_scope, enabled, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO mcp_servers (id, name, type, command, url, env, repo_scope, tool_allowlist, enabled, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           id,
@@ -217,6 +248,7 @@ export class McpServerStore {
           config.repoScopes?.length
             ? JSON.stringify(config.repoScopes.map((r) => r.toLowerCase()))
             : null,
+          serializeToolAllowlist(config.toolAllowlist),
           config.enabled ? 1 : 0,
           now,
           now
@@ -289,7 +321,7 @@ export class McpServerStore {
 
     try {
       const statement = this.db.prepare(
-        `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?, revision = revision + 1
+        `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, tool_allowlist = ?, enabled = ?, updated_at = ?, revision = revision + 1
          WHERE id = ? AND revision = COALESCE(?, revision)
          RETURNING *`
       );
@@ -305,6 +337,9 @@ export class McpServerStore {
               ? JSON.stringify(patch.repoScopes.map((r) => r.toLowerCase()))
               : null
             : row.repo_scope,
+          patch.toolAllowlist !== undefined
+            ? serializeToolAllowlist(patch.toolAllowlist)
+            : row.tool_allowlist,
           patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : row.enabled,
           now,
           id,
@@ -325,6 +360,15 @@ export class McpServerStore {
     }
   }
 
+  /** One server with decrypted credentials, for control-plane calls to the server itself. */
+  async getDecrypted(id: string): Promise<McpServerConfig | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM mcp_servers WHERE id = ?")
+      .bind(id)
+      .first<McpServerRow>();
+    return row ? this.decryptRow(row) : null;
+  }
+
   async delete(id: string): Promise<boolean> {
     const result = await this.db.prepare("DELETE FROM mcp_servers WHERE id = ?").bind(id).run();
     return (result.meta?.changes ?? 0) > 0;
@@ -334,6 +378,7 @@ export class McpServerStore {
    * Servers applicable to a session's member repositories: unscoped servers
    * always apply; scoped servers apply when ANY member matches a scope.
    * Pass an empty list for repo-less sessions (unscoped servers only).
+   * Servers allowed no tools are left out, since starting them gains nothing.
    */
   async getDecryptedForSession(
     repositories: Array<{ repoOwner: string; repoName: string }>
@@ -351,6 +396,7 @@ export class McpServerStore {
       return scopes.some((s) => repoFullNames.has(s.toLowerCase()));
     });
 
-    return Promise.all(filtered.map((r) => this.decryptRow(r)));
+    const servers = await Promise.all(filtered.map((r) => this.decryptRow(r)));
+    return servers.filter((server) => server.toolAllowlist?.length !== 0);
   }
 }

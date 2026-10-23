@@ -11,6 +11,8 @@ export const MIN_COMPATIBLE_RUNTIME_GENERATION = runtimeManifest.minimumCompatib
 export const MIN_SHUTDOWN_PROTOCOL_RUNTIME_GENERATION =
   runtimeManifest.minimumPreservationGeneration;
 export const MIN_REBUILD_RUNTIME_GENERATION = runtimeManifest.minimumRebuildGeneration;
+export const MIN_MCP_TOOL_ALLOWLIST_RUNTIME_GENERATION =
+  runtimeManifest.minimumMcpToolAllowlistGeneration;
 /** Per-harness image floors; see minCompatibleRuntimeVersionFor in image-builds/model.ts. */
 export const HARNESS_MIN_RUNTIME_GENERATION: Readonly<Partial<Record<string, number>>> =
   runtimeManifest.harnessMinimumGeneration;

@@ -66,6 +66,7 @@ import {
 } from "./launch-context";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
+import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
 import type {
   SandboxGeneration,
   SandboxReadiness,
@@ -818,7 +819,10 @@ export class SandboxLifecycleManager
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
-      const mcpServers = await this.launchContext.loadMcpServers(repositories);
+      const { servers: mcpServers } = await this.launchContext.loadMcpServers(
+        repositories,
+        selectedImage?.runtimeVersion ?? SANDBOX_RUNTIME_VERSION
+      );
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
@@ -1104,6 +1108,21 @@ export class SandboxLifecycleManager
     return false;
   }
 
+  /** Tells the user which restricted MCP servers a restored, older runtime was not given. */
+  private recordWithheldMcpServers(names: string[], snapshotImageId: string): void {
+    try {
+      this.config.recordWarning?.(
+        `MCP servers limited to selected tools (${names.join(", ")}) are unavailable in this session, because its saved sandbox runs a runtime that cannot apply the selection. Start a new session to use them.`,
+        `mcp-servers-withheld:${snapshotImageId}`
+      );
+    } catch (error) {
+      this.log.warn("Could not record withheld MCP servers warning", {
+        event: "mcp.restricted_servers_withheld_notice_failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /**
    * Restore a sandbox from a filesystem snapshot.
    */
@@ -1161,7 +1180,8 @@ export class SandboxLifecycleManager
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
-      const mcpServers = await this.launchContext.loadMcpServers(repositories);
+      const { servers: mcpServers, withheld: withheldMcpServers } =
+        await this.launchContext.loadMcpServers(repositories, snapshotRuntimeVersion);
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
       const restoreConfig = {
@@ -1225,6 +1245,9 @@ export class SandboxLifecycleManager
           type: "sandbox_restored",
           message: "Session restored from snapshot",
         });
+        if (withheldMcpServers.length) {
+          this.recordWithheldMcpServers(withheldMcpServers, snapshotImageId);
+        }
 
         this.log.info("Sandbox restore completed", {
           event: "sandbox.restore",

@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 import { webcrypto } from "node:crypto";
 import { createRequire } from "node:module";
+import { fakeMcpServer } from "./test/integration/fake-mcp-server";
 
 const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 
@@ -51,6 +52,7 @@ export default defineConfig({
           compatibilityFlags: ["nodejs_compat"],
           async outboundService(request: Request) {
             const url = new URL(request.url);
+            if (url.hostname === "mcp.integration.test") return fakeMcpServer(request);
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
             }
