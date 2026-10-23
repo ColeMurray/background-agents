@@ -16,6 +16,7 @@ const automation = {
   instructions: "Run the sync",
   triggerType: "schedule",
   scheduleCron: "0 9 * * *",
+  scheduleOnceAt: null,
   scheduleTz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   harness: "opencode",

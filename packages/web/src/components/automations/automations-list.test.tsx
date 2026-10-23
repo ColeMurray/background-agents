@@ -37,6 +37,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     harness: "opencode",
     triggerType: "schedule",
     scheduleCron: "0 9 * * *",
+    scheduleOnceAt: null,
     scheduleTz: "UTC",
     model: "openai/gpt-5.4",
     reasoningEffort: null,
@@ -103,6 +104,24 @@ describe("AutomationsList repository labels", () => {
 });
 
 describe("AutomationsList schedule metadata", () => {
+  it("describes a one-shot by its scheduled time", () => {
+    const at = new Date("2099-01-01T09:00:00Z").getTime();
+    render(
+      <AutomationsList
+        canCreate
+        automations={[makeAutomation({ scheduleCron: null, scheduleOnceAt: at, nextRunAt: at })]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+    expect(screen.getAllByText(`Once at ${new Date(at).toLocaleString()}`).length).toBeGreaterThan(
+      0
+    );
+  });
+
   it("shows how long remains until the next scheduled run", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00Z"));

@@ -121,6 +121,8 @@ const automationSchema = z.object({
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema,
   scheduleCron: z.string().nullable(),
+  /** Unix timestamp in milliseconds for a one-shot schedule; null for recurring schedules. */
+  scheduleOnceAt: z.number().nullable(),
   scheduleTz: z.string(),
   harness: harnessIdSchema,
   model: z.string(),
@@ -208,6 +210,7 @@ export const createAutomationRequestSchema = z.object({
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema.optional(),
   scheduleCron: z.string().optional(),
+  scheduleOnceAt: z.number().int().positive().max(8_640_000_000_000_000).optional(),
   scheduleTz: z.string().optional(),
   /** Agent harness for the sessions this automation creates. Omission means the built-in harness. */
   harness: harnessIdSchema.optional(),
@@ -229,6 +232,7 @@ export const updateAutomationRequestSchema = z.object({
   name: z.string().optional(),
   instructions: z.string().optional(),
   scheduleCron: z.string().optional(),
+  scheduleOnceAt: z.number().int().positive().max(8_640_000_000_000_000).optional(),
   scheduleTz: z.string().optional(),
   harness: harnessIdSchema.optional(),
   model: z.string().optional(),

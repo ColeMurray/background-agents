@@ -15,6 +15,7 @@ export function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRo
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
