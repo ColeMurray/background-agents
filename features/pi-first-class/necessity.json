@@ -2010,6 +2010,11 @@
       "need": ["SUPPORT:test", "A2"],
       "why": "Proves promptable in-process rows persist a rollback-safe marker while current readers expose the canonical status."
     },
+    "packages/control-plane/test/integration/durable-object.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "G-2"],
+      "why": "Proves the Durable Object applies the complete dynamically composed session migration registry."
+    },
     "packages/control-plane/test/integration/external-action-reconciliation.test.ts": {
       "layer": "overlay",
       "need": ["SUPPORT:test"],
@@ -2169,6 +2174,11 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/docs/vercel.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Keeps the docs project's framework and deployment region local while Terraform plans remain network-independent."
     },
     "packages/modal-infra/deploy.py": {
       "layer": "core-support",
@@ -2750,6 +2760,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/web/vercel.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Keeps the web project's framework and deployment region local while Terraform plans remain network-independent."
+    },
     "packages/web/src/app/(app)/(sidebar)/automations/new/page.test.tsx": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -3310,6 +3325,11 @@
       "need": ["SUPPORT:deploy"],
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
+    "terraform/environments/production/docs-vercel.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Leaves framework and region authority in the docs package so mocked Terraform plans require no Vercel catalog lookup."
+    },
     "terraform/environments/production/locals.tf": {
       "layer": "core-support",
       "need": ["SUPPORT:deploy"],
@@ -3324,6 +3344,11 @@
       "layer": "overlay-hook",
       "need": ["DEV:overlay-integration", "SUPPORT:deploy"],
       "why": "Documents the explicit off-by-default personal-MCP production inputs without enabling the overlay."
+    },
+    "terraform/environments/production/tests/docs_site.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "SUPPORT:deploy"],
+      "why": "Verifies both Vercel packages retain their Next.js framework and deployment region after Terraform stops owning them."
     },
     "terraform/environments/production/tests/pi_browser.tftest.hcl": {
       "layer": "core-support",
@@ -3424,6 +3449,16 @@
       "layer": "core-support",
       "need": ["SUPPORT:deploy"],
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/vercel-project/main.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Avoids provider catalog validation during mocked plans by leaving framework and region settings in each package."
+    },
+    "terraform/modules/vercel-project/variables.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Removes obsolete module inputs after framework and region settings move to package-local Vercel configuration."
     },
     "wrangler.d1.local.jsonc": {
       "layer": "core-support",

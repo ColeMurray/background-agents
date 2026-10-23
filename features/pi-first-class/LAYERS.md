@@ -555,6 +555,54 @@ boundary.
 | `rejects a write when failed wins after route authorization`                                | Failed sessions remain promptable, so rejecting the commit-time write would diverge from canonical session admission.                                         | `allows a write when promptable status failed wins after route authorization`             |
 | `rejects a write when completed wins after route authorization`                             | Completed sessions remain promptable, so rejecting the commit-time write would diverge from canonical session admission.                                      | `allows a write when promptable status completed wins after route authorization`          |
 
+#### Rebuilt bridge replacements
+
+The rebuilt core split these former all-in-one bridge checks across narrower authority boundaries;
+the original titles remain recorded here so retention is explicit:
+
+- `cancels a prepared effect without needing an approval` →
+  `cancels an approved effect that nobody wanted`.
+- `fails closed before persistence while the capability is disabled` →
+  `refuses a new effect when the live deployment policy denies it`.
+- `lets an authenticated human approve and inspect a prepared action` → route decision authority
+  plus `lists an awaiting effect with its exact target and arguments`.
+- `lists a publication only for a provider the deployment holds a credential for` →
+  `registers only the providers the deployment named`.
+- `lists no publication when the deployment holds no credential` →
+  `registers nothing when the deployment named no provider`.
+- `marks transient provider materialization failures as retryable` →
+  `redacts provider details while preserving retry classification`.
+- `never returns an internal failure reason to the approver` →
+  `survives a malformed provider response without leaking it`.
+- `prepares and reads actions only for the active Pi operation` →
+  `binds a new real Pi call to approval and executes only through SessionDO`.
+- `reauthorizes the exact automation grant at execution claim` →
+  `returns a grant only for the automation's current executor`.
+- `recovers SessionDO baselines after a crash before Pi persisted its pins` → immutable pin
+  restoration plus `retains baseline overlays and changes across a workspace restart`.
+- `refuses a new effect while the live deployment mode denies it` →
+  `refuses a new effect when the live deployment policy denies it`.
+- `refuses an approval while the live deployment mode denies it` →
+  `keeps an already prepared effect reachable when the live policy denies new effects`.
+- `refuses execution when no provider executor is bound` →
+  `refuses a provider that has no definition`.
+- `rejects materialization at a full SHA other than SessionDO's claimed baseline` →
+  `accepts only full immutable repository pins` plus the SessionDO baseline check.
+- `renders the session's memory into the prompt and omits it when there is none` →
+  `refetches rendered memory before every model request`.
+- `resolves and claims repository heads only for an explicit lazy pin request` →
+  `pins each session repository to one immutable default commit`.
+- `restores durable repository pins without resolving branch heads` →
+  `restores durable pins without resolving mutable branch heads`.
+- `returns lightweight repository identities without resolving heads` → bootstrap remains
+  metadata-only while pin and restore own resolution.
+- `returns one credential-free materialization only for a Pi session` →
+  `accepts a credential-free bounded materialization manifest`.
+- `serves the rendered memory in the Pi session context` →
+  `serves rendered memory only for an authorized live Pi turn`.
+- `still lets an approver deny or cancel while the live mode denies new effects` → prepared effects
+  remain reachable and cancellation has its own durable lifecycle proof.
+
 ### The other local branches (SHAPE-3)
 
 The judge finds two local branches besides this one: `docs/opencode-v2-migration-plan` and

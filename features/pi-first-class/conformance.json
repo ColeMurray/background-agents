@@ -507,8 +507,12 @@
           "name": "refuses a new effect when the live deployment policy denies it"
         },
         {
-          "file": "packages/control-plane/src/session/http/handlers/pi-bridge.handler.test.ts",
-          "name": "deterministically declines unattended work without a live grant"
+          "file": "packages/control-plane/src/pi/external-action-policy-integration.test.ts",
+          "name": "binds a new real Pi call to approval and executes only through SessionDO"
+        },
+        {
+          "file": "packages/control-plane/src/db/automation-external-action-grants.test.ts",
+          "name": "returns a grant only for the automation's current executor"
         }
       ],
       "mutation": {
