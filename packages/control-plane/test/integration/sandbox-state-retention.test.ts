@@ -118,7 +118,7 @@ describe("sandbox state retention", () => {
         expect(deadline.pending_deadline).toBeLessThanOrEqual(Date.now() + 30_000);
         expect(await durableState.storage.getAlarm()).toBe(deadline.pending_deadline);
         expect(stop).not.toHaveBeenCalled();
-        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(manager.allowsQueueProcessing()).toBe(false);
         now.mockReturnValue(Number(deadline.pending_deadline));
         // Simulate the host consuming its alarm before delivering the due callback.
         await durableState.storage.deleteAlarm();
@@ -423,7 +423,7 @@ describe("sandbox state retention", () => {
         await starting;
         expect(manager.shutdownSnapshot()).toMatchObject({ phase: "unknown" });
         expect(sandbox.getSandbox()?.status).toBe("stale");
-        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(manager.allowsQueueProcessing()).toBe(false);
         expect(provider.stopSandbox).not.toHaveBeenCalled();
         expect(provider.takeSnapshot).not.toHaveBeenCalled();
         expect(provider.createSandbox).not.toHaveBeenCalled();
@@ -549,7 +549,7 @@ describe("sandbox state retention", () => {
       });
       await restoring;
       expect(restarted.manager.shutdownSnapshot()).toMatchObject({ phase: "unknown" });
-      expect(restarted.manager.mayProcessQueuedWork()).toBe(false);
+      expect(restarted.manager.allowsQueueProcessing()).toBe(false);
       await restarted.manager.spawnSandbox();
       expect(provider.restoreFromSnapshot).toHaveBeenCalledOnce();
       expect(provider.createSandbox).not.toHaveBeenCalled();
@@ -600,13 +600,13 @@ describe("sandbox state retention", () => {
       const restarted = realLifecycleHarness(instance, durableState, provider);
       await restarted.manager.handleShutdownAlarm();
       await restarted.manager.spawnSandbox();
-      expect(restarted.manager.mayProcessQueuedWork()).toBe(false);
+      expect(restarted.manager.allowsQueueProcessing()).toBe(false);
       expect(provider.createSandbox).not.toHaveBeenCalled();
       expect(restarted.manager.shutdownSnapshot()).toMatchObject({
         availableRecoveryActions: ["restore_saved"],
       });
       await restarted.manager.recoverShutdown("restore_saved");
-      expect(restarted.manager.mayProcessQueuedWork()).toBe(true);
+      expect(restarted.manager.allowsQueueProcessing()).toBe(true);
       await restarted.manager.spawnSandbox();
       expect(provider.restoreFromSnapshot).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ snapshotImageId: "rescued-filesystem" })

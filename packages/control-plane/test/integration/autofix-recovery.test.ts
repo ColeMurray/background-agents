@@ -13,7 +13,6 @@ import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider
 import { SANDBOX_RUNTIME_VERSION } from "../../src/sandbox/runtime-manifest";
 import { createSessionRuntime } from "../../src/session/components";
 import { SessionInternalPaths } from "../../src/session/contracts";
-import { SandboxPromptBlockedError } from "../../src/session/message-queue";
 import { MessageRepository } from "../../src/session/message-repository";
 import {
   SandboxShutdownRepository,
@@ -252,7 +251,7 @@ describe("Autofix feedback across sandbox recovery", () => {
       await runInSessionDO(stub, async (instance, state) => {
         const h = recoveryHarness(instance, state, { phase }, true);
         expect(h.shutdown.read()).toMatchObject({ phase, restoreInvoked: true });
-        expect(h.lifecycleManager.mayProcessQueuedWork()).toBe(false);
+        expect(h.lifecycleManager.allowsQueueProcessing()).toBe(false);
         expect(h.shutdown.read()).toMatchObject({ phase: "unknown", restoreInvoked: true });
         expect(h.rows()).toEqual([{ id: "queued-user", status: "pending" }]);
 
@@ -501,14 +500,11 @@ describe("Autofix feedback across sandbox recovery", () => {
     });
   });
 
-  it("still blocks a user API prompt with SandboxPromptBlockedError and HTTP 409 under the real hold", async () => {
+  it("still blocks a user API prompt with HTTP 409 under the real hold", async () => {
     const stub = await recoverySession();
     await runInSessionDO(stub, async (instance, state) => {
       const h = recoveryHarness(instance, state);
       const prompt = { content: "New user work", authorId: "user-1", source: "web" as const };
-      await expect(h.messageQueue.enqueuePromptFromApi(prompt)).rejects.toBeInstanceOf(
-        SandboxPromptBlockedError
-      );
       const response = await h.runtime.server.onRequest(
         new Request(`http://internal${SessionInternalPaths.prompt}`, {
           method: "POST",

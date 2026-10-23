@@ -9,7 +9,7 @@ import {
   PromptQueueFullError,
   SandboxPromptBlockedError,
   SessionNotPromptableError,
-} from "../../message-queue";
+} from "../../prompt-admission";
 import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";

@@ -394,6 +394,8 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
 export type SandboxStartupIntent = "spawn" | "warm";
 
 export interface SandboxLifecycle {
+  /** Allows the queue to proceed, including spawning or restoring a sandbox; not a readiness check. */
+  allowsQueueProcessing(): boolean;
   spawnSandbox(intent?: SandboxStartupIntent): Promise<void>;
   updateLastActivity(timestamp: number): void;
   onPromptDispatched(): void;
@@ -1951,7 +1953,7 @@ export class SandboxLifecycleManager
     this.shutdown.prepared(event);
   }
 
-  mayProcessQueuedWork(): boolean {
+  allowsQueueProcessing(): boolean {
     if (this.providerStartupPending) return false;
     switch (this.shutdown.admissionDecision()) {
       case "unmanaged":

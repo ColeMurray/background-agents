@@ -1738,7 +1738,7 @@ describe("unconfirmed checkpoint across a Durable Object reset", () => {
     const restored = await seedPendingFatalReport(`fatal-replay-startup-${Date.now()}`);
     await runInSessionDO(restored, async (instance: SessionDO) => {
       // Reading the runtime initializes it as a request would, with start-up recovery.
-      expect(componentsOf(instance).lifecycleManager.mayProcessQueuedWork()).toBe(false);
+      expect(componentsOf(instance).lifecycleManager.allowsQueueProcessing()).toBe(false);
     });
 
     await vi.waitFor(() => expectFatalReportActedOn(restored));

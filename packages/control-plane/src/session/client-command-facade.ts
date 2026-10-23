@@ -3,8 +3,8 @@
  *
  * The router's `SessionClientCommands` port stays generic so the server stack
  * unit-tests over string connections; this class is its production
- * implementation, holding the four collaborators as constructor deps instead
- * of a closure bag in the composition root.
+ * implementation. Browser acknowledgements and domain-error translation live
+ * here; admission and execution do not depend on client sockets.
  */
 
 import type { ClientInfo } from "../types";
@@ -24,6 +24,18 @@ import type { PresenceService } from "./presence-service";
 import type { SessionAction } from "@open-inspect/shared";
 import type { SessionWebSocket } from "../platform-ports";
 import type { ShutdownRecoveryAction } from "@open-inspect/shared/types/sandbox-shutdown";
+import type { SessionWebSocketManager } from "./websocket-manager";
+import type { EnqueuedPrompt } from "./prompt-admission-types";
+import {
+  BudgetExhaustedError,
+  HarnessModelIncompatibleError,
+  PromptQueueFullError,
+  PromptRequestConflictError,
+  SandboxPromptBlockedError,
+  SessionNotPromptableError,
+  type SessionPromptAdmission,
+} from "./prompt-admission";
+import { SessionAttachmentError } from "./session-attachment-resolver";
 
 export class SessionClientCommandFacade implements SessionClientCommands<
   SessionWebSocket,
@@ -32,6 +44,8 @@ export class SessionClientCommandFacade implements SessionClientCommands<
   constructor(
     private readonly authenticator: SessionConnectionAuthenticator,
     private readonly prompts: SessionMessageQueue,
+    private readonly admission: SessionPromptAdmission,
+    private readonly sockets: SessionWebSocketManager,
     private readonly stop: () => Promise<void>,
     private readonly presence: PresenceService,
     private readonly events: SessionEventStream,
@@ -42,16 +56,67 @@ export class SessionClientCommandFacade implements SessionClientCommands<
     return this.authenticator.handleSubscribe(connection, message);
   }
 
-  submitPrompt(
+  async submitPrompt(
     connection: SessionWebSocket,
     client: ClientInfo,
     message: ClientPrompt
   ): Promise<void> {
-    return this.prompts.handlePromptMessage(connection, client, message);
+    let enqueued: EnqueuedPrompt;
+    try {
+      enqueued = await this.admission.enqueueFromWeb(client, message);
+    } catch (error) {
+      let code: string;
+      if (error instanceof SessionAttachmentError) {
+        code = "INVALID_ATTACHMENTS";
+      } else if (error instanceof SessionNotPromptableError) {
+        code = "SESSION_NOT_PROMPTABLE";
+      } else if (error instanceof SandboxPromptBlockedError) {
+        code = "SANDBOX_RECOVERY_REQUIRED";
+      } else if (error instanceof PromptQueueFullError) {
+        code = "PROMPT_QUEUE_FULL";
+      } else if (error instanceof PromptRequestConflictError) {
+        code = "PROMPT_REQUEST_CONFLICT";
+      } else if (error instanceof BudgetExhaustedError) {
+        code = "BUDGET_EXHAUSTED";
+      } else if (error instanceof HarnessModelIncompatibleError) {
+        code = "HARNESS_MODEL_INCOMPATIBLE";
+      } else {
+        throw error;
+      }
+      this.sockets.send(connection, {
+        type: "error",
+        code,
+        message: error.message,
+        clientRequestId: message.clientRequestId,
+      });
+      return;
+    }
+
+    this.sockets.send(connection, {
+      type: "prompt_queued",
+      clientRequestId: message.clientRequestId,
+      messageId: enqueued.messageId,
+      position: enqueued.position,
+    });
+    await this.prompts.processMessageQueue();
   }
 
-  cancelPrompt(connection: SessionWebSocket, message: ClientCancelPrompt): Promise<void> {
-    return this.prompts.cancelQueuedPrompt(connection, message);
+  async cancelPrompt(connection: SessionWebSocket, message: ClientCancelPrompt): Promise<void> {
+    const cancelled = await this.prompts.cancelQueuedPrompt(message.messageId, () => {
+      this.sockets.send(connection, {
+        type: "prompt_cancelled",
+        clientRequestId: message.clientRequestId,
+        messageId: message.messageId,
+      });
+    });
+    if (!cancelled) {
+      this.sockets.send(connection, {
+        type: "error",
+        code: "PROMPT_NOT_CANCELLABLE",
+        message: "This prompt is no longer pending and cannot be removed",
+        clientRequestId: message.clientRequestId,
+      });
+    }
   }
 
   stopExecution(): Promise<void> {

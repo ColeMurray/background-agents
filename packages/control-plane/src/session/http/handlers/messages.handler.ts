@@ -22,7 +22,7 @@ import {
   PromptRequestConflictError,
   SessionNotPromptableError,
   SandboxPromptBlockedError,
-} from "../../message-queue";
+} from "../../prompt-admission";
 
 /**
  * HTTP boundary for the prompt/event/artifact/message/trace endpoints: parses

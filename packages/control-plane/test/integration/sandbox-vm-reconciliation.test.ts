@@ -253,7 +253,7 @@ describe("production-wired VM startup reconciliation", () => {
         manager.onSandboxSocketAttached(f.generation);
         expect(sandbox.getSandbox()?.status).toBe("connecting");
         expect(wsManager.getSandboxCommandTarget()).toEqual({ kind: "booting", phase: null });
-        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(manager.allowsQueueProcessing()).toBe(false);
         expect(manager.pushAdmissionDecision()).toBe("held");
         expect(f.shutdown.read()).toMatchObject({
           phase: "running",
@@ -276,7 +276,7 @@ describe("production-wired VM startup reconciliation", () => {
         expect(f.bridge.send).toHaveBeenCalledWith(
           JSON.stringify({ type: "sandbox_generation", generation: f.generation })
         );
-        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(manager.allowsQueueProcessing()).toBe(false);
         expect(manager.pushAdmissionDecision()).toBe("held");
         const readyWithoutAck = f.shutdown.read();
         manager.onShutdownGenerationReady({
@@ -294,9 +294,9 @@ describe("production-wired VM startup reconciliation", () => {
         });
 
         // Confirmed pending lifetime plus acknowledgement admits work before lookup completes.
-        expect(manager.mayProcessQueuedWork()).toBe(true);
+        expect(manager.allowsQueueProcessing()).toBe(true);
         expect(manager.pushAdmissionDecision()).toBe("ready");
-        expect(f.initial.internals.lifecycleManager.mayProcessQueuedWork()).toBe(false);
+        expect(f.initial.internals.lifecycleManager.allowsQueueProcessing()).toBe(false);
         expect(f.initial.internals.lifecycleManager.pushAdmissionDecision()).toBe("start_required");
         const acknowledged = f.shutdown.read()!;
         f.shutdown.write({
@@ -305,10 +305,10 @@ describe("production-wired VM startup reconciliation", () => {
           expiresAtMs: null,
           drainAtMs: null,
         });
-        expect(manager.mayProcessQueuedWork()).toBe(false);
+        expect(manager.allowsQueueProcessing()).toBe(false);
         expect(manager.pushAdmissionDecision()).toBe("held");
         f.shutdown.write(acknowledged);
-        expect(manager.mayProcessQueuedWork()).toBe(true);
+        expect(manager.allowsQueueProcessing()).toBe(true);
         expect(sandbox.getSandbox()).toMatchObject({
           modal_object_id: f.reference,
           code_server_url: null,
@@ -348,7 +348,7 @@ describe("production-wired VM startup reconciliation", () => {
         expect(f.browser.send).toHaveBeenCalledWith(
           JSON.stringify({ type: "sandbox_access_changed" })
         );
-        expect(manager.mayProcessQueuedWork()).toBe(true);
+        expect(manager.allowsQueueProcessing()).toBe(true);
         expect(manager.pushAdmissionDecision()).toBe("ready");
         expect(f.create).toHaveBeenCalledOnce();
         expect(f.stop).not.toHaveBeenCalled();
@@ -371,7 +371,7 @@ describe("production-wired VM startup reconciliation", () => {
         expect(await sandbox.getSandboxAccessSecret("ttyd")).toEqual(expect.any(String));
         expect(f.shutdown.read()).toEqual({ ...acknowledged, providerObjectId: "resolved-vm" });
         expect(f.initial.internals.lifecycleManager.isProviderStartupPending()).toBe(false);
-        expect(f.initial.internals.lifecycleManager.mayProcessQueuedWork()).toBe(true);
+        expect(f.initial.internals.lifecycleManager.allowsQueueProcessing()).toBe(true);
         expect(f.create).toHaveBeenCalledOnce();
         expect(f.stop).not.toHaveBeenCalled();
       } finally {
