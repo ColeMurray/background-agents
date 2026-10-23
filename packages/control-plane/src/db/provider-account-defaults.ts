@@ -1,24 +1,48 @@
-import type {
-  ModelProviderAccountDefault,
-  ProviderAuthMode,
+import {
+  providerAuthModeSchema,
+  subscriptionProviderIdSchema,
+  type ModelProviderAccountDefault,
+  type ProviderAuthMode,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
   assertModelProviderId,
   type ModelProviderId,
 } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { z } from "zod";
 
 export type ProviderUnattendedMode = ProviderAuthMode;
 export type ProviderDefault = ModelProviderAccountDefault;
 
-interface DefaultRow {
-  provider: string;
-  provider_account_id: string;
-  unattended_mode: ProviderUnattendedMode;
-  created_by: string | null;
-  updated_by: string | null;
-  created_at: number;
-  updated_at: number;
+const auditUserIdSchema = z.string().min(1).nullable();
+const timestampMsSchema = z.number().int().nonnegative();
+
+const providerDefaultRowSchema = z.object({
+  provider: subscriptionProviderIdSchema,
+  provider_account_id: z.string().min(1),
+  unattended_mode: providerAuthModeSchema,
+  created_by: auditUserIdSchema,
+  updated_by: auditUserIdSchema,
+  created_at: timestampMsSchema,
+  updated_at: timestampMsSchema,
+});
+
+const providerDefaultWriteSchema = z.object({
+  actorId: auditUserIdSchema,
+  now: timestampMsSchema,
+});
+
+type DefaultRow = z.infer<typeof providerDefaultRowSchema>;
+
+function parseDefaultRow(row: unknown): DefaultRow {
+  const parsed = providerDefaultRowSchema.safeParse(row);
+  if (parsed.success) return parsed.data;
+  throw new Error("Invalid provider default row");
+}
+
+function assertValidDefaultWrite(actorId: string | null, now: number): void {
+  const parsed = providerDefaultWriteSchema.safeParse({ actorId, now });
+  if (!parsed.success) throw new Error("Invalid provider default write");
 }
 
 function toDefault(row: DefaultRow): ProviderDefault {
@@ -47,6 +71,7 @@ export class ProviderDefaultStore {
     now = Date.now()
   ): Promise<void> {
     assertModelProviderId(provider);
+    assertValidDefaultWrite(actorId, now);
     const result = await this.db
       .prepare(
         `INSERT INTO model_provider_account_defaults (
@@ -74,6 +99,7 @@ export class ProviderDefaultStore {
     now: number
   ): SqlStatement {
     assertModelProviderId(provider);
+    assertValidDefaultWrite(actorId, now);
     return this.db
       .prepare(
         `INSERT INTO model_provider_account_defaults
@@ -110,15 +136,15 @@ export class ProviderDefaultStore {
     const row = await this.db
       .prepare("SELECT * FROM model_provider_account_defaults WHERE provider = ?")
       .bind(provider)
-      .first<DefaultRow>();
-    return row ? toDefault(row) : null;
+      .first<unknown>();
+    return row ? toDefault(parseDefaultRow(row)) : null;
   }
 
   async list(): Promise<ProviderDefault[]> {
     const rows = await this.db
       .prepare("SELECT * FROM model_provider_account_defaults ORDER BY provider")
-      .all<DefaultRow>();
-    return rows.results.map(toDefault);
+      .all<unknown>();
+    return rows.results.map((row) => toDefault(parseDefaultRow(row)));
   }
 
   async remove(provider: ModelProviderId): Promise<boolean> {
