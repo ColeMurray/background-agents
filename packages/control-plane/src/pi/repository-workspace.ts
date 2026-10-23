@@ -22,7 +22,11 @@ import {
   assembleSessionTextDiff,
   type SessionTextDiffRepository,
 } from "../session/diffs/assembler";
-import { WorkspaceMutationFifo } from "../pi/computer-workspace-quota";
+import {
+  WorkspaceMutationFifo,
+  runCoordinatedComputerOperation,
+} from "../pi/computer-workspace-quota";
+import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
 
 const METADATA_ROOT = "/.open-inspect/repositories";
 const STAGING_ROOT = "/.open-inspect/staging";
@@ -58,6 +62,24 @@ export interface RepositoryWorkspaceFileSystem {
       isSymbolicLink: boolean;
     }>
   >;
+}
+
+/** Route every repository-overlay VFS operation through Pi's SQLite queue. */
+export function createCoordinatedRepositoryFileSystem(
+  fs: RepositoryWorkspaceFileSystem,
+  database: SqliteDatabase
+): RepositoryWorkspaceFileSystem {
+  const coordinate = <T>(operation: () => Promise<T>): Promise<T> =>
+    runCoordinatedComputerOperation(database, operation);
+  return {
+    readFile: (...args) => coordinate(() => fs.readFile(...args)),
+    writeFile: (...args) => coordinate(() => fs.writeFile(...args)),
+    mkdir: (...args) => coordinate(() => fs.mkdir(...args)),
+    rm: (...args) => coordinate(() => fs.rm(...args)),
+    rename: (...args) => coordinate(() => fs.rename(...args)),
+    lstat: (...args) => coordinate(() => fs.lstat(...args)),
+    readdir: (...args) => coordinate(() => fs.readdir(...args)),
+  };
 }
 
 interface StoredRepositoryManifest {

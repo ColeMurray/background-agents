@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import type { SessionDiffUpload } from "@open-inspect/shared/types/session-diffs";
 import {
   PermanentRepositoryDiffPublicationError,
@@ -47,7 +48,7 @@ function outbox(now: () => number = () => 100) {
   const database = new DatabaseSync(":memory:");
   const sql = createNodeSqlStorage(database).sql;
   applyPiDoMigrations(sql);
-  return new RepositoryDiffOutbox(sql, now);
+  return new RepositoryDiffOutbox(new NodeSqliteDatabase(database), now);
 }
 
 describe("RepositoryDiffOutbox", () => {
@@ -63,7 +64,7 @@ describe("RepositoryDiffOutbox", () => {
       box.drain(vi.fn(async () => Promise.reject(new Error("provider down"))))
     ).resolves.toBe("pending");
 
-    expect(box.state()).toMatchObject({
+    await expect(box.state()).resolves.toMatchObject({
       pending: second,
       lastSuccessful: first,
       lastError: { message: "provider down", occurredAt: 100 },
@@ -74,7 +75,7 @@ describe("RepositoryDiffOutbox", () => {
     const box = outbox();
     await box.stage(bundle("first.txt"));
     await box.stage(bundle("latest.txt"));
-    box.recordCaptureFailure(new Error("assembly failed"));
+    await box.recordCaptureFailure(new Error("assembly failed"));
     const publish = vi.fn(async () => undefined);
 
     await expect(box.drain(publish)).resolves.toBe("pending");
@@ -87,7 +88,7 @@ describe("RepositoryDiffOutbox", () => {
       }),
       expect.any(AbortSignal)
     );
-    expect(box.state()).toMatchObject({
+    await expect(box.state()).resolves.toMatchObject({
       pending: null,
       recaptureRequired: true,
       lastSuccessful: bundle("latest.txt"),
@@ -102,27 +103,31 @@ describe("RepositoryDiffOutbox", () => {
     const sql = createNodeSqlStorage(database).sql;
     applyPiDoMigrations(sql);
     let now = 0;
-    const first = new RepositoryDiffOutbox(sql, () => now);
+    const coordinated = new NodeSqliteDatabase(database);
+    const first = new RepositoryDiffOutbox(coordinated, () => now);
     const previous = bundle("previous.txt");
-    first.stage(previous);
+    await first.stage(previous);
     await first.drain(async () => undefined);
     const pending = bundle("pending.txt");
-    first.stage(pending);
+    await first.stage(pending);
     const outage = vi.fn(async () => Promise.reject(new Error("publication unavailable")));
 
     for (let minute = 0; minute < 24 * 60; minute++) {
       now = minute * 60_000;
       await first.drain(outage);
     }
-    const reopened = new RepositoryDiffOutbox(sql, () => now);
+    const reopened = new RepositoryDiffOutbox(coordinated, () => now);
 
-    expect(reopened.state()).toMatchObject({
+    await expect(reopened.state()).resolves.toMatchObject({
       pending,
       lastSuccessful: previous,
       lastError: { message: "publication unavailable" },
     });
     await expect(reopened.drain(async () => undefined)).resolves.toBe("published");
-    expect(reopened.state()).toMatchObject({ pending: null, lastSuccessful: pending });
+    await expect(reopened.state()).resolves.toMatchObject({
+      pending: null,
+      lastSuccessful: pending,
+    });
     database.close();
   });
 
@@ -152,7 +157,10 @@ describe("RepositoryDiffOutbox", () => {
 
     await publishA;
     expect(remote).toEqual(["a", "b"]);
-    expect(box.state()).toMatchObject({ pending: null, lastSuccessful: bundle("b.txt") });
+    await expect(box.state()).resolves.toMatchObject({
+      pending: null,
+      lastSuccessful: bundle("b.txt"),
+    });
   });
 
   it("retains recapture-required when B capture fails while A is pending", async () => {
@@ -162,7 +170,7 @@ describe("RepositoryDiffOutbox", () => {
 
     await expect(box.drain(async () => undefined)).resolves.toBe("pending");
 
-    expect(box.state()).toMatchObject({
+    await expect(box.state()).resolves.toMatchObject({
       pending: null,
       recaptureRequired: true,
       lastSuccessful: bundle("a.txt"),
@@ -180,7 +188,7 @@ describe("RepositoryDiffOutbox", () => {
       })
     ).resolves.toBe("permanent");
 
-    expect(box.state()).toMatchObject({
+    await expect(box.state()).resolves.toMatchObject({
       pending: null,
       recaptureRequired: false,
       permanentError: expect.stringMatching(/^x{2000}$/),
@@ -194,7 +202,7 @@ describe("RepositoryDiffOutbox", () => {
     const database = new DatabaseSync(":memory:");
     const sql = createNodeSqlStorage(database).sql;
     applyPiDoMigrations(sql);
-    const box = new RepositoryDiffOutbox(sql, () => 100, 5);
+    const box = new RepositoryDiffOutbox(new NodeSqliteDatabase(database), () => 100, 5);
     await box.stage(bundle("slow.txt"));
 
     await expect(
@@ -206,7 +214,9 @@ describe("RepositoryDiffOutbox", () => {
       )
     ).resolves.toBe("pending");
 
-    expect(box.state().lastError).toMatchObject({ message: expect.stringMatching(/timed out/i) });
+    expect((await box.state()).lastError).toMatchObject({
+      message: expect.stringMatching(/timed out/i),
+    });
     database.close();
   });
 
@@ -216,11 +226,11 @@ describe("RepositoryDiffOutbox", () => {
     await box.drain(async () => {
       throw new PermanentRepositoryDiffPublicationError("contract rejected");
     });
-    const before = box.state().generation;
+    const before = (await box.state()).generation;
 
     await expect(box.requestRecapture()).resolves.toBe(before + 1);
 
-    expect(box.state()).toMatchObject({
+    await expect(box.state()).resolves.toMatchObject({
       generation: before + 1,
       recaptureRequired: true,
       permanentError: null,

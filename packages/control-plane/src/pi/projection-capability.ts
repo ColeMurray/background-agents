@@ -31,8 +31,8 @@ interface PiProjectionCapabilityOptions {
   drain(operationId: string): Promise<void>;
   result(operationId: string): Promise<PiRuntimeResult>;
   deliver(sessionId: string, result: PiRuntimeResult): Promise<void>;
-  rejection(operationId: string): string | null;
-  recordRejection(operationId: string, error: PermanentPiResultDeliveryError): void;
+  rejection(operationId: string): Promise<string | null>;
+  recordRejection(operationId: string, error: PermanentPiResultDeliveryError): Promise<void>;
   reject(operationId: string, error: PermanentPiResultDeliveryError): Promise<void>;
   fail(sessionId: string, operationId: string, error: PermanentPiProjectionError): Promise<void>;
 }
@@ -92,7 +92,7 @@ export class PiProjectionCapability extends LifecycleCapability {
     if (context.job.fn !== "project")
       throw new Error(`Unknown Pi projection job ${context.job.fn}`);
     const payload = projectionPayload(context.job.payload);
-    const rejection = this.options.rejection(payload.operationId);
+    const rejection = await this.options.rejection(payload.operationId);
     if (rejection !== null) {
       try {
         await this.options.reject(
@@ -156,7 +156,7 @@ export class PiProjectionCapability extends LifecycleCapability {
       await this.options.deliver(payload.sessionId, result);
     } catch (error) {
       if (error instanceof PermanentPiResultDeliveryError) {
-        this.options.recordRejection(payload.operationId, error);
+        await this.options.recordRejection(payload.operationId, error);
         try {
           await this.options.reject(payload.operationId, error);
         } catch (cleanupError) {

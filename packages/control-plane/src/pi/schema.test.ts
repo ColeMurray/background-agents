@@ -10,6 +10,7 @@ import {
   validateMigrationArtifacts,
 } from "@open-inspect/shared/migration-reservations";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import { PiProjectionOutbox } from "./projection-outbox";
 import { RepositoryDiffOutbox } from "./repository-diff-outbox";
 import { PI_DO_MIGRATIONS, applyPiDoMigrations, assertPiDoTables } from "./schema";
@@ -112,34 +113,35 @@ describe("the Pi Durable Object's migration registry", () => {
 });
 
 describe("the outboxes read the migrated tables", () => {
-  it("refuses to work against a database that did not migrate", () => {
-    const { db, sql } = database();
+  it("refuses to work against a database that did not migrate", async () => {
+    const { db } = database();
     try {
-      const outbox = new PiProjectionOutbox(sql, async () => undefined);
-      expect(() => outbox.pending("message-1")).toThrow(/migrations did not run/);
+      const outbox = new PiProjectionOutbox(new NodeSqliteDatabase(db), async () => undefined);
+      await expect(outbox.pending("message-1")).rejects.toThrow(/migrations did not run/);
     } finally {
       db.close();
     }
   });
 
-  it("refuses to work against a database that did not migrate", () => {
-    const { db, sql } = database();
+  it("refuses to work against a database that did not migrate", async () => {
+    const { db } = database();
     try {
-      const outbox = new RepositoryDiffOutbox(sql);
-      expect(() => outbox.state()).toThrow(/migrations did not run/);
+      const outbox = new RepositoryDiffOutbox(new NodeSqliteDatabase(db));
+      await expect(outbox.state()).rejects.toThrow(/migrations did not run/);
     } finally {
       db.close();
     }
   });
 
-  it("works against a migrated database", () => {
+  it("works against a migrated database", async () => {
     const { db, sql } = database();
     try {
       applyPiDoMigrations(sql);
-      const outbox = new RepositoryDiffOutbox(sql);
-      expect(outbox.state().generation).toBe(0);
-      const projection = new PiProjectionOutbox(sql, async () => undefined);
-      expect(projection.pending("message-1")).toBe(0);
+      const database = new NodeSqliteDatabase(db);
+      const outbox = new RepositoryDiffOutbox(database);
+      expect((await outbox.state()).generation).toBe(0);
+      const projection = new PiProjectionOutbox(database, async () => undefined);
+      await expect(projection.pending("message-1")).resolves.toBe(0);
     } finally {
       db.close();
     }

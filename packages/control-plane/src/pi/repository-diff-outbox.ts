@@ -3,8 +3,8 @@ import {
   type SessionDiffUpload,
 } from "@open-inspect/shared/types/session-diffs";
 import { z } from "zod";
-import type { SqlStorage } from "../session/sql-storage";
-import { assertPiDoTables } from "./schema";
+import type { SqliteDatabase, SqliteExecutor } from "@earendil-works/chord/sqlite";
+import { assertPiDoTablesAsync } from "./schema";
 
 const MAX_ERROR_LENGTH = 2_000;
 export const REPOSITORY_DIFF_PUBLISH_TIMEOUT_MS = 15_000;
@@ -45,67 +45,76 @@ export class RepositoryDiffOutbox {
   private publishing: Promise<RepositoryDiffPublicationOutcome> | undefined;
 
   constructor(
-    private readonly sql: SqlStorage,
+    private readonly sql: SqliteDatabase,
     private readonly now: () => number = Date.now,
     private readonly publishTimeoutMs = REPOSITORY_DIFF_PUBLISH_TIMEOUT_MS
   ) {}
 
   async stage(bundle: SessionDiffUpload): Promise<number> {
-    const generation = this.state().generation + 1;
-    const encoded = JSON.stringify(
-      sessionDiffUploadSchema.parse({ ...bundle, publicationGeneration: generation })
-    );
-    this.sql.exec(
-      `INSERT INTO oi_pi_repository_diff_outbox
+    await this.assertTable();
+    return this.sql.transaction(async (transaction) => {
+      const generation = (await this.readState(transaction)).generation + 1;
+      const encoded = JSON.stringify(
+        sessionDiffUploadSchema.parse({ ...bundle, publicationGeneration: generation })
+      );
+      await transaction.run(
+        `INSERT INTO oi_pi_repository_diff_outbox
            (singleton, generation, pending_generation, pending_json, recapture_required,
-            permanent_error, updated_at)
+             permanent_error, updated_at)
          VALUES (1, ?, ?, ?, 0, NULL, ?)
          ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation,
            pending_generation = excluded.pending_generation, pending_json = excluded.pending_json,
            recapture_required = 0, permanent_error = NULL, updated_at = excluded.updated_at`,
-      generation,
-      generation,
-      encoded,
-      this.now()
-    );
-    return generation;
+        generation,
+        generation,
+        encoded,
+        this.now()
+      );
+      return generation;
+    });
   }
 
   async requestRecapture(): Promise<number> {
-    const generation = this.state().generation + 1;
-    this.sql.exec(
-      `INSERT INTO oi_pi_repository_diff_outbox
+    await this.assertTable();
+    return this.sql.transaction(async (transaction) => {
+      const generation = (await this.readState(transaction)).generation + 1;
+      await transaction.run(
+        `INSERT INTO oi_pi_repository_diff_outbox
          (singleton, generation, recapture_required, permanent_error, updated_at)
        VALUES (1, ?, 1, NULL, ?)
        ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation,
          recapture_required = 1, permanent_error = NULL, updated_at = excluded.updated_at`,
-      generation,
-      this.now()
-    );
-    return generation;
+        generation,
+        this.now()
+      );
+      return generation;
+    });
   }
 
   async recordCaptureFailure(error: unknown): Promise<number> {
-    const generation = this.state().generation + 1;
-    const now = this.now();
-    this.sql.exec(
-      `INSERT INTO oi_pi_repository_diff_outbox
+    await this.assertTable();
+    return this.sql.transaction(async (transaction) => {
+      const generation = (await this.readState(transaction)).generation + 1;
+      const now = this.now();
+      await transaction.run(
+        `INSERT INTO oi_pi_repository_diff_outbox
            (singleton, generation, recapture_required, last_error, last_error_at, updated_at)
          VALUES (1, ?, 1, ?, ?, ?)
          ON CONFLICT(singleton) DO UPDATE SET generation = excluded.generation,
            recapture_required = 1, last_error = excluded.last_error,
            last_error_at = excluded.last_error_at, updated_at = excluded.updated_at`,
-      generation,
-      boundedError(error),
-      now,
-      now
-    );
-    return generation;
+        generation,
+        boundedError(error),
+        now,
+        now
+      );
+      return generation;
+    });
   }
 
   async recordFailure(error: unknown): Promise<void> {
-    this.ensureRow();
-    this.recordError(error);
+    await this.ensureRow();
+    await this.recordError(error);
   }
 
   drain(
@@ -125,7 +134,7 @@ export class RepositoryDiffOutbox {
     publish: (bundle: SessionDiffUpload, signal: AbortSignal) => Promise<void>
   ): Promise<RepositoryDiffPublicationOutcome> {
     while (true) {
-      const state = this.state();
+      const state = await this.state();
       if (!state.pending) {
         if (state.recaptureRequired) return "pending";
         return state.permanentError ? "permanent" : "idle";
@@ -139,7 +148,7 @@ export class RepositoryDiffOutbox {
         if (error instanceof PermanentRepositoryDiffPublicationError) {
           const message = boundedError(error);
           const now = this.now();
-          this.sql.exec(
+          await this.sql.run(
             `UPDATE oi_pi_repository_diff_outbox
                 SET pending_generation = NULL, pending_json = NULL, permanent_error = ?,
                     last_error = ?, last_error_at = ?, updated_at = ?
@@ -150,15 +159,15 @@ export class RepositoryDiffOutbox {
             now,
             pendingGeneration
           );
-          const current = this.state();
+          const current = await this.state();
           if (current.pending) continue;
           return current.recaptureRequired ? "pending" : "permanent";
         }
-        this.recordError(error);
+        await this.recordError(error);
         return "pending";
       }
       const encoded = JSON.stringify(state.pending);
-      this.sql.exec(
+      await this.sql.run(
         `UPDATE oi_pi_repository_diff_outbox
             SET pending_generation = NULL, pending_json = NULL, last_success_json = ?, updated_at = ?
           WHERE singleton = 1 AND pending_generation = ?`,
@@ -166,21 +175,23 @@ export class RepositoryDiffOutbox {
         this.now(),
         pendingGeneration
       );
-      const current = this.state();
+      const current = await this.state();
       if (current.pending) continue;
       return current.recaptureRequired ? "pending" : "published";
     }
   }
 
-  state(): RepositoryDiffOutboxState {
-    this.assertTable();
-    const rows = this.sql
-      .exec(
-        `SELECT generation, pending_generation, pending_json, recapture_required,
+  async state(): Promise<RepositoryDiffOutboxState> {
+    await this.assertTable();
+    return this.readState(this.sql);
+  }
+
+  private async readState(sql: SqliteExecutor): Promise<RepositoryDiffOutboxState> {
+    const rows = await sql.all(
+      `SELECT generation, pending_generation, pending_json, recapture_required,
                 last_success_json, last_error, last_error_at, permanent_error
            FROM oi_pi_repository_diff_outbox WHERE singleton = 1`
-      )
-      .toArray();
+    );
     if (rows.length === 0) {
       return {
         generation: 0,
@@ -207,10 +218,10 @@ export class RepositoryDiffOutbox {
     };
   }
 
-  private recordError(error: unknown): void {
+  private async recordError(error: unknown): Promise<void> {
     const message = boundedError(error);
     const now = this.now();
-    this.sql.exec(
+    await this.sql.run(
       `UPDATE oi_pi_repository_diff_outbox
           SET last_error = ?, last_error_at = ?, updated_at = ?
         WHERE singleton = 1`,
@@ -242,9 +253,9 @@ export class RepositoryDiffOutbox {
     }
   }
 
-  private ensureRow(): void {
-    this.assertTable();
-    this.sql.exec(
+  private async ensureRow(): Promise<void> {
+    await this.assertTable();
+    await this.sql.run(
       `INSERT OR IGNORE INTO oi_pi_repository_diff_outbox
          (singleton, generation, recapture_required, updated_at)
        VALUES (1, 0, 0, ?)`,
@@ -252,11 +263,11 @@ export class RepositoryDiffOutbox {
     );
   }
 
-  private assertTable(): void {
+  private async assertTable(): Promise<void> {
     if (this.initialized) return;
     // The table is the Pi Durable Object's tracked migration's work, not this
     // outbox's: a missing table is a deployment that did not migrate.
-    assertPiDoTables(this.sql, "oi_pi_repository_diff_outbox");
+    await assertPiDoTablesAsync(this.sql, "oi_pi_repository_diff_outbox");
     this.initialized = true;
   }
 }

@@ -34,6 +34,7 @@ import {
   type UserInput,
   watchEvents,
 } from "@earendil-works/pi-durable";
+import { DurableObjectSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import { DurableObject } from "cloudflare:workers";
@@ -97,6 +98,8 @@ import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
   createQuotaWorkspace,
+  createCoordinatedWorkspaceToolFacade,
+  runCoordinatedComputerOperation,
   createLazyWorkspaceToolFacade,
   createWorkspaceToolFacade,
   ensureRealWorkspaceDirectory,
@@ -112,7 +115,10 @@ import {
   PI_LEGACY_FEATURE_CAPABILITY_SNAPSHOT,
   readPiFeatureCapabilitySnapshot,
 } from "../pi/capability-snapshot";
-import { PiRepositoryWorkspace } from "../pi/repository-workspace";
+import {
+  PiRepositoryWorkspace,
+  createCoordinatedRepositoryFileSystem,
+} from "../pi/repository-workspace";
 import { z } from "zod";
 import {
   memorySearchResponseSchema,
@@ -314,6 +320,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     createFixedActionCeiling(HARNESS_ACTION_CEILING);
   private readonly prices = createPiPriceTable(this.models);
   private readonly trustedUsage = new TrustedUsageMeter(this.ctx.storage, this.prices);
+  /** Shared Pi/host/Computer queue for this Durable Object's SQLite database. */
+  private readonly database = new DurableObjectSqliteDatabase(this.ctx.storage);
   /** Current open's registry; replaced on every PiHarness reopen. */
   private registry: ReturnType<typeof createRegistry> | undefined;
   private workspace: WorkspaceToolFacade | undefined;
@@ -337,11 +345,11 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly firstTokenProjected = new Set<string>();
   private readonly activeOperationByConversation = new Map<string, string>();
   readonly projectionOutbox = new PiProjectionOutbox(
-    this.ctx.storage.sql,
+    this.database,
     (sequence, displayId, operationId, event) =>
       this.deliverEventProjection(sequence, displayId, operationId, event)
   );
-  readonly repositoryDiffOutbox = new RepositoryDiffOutbox(this.ctx.storage.sql);
+  readonly repositoryDiffOutbox = new RepositoryDiffOutbox(this.database);
   readonly repositoryDiffPublication = new RepositoryDiffPublicationCapability(() =>
     this.drainRepositoryDiffPublication()
   );
@@ -499,7 +507,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             computerExecutionEnabled
           );
           if (!this.rawWorkspace) throw new Error("Pi repository workspace is unavailable");
-          return createWorkspaceToolFacade(this.rawWorkspace);
+          return createCoordinatedWorkspaceToolFacade(
+            createWorkspaceToolFacade(this.rawWorkspace),
+            this.database
+          );
         });
         this.repositoryWorkspaceInitializer = async (signal) => {
           await this.openWorkspace(
@@ -705,7 +716,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       // enqueued after the projector's pre-terminal drain.
       await this.projectionOutbox.drain(result.operationId);
       await this.deliverResult(sessionId, result);
-      this.projectionOutbox.complete(result.operationId);
+      await this.projectionOutbox.complete(result.operationId);
       await this.settleOperationMetadata(result.operationId);
     },
     rejection: (operationId) => this.projectionOutbox.resultRejection(operationId),
@@ -714,7 +725,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     reject: async (operationId) => {
       this.turnDeadlines.get(operationId)?.clear();
       this.turnDeadlines.delete(operationId);
-      this.projectionOutbox.complete(operationId);
+      await this.projectionOutbox.complete(operationId);
       await this.settleOperationMetadata(operationId);
     },
     fail: async (sessionId, operationId, error) => {
@@ -723,7 +734,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       await this.stopEventRelay(operationId);
       await this.harness.abort({ session: ROOT_SESSION, operationId }).catch(() => false);
       const accounting = await this.observeOperationAccounting(operationId);
-      const finalized = this.projectionOutbox.finalAccounting(operationId);
+      const finalized = await this.projectionOutbox.finalAccounting(operationId);
       await this.deliverResult(sessionId, {
         operationId,
         status: "unanswered",
@@ -732,7 +743,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         usage: finalized?.usage ?? accounting.usage,
         costUsd: finalized?.costUsd ?? accounting.costUsd,
       });
-      this.projectionOutbox.complete(operationId);
+      await this.projectionOutbox.complete(operationId);
       await this.settleOperationMetadata(operationId);
     },
   });
@@ -1095,7 +1106,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   private async waitForResult(operationId: string): Promise<PiRuntimeResult> {
     const result = await this.harness.wait(operationId, { session: ROOT_SESSION });
-    const accounting = this.projectionOutbox.finalAccounting(operationId);
+    const accounting = await this.projectionOutbox.finalAccounting(operationId);
     if (!accounting) throw new Error("Pi operation final projection is unavailable");
     return {
       operationId,
@@ -1395,7 +1406,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           timestamp: Date.now() / 1_000,
           messageId: projectedOperationId,
         } satisfies Extract<SandboxIngressEvent, { type: "context_compacted" }>;
-        this.projectionOutbox.enqueue(
+        await this.projectionOutbox.enqueue(
           piProjectionIdentity(projectedOperationId, event, `compaction_end:${record.target.id}`),
           projectedOperationId,
           event,
@@ -1454,7 +1465,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private async finalizeControlProjection(operationId: string): Promise<void> {
     await this.captureFinalProjection(operationId);
     await this.projectionOutbox.drain(operationId);
-    this.projectionOutbox.complete(operationId);
+    await this.projectionOutbox.complete(operationId);
     await this.settleOperationMetadata(operationId);
   }
 
@@ -1567,7 +1578,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     // archive is acknowledged. A failed delivery stays in the outbox and the
     // archive request fails; its retry drains the same immutable events.
     for (;;) {
-      const undelivered = this.projectionOutbox.undeliveredOperations();
+      const undelivered = await this.projectionOutbox.undeliveredOperations();
       if (undelivered.length === 0) break;
       for (const operationId of undelivered) {
         await this.projectionOutbox.drain(operationId);
@@ -1686,44 +1697,52 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (executionEnabled && !loader) {
       throw new Error("Computer JavaScript execution requires WORKSPACE_LOADER");
     }
-    const workspace = new Workspace({
-      storage: this.ctx.storage as unknown as DurableObjectStorageLike,
-      sessionId: this.ctx.id.toString(),
-      backends:
-        executionEnabled && loader
-          ? [
-              new WorkerJavaScriptBackend({
-                loader,
-                root: COMPUTER_SCRATCH_ROOT,
-                access: "read",
-                egress: { mode: "none" },
-                defaultTimeoutMs: 30_000,
-                maxTimeoutMs: 60_000,
-                maxCpuMs: 30_000,
-                maxSourceBytes: 128 * 1024,
-                maxInputBytes: 128 * 1024,
-                maxResultBytes: 256 * 1024,
-                maxStdioBytes: 256 * 1024,
-              }),
-            ]
-          : [],
-      // A read-only execution backend must not bypass scratch quota by
-      // writing full-output spill files through the raw Workspace.
-      output: executionEnabled ? false : undefined,
-    });
+    let workspace: Workspace | undefined;
     try {
-      await ensureRealWorkspaceDirectory(workspace.fs, "/workspace");
-      await ensureRealWorkspaceDirectory(workspace.fs, COMPUTER_SCRATCH_ROOT);
-      await ensureRealWorkspaceDirectory(workspace.fs, "/workspace/repos");
+      workspace = await runCoordinatedComputerOperation(this.database, async () => {
+        const opened = new Workspace({
+          storage: this.ctx.storage as unknown as DurableObjectStorageLike,
+          sessionId: this.ctx.id.toString(),
+          backends:
+            executionEnabled && loader
+              ? [
+                  new WorkerJavaScriptBackend({
+                    loader,
+                    root: COMPUTER_SCRATCH_ROOT,
+                    access: "read",
+                    egress: { mode: "none" },
+                    defaultTimeoutMs: 30_000,
+                    maxTimeoutMs: 60_000,
+                    maxCpuMs: 30_000,
+                    maxSourceBytes: 128 * 1024,
+                    maxInputBytes: 128 * 1024,
+                    maxResultBytes: 256 * 1024,
+                    maxStdioBytes: 256 * 1024,
+                  }),
+                ]
+              : [],
+          // A read-only execution backend must not bypass scratch quota by
+          // writing full-output spill files through the raw Workspace.
+          output: executionEnabled ? false : undefined,
+        });
+        await ensureRealWorkspaceDirectory(opened.fs, "/workspace");
+        await ensureRealWorkspaceDirectory(opened.fs, COMPUTER_SCRATCH_ROOT);
+        await ensureRealWorkspaceDirectory(opened.fs, "/workspace/repos");
+        return opened;
+      });
     } catch (error) {
-      await workspace.close().catch(() => {});
+      await workspace?.close().catch(() => {});
       throw error;
     }
+    if (!workspace) throw new Error("Computer Workspace failed to initialize");
     this.rawWorkspace = workspace;
     const files = writable
       ? createQuotaWorkspace(workspace, this.ctx.storage)
       : createWorkspaceToolFacade(workspace);
-    this.workspace = executionEnabled ? withWorkspaceRuntime(files, workspace) : files;
+    this.workspace = createCoordinatedWorkspaceToolFacade(
+      executionEnabled ? withWorkspaceRuntime(files, workspace) : files,
+      this.database
+    );
     return this.workspace;
   }
 
@@ -1741,26 +1760,30 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const work = (async () => {
         const rawWorkspace = this.rawWorkspace;
         if (!rawWorkspace) throw new Error("Pi repository workspace is unavailable");
-        const repositoryWorkspace = new PiRepositoryWorkspace(rawWorkspace.fs, () => Date.now(), {
-          mutations,
-          publication: {
-            stage: (bundle) => this.repositoryDiffOutbox.stage(bundle),
-            drain: () => this.drainRepositoryDiffOutbox(),
-            recordCaptureFailure: (error) =>
-              this.repositoryDiffOutbox.recordCaptureFailure(error).then(() => undefined),
-            recordFailure: (error) => this.repositoryDiffOutbox.recordFailure(error),
-            reportFailure: async (error) => {
-              const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
-              if (sessionId) {
-                await this.recordDiffFailure(
-                  sessionId,
-                  error instanceof Error ? error.message : String(error)
-                ).catch(() => {});
-              }
+        const repositoryWorkspace = new PiRepositoryWorkspace(
+          createCoordinatedRepositoryFileSystem(rawWorkspace.fs, this.database),
+          () => Date.now(),
+          {
+            mutations,
+            publication: {
+              stage: (bundle) => this.repositoryDiffOutbox.stage(bundle),
+              drain: () => this.drainRepositoryDiffOutbox(),
+              recordCaptureFailure: (error) =>
+                this.repositoryDiffOutbox.recordCaptureFailure(error).then(() => undefined),
+              recordFailure: (error) => this.repositoryDiffOutbox.recordFailure(error),
+              reportFailure: async (error) => {
+                const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+                if (sessionId) {
+                  await this.recordDiffFailure(
+                    sessionId,
+                    error instanceof Error ? error.message : String(error)
+                  ).catch(() => {});
+                }
+              },
+              schedule: () => this.repositoryDiffPublication.schedule(),
             },
-            schedule: () => this.repositoryDiffPublication.schedule(),
-          },
-        });
+          }
+        );
         const restorePlan = await repositoryWorkspace.restore(repositories);
         const manifests: PiRepositoryMaterializationManifest[] = [];
         for (const repository of repositories) {
@@ -2652,7 +2675,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const repositoryWorkspace = await this.repositoryWorkspaceInitializer();
     let outcome = await this.drainRepositoryDiffOutbox();
     if (outcome === "permanent" || outcome === "idle" || outcome === "published") return outcome;
-    let state = this.repositoryDiffOutbox.state();
+    let state = await this.repositoryDiffOutbox.state();
     if (state.pending) return "pending";
     if (state.recaptureRequired) {
       try {
@@ -2669,7 +2692,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         return "pending";
       }
       outcome = await this.drainRepositoryDiffOutbox();
-      state = this.repositoryDiffOutbox.state();
+      state = await this.repositoryDiffOutbox.state();
       return state.pending || state.recaptureRequired ? "pending" : outcome;
     }
     return outcome;
@@ -2680,7 +2703,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       this.publishDiffBundle(bundle, signal)
     );
     if (outcome === "pending" || outcome === "permanent") {
-      const state = this.repositoryDiffOutbox.state();
+      const state = await this.repositoryDiffOutbox.state();
       const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
       if (sessionId && state.lastError) {
         await this.recordDiffFailure(sessionId, state.lastError.message).catch(() => {});
@@ -2766,7 +2789,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                   model: routedMetadata.model,
                 });
               }
-              this.projectionOutbox.enqueue(
+              await this.projectionOutbox.enqueue(
                 piProjectionIdentity(routedOperation, event, sourceIdentity),
                 routedOperation,
                 this.priceStepEvent(event, routedMetadata.model, accounting?.costUsd),
@@ -2790,7 +2813,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                 routedOperation,
                 accounting.costUsd
               );
-              this.projectionOutbox.enqueue(
+              await this.projectionOutbox.enqueue(
                 piProjectionIdentity(routedOperation, event),
                 routedOperation,
                 event,
@@ -2856,7 +2879,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             operationId,
             event
           )}`;
-          this.projectionOutbox.enqueue(
+          await this.projectionOutbox.enqueue(
             piProjectionIdentity(operationId, event, sourceIdentity),
             operationId,
             this.priceStepEvent(event, metadata.model, accounting?.costUsd),
@@ -2866,7 +2889,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         }
         if (accounting?.changed) {
           const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
-          this.projectionOutbox.enqueue(
+          await this.projectionOutbox.enqueue(
             piProjectionIdentity(operationId, event),
             operationId,
             event,
@@ -2904,7 +2927,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async captureFinalProjection(operationId: string): Promise<void> {
-    if (this.projectionOutbox.isFinalized(operationId)) return;
+    if (await this.projectionOutbox.isFinalized(operationId)) return;
     await this.stopEventRelay(operationId);
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
@@ -2920,7 +2943,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     });
     const accounting = await this.observeOperationAccounting(operationId);
     for (const event of translated) {
-      this.projectionOutbox.enqueue(
+      await this.projectionOutbox.enqueue(
         piProjectionIdentity(operationId, event),
         operationId,
         this.priceStepEvent(event, metadata.model, accounting.costUsd),
@@ -2929,7 +2952,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       );
     }
     const accountingEvent = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
-    this.projectionOutbox.enqueue(
+    await this.projectionOutbox.enqueue(
       piProjectionIdentity(operationId, accountingEvent),
       operationId,
       accountingEvent,
@@ -2937,21 +2960,21 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       "final:accounting"
     );
     await this.recordProjectedCost(operationId, accounting.costUsd);
-    this.projectionOutbox.markFinalized(operationId, accounting, Date.now());
+    await this.projectionOutbox.markFinalized(operationId, accounting, Date.now());
   }
 
   private async checkpointAccounting(operationId: string): Promise<void> {
-    if (this.projectionOutbox.isFinalized(operationId)) return;
+    if (await this.projectionOutbox.isFinalized(operationId)) return;
     const accounting = await this.observeOperationAccounting(operationId);
     // accountingTotals() spans every Pi conversation. A may settle while that
     // read is in flight and B may then add usage; never attribute that snapshot
     // back to finalized A.
-    if (this.projectionOutbox.isFinalized(operationId)) return;
+    if (await this.projectionOutbox.isFinalized(operationId)) return;
     if (!accounting.changed) return;
     const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
     if (!sessionId) throw new Error("Pi Durable session is not initialized");
     const event = accountingProjectionEvent(sessionId, operationId, accounting.costUsd);
-    this.projectionOutbox.enqueue(
+    await this.projectionOutbox.enqueue(
       piProjectionIdentity(operationId, event),
       operationId,
       event,

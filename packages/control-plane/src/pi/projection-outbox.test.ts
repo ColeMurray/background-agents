@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+import { NodeSqliteDatabase } from "@earendil-works/chord/sqlite/node";
 import { PermanentPiProjectionError, PiProjectionOutbox } from "./projection-outbox";
 import { applyPiDoMigrations } from "./schema";
 
@@ -22,7 +23,7 @@ function buildOutbox(
   databases.push(database);
   const sql = createNodeSqlStorage(database).sql;
   applyPiDoMigrations(sql);
-  return new PiProjectionOutbox(sql, deliver);
+  return new PiProjectionOutbox(new NodeSqliteDatabase(database), deliver);
 }
 
 describe("PiProjectionOutbox", () => {
@@ -37,8 +38,8 @@ describe("PiProjectionOutbox", () => {
     const first = event("hel");
     const final = event("hello");
 
-    const firstSequence = outbox.enqueue("message-1:assistant", "message-1", first, 1);
-    const finalSequence = outbox.enqueue("message-1:assistant", "message-1", final, 2);
+    const firstSequence = await outbox.enqueue("message-1:assistant", "message-1", first, 1);
+    const finalSequence = await outbox.enqueue("message-1:assistant", "message-1", final, 2);
 
     expect(finalSequence).toBe(firstSequence + 1);
     await expect(outbox.drain("message-1")).rejects.toThrow("response lost");
@@ -55,7 +56,7 @@ describe("PiProjectionOutbox", () => {
       "message-1",
       final
     );
-    expect(outbox.pending("message-1")).toBe(0);
+    await expect(outbox.pending("message-1")).resolves.toBe(0);
   });
 
   it("drains an update enqueued while an earlier delivery awaits acknowledgement", async () => {
@@ -68,16 +69,16 @@ describe("PiProjectionOutbox", () => {
       delivered.push(displayId);
       if (displayId === "first") await firstDelivery;
     });
-    outbox.enqueue("first", "message-1", event("first"), 1);
+    await outbox.enqueue("first", "message-1", event("first"), 1);
 
     const draining = outbox.drain("message-1");
     await vi.waitFor(() => expect(delivered).toEqual(["first"]));
-    outbox.enqueue("second", "message-1", event("second"), 2);
+    await outbox.enqueue("second", "message-1", event("second"), 2);
     release?.();
     await draining;
 
     expect(delivered).toEqual(["first", "second"]);
-    expect(outbox.pending("message-1")).toBe(0);
+    await expect(outbox.pending("message-1")).resolves.toBe(0);
   });
 
   it("marks delivery by operation and sequence when two operations both have sequence one", async () => {
@@ -85,13 +86,13 @@ describe("PiProjectionOutbox", () => {
     const outbox = buildOutbox(async (_sequence, _displayId, operationId) => {
       delivered.push(operationId);
     });
-    expect(outbox.enqueue("a", "operation-a", event("a", "operation-a"), 1)).toBe(1);
-    expect(outbox.enqueue("b", "operation-b", event("b", "operation-b"), 1)).toBe(1);
+    await expect(outbox.enqueue("a", "operation-a", event("a", "operation-a"), 1)).resolves.toBe(1);
+    await expect(outbox.enqueue("b", "operation-b", event("b", "operation-b"), 1)).resolves.toBe(1);
 
     await outbox.drain("operation-a");
 
-    expect(outbox.pending("operation-a")).toBe(0);
-    expect(outbox.pending("operation-b")).toBe(1);
+    await expect(outbox.pending("operation-a")).resolves.toBe(0);
+    await expect(outbox.pending("operation-b")).resolves.toBe(1);
     await outbox.drain("operation-b");
     expect(delivered).toEqual(["operation-a", "operation-b"]);
   });
@@ -101,8 +102,8 @@ describe("PiProjectionOutbox", () => {
       if (operationId === "operation-a") throw new PermanentPiProjectionError("rejected (409)");
     });
     const outbox = buildOutbox(deliver);
-    outbox.enqueue("a", "operation-a", event("a", "operation-a"), 1);
-    outbox.enqueue("b", "operation-b", event("b", "operation-b"), 1);
+    await outbox.enqueue("a", "operation-a", event("a", "operation-a"), 1);
+    await outbox.enqueue("b", "operation-b", event("b", "operation-b"), 1);
 
     await expect(outbox.drain("operation-a")).rejects.toThrow("rejected (409)");
     await expect(outbox.drain("operation-b")).resolves.toBeUndefined();
@@ -115,38 +116,38 @@ describe("PiProjectionOutbox", () => {
       throw new PermanentPiProjectionError("rejected (409)");
     });
     const outbox = buildOutbox(deliver);
-    outbox.enqueue("invalid", "message-1", event("invalid"), 1);
+    await outbox.enqueue("invalid", "message-1", event("invalid"), 1);
 
     await expect(outbox.drain("message-1")).rejects.toThrow("rejected (409)");
     await expect(outbox.drain("message-1")).rejects.toThrow("rejected (409)");
     expect(deliver).toHaveBeenCalledOnce();
 
-    outbox.complete("message-1");
+    await outbox.complete("message-1");
     await expect(outbox.drain("message-1")).resolves.toBeUndefined();
   });
 
-  it("latches one final capture across delivery cleanup and later retries", () => {
+  it("latches one final capture across delivery cleanup and later retries", async () => {
     const outbox = buildOutbox(async () => {});
     const first = accounting(1.25, 10);
-    outbox.markFinalized("message-1", first, 1);
-    outbox.markFinalized("message-1", accounting(99, 999), 2);
+    await outbox.markFinalized("message-1", first, 1);
+    await outbox.markFinalized("message-1", accounting(99, 999), 2);
 
-    expect(outbox.finalAccounting("message-1")).toEqual(first);
-    outbox.complete("message-1");
-    expect(outbox.isFinalized("message-1")).toBe(true);
-    expect(outbox.finalAccounting("message-1")).toEqual(first);
+    await expect(outbox.finalAccounting("message-1")).resolves.toEqual(first);
+    await outbox.complete("message-1");
+    await expect(outbox.isFinalized("message-1")).resolves.toBe(true);
+    await expect(outbox.finalAccounting("message-1")).resolves.toEqual(first);
   });
 
-  it("bounds finalization tombstones after terminal cleanup", () => {
+  it("bounds finalization tombstones after terminal cleanup", async () => {
     const outbox = buildOutbox(async () => {});
     for (let index = 0; index < 130; index++) {
       const operationId = `message-${index}`;
-      outbox.markFinalized(operationId, accounting(index, index), index);
-      outbox.complete(operationId);
+      await outbox.markFinalized(operationId, accounting(index, index), index);
+      await outbox.complete(operationId);
     }
 
-    expect(outbox.isFinalized("message-0")).toBe(false);
-    expect(outbox.isFinalized("message-129")).toBe(true);
+    await expect(outbox.isFinalized("message-0")).resolves.toBe(false);
+    await expect(outbox.isFinalized("message-129")).resolves.toBe(true);
   });
 });
 

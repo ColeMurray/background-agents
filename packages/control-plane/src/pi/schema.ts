@@ -27,6 +27,7 @@ import {
 } from "@open-inspect/shared/migration-reservations";
 import type { MigrationOwner } from "@open-inspect/shared/migration-reservations";
 import { createLogger } from "../logger";
+import type { SqliteExecutor } from "@earendil-works/chord/sqlite";
 import type { SqlStorage } from "../session/sql-storage";
 
 const schemaLog = createLogger("pi-schema");
@@ -166,6 +167,26 @@ export function assertPiDoTables(sql: SqlStorage, ...names: string[]): void {
       ...names
     )
     .toArray() as Array<{ name?: unknown }>;
+  const present = new Set(rows.map((row) => row.name));
+  const missing = names.filter((name) => !present.has(name));
+  if (missing.length > 0) {
+    throw new Error(
+      `Pi Durable Object schema is missing ${missing.join(", ")}; its migrations did not run`
+    );
+  }
+}
+
+/** Async form for callers coordinated with pi-durable's shared SQLite queue. */
+export async function assertPiDoTablesAsync(
+  sql: SqliteExecutor,
+  ...names: string[]
+): Promise<void> {
+  if (names.length === 0) return;
+  const placeholders = names.map(() => "?").join(", ");
+  const rows = await sql.all<{ name?: unknown }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`,
+    ...names
+  );
   const present = new Set(rows.map((row) => row.name));
   const missing = names.filter((name) => !present.has(name));
   if (missing.length > 0) {

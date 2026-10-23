@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
+import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
@@ -726,7 +727,7 @@ describe("PiSessionDO", () => {
        VALUES ('message-1', 'admitted', 0, 1, 1)`
     );
     await runInPiSessionDO(stub, async (instance) => {
-      instance.projectionOutbox.enqueue(
+      await instance.projectionOutbox.enqueue(
         "message-1:token",
         "message-1",
         {
@@ -747,7 +748,7 @@ describe("PiSessionDO", () => {
     // deletes nothing: the conversation, the task graph and the workspace
     // files stay where they are.
     await runInPiSessionDO(stub, async (instance, state) => {
-      expect(instance.projectionOutbox.undeliveredOperations()).toEqual([]);
+      await expect(instance.projectionOutbox.undeliveredOperations()).resolves.toEqual([]);
       await expect(state.storage.get("open-inspect:session-id")).resolves.toBe(sessionName);
       await expect(state.storage.get("open-inspect:archive-state")).resolves.toBe("archived");
       await expect(
@@ -774,8 +775,8 @@ describe("PiSessionDO", () => {
   it("refuses to confirm an archive while a transcript event is undelivered", async () => {
     const { sessionName, stub } = await initializedPiStub("pi-archive-incomplete");
     await stub.status(sessionName);
-    await runInPiSessionDO(stub, (instance) => {
-      instance.projectionOutbox.enqueue(
+    await runInPiSessionDO(stub, async (instance) => {
+      await instance.projectionOutbox.enqueue(
         "missing-message:token",
         "missing-message",
         {
@@ -1258,6 +1259,82 @@ describe("PiSessionDO", () => {
     await expect(
       runInDurableObject(stub, (_instance, state) => state.storage.get(WORKSPACE_QUOTA_STATE_KEY))
     ).resolves.toMatchObject({ version: 2, bytes: 12, entries: 1, dirty: false });
+  });
+
+  it("commits host outbox and Computer writes after a paused Pi transaction rolls back", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-shared-sqlite-rollback");
+    await stub.status(sessionName);
+
+    const result = await runInPiSessionDO(stub, async (instance, state) => {
+      const workspace = workspaceOf(instance);
+      await workspace.fs.writeFile("/workspace/scratch/before.txt", "before");
+      const piStorage = await instance.harness.storage();
+      const piDatabase = (piStorage as unknown as { db: SqliteDatabase }).db;
+      let transactionStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        transactionStarted = resolve;
+      });
+      let releaseTransaction!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        releaseTransaction = resolve;
+      });
+      const rollingBack = piDatabase.transaction(async (transaction) => {
+        await transaction.run(
+          `INSERT INTO oi_pi_projection_finalization
+             (operation_id, cost_usd, usage_json, captured_at)
+           VALUES ('rolled-back-pi-transaction', 0, '{}', 1)`
+        );
+        transactionStarted();
+        await paused;
+        throw new Error("roll back paused Pi transaction");
+      });
+      await started;
+
+      let outboxCommitted = false;
+      let computerCommitted = false;
+      const outboxWrite = instance.projectionOutbox
+        .enqueue(
+          "committed-operation:token",
+          "committed-operation",
+          {
+            type: "token",
+            sandboxId: `pi:${sessionName}`,
+            timestamp: 1,
+            messageId: "committed-operation",
+            content: "survives",
+            partId: "entry-1",
+          },
+          1
+        )
+        .then(() => {
+          outboxCommitted = true;
+        });
+      const computerWrite = workspace.fs
+        .writeFile("/workspace/scratch/after.txt", "after")
+        .then(() => {
+          computerCommitted = true;
+        });
+      await Promise.resolve();
+      expect(outboxCommitted).toBe(false);
+      expect(computerCommitted).toBe(false);
+
+      releaseTransaction();
+      await expect(rollingBack).rejects.toThrow("roll back paused Pi transaction");
+      await Promise.all([outboxWrite, computerWrite]);
+
+      return {
+        pending: await instance.projectionOutbox.pending("committed-operation"),
+        file: await workspace.fs.readFile("/workspace/scratch/after.txt", "utf8"),
+        rolledBackRows: state.storage.sql
+          .exec(
+            `SELECT operation_id FROM oi_pi_projection_finalization
+             WHERE operation_id = 'rolled-back-pi-transaction'`
+          )
+          .toArray(),
+      };
+    });
+
+    expect(result).toEqual({ pending: 1, file: "after", rolledBackRows: [] });
   });
 
   it("writes, edits, and deletes scratch files through unsafe workspace tools", async () => {
@@ -2482,7 +2559,7 @@ describe("PiSessionDO", () => {
         },
         projectedCostUsd: 0,
       });
-      instance.projectionOutbox.markFinalized(
+      await instance.projectionOutbox.markFinalized(
         operationId,
         {
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -2626,7 +2703,7 @@ describe("PiSessionDO", () => {
         },
         projectedCostUsd: 0,
       });
-      instance.projectionOutbox.enqueue(
+      await instance.projectionOutbox.enqueue(
         "message-1:token",
         "message-1",
         {
@@ -2793,8 +2870,8 @@ describe("PiSessionDO", () => {
       checkpoint = internals.checkpointAccounting("message-a");
     });
     await started;
-    await runInPiSessionDO(stub, (instance) => {
-      instance.projectionOutbox.markFinalized(
+    await runInPiSessionDO(stub, async (instance) => {
+      await instance.projectionOutbox.markFinalized(
         "message-a",
         {
           usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
@@ -2855,7 +2932,7 @@ describe("PiSessionDO", () => {
         operationId
       );
       await (instance as unknown as { alarm(): Promise<void> }).alarm();
-      const finalizedBeforeAdmission = instance.projectionOutbox.isFinalized(operationId);
+      const finalizedBeforeAdmission = await instance.projectionOutbox.isFinalized(operationId);
 
       releaseAdmission();
       const receipt = await submission;
@@ -2865,7 +2942,7 @@ describe("PiSessionDO", () => {
         finalizedBeforeAdmission,
         receipt,
         lookup,
-        finalAccounting: instance.projectionOutbox.finalAccounting(operationId),
+        finalAccounting: await instance.projectionOutbox.finalAccounting(operationId),
       };
     });
 

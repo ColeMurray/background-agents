@@ -1,4 +1,5 @@
 import type { Workspace } from "@cloudflare/computer";
+import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
 
 export const COMPUTER_SCRATCH_ROOT = "/workspace/scratch";
 const WORKSPACE_ROOT = "/workspace";
@@ -40,6 +41,28 @@ export interface WorkspaceToolFacade {
   readonly runtime?: ToolRuntime;
 }
 
+/**
+ * Hold Pi's shared queue while Computer runs its synchronous database work.
+ * Computer owns rollback through its nested transactionSync savepoints; an
+ * operation error is rethrown only after the queue-holding transaction ends.
+ */
+export async function runCoordinatedComputerOperation<T>(
+  database: SqliteDatabase,
+  operation: () => T | Promise<T>
+): Promise<T> {
+  let outcome: { ok: true; value: T } | { ok: false; error: unknown } | undefined;
+  await database.transaction(async () => {
+    try {
+      outcome = { ok: true, value: await operation() };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+  });
+  if (!outcome) throw new Error("Computer SQLite operation did not settle");
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
+}
+
 /** Add only Computer's execution surface, never the owning Workspace. */
 export function withWorkspaceRuntime(
   facade: WorkspaceToolFacade,
@@ -51,6 +74,51 @@ export function withWorkspaceRuntime(
       exec: workspace.runtime.exec.bind(workspace.runtime),
       backends: workspace.runtime.backends.bind(workspace.runtime),
     },
+  };
+}
+
+/**
+ * Serialize Computer's synchronous SQLite internals with pi-durable's async
+ * adapter queue. The outer Durable Object transaction is the queue holder;
+ * Computer's own transactionSync calls remain nested savepoints.
+ */
+export function createCoordinatedWorkspaceToolFacade(
+  workspace: WorkspaceToolFacade,
+  database: SqliteDatabase
+): WorkspaceToolFacade {
+  const coordinate = <T>(operation: () => T | Promise<T>): Promise<T> =>
+    runCoordinatedComputerOperation(database, operation);
+  const filesystem = workspace.fs;
+  return {
+    fs: {
+      stat: ((...args: Parameters<ToolFileSystem["stat"]>) =>
+        coordinate(() => filesystem.stat(...args))) as ToolFileSystem["stat"],
+      lstat: ((...args: Parameters<ToolFileSystem["lstat"]>) =>
+        coordinate(() => filesystem.lstat(...args))) as ToolFileSystem["lstat"],
+      readFile: ((...args: Parameters<ToolFileSystem["readFile"]>) =>
+        coordinate(() => filesystem.readFile(...args))) as ToolFileSystem["readFile"],
+      writeFile: ((...args: Parameters<ToolFileSystem["writeFile"]>) =>
+        coordinate(() => filesystem.writeFile(...args))) as ToolFileSystem["writeFile"],
+      mkdir: ((...args: Parameters<ToolFileSystem["mkdir"]>) =>
+        coordinate(() => filesystem.mkdir(...args))) as ToolFileSystem["mkdir"],
+      rm: ((...args: Parameters<ToolFileSystem["rm"]>) =>
+        coordinate(() => filesystem.rm(...args))) as ToolFileSystem["rm"],
+      find: ((...args: Parameters<ToolFileSystem["find"]>) =>
+        coordinate(() => filesystem.find(...args))) as ToolFileSystem["find"],
+      grep: ((...args: Parameters<ToolFileSystem["grep"]>) =>
+        coordinate(() => filesystem.grep(...args))) as ToolFileSystem["grep"],
+      readdir: ((...args: Parameters<ToolFileSystem["readdir"]>) =>
+        coordinate(() => filesystem.readdir(...args))) as ToolFileSystem["readdir"],
+    },
+    ...(workspace.runtime
+      ? {
+          runtime: {
+            exec: ((...args: Parameters<ToolRuntime["exec"]>) =>
+              coordinate(() => workspace.runtime!.exec(...args))) as ToolRuntime["exec"],
+            backends: workspace.runtime.backends.bind(workspace.runtime),
+          },
+        }
+      : {}),
   };
 }
 
