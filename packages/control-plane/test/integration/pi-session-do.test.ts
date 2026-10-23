@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiSessionDO } from "../../src/cloudflare/pi-durable-object";
 import { collectMessages, initSession, openClientWs, queryDO } from "./helpers";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -13,7 +13,7 @@ import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snap
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
 import { SessionInternalPaths } from "../../src/session/contracts";
-import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-feature-capabilities";
+import { createPiFeatureCapabilitySnapshot } from "@open-inspect/shared/pi-runtime-feature-capabilities";
 import { createDurableObjectPiRuntimeDispatch } from "../../src/cloudflare/pi-runtime-dispatch";
 import type {
   PiRuntimeControl,
