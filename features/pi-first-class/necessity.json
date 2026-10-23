@@ -16,9 +16,9 @@
       "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
     },
     ".github/workflows/terraform.yml": {
-      "layer": "core-support",
-      "need": ["SUPPORT:ci"],
-      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration", "SUPPORT:ci"],
+      "why": "Carries off-by-default overlay inputs and invokes the shared staged Durable Object migration in both plan and apply."
     },
     "docs/schemas/trace-export.v2.schema.json": {
       "layer": "core-seam",
@@ -1975,11 +1975,6 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
-    "packages/control-plane/test/integration/automation-authorization.test.ts": {
-      "layer": "core-support",
-      "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
-    },
     "packages/control-plane/test/integration/automation-executor-permissions.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -3238,7 +3233,7 @@
     "scripts/terraform-workflow-contract.test.mjs": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+      "why": "Proves every declared production variable reaches plan and apply while staged binding variables remain workflow-owned."
     },
     "scripts/trace-export-schema-drift.test.mjs": {
       "layer": "core-support",
@@ -3301,9 +3296,9 @@
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "terraform/environments/production/terraform.tfvars.example": {
-      "layer": "core-support",
-      "need": ["SUPPORT:deploy"],
-      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration", "SUPPORT:deploy"],
+      "why": "Documents the explicit off-by-default personal-MCP production inputs without enabling the overlay."
     },
     "terraform/environments/production/tests/pi_browser.tftest.hcl": {
       "layer": "core-support",
@@ -3323,7 +3318,7 @@
     "terraform/environments/production/tests/pi_mcp.tftest.hcl": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+      "why": "Tests preserve the shared reviewed MCP capability modes and their default-off deployment contract."
     },
     "terraform/environments/production/tests/pi_slack_ingress.tftest.hcl": {
       "layer": "core-support",
@@ -3351,9 +3346,9 @@
       "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
     },
     "terraform/environments/production/workers-control-plane.tf": {
-      "layer": "core-support",
-      "need": ["SUPPORT:deploy"],
-      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration", "SUPPORT:deploy"],
+      "why": "Adds only the conditional personal-MCP flag, secret, and Durable Object binding at the production composition root."
     },
     "terraform/environments/production/workers-slack.tf": {
       "layer": "core-support",
@@ -3409,6 +3404,36 @@
       "layer": "core-support",
       "need": ["SUPPORT:build"],
       "why": "This build support file is required to compile or verify the added packages and generated contracts."
+    },
+    "packages/control-plane/src/session/schema-extension-registry.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "G-2"],
+      "why": "Proves duplicate extension migration ids fail fatally while an exactly identical owned registration remains idempotent."
+    },
+    "scripts/stage-mcp-connection-do.test.mjs": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test", "DEV:personal-mcp"],
+      "why": "Exercises every staged McpConnectionDO migration state and rejects unsafe one-phase registration."
+    },
+    "terraform/environments/production/mcp-overlay.tf": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp", "SUPPORT:deploy"],
+      "why": "Declares the off-by-default feature, binding-retention, and encryption inputs owned by personal MCP."
+    },
+    "packages/control-plane/src/session/user-env-resolver.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "OI:harness-seam"],
+      "why": "Refuses unknown persisted harness ids before selecting any sandbox provider environment behavior."
+    },
+    "packages/control-plane/test/integration/session-snapshot.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves snapshots refuse unknown persisted harness ids rather than exposing an OpenCode fallback."
+    },
+    "terraform/environments/production/tests/personal_mcp_foundation.tftest.hcl": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test", "DEV:personal-mcp"],
+      "why": "Proves the personal MCP foundation is absent by default and fully registered only with explicit staged inputs."
     }
   }
 }

@@ -303,9 +303,11 @@ These are **not** mine to decide (brief §7):
 1. **D8 — the prompt-vs-lifecycle authority split.** Taken autonomously in `b8cf0831`: `fork` and
    `compact` moved onto the session's existing `lifecycle` authority. Recorded as _"decided strict
    pending user"_ — no new permission was granted, which is the strict choice.
-2. **Delete semantics.** Pi cannot delete a conversation; Open-Inspect's delete is a D1 index row
-   and the DO is orphaned (G-4). The decision taken autonomously was to document the orphaning
-   rather than purge.
+2. **Delete semantics.** The selected G-4 behavior is an ordered purge for Pi sessions:
+   `handleDeleteSession` asks `PiSessionDO.destroy` to quiesce and remove its private durable state
+   before deleting the D1 index row. Cleanup failure leaves the D1 row reachable and returns 503;
+   only successful cleanup makes the runtime unreachable. Sandbox harness deletion remains the
+   upstream D1-index behavior.
 3. **Revocation inside a replaying Code Mode script.** Pi's journal replays already-journaled
    results without re-authorizing them, so revocation is **not retroactive** inside a script (ledger
    §4).
@@ -339,9 +341,9 @@ reason it is gone. Nothing is dropped silently.
 
 | The title                                                                             | What happened to it                                                                                                                                                                                                                                                |
 | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `McpConnectionDO migration refuses one-phase and pre-v4 upgrades`                     | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `McpConnectionDO migration stages fresh, upgrade, phase-two, and rollback states`     | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `McpConnectionDO remains an explicitly staged binding`                                | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
+| `McpConnectionDO migration refuses one-phase and pre-v4 upgrades`                     | Restored as behavioral staging assertions in `scripts/stage-mcp-connection-do.test.mjs`: `refuses a one-phase McpConnectionDO deployment`, plus the script's explicit pre-v4 refusal.                                                                              |
+| `McpConnectionDO migration stages fresh, upgrade, phase-two, and rollback states`     | Restored in `scripts/stage-mcp-connection-do.test.mjs`: `stages all required SQLite classes on a fresh deployment`, `stages only McpConnectionDO after the PiSessionDO migration`, and `retains the migrated binding during phase two and rollback`.               |
+| `McpConnectionDO remains an explicitly staged binding`                                | Restored in `terraform/environments/production/tests/personal_mcp_foundation.tftest.hcl` (`personal_mcp_foundation_reaches_the_worker`) and `scripts/terraform-workflow-contract.test.mjs` (`McpConnectionDO registration is staged in plan and apply`).           |
 | `accepts only a catalog server reference from the caller`                             | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
 | `accepts only explicit follow-up and steering commands`                               | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
 | `allows a reviewed host that resolves to a public address`                            | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
@@ -355,19 +357,19 @@ reason it is gone. Nothing is dropped silently.
 | `refuses a host that resolves to a private address`                                   | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
 | `refuses a host that resolves to an unreviewed address`                               | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
 | `refuses to merge away a user that holds personal MCP connections`                    | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `repairs a legacy GitHub owner before own-scope route admission`                      | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `reserves executor changes for leads and audits only effective changes`               | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
+| `repairs a legacy GitHub owner before own-scope route admission`                      | Restored in `packages/control-plane/test/integration/automation-authorization.test.ts`; it exercises the production route and verifies the canonical owner repair.                                                                                                 |
+| `reserves executor changes for leads and audits only effective changes`               | Restored in `packages/control-plane/test/integration/automation-team-ownership.test.ts`; it proves member denial, lead success, one applied audit, and no audit for an identical no-op.                                                                            |
 | `reserves external-action approvals and unattended grants for administrators`         | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `rolls back an executor mutation when its batched audit fails`                        | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
+| `rolls back an executor mutation when its batched audit fails`                        | Restored in `packages/control-plane/test/integration/automation-team-ownership.test.ts` against the current guarded executor/audit batch API.                                                                                                                      |
 | `rolls back bulk executor grant revocation when a later merge statement fails`        | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
 
 #### From upstream
 
-| The title                                                               | What happened to it                                                                                                                                                                                                                                                |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `repairs a legacy GitHub owner before own-scope route admission`        | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `reserves executor changes for leads and audits only effective changes` | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
-| `rolls back an executor mutation when its batched audit fails`          | The reference branch's copy is superseded: the check it made is now made by this branch's own test, in the seam or in the adapter, and the behaviour it protected is covered there. The title is named here so the difference is on the record rather than silent. |
+| The title                                                               | What happened to it                                                                 |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `repairs a legacy GitHub owner before own-scope route admission`        | Restored at the same integration boundary in `automation-authorization.test.ts`.    |
+| `reserves executor changes for leads and audits only effective changes` | Restored at the same integration boundary in `automation-team-ownership.test.ts`.   |
+| `rolls back an executor mutation when its batched audit fails`          | Restored at the same real-D1 batch boundary in `automation-team-ownership.test.ts`. |
 
 ### The core files the overlay edits
 
@@ -383,10 +385,24 @@ The remaining thin hooks also include:
   settings composition.
 - `scripts/sql-portability-baseline.json` — records the time-bounded rollback trigger required by
   the external-action compatibility window.
-- `terraform/environments/production/variables.tf` — declares the overlay's off-by-default modes and
-  provider allow-list.
+- `terraform/environments/production/mcp-overlay.tf` — overlay-owned declarations for the personal
+  MCP foundation, retained binding, feature flag, and encryption secret; all default off/empty.
 - `terraform/environments/production/workers-control-plane.tf` — binds those overlay modes into the
   control-plane Worker.
+- `terraform/modules/cloudflare-worker/outputs.tf` — exposes only non-secret Durable Object class
+  identities so Terraform contract tests can verify the staged binding.
+- `packages/control-plane/src/session/http/handlers/session-init.handler.ts` — the A2 correction
+  refuses unknown persisted harness ids during idempotent initialization.
+- `packages/control-plane/src/session/schema-extension-registry.ts` — the neutral extension hook
+  rejects migration-id collisions and permits only an identical repeated registration.
+- `packages/control-plane/src/session/snapshot-reader.ts` — snapshot projection refuses unknown
+  persisted harness ids rather than presenting them as OpenCode.
+- `packages/control-plane/src/session/types.ts` and
+  `packages/control-plane/src/session/user-env-resolver.ts` — persisted ids remain untrusted strings
+  until a use-site applies the fail-closed resolver.
+- `terraform/environments/production/terraform.tfvars.example` documents the overlay's explicit
+  default-off inputs; `terraform/environments/production/variables.tf` remains the shared/core
+  declaration file while the personal-MCP declarations live in `mcp-overlay.tf`.
 
 The overlay's test-only package selections are also explicit:
 

@@ -23,27 +23,25 @@
     "A2": {
       "status": "PASS",
       "code": [
-        "packages/control-plane/src/db/session-row.ts:1",
-        "packages/control-plane/src/db/automation-store.ts:1",
-        "packages/control-plane/src/db/session-status-projection-store.ts:1",
-        "packages/shared/src/harnesses.ts:86",
-        "packages/control-plane/src/harness-admission.ts:40"
+        "packages/control-plane/src/session/message-queue.ts:546",
+        "packages/control-plane/src/session/snapshot-reader.ts:63",
+        "packages/shared/src/harnesses.ts:105"
       ],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/d1-session-index.test.ts",
-          "name": "persists promptable in-process rows with a rollback-safe status marker"
+          "file": "packages/control-plane/test/integration/sandbox-early-connect.test.ts",
+          "name": "keeps a pending prompt queued when readiness finds an unknown persisted harness"
         },
         {
-          "file": "packages/control-plane/test/integration/automation-store.test.ts",
-          "name": "persists enabled in-process automations with a rollback-safe marker"
+          "file": "packages/control-plane/test/integration/session-snapshot.test.ts",
+          "name": "refuses to project an unknown persisted harness as OpenCode"
         }
       ],
       "mutation": {
-        "file": "packages/shared/src/harnesses.ts",
-        "find": "    execution: \"in_process\",",
-        "replace": "    execution: \"sandbox\",",
-        "cmd": "npm run build -w @open-inspect/shared && npm run test:integration -w @open-inspect/control-plane -- d1-session-index automation-store"
+        "file": "packages/control-plane/src/session/message-queue.ts",
+        "find": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness);\n    if (currentHarness === null) {",
+        "replace": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness) ?? \"opencode\";\n    if (false) {",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect -t \"unknown persisted harness\""
       }
     },
     "A3": {
@@ -57,9 +55,9 @@
       ],
       "mutation": {
         "file": "packages/shared/src/harnesses.ts",
-        "find": "export function checkHarnessCompatibility(",
-        "replace": "export function removedCheckHarnessCompatibility(",
-        "cmd": "npm test -w @open-inspect/shared -- harnesses"
+        "find": "  if (!harnessSupportsModel(harness, model)) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/shared -- src/harnesses.test.ts -t \"rejects a model the harness cannot run\""
       }
     },
     "A4": {
@@ -115,9 +113,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/routing/route-admission.ts",
-        "find": "export async function admitRoute(",
-        "replace": "export async function removedAdmitRoute(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- route-admission-matrix"
+        "find": "    if (policy.authorization.kind !== \"none\") {",
+        "replace": "    if (false) {",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- route-admission-matrix -t \"admits exactly the credential classes\""
       }
     },
     "B-2": {
@@ -134,9 +132,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/routing/identity-enforcement.ts",
-        "find": "export function requireAdmittedCanonicalUserId(",
-        "replace": "export function removedRequireAdmittedCanonicalUserId(",
-        "cmd": "npm test -w @open-inspect/control-plane -- identity-enforcement"
+        "find": "  if (userId && ctx.authorization?.userId === userId) return userId;",
+        "replace": "  if (userId) return userId;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/auth/identity-enforcement.test.ts -t \"returns the canonical id only\""
       }
     },
     "B-3": {
@@ -153,9 +151,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/authorization/service-permissions.ts",
-        "find": "export function serviceAllowsPermission(",
-        "replace": "export function removedServiceAllowsPermission(",
-        "cmd": "npm test -w @open-inspect/control-plane -- service-permissions"
+        "find": "  return SERVICE_PERMISSION_CEILINGS[service].includes(permission);",
+        "replace": "  return true;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/authorization/service-permissions.test.ts -t \"allows launch capabilities but denies management capabilities\""
       }
     },
     "B-4": {
@@ -232,9 +230,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/harness/action-ceiling.ts",
-        "find": "export function createFixedActionCeiling(",
-        "replace": "export function removedCreateFixedActionCeiling(",
-        "cmd": "npm test -w @open-inspect/control-plane -- tool-policy-extension"
+        "find": "      remaining = Math.max(0, remaining - 1);",
+        "replace": "      remaining = remaining;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/tool-policy-extension.test.ts -t \"refuses the turn when the action ceiling is reached\""
       }
     },
     "B-8": {
@@ -270,9 +268,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/routing/identity-enforcement.ts",
-        "find": "export function mayAttachCallbackContext(",
-        "replace": "export function removedMayAttachCallbackContext(",
-        "cmd": "npm test -w @open-inspect/control-plane -- identity-enforcement"
+        "find": "    (CALLBACK_DESTINATIONS as readonly ServiceName[]).includes(principal.service)",
+        "replace": "    true",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/auth/identity-enforcement.test.ts -t \"restricts callbackContext\""
       }
     },
     "C1": {
@@ -300,14 +298,14 @@
       "tests": [
         {
           "file": "packages/control-plane/src/session/message-queue.test.ts",
-          "name": "dispatches Pi prompts without consulting, spawning, or sending to a sandbox"
+          "name": "does not dispatch when another worker wins the processing claim"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/message-queue.ts",
-        "find": "  async processMessageQueue(): Promise<void> {",
-        "replace": "  async removedProcessMessageQueue(): Promise<void> {",
-        "cmd": "npm test -w @open-inspect/control-plane -- message-queue"
+        "find": "    if (!claimed) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/message-queue.test.ts -t \"does not dispatch when another worker wins the processing claim\""
       }
     },
     "C3": {
@@ -321,9 +319,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/pi/projection-outbox.ts",
-        "find": "  enqueue(",
-        "replace": "  removedEnqueue(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection"
+        "find": "        await this.deliver(row.sequence, row.display_id, row.operation_id, event);",
+        "replace": "        await Promise.resolve();",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
       }
     },
     "C4": {
@@ -337,9 +335,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/sandbox-events/processor.ts",
-        "find": "  async processSandboxEvent(",
-        "replace": "  async removedProcessSandboxEvent(",
-        "cmd": "npm test -w @open-inspect/control-plane -- processor"
+        "find": "        messageId: eventMessageId ?? processingMessage?.id ?? null,",
+        "replace": "        messageId: null,",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/sandbox-events/processor.test.ts -t \"correlates tool processing\""
       }
     },
     "C5": {
@@ -372,9 +370,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/sandbox-events/execution.handler.ts",
-        "find": "export class SandboxExecutionEventHandler",
-        "replace": "export class RemovedSandboxExecutionEventHandler",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection"
+        "find": "      this.messenger.broadcast({ type: \"sandbox_event\", event });",
+        "replace": "      void event;",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
       }
     },
     "C7": {
@@ -388,9 +386,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/sandbox-events/processor.ts",
-        "find": "  private async dispatch(",
-        "replace": "  private async removedDispatch(",
-        "cmd": "npm test -w @open-inspect/control-plane -- processor"
+        "find": "    let fields = eventLogContext(event, eventMessageId ?? null);",
+        "replace": "    let fields = { ...event };",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/sandbox-events/processor.test.ts -t \"correlates tool processing\""
       }
     },
     "C8": {
@@ -420,9 +418,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/pi/computer-workspace-policy.ts",
-        "find": "export function createWorkspaceMutationPolicyDelegate(",
-        "replace": "export function removedCreateWorkspaceMutationPolicyDelegate(",
-        "cmd": "npm test -w @open-inspect/control-plane -- computer-workspace-policy"
+        "find": "  if (path === null) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/computer-workspace-policy.test.ts -t \"blocks oversized content and paths outside scratch\""
       }
     },
     "D-2": {
@@ -436,9 +434,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/pi/codemode-extension.ts",
-        "find": "export function createOpenInspectCodemodeExtension(",
-        "replace": "export function removedCreateOpenInspectCodemodeExtension(",
-        "cmd": "npm test -w @open-inspect/control-plane -- codemode-durable"
+        "find": "              return policy.coordinator.run(deadline.deadlineMs, context.abortSignal, async () => {",
+        "replace": "              return policy.coordinator.run(deadline.deadlineMs, undefined, async () => {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/codemode-durable.test.ts -t \"aborts the active script and its nested call\""
       }
     },
     "D-3": {
@@ -476,9 +474,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/pi/projection-outbox.ts",
-        "find": "  markFinalized(",
-        "replace": "  removedMarkFinalized(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection"
+        "find": "    const eventJson = JSON.stringify(sandboxIngressEventSchema.parse(event));",
+        "replace": "    const eventJson = JSON.stringify({ type: \"heartbeat\", sandboxId: \"mutated\", timestamp: createdAt });",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
       }
     },
     "D-5": {
@@ -570,9 +568,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/source-control/credential-scope.ts",
-        "find": "export function repositoryCredentialScope(",
-        "replace": "export function removedRepositoryCredentialScope(",
-        "cmd": "npm test -w @open-inspect/control-plane -- credential-scope"
+        "find": "  if (ids.length > MAX_CREDENTIAL_SCOPE_REPOSITORY_IDS) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/source-control/credential-scope.test.ts -t \"refuses more than 500\""
       }
     },
     "E-4": {
@@ -586,14 +584,17 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/pull-request-service.ts",
-        "find": "export class SessionPullRequestService",
-        "replace": "export class RemovedSessionPullRequestService",
-        "cmd": "npm test -w @open-inspect/control-plane -- pull-request-service.per-branch"
+        "find": "        updated: false,",
+        "replace": "        updated: true,",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/pull-request-service.per-branch.test.ts -t \"reports the resolved head\""
       }
     },
     "E-5": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:35"],
+      "code": [
+        "packages/shared/src/types/overlay-integrations.ts:706",
+        "packages/control-plane/src/routes/mcp-connections.ts:59"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
@@ -601,10 +602,10 @@
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts",
-        "find": "  private async openTransport(",
-        "replace": "  private async removedOpenTransport(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections"
+        "file": "packages/shared/src/types/overlay-integrations.ts",
+        "find": "export const mcpConnectionCreateInputSchema = z\n  .object({\n    serverId: z.string().trim().min(1),\n  })\n  .strict();",
+        "replace": "export const mcpConnectionCreateInputSchema = z\n  .object({\n    serverId: z.string().trim().min(1),\n  })\n  .passthrough();",
+        "cmd": "npm run build -w @open-inspect/shared && npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"derives ownership from the human principal\""
       }
     },
     "E-6": {
@@ -613,14 +614,14 @@
       "tests": [
         {
           "file": "packages/control-plane/src/mcp/egress-policy.test.ts",
-          "name": "refuses an endpoint that carries credentials"
+          "name": "refuses a redirect to another host"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/mcp/egress-policy.ts",
-        "find": "export function assertMcpEgress(",
-        "replace": "export function removedAssertMcpEgress(",
-        "cmd": "npm test -w @open-inspect/control-plane -- egress-policy"
+        "find": "  assertExactMcpHost(candidateUrl, policy.endpointHost);",
+        "replace": "  void policy.endpointHost;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/mcp/egress-policy.test.ts -t \"refuses a redirect to another host\""
       }
     },
     "E-7": {
@@ -637,9 +638,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts",
-        "find": "  async callTool(",
-        "replace": "  async removedCallTool(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections"
+        "find": "    const authority = await this.requireD1Authority(call.connectionId, call.ownerUserId);",
+        "replace": "    const authority = { status: \"oauth_ready\" };",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"rechecks durable D1 authority\""
       }
     },
     "E-8": {
@@ -669,25 +670,28 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts",
-        "find": "  async destroy(",
-        "replace": "  async removedDestroy(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections"
+        "find": "    await this.env.DB.prepare(\"DELETE FROM mcp_oauth_storage WHERE connection_id = ?\")",
+        "replace": "    await this.env.DB.prepare(\"DELETE FROM mcp_oauth_storage WHERE 0 AND connection_id = ?\")",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"closes the dormant transport cache\""
       }
     },
     "F-1": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/routes/session-create.ts:78"],
+      "code": [
+        "packages/control-plane/src/session/initialize.ts:97",
+        "packages/control-plane/src/routes/session-create.ts:78"
+      ],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/route-admission-matrix.test.ts",
-          "name": "admits exactly the credential classes each route's policy accepts"
+          "file": "packages/control-plane/test/integration/pi-session-creation.test.ts",
+          "name": "retries exact initialization when Pi commits before the first RPC response is lost"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/routes/session-create.ts",
-        "find": "export async function handleCreateSession(",
-        "replace": "export async function removedHandleCreateSession(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- route-admission-matrix"
+        "file": "packages/control-plane/src/session/initialize.ts",
+        "find": "  if (!existingSession)\n    await sessionStore.create({",
+        "replace": "  if (false)\n    await sessionStore.create({",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-creation -t \"retries exact initialization\""
       }
     },
     "F-2": {
@@ -720,9 +724,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/scheduler/scheduler.ts",
-        "find": "export async function resolveAutomationProviderAuth(",
-        "replace": "export async function removedResolveAutomationProviderAuth(",
-        "cmd": "npm test -w @open-inspect/control-plane -- scheduler"
+        "find": "  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true, harness });",
+        "replace": "  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: false, harness });",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/scheduler/scheduler.test.ts -t \"resolves one provider auth snapshot\""
       }
     },
     "F-4": {
@@ -736,9 +740,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/authorization/slack-post-gate.ts",
-        "find": "export function slackPostGate(",
-        "replace": "export function removedSlackPostGate(",
-        "cmd": "npm test -w @open-inspect/control-plane -- slack-post-gate"
+        "find": "  if (!session) return \"missing_session\";",
+        "replace": "  if (!session) return null;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/authorization/slack-post-gate.test.ts -t \"refuses a missing session\""
       }
     },
     "F-5": {
@@ -752,9 +756,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/scheduler/scheduler.ts",
-        "find": "export function composeAutomationPrompt(",
-        "replace": "export function removedComposeAutomationPrompt(",
-        "cmd": "npm test -w @open-inspect/control-plane -- scheduler"
+        "find": "  return `${instructions}\\n---\\n\\n${contextBlock}\\n\\n---\\n\\n${AUTOMATION_CONTEXT_GUARDRAIL}`;",
+        "replace": "  return `${instructions}\\n---\\n\\n${contextBlock}`;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/scheduler/scheduler.test.ts -t \"appends workspace session instructions\""
       }
     },
     "F-6": {
@@ -776,9 +780,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/routes/session-child-spawn.ts",
-        "find": "export async function handleSpawnChild(",
-        "replace": "export async function removedHandleSpawnChild(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- spawn-children"
+        "find": "  if (parentDepth >= MAX_SPAWN_DEPTH) {",
+        "replace": "  if (false) {",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- spawn-children -t \"rejects when depth >= 2\""
       }
     },
     "G-1": {
@@ -795,9 +799,9 @@
       ],
       "mutation": {
         "file": "packages/shared/src/overlay-migration-reservations.ts",
-        "find": "export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION",
-        "replace": "export const REMOVED_PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION",
-        "cmd": "npm test -w @open-inspect/shared -- migration-reservations"
+        "find": "export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 90;",
+        "replace": "export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 9001;",
+        "cmd": "npm test -w @open-inspect/shared -- src/migration-reservations.test.ts -t \"assigns the cross-cutting feature migration ranges\""
       }
     },
     "G-2": {
@@ -811,9 +815,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/schema.ts",
-        "find": "export const MIGRATIONS:",
-        "replace": "export const REMOVED_MIGRATIONS:",
-        "cmd": "npm test -w @open-inspect/control-plane -- schema"
+        "find": "  ...CORE_MIGRATIONS,",
+        "replace": "  ...CORE_MIGRATIONS, CORE_MIGRATIONS[0]!,",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/schema.test.ts -t \"has unique, strictly increasing migration ids\""
       }
     },
     "G-3": {
@@ -837,18 +841,18 @@
     },
     "G-4": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/session/components.ts:951"],
+      "code": ["packages/control-plane/src/routes/session-index.ts:460"],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/session-components.test.ts",
-          "name": "builds the whole graph on a correctly configured deployment"
+          "file": "packages/control-plane/src/routes/session-index.test.ts",
+          "name": "destroys Pi state before deleting its D1 index row"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/session/components.ts",
-        "find": "export function createSessionRuntime(",
-        "replace": "export function removedCreateSessionRuntime(",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- session-components"
+        "file": "packages/control-plane/src/routes/session-index.ts",
+        "find": "  if (session?.harness === \"pi\") {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/routes/session-index.test.ts -t \"destroys Pi state before deleting its D1 index row\""
       }
     },
     "G-5": {
@@ -887,9 +891,9 @@
       ],
       "mutation": {
         "file": "packages/shared/src/types/audit-events.ts",
-        "find": "export function interpretAuditEvent(",
-        "replace": "export function removedInterpretAuditEvent(",
-        "cmd": "npm test -w @open-inspect/shared -- audit-events"
+        "find": "    return { kind: \"observation\", observation: \"would_deny\" };",
+        "replace": "    return { kind: \"operation\", result: event.operationResult };",
+        "cmd": "npm test -w @open-inspect/shared -- src/types/audit-events.test.ts -t \"keeps shadow observations separate\""
       }
     },
     "H-1": {
@@ -1005,8 +1009,8 @@
       "mutation": {
         "file": "packages/control-plane/src/pi/managed-skills-extension.ts",
         "find": "    name: \"open-inspect.skills\",",
-        "replace": "    name: \"removed.skills\",",
-        "cmd": "npm test -w @open-inspect/control-plane -- managed-skills-extension"
+        "replace": "    name: \"disabled.skills\",",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/managed-skills-extension.test.ts -t \"activates a managed skill through Pi's output contract\""
       }
     },
     "I-4": {
@@ -1023,9 +1027,9 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/http/handlers/sandbox.handler.ts",
-        "find": "  async createMediaArtifact(",
-        "replace": "  async removedCreateMediaArtifact(",
-        "cmd": "npm test -w @open-inspect/control-plane -- sandbox.handler"
+        "find": "    this.artifactRepository.createArtifact({",
+        "replace": "    if (false) this.artifactRepository.createArtifact({",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/http/handlers/sandbox.handler.test.ts -t \"creates a media artifact row\""
       }
     }
   },
