@@ -400,15 +400,20 @@
       "need": ["DEV:personal-mcp"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
+    "packages/control-plane/src/mcp/credential-values.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Rejects configured deployment credentials echoed by the shared MCP transport; the personal overlay reuses the same core guard."
+    },
     "packages/control-plane/src/mcp/egress-policy.test.ts": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "why": "Proves the enforceable exact-host, HTTPS and private-address checks used by the core shared MCP transport."
     },
     "packages/control-plane/src/mcp/egress-policy.ts": {
-      "layer": "overlay",
-      "need": ["DEV:personal-mcp"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Enforces the reviewed endpoint boundary for deployment-owned shared MCP; the personal overlay reuses rather than weakens it."
     },
     "packages/control-plane/src/mcp/encrypted-oauth-provider.ts": {
       "layer": "overlay",
@@ -436,14 +441,14 @@
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
     "packages/control-plane/src/mcp/remote-url-policy.test.ts": {
-      "layer": "overlay",
+      "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "This test proves the Compound overlay behavior and its compensating controls without changing the core contract."
+      "why": "Proves URL validation for the core shared MCP transport before any deployment credential reaches a client."
     },
     "packages/control-plane/src/mcp/remote-url-policy.ts": {
-      "layer": "overlay",
-      "need": ["DEV:personal-mcp"],
-      "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Validates reviewed shared MCP endpoints for the harness-neutral transport; the personal overlay consumes the same policy."
     },
     "packages/control-plane/src/memory/errors.ts": {
       "layer": "core-seam",
@@ -694,6 +699,11 @@
       "layer": "core-adapter",
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/model-compatibility.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves the Pi adapter admits exactly the models exposed by the pinned pi-ai OpenAI Codex runtime."
     },
     "packages/control-plane/src/pi/model-image-support.test.ts": {
       "layer": "core-support",
@@ -1640,10 +1650,15 @@
       "need": ["DEV:personal-mcp"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
+    "packages/control-plane/src/session/mcp-shared-client.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves the core shared MCP transport refuses unsafe egress and credential echoes before returning provider content."
+    },
     "packages/control-plane/src/session/mcp-shared-client.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Lets an in-process harness consume Open-Inspect's deployment-owned shared MCP servers without adding personal credentials or overlay policy."
     },
     "packages/control-plane/src/session/message-queue-types.ts": {
       "layer": "core-seam",
@@ -1855,6 +1870,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/session/session-status-ordering.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Keeps canonical status ordering coverage valid after the core session row gains a harness identity."
+    },
     "packages/control-plane/src/session/snapshot-reader.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
@@ -2015,6 +2035,11 @@
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
+    "packages/control-plane/test/integration/memories-access.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves memory commit-time fencing follows the canonical promptable statuses shared by sandbox and in-process harnesses."
+    },
     "packages/control-plane/test/integration/mcp-connections.test.ts": {
       "layer": "overlay",
       "need": ["SUPPORT:test"],
@@ -2079,6 +2104,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/session-discovery.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves session discovery treats rollback-safe durable archive markers as the canonical archived state."
     },
     "packages/control-plane/test/integration/session-do-access.ts": {
       "layer": "overlay-hook",
@@ -2399,6 +2429,11 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/models.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Keeps runtime-catalog capability metadata in the existing authoritative model catalog so every harness uses one admission source."
     },
     "packages/shared/src/migration-reservations.test.ts": {
       "layer": "core-support",
