@@ -77,3 +77,14 @@ test("refuses a one-phase McpConnectionDO deployment", async () => {
   assert.match(result.stderr, /apply the McpConnectionDO migration first/);
   assert.equal(variables, null);
 });
+
+test("refuses an incremental McpConnectionDO migration before PiSessionDO v4", async () => {
+  const { result, variables } = await stage({
+    CURRENT_CONTROL_PLANE_MIGRATION_TAG: "v3",
+    MCP_CONNECTION_FOUNDATION_ENABLED: "true",
+    ENABLE_DURABLE_OBJECT_BINDINGS: "false",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /requires the PiSessionDO v4 migration/);
+  assert.equal(variables, null);
+});
