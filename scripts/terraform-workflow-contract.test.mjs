@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 const workflow = await readFile(
@@ -83,10 +83,11 @@ const NOT_FROM_ENVIRONMENT = new Set([
 ]);
 
 test("Every production Terraform variable reaches plan and apply", async () => {
-  const variables = await readFile(
-    new URL("../terraform/environments/production/variables.tf", import.meta.url),
-    "utf8"
-  );
+  const production = new URL("../terraform/environments/production/", import.meta.url);
+  const variableFiles = (await readdir(production)).filter((name) => name.endsWith(".tf"));
+  const variables = (
+    await Promise.all(variableFiles.map((name) => readFile(new URL(name, production), "utf8")))
+  ).join("\n");
   const declared = [...variables.matchAll(/^variable "([a-z0-9_]+)"/gm)].map((match) => match[1]);
   assert.ok(declared.length > 0, "expected variables in variables.tf");
 
