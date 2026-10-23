@@ -39,8 +39,8 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/message-queue.ts",
-        "find": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness);\n    if (currentHarness === null) {",
-        "replace": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness) ?? \"opencode\";\n    if (false) {",
+        "find": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness);\n    if (currentHarness === null) return;",
+        "replace": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness) ?? \"opencode\";\n    if (false) return;",
         "cmd": "npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect -t \"unknown persisted harness\""
       }
     },
