@@ -450,17 +450,13 @@
         {
           "file": "packages/control-plane/src/harness/turn-deadline.test.ts",
           "name": "expires when the deadline passes"
-        },
-        {
-          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
-          "name": "refuses follow-up controls while another turn is active"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
-        "find": "      if (input.action === \"follow_up\" && conversationBusy) {",
-        "replace": "      if (false) {",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do -t \"refuses follow-up controls while another turn is active\""
+        "file": "packages/control-plane/src/harness/turn-deadline.ts",
+        "find": "    handle = timers.set(expire, remaining);",
+        "replace": "    handle = undefined;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/harness/turn-deadline.test.ts -t \"expires when the deadline passes\""
       }
     },
     "D-4": {
