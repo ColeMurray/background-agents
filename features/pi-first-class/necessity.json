@@ -92,7 +92,7 @@
     },
     "packages/control-plane/src/cloudflare/pi-durable-object.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "Hosts Pi as one internal session-scoped DO per PI-OPENINSPECT-INTEGRATION-LEDGER.md:343-364 and pi-durable README:103-126,378-406,648-674; Open-Inspect remains authority and terminal owner."
     },
     "packages/control-plane/src/cloudflare/pi-overlay-runtime.ts": {
@@ -102,7 +102,7 @@
     },
     "packages/control-plane/src/cloudflare/pi-runtime-dispatch.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/cloudflare/platform.ts": {
@@ -492,7 +492,7 @@
     },
     "packages/control-plane/src/pi/browser-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/browser-policy-extension.test.ts": {
@@ -502,7 +502,7 @@
     },
     "packages/control-plane/src/pi/browser-policy-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/browser-transport.test.ts": {
@@ -512,7 +512,7 @@
     },
     "packages/control-plane/src/pi/browser-transport.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/capability-authority-client.ts": {
@@ -532,7 +532,7 @@
     },
     "packages/control-plane/src/pi/capability-snapshot.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/codemode-durable.test.ts": {
@@ -547,7 +547,7 @@
     },
     "packages/control-plane/src/pi/codemode-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/codex-credential-store.test.ts": {
@@ -557,7 +557,7 @@
     },
     "packages/control-plane/src/pi/codex-credential-store.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/computer-workspace-extension.test.ts": {
@@ -567,7 +567,7 @@
     },
     "packages/control-plane/src/pi/computer-workspace-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/computer-workspace-policy.test.ts": {
@@ -577,7 +577,7 @@
     },
     "packages/control-plane/src/pi/computer-workspace-policy.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/computer-workspace-quota.test.ts": {
@@ -587,7 +587,7 @@
     },
     "packages/control-plane/src/pi/computer-workspace-quota.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/cross-session-extension.test.ts": {
@@ -602,7 +602,7 @@
     },
     "packages/control-plane/src/pi/deployment-capabilities.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/emergency-policy-vocabulary.test.ts": {
@@ -612,7 +612,7 @@
     },
     "packages/control-plane/src/pi/emergency-policy-vocabulary.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/event-translator.test.ts": {
@@ -622,7 +622,7 @@
     },
     "packages/control-plane/src/pi/event-translator.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/external-action-policy-extension.test.ts": {
@@ -652,7 +652,7 @@
     },
     "packages/control-plane/src/pi/inspection-sanitizer.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/managed-skills-extension.test.ts": {
@@ -662,7 +662,7 @@
     },
     "packages/control-plane/src/pi/managed-skills-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/mcp-extension.test.ts": {
@@ -672,7 +672,7 @@
     },
     "packages/control-plane/src/pi/mcp-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/memory-extension.test.ts": {
@@ -682,7 +682,7 @@
     },
     "packages/control-plane/src/pi/memory-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/memory-policy-extension.test.ts": {
@@ -692,7 +692,7 @@
     },
     "packages/control-plane/src/pi/memory-policy-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/model-image-support.test.ts": {
@@ -702,7 +702,7 @@
     },
     "packages/control-plane/src/pi/model-image-support.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/open-inspect-extension.test.ts": {
@@ -712,7 +712,7 @@
     },
     "packages/control-plane/src/pi/open-inspect-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "Adapts Pi foreground owned tasks from pi-durable README:82-101,237-253,534-575 to the containment shape in upstream PR #2467: one level, four total threads, parent waits, no direct messaging."
     },
     "packages/control-plane/src/pi/personal-mcp-extension.ts": {
@@ -737,7 +737,7 @@
     },
     "packages/control-plane/src/pi/pi-telemetry.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/pi-trace.test.ts": {
@@ -747,7 +747,7 @@
     },
     "packages/control-plane/src/pi/pi-trace.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/price-table.test.ts": {
@@ -757,7 +757,7 @@
     },
     "packages/control-plane/src/pi/price-table.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/pricing.test.ts": {
@@ -767,12 +767,12 @@
     },
     "packages/control-plane/src/pi/pricing.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/projection-capability.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/projection-identity.test.ts": {
@@ -782,7 +782,7 @@
     },
     "packages/control-plane/src/pi/projection-identity.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/projection-outbox.test.ts": {
@@ -792,7 +792,7 @@
     },
     "packages/control-plane/src/pi/projection-outbox.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/projection-retry-policy.test.ts": {
@@ -802,12 +802,12 @@
     },
     "packages/control-plane/src/pi/projection-retry-policy.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/provider-factories.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-diff-outbox.test.ts": {
@@ -817,12 +817,12 @@
     },
     "packages/control-plane/src/pi/repository-diff-outbox.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-diff-publication.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-editing-capability.test.ts": {
@@ -832,12 +832,12 @@
     },
     "packages/control-plane/src/pi/repository-editing-capability.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-materialization-contract.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-tools.test.ts": {
@@ -847,7 +847,7 @@
     },
     "packages/control-plane/src/pi/repository-tools.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/repository-workspace.test.ts": {
@@ -857,7 +857,7 @@
     },
     "packages/control-plane/src/pi/repository-workspace.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/runtime-contract.test.ts": {
@@ -867,7 +867,7 @@
     },
     "packages/control-plane/src/pi/runtime-contract.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/runtime-extension-registry.ts": {
@@ -882,7 +882,7 @@
     },
     "packages/control-plane/src/pi/sandbox-execution-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/schema.test.ts": {
@@ -892,7 +892,7 @@
     },
     "packages/control-plane/src/pi/schema.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/session-context-contract.test.ts": {
@@ -902,7 +902,7 @@
     },
     "packages/control-plane/src/pi/session-context-contract.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/skill-source.test.ts": {
@@ -912,7 +912,7 @@
     },
     "packages/control-plane/src/pi/skill-source.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/tool-policy-extension.test.ts": {
@@ -922,12 +922,12 @@
     },
     "packages/control-plane/src/pi/tool-policy-extension.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/tool-policy-types.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/pi/workspace-input-compatibility.test.ts": {
@@ -942,7 +942,7 @@
     },
     "packages/control-plane/src/pi/workspace-input-limits.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/repos/resolve.test.ts": {
@@ -1057,7 +1057,7 @@
     },
     "packages/control-plane/src/routes/pi-controls.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/routes/session-children.test.ts": {
@@ -1562,7 +1562,7 @@
     },
     "packages/control-plane/src/session/http/handlers/pi-bridge.handler.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/http/handlers/pi-control.handler.test.ts": {
@@ -1572,7 +1572,7 @@
     },
     "packages/control-plane/src/session/http/handlers/pi-control.handler.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts": {
@@ -1582,7 +1582,7 @@
     },
     "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "Calls the existing service in origin/main:packages/control-plane/src/memory/session-memory-service.ts:29-52,81-179, adding only the live-turn author fence required without a sandbox."
     },
     "packages/control-plane/src/session/http/handlers/pi-result.handler.test.ts": {
@@ -1592,7 +1592,7 @@
     },
     "packages/control-plane/src/session/http/handlers/pi-result.handler.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/http/handlers/sandbox.handler.test.ts": {
@@ -1697,7 +1697,7 @@
     },
     "packages/control-plane/src/session/pi-control-message-id.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/pi-control-repository.test.ts": {
@@ -1707,7 +1707,7 @@
     },
     "packages/control-plane/src/session/pi-control-repository.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/pi-operation-repository.test.ts": {
@@ -1717,7 +1717,7 @@
     },
     "packages/control-plane/src/session/pi-operation-repository.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/control-plane/src/session/provider-account-resolution.test.ts": {
@@ -2212,17 +2212,17 @@
     },
     "packages/pi-codemode-sandbox/scripts/artifact-manifest.mjs": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/pi-codemode-sandbox/scripts/normalize-build.mjs": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/pi-codemode-sandbox/src/index.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/pi-codemode-sandbox/tsconfig.json": {
@@ -2442,7 +2442,7 @@
     },
     "packages/shared/src/pi-runtime-feature-capabilities.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/shared/src/pi-runtime-tool-effects.test.ts": {
@@ -2452,7 +2452,7 @@
     },
     "packages/shared/src/pi-runtime-tool-effects.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/shared/src/rbac.test.ts": {
@@ -2667,7 +2667,7 @@
     },
     "packages/slack-bot/src/pi-explicit-control.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/slack-bot/src/routes/events.test.ts": {
@@ -2852,7 +2852,7 @@
     },
     "packages/web/src/app/api/sessions/[id]/pi/agents/route.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/app/api/sessions/[id]/pi/control/route.test.ts": {
@@ -2862,12 +2862,12 @@
     },
     "packages/web/src/app/api/sessions/[id]/pi/control/route.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/app/api/sessions/[id]/pi/lifecycle-control/route.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/components/automations/automation-agent-fields.tsx": {
@@ -3067,7 +3067,7 @@
     },
     "packages/web/src/components/sidebar/pi-agents-section.tsx": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/components/ui/alert-dialog.tsx": {
@@ -3112,7 +3112,7 @@
     },
     "packages/web/src/hooks/use-pi-agents.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/hooks/use-session-diffs.ts": {
@@ -3162,7 +3162,7 @@
     },
     "packages/web/src/lib/pi-agents.ts": {
       "layer": "core-adapter",
-      "need": ["PI:\u00a79"],
+      "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
     "packages/web/src/lib/provider-selection.ts": {
@@ -3434,6 +3434,11 @@
       "layer": "overlay",
       "need": ["SUPPORT:test", "DEV:personal-mcp"],
       "why": "Proves the personal MCP foundation is absent by default and fully registered only with explicit staged inputs."
+    },
+    "packages/control-plane/src/scheduler/scheduler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "F-3"],
+      "why": "Proves fan-out resolves one unattended provider-auth snapshot and reuses it for every child launch."
     }
   }
 }

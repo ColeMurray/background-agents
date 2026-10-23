@@ -364,15 +364,15 @@
       "code": ["packages/control-plane/src/session/sandbox-events/execution.handler.ts:63"],
       "tests": [
         {
-          "file": "packages/control-plane/test/integration/pi-export-projection.test.ts",
-          "name": "puts a Pi turn's tool call and its completion in the session's events"
+          "file": "packages/control-plane/src/session/message-queue.test.ts",
+          "name": "cannot dispatch while final-cost settlement waits for terminal projection"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/sandbox-events/execution.handler.ts",
-        "find": "        context.processingMessage?.id === event.messageId",
-        "replace": "        false",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
+        "find": "      await this.projectTerminalMessage(\n        completion.messageId,\n        completion.messageCreatedAt,\n        completion.completedAt\n      );",
+        "replace": "      await Promise.resolve();",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/message-queue.test.ts -t \"cannot dispatch while final-cost settlement\""
       }
     },
     "C7": {
