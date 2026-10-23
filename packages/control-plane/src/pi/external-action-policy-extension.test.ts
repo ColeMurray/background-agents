@@ -69,7 +69,11 @@ function hookHarness(
       }),
     },
   });
-  const extension = createToolPolicyExtension({ effects, delegates: [delegate] });
+  const extension = createToolPolicyExtension({
+    effects,
+    delegates: [delegate],
+    authorizeToolCall: async () => undefined,
+  });
   const handlers = extension.hooks?.[0]?.handlers as {
     beforeTool: (
       call: never,

@@ -95,7 +95,11 @@ describe("Pi external action approval integration", () => {
           slot: "policy",
           effects: [],
           createExtension: (effects) =>
-            createToolPolicyExtension({ effects, delegates: [delegate] }),
+            createToolPolicyExtension({
+              effects,
+              delegates: [delegate],
+              authorizeToolCall: async () => undefined,
+            }),
         },
         {
           slot: "external_actions",
