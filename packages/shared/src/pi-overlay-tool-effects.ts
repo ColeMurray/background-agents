@@ -95,6 +95,15 @@ export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 
+export const PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "exec",
+    effect: SANDBOX_EXECUTION_TOOL_EFFECT,
+    callers: ["model"],
+    replay: "unsafe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
 /**
  * The MCP read tools.
  *
