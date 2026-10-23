@@ -8,7 +8,6 @@ module "web_app" {
 
   project_name = "open-inspect-${local.name_suffix}"
   team_id      = var.vercel_team_id
-  framework    = "nextjs"
 
   # No git_repository - deploy via CLI/CI instead of auto-deploy on push.
   # The Node.js runtime comes from `engines.node` in packages/web/package.json

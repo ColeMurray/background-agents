@@ -10,7 +10,6 @@ module "docs_site" {
 
   project_name = "open-inspect-docs-${local.name_suffix}"
   team_id      = var.vercel_team_id
-  framework    = "nextjs"
 
   # No git_repository, so a push to main does not deploy. The Deploy Docs
   # workflow publishes on demand, which is the gate documented in
