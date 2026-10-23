@@ -345,6 +345,15 @@ sandbox_provider = "modal"
 # It reuses the canonical workspace FIFO, policy, redaction, and scratch quota.
 # pi_repository_editing_mode = "off"
 
+# MCP capabilities are independent and off by default. PI_MCP_MODE controls the
+# deployment-reviewed shared lane. Personal OAuth connections additionally need
+# a staged McpConnectionDO class migration and a dedicated AES-256 key.
+pi_mcp_mode                       = "off"
+mcp_connection_foundation_enabled = false
+mcp_connection_binding_enabled    = false # workflow-managed after migration
+mcp_connections_enabled           = false
+mcp_oauth_encryption_key          = "" # openssl rand -base64 32 before foundation=true
+
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)
 # - "cloudflare": deploy the web app to Cloudflare Workers via OpenNext (no Vercel credentials needed)

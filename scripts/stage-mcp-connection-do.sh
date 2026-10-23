@@ -27,7 +27,7 @@ fi
 
 case "$current_tag" in
   "")
-    printf '%s\n' '{"mcp_connection_binding_enabled":true,"control_plane_migration_tag":"v5","control_plane_new_sqlite_classes":["SessionDO","PiSessionDO","McpConnectionDO"]}' > mcp-connection-do.auto.tfvars.json
+    printf '%s\n' '{"mcp_connection_binding_enabled":true,"pi_durable_binding_enabled":true,"control_plane_migration_tag":"v5","control_plane_new_sqlite_classes":["SessionDO","PiSessionDO","McpConnectionDO"]}' > mcp-connection-do.auto.tfvars.json
     ;;
   v4)
     printf '%s\n' '{"mcp_connection_binding_enabled":true,"control_plane_migration_tag":"v5","control_plane_migration_old_tag":"v4","control_plane_new_sqlite_classes":["McpConnectionDO"]}' > mcp-connection-do.auto.tfvars.json

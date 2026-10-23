@@ -78,6 +78,7 @@ const NOT_FROM_ENVIRONMENT = new Set([
   // Derived by migration staging. An environment value would override the
   // auto tfvars that preserve the binding after admission is disabled.
   "pi_durable_binding_enabled",
+  "mcp_connection_binding_enabled",
   "project_root",
 ]);
 
@@ -122,6 +123,20 @@ test("PiSessionDO migration is staged and guarded in plan and apply", () => {
   assertInPlanAndApply(
     "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable",
     "Pi rollback phase guard"
+  );
+});
+
+test("McpConnectionDO registration is staged in plan and apply", () => {
+  assertInPlanAndApply(
+    "TF_VAR_mcp_connection_foundation_enabled:",
+    "MCP connection foundation flag"
+  );
+  assertInPlanAndApply("TF_VAR_mcp_connections_enabled:", "MCP connection feature flag");
+  assertInPlanAndApply("TF_VAR_mcp_oauth_encryption_key:", "MCP OAuth encryption key");
+  assertInPlanAndApply("MCP_CONNECTION_FOUNDATION_ENABLED:", "MCP migration stage input");
+  assertInPlanAndApply(
+    '"$GITHUB_WORKSPACE/scripts/stage-mcp-connection-do.sh"',
+    "MCP migration stage command"
   );
 });
 

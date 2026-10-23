@@ -48,6 +48,15 @@ output "binding_names" {
   value       = sort(nonsensitive(local.binding_names))
 }
 
+output "durable_object_bindings" {
+  description = "Configured Durable Object binding identities, excluding runtime values and secrets."
+  value = {
+    for name, binding in var.durable_objects : name => {
+      class_name = binding.class_name
+    }
+  }
+}
+
 output "external_durable_object_bindings" {
   description = "Configured external Durable Object identities, excluding runtime values and secrets."
   value = {

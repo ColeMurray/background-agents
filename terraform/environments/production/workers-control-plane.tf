@@ -116,6 +116,7 @@ module "control_plane_worker" {
       PI_SANDBOX_EXECUTION_ATTESTATION = { value = var.pi_sandbox_execution_attestation }
       PI_CODE_MODE                     = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
       PI_MCP_MODE                      = { value = var.pi_mcp_mode }
+      MCP_CONNECTIONS_ENABLED          = { value = tostring(var.mcp_connections_enabled) }
       PI_CROSS_SESSION_MESSAGING_MODE  = { value = var.pi_cross_session_messaging_mode }
       PI_EXTERNAL_ACTIONS_MODE         = { value = var.pi_external_actions_mode }
       PI_EXTERNAL_ACTION_PROVIDERS     = { value = var.pi_external_action_providers }
@@ -237,12 +238,18 @@ module "control_plane_worker" {
     # token can authorize chat.postMessage from agent tool calls.
     length(var.slack_bot_token) > 0 ? {
       SLACK_BOT_TOKEN = { value = var.slack_bot_token }
+    } : {},
+    trimspace(var.mcp_oauth_encryption_key) != "" ? {
+      MCP_OAUTH_ENCRYPTION_KEY = { value = var.mcp_oauth_encryption_key }
     } : {}
   )
 
   durable_objects = merge(
     { SESSION = { class_name = "SessionDO" } },
-    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {}
+    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {},
+    var.mcp_connection_binding_enabled ? {
+      MCP_CONNECTION = { class_name = "McpConnectionDO" }
+    } : {}
   )
 
   # Terraform never owns this Worker. Add only after the protected Wrangler

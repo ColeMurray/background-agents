@@ -48,6 +48,48 @@ run "mcp_defaults_off" {
     condition     = module.control_plane_worker.plain_text_bindings["PI_MCP_MODE"] == "off"
     error_message = "The MCP capability must fail closed by default."
   }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["MCP_CONNECTIONS_ENABLED"] == "false"
+    error_message = "Personal MCP connections must fail closed by default."
+  }
+
+  assert {
+    condition     = !contains(module.control_plane_worker.binding_names, "MCP_CONNECTION")
+    error_message = "The personal MCP Durable Object binding must be absent by default."
+  }
+
+  assert {
+    condition     = !contains(module.control_plane_worker.secret_binding_names, "MCP_OAUTH_ENCRYPTION_KEY")
+    error_message = "The personal MCP encryption secret must be absent while its foundation is disabled."
+  }
+}
+
+run "personal_mcp_foundation_reaches_the_worker" {
+  command = plan
+
+  variables {
+    mcp_connection_foundation_enabled = true
+    mcp_connection_binding_enabled    = true
+    mcp_connections_enabled           = true
+    mcp_oauth_encryption_key          = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    control_plane_migration_tag       = "v5"
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["MCP_CONNECTIONS_ENABLED"] == "true"
+    error_message = "The personal MCP feature gate must reach the worker."
+  }
+
+  assert {
+    condition     = module.control_plane_worker.durable_object_bindings["MCP_CONNECTION"].class_name == "McpConnectionDO"
+    error_message = "The personal MCP binding must target McpConnectionDO."
+  }
+
+  assert {
+    condition     = contains(module.control_plane_worker.secret_binding_names, "MCP_OAUTH_ENCRYPTION_KEY")
+    error_message = "The personal MCP OAuth key must be a Worker secret."
+  }
 }
 
 run "mcp_reaches_the_worker" {

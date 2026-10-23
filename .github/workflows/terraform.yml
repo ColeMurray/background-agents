@@ -196,6 +196,7 @@ jobs:
       - name: Stage Durable Object migration
         env:
           PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
+          MCP_CONNECTION_FOUNDATION_ENABLED: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || secrets.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
           ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
         run: |
           set -euo pipefail
@@ -206,7 +207,9 @@ jobs:
           state="$(terraform state pull)"
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          mcp_foundation_enabled="$(printf '%s' "$MCP_CONNECTION_FOUNDATION_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
+          if [ "$mcp_foundation_enabled" != "true" ]; then
           if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ] || [ "$current_tag" = "v5" ]; then
             printf '%s\n' '{"pi_durable_binding_enabled":true}' > pi-binding.auto.tfvars.json
           fi
@@ -228,16 +231,21 @@ jobs:
                   exit 1
                   ;;
               esac
-            elif [ "$current_tag" != "v4" ]; then
+            elif [ "$current_tag" != "v4" ] && [ "$current_tag" != "v5" ]; then
               echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
               exit 1
             fi
-          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ]; then
+          elif { [ "$current_tag" = "v4" ] || [ "$current_tag" = "v5" ]; } && [ "$bindings_enabled" = "false" ]; then
             echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable" >&2
             exit 1
           elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
+          fi
+          CURRENT_CONTROL_PLANE_MIGRATION_TAG="$current_tag" \
+            MCP_CONNECTION_FOUNDATION_ENABLED="$mcp_foundation_enabled" \
+            ENABLE_DURABLE_OBJECT_BINDINGS="$bindings_enabled" \
+            "$GITHUB_WORKSPACE/scripts/stage-mcp-connection-do.sh"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Plan
@@ -264,6 +272,9 @@ jobs:
           TF_VAR_pi_browser_mode: "${{ vars.PI_BROWSER_MODE || 'off' }}"
           TF_VAR_pi_memory_mode: "${{ vars.PI_MEMORY_MODE || 'off' }}"
           TF_VAR_pi_mcp_mode: "${{ vars.PI_MCP_MODE || 'off' }}"
+          TF_VAR_mcp_connection_foundation_enabled: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || secrets.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
+          TF_VAR_mcp_connections_enabled: "${{ vars.MCP_CONNECTIONS_ENABLED || secrets.MCP_CONNECTIONS_ENABLED || 'false' }}"
+          TF_VAR_mcp_oauth_encryption_key: ${{ secrets.MCP_OAUTH_ENCRYPTION_KEY }}
           TF_VAR_pi_cross_session_messaging_mode: "${{ vars.PI_CROSS_SESSION_MESSAGING_MODE || 'off' }}"
           TF_VAR_pi_external_actions_mode: "${{ vars.PI_EXTERNAL_ACTIONS_MODE || 'off' }}"
           TF_VAR_pi_external_action_providers: "${{ vars.PI_EXTERNAL_ACTION_PROVIDERS || '' }}"
@@ -541,6 +552,7 @@ jobs:
       - name: Stage Durable Object migration
         env:
           PI_DURABLE_ENABLED: "${{ vars.PI_DURABLE_ENABLED || secrets.PI_DURABLE_ENABLED || 'false' }}"
+          MCP_CONNECTION_FOUNDATION_ENABLED: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || secrets.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
           ENABLE_DURABLE_OBJECT_BINDINGS: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
         run: |
           set -euo pipefail
@@ -551,7 +563,9 @@ jobs:
           state="$(terraform state pull)"
           current_tag="$(printf '%s' "$state" | jq -r '.resources[]? | select(.module == "module.control_plane_worker" and .type == "cloudflare_worker_version" and .name == "this") | .instances[0].attributes.migration_tag // empty')"
           pi_enabled="$(printf '%s' "$PI_DURABLE_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          mcp_foundation_enabled="$(printf '%s' "$MCP_CONNECTION_FOUNDATION_ENABLED" | tr '[:upper:]' '[:lower:]')"
           bindings_enabled="$(printf '%s' "$ENABLE_DURABLE_OBJECT_BINDINGS" | tr '[:upper:]' '[:lower:]')"
+          if [ "$mcp_foundation_enabled" != "true" ]; then
           if [ "$pi_enabled" = "true" ] || [ "$current_tag" = "v4" ] || [ "$current_tag" = "v5" ]; then
             printf '%s\n' '{"pi_durable_binding_enabled":true}' > pi-binding.auto.tfvars.json
           fi
@@ -573,16 +587,21 @@ jobs:
                   exit 1
                   ;;
               esac
-            elif [ "$current_tag" != "v4" ]; then
+            elif [ "$current_tag" != "v4" ] && [ "$current_tag" != "v5" ]; then
               echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=false and apply the PiSessionDO migration first" >&2
               exit 1
             fi
-          elif [ "$current_tag" = "v4" ] && [ "$bindings_enabled" = "false" ]; then
+          elif { [ "$current_tag" = "v4" ] || [ "$current_tag" = "v5" ]; } && [ "$bindings_enabled" = "false" ]; then
             echo "Set ENABLE_DURABLE_OBJECT_BINDINGS=true before disabling Pi Durable" >&2
             exit 1
           elif [ "$current_tag" = "v2" ]; then
             printf '%s\n' '{"control_plane_migration_tag":"v3","control_plane_migration_old_tag":"v2","control_plane_deleted_classes":["SchedulerDO"]}' > scheduler-do-retirement.auto.tfvars.json
           fi
+          fi
+          CURRENT_CONTROL_PLANE_MIGRATION_TAG="$current_tag" \
+            MCP_CONNECTION_FOUNDATION_ENABLED="$mcp_foundation_enabled" \
+            ENABLE_DURABLE_OBJECT_BINDINGS="$bindings_enabled" \
+            "$GITHUB_WORKSPACE/scripts/stage-mcp-connection-do.sh"
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Terraform Apply
@@ -600,6 +619,9 @@ jobs:
           TF_VAR_pi_browser_mode: "${{ vars.PI_BROWSER_MODE || 'off' }}"
           TF_VAR_pi_memory_mode: "${{ vars.PI_MEMORY_MODE || 'off' }}"
           TF_VAR_pi_mcp_mode: "${{ vars.PI_MCP_MODE || 'off' }}"
+          TF_VAR_mcp_connection_foundation_enabled: "${{ vars.MCP_CONNECTION_FOUNDATION_ENABLED || secrets.MCP_CONNECTION_FOUNDATION_ENABLED || 'false' }}"
+          TF_VAR_mcp_connections_enabled: "${{ vars.MCP_CONNECTIONS_ENABLED || secrets.MCP_CONNECTIONS_ENABLED || 'false' }}"
+          TF_VAR_mcp_oauth_encryption_key: ${{ secrets.MCP_OAUTH_ENCRYPTION_KEY }}
           TF_VAR_pi_cross_session_messaging_mode: "${{ vars.PI_CROSS_SESSION_MESSAGING_MODE || 'off' }}"
           TF_VAR_pi_external_actions_mode: "${{ vars.PI_EXTERNAL_ACTIONS_MODE || 'off' }}"
           TF_VAR_pi_external_action_providers: "${{ vars.PI_EXTERNAL_ACTION_PROVIDERS || '' }}"
