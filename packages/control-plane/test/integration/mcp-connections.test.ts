@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject, SELF } from "cloudflare:test";
 import type { McpConnectionDO } from "../../src/cloudflare/mcp-connection-durable-object";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
@@ -435,6 +435,81 @@ describe("personal MCP connections API", () => {
       )
     ).rejects.toThrow(/no longer authorized/i);
   });
+
+  it.each([
+    ["plain text", "integration-access-token"],
+    ["an innocuous object field", { note: "integration-refresh-token" }],
+    ["an object key", { "integration-access-token": "redacted" }],
+  ])(
+    "rejects an OAuth credential echoed through %s before it leaves the broker",
+    async (_label, content) => {
+      const server = await createRemoteServer();
+      const inputSchemaJson = "{}";
+      await env.DB.prepare(
+        `INSERT INTO mcp_reviewed_tools
+         (stable_tool_id, server_id, server_revision, tool_name, input_schema_json,
+          input_schema_sha256, effect, reviewed_by_user_id, reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'external_read', ?, ?)`
+      )
+        .bind(
+          "tool_echo_v1",
+          server.id,
+          server.revision,
+          "echo",
+          inputSchemaJson,
+          await sha256Hex(inputSchemaJson),
+          "11111111111111111111111111111111",
+          Date.now()
+        )
+        .run();
+      const created = await serviceFetch("https://test.local/mcp-connections", {
+        method: "POST",
+        body: JSON.stringify({ serverId: server.id }),
+      });
+      const connection = await created.json<McpConnectionMetadata>();
+      const broker = mcpNamespace().getByName(connection.id);
+      await runInMcpConnectionDO(broker, async (instance) => {
+        await instance.initialize(connection.id, "11111111111111111111111111111111");
+        const manager = (
+          instance as unknown as {
+            mcp: {
+              mcpConnections: Record<string, unknown>;
+              callTool: (request: unknown, options: unknown) => Promise<{ content: unknown }>;
+            };
+          }
+        ).mcp;
+        manager.mcpConnections[connection.id] = {
+          connectionState: "ready",
+          options: {
+            transport: {
+              authProvider: {
+                tokens: async () => ({
+                  access_token: "integration-access-token",
+                  refresh_token: "integration-refresh-token",
+                }),
+              },
+            },
+          },
+        };
+        manager.callTool = vi.fn(async () => ({ content }));
+
+        const error = await instance
+          .callTool({
+            connectionId: connection.id,
+            ownerUserId: "11111111111111111111111111111111",
+            toolName: "echo",
+            arguments: {},
+          })
+          .then(() => null)
+          .catch((caught: unknown) => caught);
+
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).toBe("Error: The MCP tool returned unsafe content");
+        expect(JSON.stringify(error)).not.toContain("integration-access-token");
+        expect(JSON.stringify(error)).not.toContain("integration-refresh-token");
+      });
+    }
+  );
 
   it("keeps every Agents OAuth value AES-GCM encrypted and connection-isolated", async () => {
     const server = await createRemoteServer();

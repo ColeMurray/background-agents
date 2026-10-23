@@ -413,6 +413,7 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
           : "MCP connection is not ready"
       );
     }
+    const credentialValues = await currentOAuthCredentialValues(connection);
     let result: Awaited<ReturnType<typeof connection.client.callTool>>;
     try {
       result = await this.mcp.callTool(
@@ -422,6 +423,12 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
     } catch {
       // The provider's own string stays in the broker.
       throw new Error("The MCP tool did not complete");
+    }
+    for (const value of await currentOAuthCredentialValues(connection)) credentialValues.add(value);
+    if (containsCredentialValue(result.content, credentialValues)) {
+      // Stable, content-free failure: neither the credential nor the provider
+      // payload may cross the credential-owning broker boundary.
+      throw new Error("The MCP tool returned unsafe content");
     }
     return { content: result.content ?? null, truncated: false };
   }
@@ -620,6 +627,51 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
     this.connectionId = undefined;
     this.ownerUserId = undefined;
   }
+}
+
+/** Read the actual OAuth credential values held by the broker, never a caller-supplied pattern. */
+async function currentOAuthCredentialValues(connection: {
+  options: { transport: { authProvider?: { tokens?: () => unknown | Promise<unknown> } } };
+}): Promise<Set<string>> {
+  const provider = connection.options.transport.authProvider;
+  if (!provider?.tokens) return new Set();
+  try {
+    const tokens = await provider.tokens();
+    if (typeof tokens !== "object" || tokens === null) return new Set();
+    const record = tokens as Record<string, unknown>;
+    return new Set(
+      [record.access_token, record.refresh_token, record.accessToken, record.refreshToken].filter(
+        (value): value is string => typeof value === "string" && value.length > 0
+      )
+    );
+  } catch {
+    throw new Error("The MCP credential guard is unavailable");
+  }
+}
+
+/** Whether a provider result echoes one of the broker's exact credential values at any depth. */
+function containsCredentialValue(
+  value: unknown,
+  credentialValues: ReadonlySet<string>,
+  seen = new Set<object>()
+): boolean {
+  if (typeof value === "string") {
+    for (const credential of credentialValues) {
+      if (value.includes(credential)) return true;
+    }
+    return false;
+  }
+  if (typeof value !== "object" || value === null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsCredentialValue(entry, credentialValues, seen));
+  }
+  return Object.entries(value).some(
+    ([key, entry]) =>
+      containsCredentialValue(key, credentialValues, seen) ||
+      containsCredentialValue(entry, credentialValues, seen)
+  );
 }
 
 /**
