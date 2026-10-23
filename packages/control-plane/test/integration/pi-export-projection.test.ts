@@ -157,6 +157,22 @@ describe("the Pi projection the export reads", () => {
     const types = events.map((event) => event.type);
     expect(types).toContain("tool_call");
     expect(types).toContain("execution_complete");
+    const rootTasks = events.filter((event) => {
+      const data = JSON.parse(event.data) as Record<string, unknown>;
+      return data.type === "tool_call" && data.tool === "task" && data.isSubtask !== true;
+    });
+    expect(rootTasks).toHaveLength(1);
+    const rootTask = JSON.parse(rootTasks[0]!.data) as Record<string, unknown>;
+    expect(rootTask).toMatchObject({
+      callId: expect.any(String),
+      childSessionId: expect.any(String),
+    });
+    expect(
+      events.some((event) => {
+        const data = JSON.parse(event.data) as Record<string, unknown>;
+        return data.type === "tool_call" && data.tool === "subagent" && data.isSubtask !== true;
+      })
+    ).toBe(false);
     const childRead = events.find((event) => {
       const data = JSON.parse(event.data) as Record<string, unknown>;
       return data.type === "tool_call" && data.tool === "read" && data.isSubtask === true;
@@ -164,7 +180,8 @@ describe("the Pi projection the export reads", () => {
     expect(childRead).toBeDefined();
     expect(JSON.parse(childRead!.data)).toMatchObject({
       isSubtask: true,
-      taskCallId: expect.any(String),
+      taskCallId: rootTask.callId,
+      childSessionId: rootTask.childSessionId,
     });
     const childUsage = await queryDO<{
       id: string;
@@ -181,8 +198,8 @@ describe("the Pi projection the export reads", () => {
     expect(childUsage).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          child_session_id: expect.any(String),
-          task_call_id: expect.any(String),
+          child_session_id: rootTask.childSessionId,
+          task_call_id: rootTask.callId,
         }),
       ])
     );

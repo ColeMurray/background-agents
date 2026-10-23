@@ -12,6 +12,7 @@ interface TranslationEnvelope {
   operationId: string;
   timestamp: number;
   subtask?: { conversationId: number; parentCallId: string };
+  childSessionByTaskId?: ReadonlyMap<string, string>;
 }
 
 interface PiToolTranslationState {
@@ -20,6 +21,7 @@ interface PiToolTranslationState {
   output: string;
   isSubtask?: boolean;
   taskCallId?: string;
+  childSessionId?: string;
 }
 
 const REDACTED = "[redacted]";
@@ -46,10 +48,17 @@ export function translatePiEvents(
         }
         const calls = toolCalls(partial ?? latestAssistant(event));
         for (const slot of event.tools) {
+          const child = childSessionId(
+            slot.name,
+            slot.details,
+            slot.taskId,
+            envelope.childSessionByTaskId
+          );
           const current = {
             tool: slot.name,
             args: calls.get(slot.callId) ?? {},
             output: slot.output ?? "",
+            ...(child ? { childSessionId: child } : {}),
           };
           tools.set(slot.callId, current);
           translated.push(
@@ -142,6 +151,12 @@ export function translatePiEvents(
         break;
       }
       case "tool_execution_start": {
+        const child = childSessionId(
+          event.toolName,
+          undefined,
+          event.taskId,
+          envelope.childSessionByTaskId
+        );
         const current = {
           tool: event.toolName,
           args: event.args,
@@ -149,6 +164,7 @@ export function translatePiEvents(
           ...(event.parentToolCallId
             ? { isSubtask: true, taskCallId: event.parentToolCallId }
             : {}),
+          ...(child ? { childSessionId: child } : {}),
         };
         tools.set(event.toolCallId, current);
         translated.push(toolEvent(current, event.toolCallId, "running", envelope));
@@ -171,6 +187,12 @@ export function translatePiEvents(
             if (event.output.append) current.output += event.output.append;
           }
         }
+        current.childSessionId ??= childSessionId(
+          event.toolName,
+          event.details,
+          event.taskId,
+          envelope.childSessionByTaskId
+        );
         tools.set(event.toolCallId, current);
         translated.push(toolEvent(current, event.toolCallId, "running", envelope));
         break;
@@ -190,6 +212,12 @@ export function translatePiEvents(
             .flatMap((part) => (part.type === "text" ? [part.text] : []))
             .join("");
         }
+        current.childSessionId ??= childSessionId(
+          event.toolName,
+          event.result?.details,
+          event.taskId,
+          envelope.childSessionByTaskId
+        );
         translated.push(
           toolEvent(
             current,
@@ -306,6 +334,12 @@ function settledSnapshotEvents(
     call.output = message.content
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("");
+    call.childSessionId ??= childSessionId(
+      message.toolName,
+      undefined,
+      entry.byTaskId,
+      envelope.childSessionByTaskId
+    );
     projected.push(
       toolEvent(call, message.toolCallId, message.isError ? "failed" : "completed", envelope)
     );
@@ -348,20 +382,42 @@ function toolEvent(
       ? `pi-child:${envelope.subtask.conversationId}:${state.taskCallId}`
       : state.taskCallId
     : envelope.subtask?.parentCallId;
+  const rootSubagent =
+    state.tool === "subagent" && state.isSubtask !== true && envelope.subtask === undefined;
   return {
     type: "tool_call",
     sandboxId: `pi:${envelope.sessionId}`,
     timestamp: envelope.timestamp,
     messageId: envelope.operationId,
-    tool: state.tool,
+    tool: rootSubagent ? "task" : state.tool,
     args: redactToolArguments(state.tool, state.args),
     callId: scopedCallId,
     status,
     ...(state.output ? { output: redactToolOutput(state.tool, state.output) } : {}),
     ...(state.isSubtask || envelope.subtask ? { isSubtask: true } : {}),
     ...(envelope.subtask ? { childSessionId: String(envelope.subtask.conversationId) } : {}),
+    ...(!envelope.subtask && state.childSessionId ? { childSessionId: state.childSessionId } : {}),
     ...(parentCallId ? { taskCallId: parentCallId } : {}),
   };
+}
+
+function childSessionId(
+  tool: string,
+  details: unknown,
+  taskId: unknown,
+  byTaskId: ReadonlyMap<string, string> | undefined
+): string | undefined {
+  if (tool !== "subagent") return undefined;
+  if (typeof details === "object" && details !== null && "conversationId" in details) {
+    const value = (details as { conversationId?: unknown }).conversationId;
+    if (
+      (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
+      (typeof value === "string" && value.length > 0)
+    ) {
+      return String(value);
+    }
+  }
+  return taskId === undefined ? undefined : byTaskId?.get(String(taskId));
 }
 
 function subtaskFields(envelope: TranslationEnvelope) {

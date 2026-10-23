@@ -183,6 +183,63 @@ describe("translatePiEvents", () => {
     ]);
   });
 
+  it("presents only the root Pi subagent call as a canonical task", () => {
+    const translated = translatePiEvents(
+      [
+        {
+          type: "tool_execution_start",
+          toolCallId: "subagent-call-1",
+          toolName: "subagent",
+          taskId: 2,
+          args: { task: "Review the change" },
+        },
+        {
+          type: "tool_execution_update",
+          toolCallId: "subagent-call-1",
+          toolName: "subagent",
+          taskId: 2,
+          details: { conversationId: 13 },
+        },
+        {
+          type: "tool_execution_end",
+          toolCallId: "subagent-call-1",
+          toolName: "subagent",
+          taskId: 2,
+          entry: {
+            id: 42,
+            model: [
+              {
+                role: "toolResult",
+                toolCallId: "subagent-call-1",
+                toolName: "subagent",
+                content: [{ type: "text", text: "done" }],
+                isError: false,
+              },
+            ],
+          },
+        },
+      ] as unknown as AgentEvent[],
+      { text: "" },
+      { sessionId: "session-1", operationId: "message-1", timestamp: 126 }
+    );
+
+    expect(translated).toHaveLength(3);
+    expect(translated).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          tool: "task",
+          callId: "subagent-call-1",
+          childSessionId: "13",
+          status: "completed",
+        }),
+      ])
+    );
+    expect(
+      translated.some((event) => event.type === "tool_call" && event.tool === "subagent")
+    ).toBe(false);
+  });
+
   it("keeps a read's content out of the shared timeline", () => {
     const state = { text: "" };
     const events = [

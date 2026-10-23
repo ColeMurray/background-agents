@@ -3018,6 +3018,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       sessionId,
       operationId,
       timestamp: Date.now() / 1_000,
+      childSessionByTaskId: await this.childSessionByTaskId(),
     });
     const accounting = await this.observeOperationAccounting(operationId);
     for (const event of translated) {
@@ -3088,6 +3089,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       if (page.next === undefined) return entries;
       cursor = page.next;
     }
+  }
+
+  private async childSessionByTaskId(): Promise<ReadonlyMap<string, string>> {
+    const pi = await this.harness.pi();
+    const page = await pi.commit((tx) => tx.scanConversations({}, 33), BACKGROUND_CONTEXT);
+    return new Map(
+      page.items.flatMap((conversation) =>
+        conversation.owner
+          ? [[String(conversation.owner.taskId), String(conversation.id)] as const]
+          : []
+      )
+    );
   }
 
   private priceStepEvent(
