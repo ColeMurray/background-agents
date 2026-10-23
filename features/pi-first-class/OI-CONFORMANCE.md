@@ -166,6 +166,11 @@ citations are in `conformance.json`.
     longer advertises an intentionally incomplete parallel transcript.
 14. Core composes deployment extensions through default-empty runtime, session-service, route, and
     schema registries. Only the overlay composition root imports Compound implementations.
+15. Pi retains one-level foreground task-owned subagents, matching the containment shape in upstream
+    Codex PR #2467: the parent waits for owned work, parent plus children are capped at four,
+    recursive delegation is removed from children, provider calls cross the same authority/budget
+    meter, and abort ownership is inherited. Direct messaging, follow-up, background agents, and
+    model-visible management controls are not installed.
 
 ## Verification state
 

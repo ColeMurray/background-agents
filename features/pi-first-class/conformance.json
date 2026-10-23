@@ -761,12 +761,17 @@
       "status": "PASS",
       "code": [
         "packages/control-plane/src/routes/session-child-spawn.ts:1",
-        "packages/control-plane/src/routes/session-children.ts:1"
+        "packages/control-plane/src/routes/session-children.ts:1",
+        "packages/control-plane/src/pi/open-inspect-extension.ts:142"
       ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/spawn-children.test.ts",
           "name": "rejects when depth >= 2 (403)"
+        },
+        {
+          "file": "packages/control-plane/src/pi/open-inspect-extension.test.ts",
+          "name": "rejects a fourth active subagent so parent plus children stay capped at four"
         }
       ],
       "mutation": {

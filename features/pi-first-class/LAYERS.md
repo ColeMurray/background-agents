@@ -194,14 +194,14 @@ with the overlay rather than into core. Its test is
 
 **NOT NOW.**
 
-| Item                  | Why                                                                                                                                           |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MCP prompts**       | Do not build. An external server would be writing the model's instructions, which breaks **F-5** (untrusted text never becomes instructions). |
-| **MCP resources**     | Not now. It replaces a human-reviewed catalogue with server-chosen URIs; it would need re-review and re-pinning.                              |
-| **MCP elicitation**   | Not now. It needs the approval primitive (D-6), and both MCP lanes cap a call at 30 s, so a human wait is impossible. Unattended ⇒ decline.   |
-| **Mid-turn steering** | Upstream is FIFO, one message at a time. Adding steering would change C2.                                                                     |
-| **Pi subagents**      | Unreleased upstream in Pi. Do not build on an unreleased primitive.                                                                           |
-| **Virtual models**    | The acting model is extension-controlled, which breaks provider pinning (E-1).                                                                |
+| Item                                     | Why                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MCP prompts**                          | Do not build. An external server would be writing the model's instructions, which breaks **F-5** (untrusted text never becomes instructions).                                                                                                                                                                                                                  |
+| **MCP resources**                        | Not now. It replaces a human-reviewed catalogue with server-chosen URIs; it would need re-review and re-pinning.                                                                                                                                                                                                                                               |
+| **MCP elicitation**                      | Not now. It needs the approval primitive (D-6), and both MCP lanes cap a call at 30 s, so a human wait is impossible. Unattended ⇒ decline.                                                                                                                                                                                                                    |
+| **Mid-turn steering**                    | Upstream is FIFO, one message at a time. Adding steering would change C2.                                                                                                                                                                                                                                                                                      |
+| **Direct/background Pi agent messaging** | Not now. Foreground task-owned Pi subagents follow the shape under review in upstream PR #2467: the parent waits, descendants cannot recurse, parent plus children are capped at four, usage crosses the normal provider meter, and abort owns the child. Direct messaging, follow-up, background agents, and model-visible management controls stay disabled. |
+| **Virtual models**                       | The acting model is extension-controlled, which breaks provider pinning (E-1).                                                                                                                                                                                                                                                                                 |
 
 **The overlay's migration range.** Per Rule O, the overlay's migrations take the `9xxx` block:
 
@@ -489,6 +489,9 @@ hide failures; each was replaced by a stricter regression test for the new bound
 | `rejects malformed provider cost totals instead of guessing`                               | Runtime-provided cost totals are ignored rather than validated as authority.                           | `prices measured usage only through the server-held price table`                    |
 | `keeps active A and explicit steer/follow-up controls attributed to one conversation`      | Mid-turn follow-up is outside Open-Inspect's one-processing-message model and is now refused.          | `refuses follow-up controls while another turn is active`                           |
 | `says plainly that a Pi session's own durable record is not in the export`                 | SessionDO's canonical projection is the authoritative export; declaring it incomplete violated G-5.    | `exports Pi through the canonical projection without an incomplete parallel marker` |
+| `advertises agent messaging only for explicitly allowed session origins`                   | Direct native messaging/follow-up is disabled, matching upstream Codex PR #2467's settlement boundary. | `packages subagents separately so children retain the core Open-Inspect extension`  |
+| `gives same-session agent controls stable idempotency keys`                                | Model-visible direct agent controls are no longer installed, so there is no effect to key or replay.   | `packages subagents separately so children retain the core Open-Inspect extension`  |
+| `rejects a fifth active same-session subagent before creating its conversation`            | Four total threads includes the parent, so the fourth child—not the fifth—is now refused.              | `rejects a fourth active subagent so parent plus children stay capped at four`      |
 
 ### The other local branches (SHAPE-3)
 
@@ -500,7 +503,7 @@ here is cherry-picked from either. This branch is `compound/pi-overlay`, its his
 
 ### The type and lint escapes (TEST-3)
 
-The branch adds 153 type or lint escapes. Every one of them is listed here with the reason it is
+The branch adds 154 type or lint escapes. Every one of them is listed here with the reason it is
 there.
 
 The three assertions in `packages/control-plane/test/integration/session-do-access.ts` are confined

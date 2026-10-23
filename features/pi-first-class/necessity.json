@@ -93,7 +93,7 @@
     "packages/control-plane/src/cloudflare/pi-durable-object.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+      "why": "Hosts Pi as one internal session-scoped DO per PI-OPENINSPECT-INTEGRATION-LEDGER.md:343-364 and pi-durable README:103-126,378-406,648-674; Open-Inspect remains authority and terminal owner."
     },
     "packages/control-plane/src/cloudflare/pi-overlay-runtime.ts": {
       "layer": "overlay",
@@ -273,7 +273,7 @@
     "packages/control-plane/src/harness-admission.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Follows origin/main:packages/control-plane/src/harness-admission.ts:30-41,70-155: deployment admission plus create/fire-time compatibility revalidation."
     },
     "packages/control-plane/src/harness/accounting.test.ts": {
       "layer": "core-support",
@@ -298,7 +298,7 @@
     "packages/control-plane/src/harness/budget-gate.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Complements origin/main:packages/control-plane/src/session/budget-service.ts:26-34,63-168 by checking the same session-owned cap before every in-process provider call."
     },
     "packages/control-plane/src/harness/emergency-policy.test.ts": {
       "layer": "core-support",
@@ -333,7 +333,7 @@
     "packages/control-plane/src/harness/in-process-runtime.ts": {
       "layer": "core-seam",
       "need": ["C5", "F-2", "G-3"],
-      "why": "Defines the harness-neutral lifecycle and dispatch port for runtimes that execute outside a sandbox."
+      "why": "Implements the sandbox-free analogue of origin/main:packages/sandbox-runtime/src/sandbox_runtime/harness/base.py:1-13,58-80,147-165 with platform-owned terminal settlement, deadlines, and containment."
     },
     "packages/control-plane/src/harness/pricing.ts": {
       "layer": "core-seam",
@@ -358,12 +358,12 @@
     "packages/control-plane/src/harness/trusted-usage-meter.ts": {
       "layer": "core-seam",
       "need": ["H-2"],
-      "why": "Persists measured provider usage and prices it only through a server-held harness price table."
+      "why": "Replaces the runtime-cost weakness while preserving origin/main:packages/control-plane/src/session/budget-service.ts:26-34,63-118 cumulative idempotent ingest."
     },
     "packages/control-plane/src/harness/turn-authority.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Calls the current-author pattern from origin/main:packages/control-plane/src/routes/session-children.ts:47-113: resolve the active author, current role/membership/collaborators, then check session access."
     },
     "packages/control-plane/src/harness/turn-deadline.test.ts": {
       "layer": "core-support",
@@ -713,7 +713,7 @@
     "packages/control-plane/src/pi/open-inspect-extension.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+      "why": "Adapts Pi foreground owned tasks from pi-durable README:82-101,237-253,534-575 to the containment shape in upstream PR #2467: one level, four total threads, parent waits, no direct messaging."
     },
     "packages/control-plane/src/pi/personal-mcp-extension.ts": {
       "layer": "overlay",
@@ -873,7 +873,7 @@
     "packages/control-plane/src/pi/runtime-extension-registry.ts": {
       "layer": "core-adapter",
       "need": ["B-4", "D-2"],
-      "why": "Provides a default-empty Pi adapter registration hook so Compound extensions are injected only by the deployment composition root."
+      "why": "Pi adapter hook required by PI-OPENINSPECT-INTEGRATION-LEDGER.md:343-364; core installs no Compound extension and the deployment composition root opts in."
     },
     "packages/control-plane/src/pi/sandbox-execution-extension.test.ts": {
       "layer": "core-support",
@@ -1273,7 +1273,7 @@
     "packages/control-plane/src/scheduler/scheduler.ts": {
       "layer": "core-seam",
       "need": ["A2", "F-3"],
-      "why": "Recognizes rollback-safe enabled markers while retaining current automation launch authority."
+      "why": "Preserves origin/main:packages/control-plane/src/scheduler/scheduler.ts:595-632 immutable launch authorization and strict harness execution validation."
     },
     "packages/control-plane/src/session/alarm/external-action-reconciliation.test.ts": {
       "layer": "overlay",
@@ -1368,7 +1368,7 @@
     "packages/control-plane/src/session/extension-services.ts": {
       "layer": "core-seam",
       "need": ["B-4", "D-6", "E-7", "F-6"],
-      "why": "Provides a default-empty harness-neutral hook for deployment-only session routes, alarms, context, and test internals."
+      "why": "Neutral default-empty replacement for sandbox composition; follows origin/main:docs/adr/0002-shared-session-contracts-and-correlation-boundary.md:18-35 by keeping one shared contract and explicit adapter normalization."
     },
     "packages/control-plane/src/session/external-action-audit-outbox.test.ts": {
       "layer": "overlay",
@@ -1583,7 +1583,7 @@
     "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+      "why": "Calls the existing service in origin/main:packages/control-plane/src/memory/session-memory-service.ts:29-52,81-179, adding only the live-turn author fence required without a sandbox."
     },
     "packages/control-plane/src/session/http/handlers/pi-result.handler.test.ts": {
       "layer": "core-support",
@@ -1668,7 +1668,7 @@
     "packages/control-plane/src/session/message-queue.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Extends origin/main:packages/control-plane/src/session/message-queue.ts:405-520: one claimed FIFO message, budget/auth rechecks after awaits, and no dispatch outside the canonical queue."
     },
     "packages/control-plane/src/session/message-repository.test.ts": {
       "layer": "core-support",
@@ -1803,7 +1803,7 @@
     "packages/control-plane/src/session/sandbox-events/processor.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Reuses origin/main:packages/control-plane/src/session/sandbox-events/processor.ts:77-184 as the only canonical event dispatcher."
     },
     "packages/control-plane/src/session/sandbox-events/runtime.handler.ready.test.ts": {
       "layer": "core-support",
@@ -1833,7 +1833,7 @@
     "packages/control-plane/src/session/schema-extension-registry.ts": {
       "layer": "core-seam",
       "need": ["G-2"],
-      "why": "Provides a default-empty migration registration hook so core schema never imports deployment-only tables."
+      "why": "Keeps overlay storage outside core while preserving origin/main:scripts/d1-migrate.sh:10-43,64-101 collision checks and atomic migration-ledger writes."
     },
     "packages/control-plane/src/session/schema.test.ts": {
       "layer": "core-support",
@@ -2108,7 +2108,7 @@
     "packages/control-plane/test/integration/session-export.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
-      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+      "why": "Proves the bounded no-partial contract from origin/main:packages/control-plane/src/routes/session-export.ts:1-16,155-180 and origin/main:docs/TRACE_EXPORT.md:48-64."
     },
     "packages/control-plane/test/integration/slack-ingress-session.test.ts": {
       "layer": "core-support",
@@ -2403,7 +2403,7 @@
     "packages/shared/src/harnesses.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Follows origin/main:packages/shared/src/harnesses.ts:29-75,213-251: one deployable catalog, strict compatibility, and refusal rather than silent substitution."
     },
     "packages/shared/src/index.ts": {
       "layer": "core-seam",
@@ -2708,7 +2708,7 @@
     "packages/slack-bot/src/sessions/session-launcher.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+      "why": "Follows origin/main:docs/CLAUDE_AGENT.md:19-27,74-118 and origin/main:packages/docs/content/docs/models/agent-harnesses.mdx:20-35: preserve the selected harness and refuse rather than fall back."
     },
     "packages/slack-bot/src/sessions/thread-session-store.test.ts": {
       "layer": "core-support",
