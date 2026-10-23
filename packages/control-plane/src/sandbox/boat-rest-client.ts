@@ -88,6 +88,9 @@ const boatSandboxSchema = z.object({
   ttlSeconds: z.number().nullable().optional(),
   snapshotAvailable: z.boolean().optional(),
   hydrated: z.boolean().optional(),
+  /** Outcome of the create-time `setupScript`: pending, running, done or failed; null without one. */
+  setupStatus: z.string().nullable().optional(),
+  setupError: z.string().nullable().optional(),
   /** Set once Boat deleted a stopped sandbox's snapshot data (14 days after the stop). */
   dataExpiredAt: z.string().nullable().optional(),
   subdomain: z.string().nullable().optional(),
@@ -206,6 +209,12 @@ export interface BoatCreateSandboxParams {
    * output can carry the scope's secrets.
    */
   monitoring: boolean;
+  /**
+   * Shell script Boat runs on the sandbox through bash, as the sandbox user
+   * with `env` applied, in the background the moment provisioning completes.
+   * A session's launch rides here, so the runtime starts with the machine.
+   */
+  setupScript?: string;
 }
 
 export class BoatApiError extends Error {
@@ -320,6 +329,7 @@ export class BoatRestClient {
             noEnv: true,
             snapshots: true,
             monitoring: params.monitoring,
+            ...(params.setupScript !== undefined ? { setupScript: params.setupScript } : {}),
           },
           headers: { "Idempotency-Key": params.idempotencyKey },
           signal,

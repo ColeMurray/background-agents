@@ -83,7 +83,7 @@ Boat sandboxes deploy from a **named snapshot** that contains:
 - Python 3.12 and Node 24 runtimes under `/opt/openinspect`
 - `code-server`, `ttyd`, `agent-browser`, and the browser/desktop tooling used by the agent runtime
 - GitHub CLI and a Git credential helper
-- the launcher (`/home/user/openinspect/launcher.sh`) the control plane starts on every boot
+- the launcher (`/home/user/openinspect/launcher.sh`) that starts the runtime on every boot
 
 The snapshot is built by `packages/boat-infra/build-template.py` from the shared image bundle
 ([`packages/sandbox-images`](../packages/sandbox-images/README.md)): a build sandbox is created from
@@ -133,16 +133,18 @@ runtime the same way Open-Inspect does on every other provider:
 
 1. the sandbox is created with `noEnv` (none of the Boat account's own secrets or logins) and the
    per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, the sandbox auth token, user secrets —
-   which Boat applies to every process the sandbox starts
+   which Boat applies to every process the sandbox starts, and the baked launcher as Boat's
+   create-time setup script, which Boat runs as the sandbox user the moment the machine is up
 2. the enabled service ports (code-server, terminal, noVNC) and the configured tunnel ports are
    routed to `https://<subdomain>-<port>.on.boat.dev` URLs; tunnel URLs are written to
-   `/workspace/.tunnels.env` before the runtime starts
-3. the control plane starts the baked launcher, detached; it links `/workspace` and `/app` into the
-   home directory, waits for the restored toolchain, takes a single-instance lock, and execs the
-   supervisor (`python -m sandbox_runtime.entrypoint`) with its output in
+   `/workspace/.tunnels.env`; the runtime waits for that file before it runs `start.sh`
+3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
+   toolchain, takes a single-instance lock, and execs the supervisor
+   (`python -m sandbox_runtime.entrypoint`) with its output in
    `/home/user/.openinspect/supervisor.log`. The supervisor records a completed boot in
    `/home/user/.openinspect/boot-complete`; a later launch that finds that file boots in restored
-   mode, one that does not boots fresh again
+   mode, one that does not boots fresh again. A resume starts the launcher again with a detached
+   command, since the setup script runs only at create
 4. the supervisor clones or syncs the selected repositories, starts OpenCode and code-server, and
    connects the Open-Inspect bridge back to the control plane; readiness is the bridge phoning home,
    and the shared connecting timeout fails the session otherwise

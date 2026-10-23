@@ -4,10 +4,12 @@
  * A Boat sandbox is a full Ubuntu VM deployed from a named snapshot the
  * `boat-infra` build saved (the sandbox image with the runtime baked in). The
  * per-sandbox env (secrets included) rides `POST /sandboxes` `env`, which Boat
- * applies to every process the sandbox starts; the control plane then starts
- * the baked launcher, detached, which execs the runtime entrypoint. Readiness
- * is the uniform contract: the sandbox bridge phones home, and the connecting
- * timeout fails the session otherwise.
+ * applies to every process the sandbox starts, and the baked launcher rides
+ * the same request as Boat's setup script, so Boat starts it the moment the
+ * machine is up (a resume starts it again with a detached command). The
+ * launcher execs the runtime entrypoint. Readiness is the uniform contract:
+ * the sandbox bridge phones home, and the connecting timeout fails the
+ * session otherwise.
  *
  * Stop is a resumable archive (Boat snapshots the disk and releases the
  * machine), so the shared lifecycle manager's persistent-resume path drives
@@ -51,6 +53,7 @@ import {
   type BoatSandbox,
 } from "../boat-rest-client";
 import {
+  BOAT_SETUP_SCRIPT,
   assertBoatEnvWithinLimits,
   BOAT_LIVE_STATES,
   BOAT_SANDBOX_VERSION,
@@ -205,6 +208,11 @@ export class BoatSandboxProvider implements SandboxProvider {
           // Session output stays inside the sandbox: Boat keeps no command or
           // process output for it.
           monitoring: false,
+          // Boat starts the launcher itself the moment the machine is up, with
+          // the env above applied, so the boot never waits for this side to
+          // notice readiness. The tunnel env file follows; the runtime waits
+          // for it before `start.sh`, as it does on Modal.
+          setupScript: BOAT_SETUP_SCRIPT,
         });
       } catch (error) {
         // Boat answers a `from` that names no snapshot with 404
@@ -231,7 +239,9 @@ export class BoatSandboxProvider implements SandboxProvider {
         }),
         this.nameSandbox(boatSandboxId, config.sandboxId),
       ]);
-      await this.lifecycle.launchRuntime(boatSandboxId);
+      // About a second after the machine came up: a launcher that died at
+      // once has reported by now, and its reason is in the same record.
+      await this.lifecycle.confirmLaunch(boatSandboxId);
 
       return {
         sandboxId: config.sandboxId,
@@ -320,9 +330,9 @@ export class BoatSandboxProvider implements SandboxProvider {
           portPlan,
           { codeServerPassword, vncPassword }
         );
-        // A resumed machine runs nothing: the launcher starts the runtime
-        // again and, finding the completed-boot marker, boots it in restored
-        // mode.
+        // A resumed machine runs nothing, and the create's setup script does
+        // not run again: the launcher is started here, and, finding the
+        // completed-boot marker, boots the runtime in restored mode.
         await this.lifecycle.launchRuntime(config.providerObjectId);
 
         return {

@@ -14,17 +14,20 @@ the base snapshot, plus the launcher it bakes in.
   idempotency key per create), saves the sandbox's disk as a named snapshot, and verifies a fresh
   deploy from that name. Sandboxes billed to an organization are made private as soon as they are
   created. Used both for manual builds and by the Terraform module.
-- **`launcher.sh`** — baked at `/home/user/openinspect/launcher.sh`. The control plane starts it,
-  detached, on every boot: it links `/workspace` and `/app` into the home directory (the part of the
-  disk a Boat snapshot saves), waits for the restored toolchain, holds a single-instance lock (exit
-  75 means a runtime is already running), picks the boot mode from the completed-boot marker the
-  runtime writes (`OI_BOOT_COMPLETE_MARKER`), and execs `python -m sandbox_runtime.entrypoint` with
-  its output in `/home/user/.openinspect/supervisor.log`.
+- **`launcher.sh`** — baked at `/home/user/openinspect/launcher.sh`. Boat starts it from the create
+  request's setup script the moment a new sandbox's machine is up, and the control plane starts it
+  again, detached, on every resume. It links `/workspace` and `/app` into the home directory (the
+  part of the disk a Boat snapshot saves), waits for the restored toolchain, holds a single-instance
+  lock (exit 75 means a runtime is already running), picks the boot mode from the completed-boot
+  marker the runtime writes (`OI_BOOT_COMPLETE_MARKER`), and execs
+  `python -m sandbox_runtime.entrypoint` with its output in
+  `/home/user/.openinspect/supervisor.log`.
 
 The snapshot runs nothing of its own. On every sandbox create the control plane passes the
 per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, auth token, user secrets — as create-time
-`env` and starts the launcher; on every resume it starts the launcher again, which boots the runtime
-in restored mode.
+`env`, with the launcher as the create-time setup script that Boat runs as the sandbox user as soon
+as the machine is up; on every resume it starts the launcher again, detached, which boots the
+runtime in restored mode.
 
 Prebuilt images are named snapshots too, saved by the control plane as `oi-img-<scope>-<digest>`
 from a build sandbox that deployed from this base snapshot. A build sandbox is created with the boot

@@ -8,7 +8,9 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 instead of one after the other. On Boat, the control plane re-reads a starting sandbox as soon as
 the previous read has answered rather than every two seconds, watches the launcher for one second
 instead of five after starting it, and names the sandbox while it hosts its ports rather than
-before. Together these take a few seconds off every boot.
+before. Together these take a few seconds off every boot. Boat also now starts the runtime from the
+create request itself, as Modal and Daytona do, instead of through a start command issued once the
+control plane notices the machine is up; a resume still uses the start command.
 
 ## October 22, 2026
 

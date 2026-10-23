@@ -74,6 +74,19 @@ const BOAT_MAX_NAME_CHARS = 120;
  */
 export const BOAT_LAUNCHER_PATH = "/home/user/openinspect/launcher.sh";
 const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
+/**
+ * What a session create hands Boat as its `setupScript`. Boat runs it through
+ * bash as the sandbox user, with the create-time env applied, the moment the
+ * machine is up, so the runtime starts with the machine instead of after the
+ * control plane has noticed it: the way Modal and Daytona start the runtime
+ * as the container's command. `exec` hands the process to the launcher,
+ * which execs into the runtime in turn, so the script never returns and Boat
+ * reports it `running` for the sandbox's life; a launcher that exits at once
+ * shows as `failed`, with the exit code and stderr in `setupError`. A resume
+ * cannot use it (it is create-time only) and starts the launcher with
+ * {@link BoatSandboxLifecycle.launchRuntime} instead.
+ */
+export const BOAT_SETUP_SCRIPT = `exec ${BOAT_LAUNCHER_PATH}\n`;
 
 /**
  * A Boat sandbox id is interpolated into one command line (a build's launch)
@@ -396,7 +409,8 @@ export class BoatSandboxLifecycle {
    * private, and a shared sandbox lets every member run commands in it, which
    * would hand them whatever the sandbox holds. A personal sandbox (no
    * visibility) needs nothing. Failing closed is the point: a sandbox that
-   * cannot be made private must not boot.
+   * cannot be made private must not carry the session; the create path deletes
+   * it, launcher and all.
    */
   async ensurePrivate(sandbox: BoatSandbox): Promise<void> {
     if (sandbox.visibility !== "shared") return;
@@ -481,6 +495,29 @@ export class BoatSandboxLifecycle {
         return;
       }
     }
+  }
+
+  /**
+   * Read how Boat's create-time launch is doing. Only `failed` is a verdict:
+   * the launcher exited, and `setupError` says how. `running` is the normal
+   * steady state, since the launcher never returns; readiness beyond that is
+   * the bridge's phone-home and the connecting timeout, as on every provider.
+   * Create-time only: a resumed sandbox still carries its create's status,
+   * which says nothing about the machine the resume brought up.
+   */
+  async confirmLaunch(boatSandboxId: string): Promise<void> {
+    const sandbox = await this.client.getSandbox(boatSandboxId);
+    if (sandbox.setupStatus === "failed") {
+      const detail = (sandbox.setupError ?? "").trim().slice(-400);
+      throw new SandboxProviderError(
+        `Boat runtime launcher failed${detail ? `: ${detail}` : ""}`,
+        "permanent"
+      );
+    }
+    log.info("boat.runtime_started", {
+      sandbox_id: boatSandboxId,
+      setup_status: sandbox.setupStatus ?? null,
+    });
   }
 
   /**
