@@ -57,7 +57,10 @@
     "minimatch": "^10.2.5",
     "undici": "^7.29.1",
     "sharp": "^0.35.5",
-    "postcss-selector-parser": "^7.1.6"
+    "postcss-selector-parser": "^7.1.6",
+    "@node-minify/core": {
+      "glob": "^10.5.0"
+    }
   },
   "lint-staged": {
     "*.{ts,tsx}": [
