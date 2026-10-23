@@ -27,11 +27,10 @@ const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
 const WS_CLOSE_INVALID_MESSAGE = 4004;
 
-// How long any *transient* cause may keep the socket down before the client
-// stops trying: `MAX_RECONNECT_ATTEMPTS` on the backoff below spans ~3
-// minutes, which covers a host restart, a redeploy behind a proxy, or a
-// network blip. The cause decides whether to retry; this decides for how long.
-const MAX_RECONNECT_ATTEMPTS = 10;
+// Transient causes retry with no attempt limit. A sleeping laptop or a long
+// outage outlasts any fixed budget, and giving up leaves a banner the user
+// must click. The backoff cap bounds the rate instead, and `scheduleReconnect`
+// holds retries while the tab is hidden or the browser is offline.
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 // RFC 6455 registers 1012 with a randomized 5-30s reconnect. A restart closes
@@ -54,6 +53,11 @@ function restartDelayMs(): number {
   return RESTART_MIN_DELAY_MS + Math.random() * (RESTART_MAX_DELAY_MS - RESTART_MIN_DELAY_MS);
 }
 
+/** A retry is worth its cost only when someone can see the tab and a network exists. */
+function canRetryNow(): boolean {
+  return document.visibilityState === "visible" && navigator.onLine;
+}
+
 /** Where the transport is in its connection lifecycle; states are exclusive. */
 type ConnectionPhase = "idle" | "connecting" | "connected" | "reconnecting";
 
@@ -62,10 +66,9 @@ type CloseDirective =
   | { action: "auth_required" }
   | { action: "refresh_credential" }
   | { action: "refresh_authorization" }
-  | { action: "session_expired" }
+  | { action: "session_expired"; delayMs: number }
   | { action: "retry"; delayMs: number }
   | { action: "await_user"; message: string }
-  | { action: "give_up" }
   | { action: "none" };
 
 function closeDirective(
@@ -84,13 +87,12 @@ function closeDirective(
     return { action: "refresh_authorization" };
   }
   if (event.code === WS_CLOSE_SESSION_EXPIRED) {
-    return { action: "session_expired" };
+    // The host lost this socket's lease (e.g. after hibernation) and asks the
+    // client to come back with a new connection.
+    return { action: "session_expired", delayMs: reconnectDelayMs(attemptsSoFar) };
   }
-  const budget = (delayMs: number): CloseDirective =>
-    attemptsSoFar < MAX_RECONNECT_ATTEMPTS ? { action: "retry", delayMs } : { action: "give_up" };
-
   if (event.code === WS_CLOSE_SERVICE_RESTART) {
-    return budget(restartDelayMs());
+    return { action: "retry", delayMs: restartDelayMs() };
   }
   if (event.code === WS_CLOSE_TRY_AGAIN_LATER) {
     // Overload, and the only sender here closes a peer for exhausting its own
@@ -109,7 +111,7 @@ function closeDirective(
     event.code === WS_CLOSE_INTERNAL_ERROR ||
     event.code === WS_CLOSE_GOING_AWAY
   ) {
-    return budget(reconnectDelayMs(attemptsSoFar));
+    return { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) };
   }
   return { action: "none" };
 }
@@ -156,6 +158,9 @@ export function useSessionTransport(
   const wsTokenRef = useRef<string | null>(null);
   const goneSessionIdRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // A reconnect is owed: its timer is armed, or it is held until the tab is
+  // visible and online (then no timer exists).
+  const retryPendingRef = useRef(false);
   const reconnectAttempts = useRef(0);
   // Automatic credential reissues spent since the last healthy connection.
   const credentialRefreshes = useRef(0);
@@ -190,6 +195,12 @@ export function useSessionTransport(
   const [goneSessionId, setGoneSessionId] = useState<string | null>(null);
   const sessionGone = goneSessionId === sessionId;
 
+  const cancelScheduledReconnect = useCallback(() => {
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    reconnectTimeoutRef.current = null;
+    retryPendingRef.current = false;
+  }, []);
+
   const fetchWsToken = useCallback(
     async (epoch: number): Promise<string | null> => {
       try {
@@ -207,10 +218,7 @@ export function useSessionTransport(
             goneSessionIdRef.current = sessionId;
             setGoneSessionId(sessionId);
             wsTokenRef.current = null;
-            if (reconnectTimeoutRef.current) {
-              clearTimeout(reconnectTimeoutRef.current);
-              reconnectTimeoutRef.current = null;
-            }
+            cancelScheduledReconnect();
             setAuthError(null);
             setConnectionError(null);
             return null;
@@ -235,7 +243,7 @@ export function useSessionTransport(
         return null;
       }
     },
-    [sessionId]
+    [cancelScheduledReconnect, sessionId]
   );
 
   /**
@@ -297,15 +305,27 @@ export function useSessionTransport(
 
   /**
    * The single path back onto the wire: arms the timer and the phase together
-   * so no close branch can schedule a reconnect the UI does not report.
+   * so no close branch can schedule a reconnect the UI does not report. A
+   * hidden or offline tab arms no timer; the resume listener runs the retry
+   * when the tab is visible and online again.
    */
-  const scheduleReconnect = useCallback((delayMs: number, retry: () => void) => {
-    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-    setPhase("reconnecting");
-    reconnectTimeoutRef.current = setTimeout(() => {
-      if (mountedRef.current) retry();
-    }, delayMs);
-  }, []);
+  const scheduleReconnect = useCallback(
+    (delayMs: number, retry: () => void) => {
+      cancelScheduledReconnect();
+      retryPendingRef.current = true;
+      setPhase("reconnecting");
+      if (!canRetryNow()) return;
+      reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        // The tab can go hidden or offline while the timer runs; the retry
+        // then stays owed to the resume listener.
+        if (!canRetryNow()) return;
+        retryPendingRef.current = false;
+        if (mountedRef.current) retry();
+      }, delayMs);
+    },
+    [cancelScheduledReconnect]
+  );
 
   /** `retry` is the connect function to schedule on an unclean close. */
   const handleSocketClose = useCallback(
@@ -356,9 +376,10 @@ export function useSessionTransport(
           return;
 
         case "session_expired":
-          // e.g. after server hibernation
-          setConnectionError("Session expired. Please reconnect.");
+          if (!mountedRef.current) return;
           wsTokenRef.current = null;
+          reconnectAttempts.current++;
+          scheduleReconnect(directive.delayMs, retry);
           return;
 
         case "retry":
@@ -372,12 +393,6 @@ export function useSessionTransport(
 
         case "await_user":
           setConnectionError(directive.message);
-          return;
-
-        case "give_up":
-          if (!mountedRef.current) return;
-          console.error(`WebSocket reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
-          setConnectionError("Connection lost. Please check your network and try reconnecting.");
           return;
 
         case "none":
@@ -463,10 +478,7 @@ export function useSessionTransport(
     // A connect() still awaiting its token must not open a second socket
     // alongside the one this call creates.
     invalidateInFlightConnect();
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
+    cancelScheduledReconnect();
     const discarded = wsRef.current;
     if (discarded) {
       wsRef.current = null;
@@ -482,7 +494,7 @@ export function useSessionTransport(
     setAuthError(null);
     setConnectionError(null);
     connect();
-  }, [connect, enabled, invalidateInFlightConnect, sessionId]);
+  }, [cancelScheduledReconnect, connect, enabled, invalidateInFlightConnect, sessionId]);
 
   const markHealthy = useCallback(() => {
     reconnectAttempts.current = 0;
@@ -507,10 +519,7 @@ export function useSessionTransport(
       const discarded = wsRef.current;
       const hadActiveAttempt = discarded !== null || connectingEpochRef.current !== null;
       invalidateInFlightConnect();
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
+      cancelScheduledReconnect();
       if (discarded) {
         wsRef.current = null;
         discarded.close();
@@ -523,7 +532,26 @@ export function useSessionTransport(
       setConnectionError(null);
       if (hadActiveAttempt) handlersRef.current.onClose?.();
     };
-  }, [connect, enabled, invalidateInFlightConnect]);
+  }, [cancelScheduledReconnect, connect, enabled, invalidateInFlightConnect]);
+
+  // A user who comes back is waiting on the result: when the tab turns visible
+  // or the network returns, an owed reconnect runs at once and the backoff
+  // starts over, rather than waiting out a delay earned while away.
+  useEffect(() => {
+    if (!enabled) return;
+    const resume = () => {
+      if (!retryPendingRef.current || !canRetryNow()) return;
+      cancelScheduledReconnect();
+      reconnectAttempts.current = 0;
+      connect();
+    };
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("online", resume);
+    return () => {
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("online", resume);
+    };
+  }, [cancelScheduledReconnect, connect, enabled]);
 
   // Ping periodically to keep connection alive.
   useEffect(() => {

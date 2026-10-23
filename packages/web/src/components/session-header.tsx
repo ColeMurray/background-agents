@@ -59,9 +59,9 @@ type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnect
 
 /**
  * A pending reconnect is a wait, not a dead connection: say so rather than
- * showing "Disconnected" while the backoff timer runs. That backoff spans
- * minutes (MAX_RECONNECT_ATTEMPTS in use-session-transport), which is far too
- * long for the interface to say nothing.
+ * showing "Disconnected" while the backoff timer runs. Transient failures
+ * retry until one succeeds (see use-session-transport), so the wait can last
+ * as long as the outage, which is far too long for the interface to say nothing.
  */
 const CONNECTION_PRESENTATION: Record<
   ConnectionState,
