@@ -53,14 +53,6 @@ export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 90;
 export const PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION = 91;
 export const PI_D1_SLACK_INGRESS_MIGRATION_VERSION = 92;
 export const PI_D1_SLACK_MAPPING_MIGRATION_VERSION = 93;
-/**
- * The dormant foundation of the personal MCP lane.
- *
- * The core carries the tables but no lane: nothing grants a connection, and
- * nothing reads one. The version sits high so the core's own migrations keep
- * the low numbers the deployment already applied.
- */
-export const PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION = 9002;
 
 export interface MigrationReservation {
   readonly store: MigrationStore;
@@ -184,12 +176,6 @@ export const MIGRATION_RESERVATIONS = [
     version: PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
     feature: "slackIngress",
     purpose: "durable Slack thread mapping projection",
-  },
-  {
-    store: "d1",
-    version: PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
-    feature: "mcp",
-    purpose: "the dormant foundation of the personal MCP lane",
   },
 ] as const satisfies readonly MigrationReservation[];
 
