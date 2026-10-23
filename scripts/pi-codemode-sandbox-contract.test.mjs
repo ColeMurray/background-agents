@@ -33,7 +33,7 @@ test("the Code Mode sandbox is an isolated, private Worker", async () => {
     "the deployed class must use the stable CodemodeSandbox name"
   );
   assert.match(source, /new Response\("Not found", \{ status: 404 \}\)/);
-  assert.equal(packageJson.dependencies["@earendil-works/pi-codemode"], "1.3.0");
+  assert.equal(packageJson.dependencies["@earendil-works/pi-codemode"], "1.4.0");
   assert.match(packageJson.scripts.build, /wrangler deploy --dry-run --outdir dist/);
   assert.match(packageJson.scripts.build, /artifact-manifest\.mjs/);
   assert.match(packageJson.scripts["verify:artifact"], /--verify/);

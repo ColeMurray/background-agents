@@ -15,9 +15,11 @@ import {
   validateMigrationArtifacts,
 } from "@open-inspect/shared/migration-reservations";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { applyMigrations, initSchema, MIGRATIONS, SCHEMA_SQL } from "./schema";
+import { applyMigrations, initSchema, sessionMigrations, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
+
+const MIGRATIONS = sessionMigrations();
 
 it("keeps the reserved Pi SessionDO migrations additive and owned", () => {
   expect(

@@ -408,7 +408,7 @@ describe("memory shared-scope authorization", () => {
     };
   }
 
-  it.each(["personal failure", "suspension", "failed", "completed", "cancelled", "archived"])(
+  it.each(["suspension", "cancelled", "archived"])(
     "rejects a write when %s wins after route authorization",
     async (change) => {
       const { response } = await raceWrite(change, () =>
@@ -434,6 +434,24 @@ describe("memory shared-scope authorization", () => {
           "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
         ).first()
       ).toEqual({ count: 0 });
+    }
+  );
+
+  it.each(["personal failure", "failed", "completed"])(
+    "allows a write when promptable status %s wins after route authorization",
+    async (change) => {
+      const { response } = await raceWrite(change, () =>
+        env.DB.prepare("UPDATE sessions SET status = ? WHERE id = ?")
+          .bind(
+            change === "personal failure" ? "failed" : change,
+            `race-${change.replaceAll(" ", "-")}`
+          )
+          .run()
+      );
+      expect(response.status).toBe(201);
+      expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
+        count: 1,
+      });
     }
   );
 

@@ -258,6 +258,7 @@ describe("MessageRepository", () => {
       null,
       null,
       null,
+      null,
       "pending",
       1000,
     ]);
@@ -347,6 +348,7 @@ describe("MessageRepository", () => {
       "github:review:held",
       "github:99:42",
       "{}",
+      null,
       "pending",
       2000,
     ]);

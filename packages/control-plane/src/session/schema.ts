@@ -956,10 +956,13 @@ const CORE_MIGRATIONS: readonly SchemaMigration[] = [
   },
 ];
 
-export const MIGRATIONS: readonly SchemaMigration[] = [
-  ...CORE_MIGRATIONS,
-  ...sessionSchemaExtensionMigrations(),
-].sort((left, right) => left.id - right.id);
+export const MIGRATIONS: readonly SchemaMigration[] = CORE_MIGRATIONS;
+
+export function sessionMigrations(): readonly SchemaMigration[] {
+  return [...CORE_MIGRATIONS, ...sessionSchemaExtensionMigrations()].sort(
+    (left, right) => left.id - right.id
+  );
+}
 
 function removePersistedHookOutputTails(sql: SqlStorage): void {
   sql.exec(`UPDATE events
@@ -1005,7 +1008,7 @@ export function applyMigrations(sql: SqlStorage): void {
   const rows = sql.exec(`SELECT id FROM _schema_migrations`).toArray() as Array<{ id: number }>;
   const applied = new Set(rows.map((r) => r.id));
 
-  for (const migration of MIGRATIONS) {
+  for (const migration of sessionMigrations()) {
     if (applied.has(migration.id)) continue;
 
     if (typeof migration.run === "string") {
