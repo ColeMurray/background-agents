@@ -34,16 +34,16 @@ Every Pi flag resolves to `off` when it is unset, when it is misspelled, or when
 
 ### 2.2 The core capabilities
 
-| Flag                               | Values                          | What it admits                                                                                                                                                                                                                                                                                            |
-| ---------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_SCRATCH_WORKSPACE_MODE`        | `off` / `read_only` / `enabled` | The session's own Computer VFS. It is **not** the Open-Inspect workspace, and **not** the execution sandbox's `/workspace`; the three are named distinctly so no screen or API makes them look alike. `read_only` admits the reads alone. `PI_WORKSPACE_MODE` is the deprecated spelling and still works. |
-| `PI_REPOSITORY_EDITING_MODE`       | `off` / `read_only` / `enabled` | The repository overlay: the session's own repositories, as a writable layer over the pinned ones.                                                                                                                                                                                                         |
-| `PI_CODE_MODE`                     | `off` / `read_only` / `enabled` | The Code Mode script lane. The script runs in a **separately deployed Worker** with no control-plane bindings, in QuickJS-in-WASM: no `fetch`, no `require`, no `process`, no timers, no modules.                                                                                                         |
-| `PI_SANDBOX_EXECUTION_MODE`        | `off` / `read_only` / `enabled` | Execution escalation to a real sandbox. The sandbox is credential-free, repo-less, and pinned to a package-install egress profile.                                                                                                                                                                        |
-| `PI_SANDBOX_EXECUTION_ATTESTATION` | provider evidence               | The generation and artifact provider canary's evidence, before the execution capability is admitted.                                                                                                                                                                                                      |
-| `PI_BROWSER_MODE`                  | `off` / `read_only` / `enabled` | The browser gateway. The agent proposes a page; the **session** authorizes it against a deployment-configured host allowlist, and the browser runs a fresh session with no cookie jar and no credential.                                                                                                  |
-| `PI_BROWSER_ALLOWED_DOMAINS`       | comma-separated hosts           | The hosts the browser may reach. Empty means **nothing** is reachable.                                                                                                                                                                                                                                    |
-| `PI_MEMORY_MODE`                   | `off` / `read_only` / `enabled` | The memory tools. `read_only` withholds the write. The write goes through upstream's `SessionMemoryService` and `SessionMemoryAccessPolicy`; the model never names its own partition.                                                                                                                     |
+| Flag                               | Values                          | What it admits                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PI_SCRATCH_WORKSPACE_MODE`        | `off` / `read_only` / `enabled` | The session's own Computer VFS. It is **not** the Open-Inspect workspace or the external execution sandbox. `read_only` admits file reads alone. When canonical sandbox execution is also enabled and `WORKSPACE_LOADER` exists, the same VFS backs a read-only, networkless Worker JavaScript isolate. `PI_WORKSPACE_MODE` is the deprecated spelling and still works. |
+| `PI_REPOSITORY_EDITING_MODE`       | `off` / `read_only` / `enabled` | The repository overlay: the session's own repositories, as a writable layer over the pinned ones.                                                                                                                                                                                                                                                                       |
+| `PI_CODE_MODE`                     | `off` / `read_only` / `enabled` | The Code Mode script lane. The script runs in a **separately deployed Worker** with no control-plane bindings, in QuickJS-in-WASM: no `fetch`, no `require`, no `process`, no timers, no modules.                                                                                                                                                                       |
+| `PI_SANDBOX_EXECUTION_MODE`        | `off` / `read_only` / `enabled` | Execution escalation to a real sandbox. The sandbox is credential-free, repo-less, and pinned to a package-install egress profile.                                                                                                                                                                                                                                      |
+| `PI_SANDBOX_EXECUTION_ATTESTATION` | provider evidence               | The generation and artifact provider canary's evidence, before the execution capability is admitted.                                                                                                                                                                                                                                                                    |
+| `PI_BROWSER_MODE`                  | `off` / `read_only` / `enabled` | The browser gateway. The agent proposes a page; the **session** authorizes it against a deployment-configured host allowlist, and the browser runs a fresh session with no cookie jar and no credential.                                                                                                                                                                |
+| `PI_BROWSER_ALLOWED_DOMAINS`       | comma-separated hosts           | The hosts the browser may reach. Empty means **nothing** is reachable.                                                                                                                                                                                                                                                                                                  |
+| `PI_MEMORY_MODE`                   | `off` / `read_only` / `enabled` | The memory tools. `read_only` withholds the write. The write goes through upstream's `SessionMemoryService` and `SessionMemoryAccessPolicy`; the model never names its own partition.                                                                                                                                                                                   |
 
 ### 2.3 The overlay's flags
 
@@ -111,8 +111,71 @@ cd terraform/environments/production && terraform test
 against real Durable Objects.
 
 **Known environment artefacts** (they fail on an untouched `main` too, so they are not the Pi work's
-fault): the web suite has 5-second timeouts under load that pass in isolation, and
-`worker-build.test.ts` asserts a literal `node_modules` path that fails under a symlinked install.
+fault): the web suite has 5-second timeouts under load that pass in isolation. A shared
+`session-diffs` test also exceeded its 5-second timeout while three verification commands ran in
+parallel; the file passed immediately in isolation (12/12).
+
+### 3.1.1 Pi 1.4 / Computer 0.6 upgrade contract
+
+The supported set is `agents@0.30.0`,
+`@earendil-works/{chord,pi-ai,pi-agent-core,pi-codemode,pi-durable,pi-telemetry}@1.4.0`, and
+`@cloudflare/computer@0.6.0`.
+
+- `PiHarness` receives and forwards native `onWake`; Agents owns the single wake job, sleeping
+  deadlines, restart recovery, parked status, and `retry()`.
+- The harness factory creates a fresh registry each time it opens. This makes the storage-error
+  reopen path safe without retaining or duplicating extensions.
+- `pending()` may return `parked`; `lookup()` preserves that status, and the lifecycle-authorized
+  `retry_parked` control calls PiHarness `retry()`.
+- Computer tools still come from `createPiTools`. The adapter remains only to layer canonical effect
+  declarations, argument bounds, fresh-author and action-ceiling policy, emergency/feature
+  delegates, root confinement, quota accounting, mutation serialization, and repository-diff
+  publication over the official result contract.
+- `createPiTools.exec` is always explicit. `{}` means no Computer execution. When both the canonical
+  sandbox-execution capability and `WORKSPACE_LOADER` authorize it, the only offered backend is
+  `worker-javascript`, rooted at `/workspace/scratch`, read-only, with no egress or output spill
+  files. Worker Shell and Container remain experimental, unconfigured, and off by default.
+  Open-Inspect's isolated sandbox tools remain the writable build/test/shell fallback.
+
+**Irreversible rollout.** Opening an existing Pi SQLite store on 1.4 automatically migrates it to
+schema v2 and rebuilds `pi_tasks` to admit `sleeping`. Pi 1.3 cannot reopen that store. There is no
+application rollback past this commit after any Pi object has opened. Roll forward only: deploy the
+1.4-compatible binary before enabling traffic, verify schema version 2 plus restart/sleep/parked
+canaries, and remediate with a newer forward fix rather than restoring a 1.3 binary.
+
+**Browser audit.** The official `Browser` + `browserTool` path is persistent Browser Run Chromium.
+It gives model-written CDP code a browser directly and does not preserve Open-Inspect's current
+session-owned per-request authorization boundary, which must enforce reviewed hostname, redirect,
+and subresource policy before any navigation. The existing transport therefore remains and fails
+closed while Browser Rendering cannot enforce those controls. Prefer `web_fetch` for plain reads.
+Kitesurf is not a `browserTool` provider; if later enabled through legacy `createBrowserTools`, it
+is one-shot render/extract/screenshot only and must never be used for login, session reuse, Live
+View, recording, pause/resume, or `cdp.spec()`.
+
+**Deleted as overbuilt:**
+
+- `packages/control-plane/src/pi/pi-harness-wake.ts`
+- `packages/control-plane/src/pi/pi-harness-wake.test.ts`
+
+They duplicated the native Agents 0.30 / Pi 1.4 wake contract. No browser authority code, workspace
+quota/policy code, repository publication code, or Code Mode isolation code was deleted because the
+ready-made tools do not implement those Open-Inspect authority boundaries.
+
+### 3.1.2 The lanes at this commit
+
+| Lane                                 | State                                                                                                                                                                                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@open-inspect/control-plane` (unit) | **upgrade focus green** — 9 files, 202 tests. The full lane has 5,459 green and 29 pre-existing overlay reds: route-policy drift, external-action fixtures missing overlay tables, and one session-status fixture missing the harness column. |
+| `@open-inspect/shared`               | **green** — 64 files, 1,332 tests; the one load timeout noted above passes in isolation.                                                                                                                                                      |
+| `@open-inspect/web`                  | green in isolation; 16 of its 20 failures are the load artefact above, and the file passes alone                                                                                                                                              |
+| the Pi workerd focus                 | **green** — `pi-session-do`, `pi-end-to-end`, `pi-export-projection`, and `pi-skills-extension`: 4 files, 73 tests                                                                                                                            |
+| typecheck                            | green for the control plane and the shared package                                                                                                                                                                                            |
+| the local D1                         | 96 migrations applied to a clean local D1, versions 1 … 9004, the overlay's tables present                                                                                                                                                    |
+| `npm run test:migration-block-guard` | green — 3 checks                                                                                                                                                                                                                              |
+
+The Pi 1.4 focus includes the former end-to-end and export-projection failures; both are green on
+the upgraded dependency set. The full unit-lane reds listed above are outside the Pi/Computer
+upgrade paths and remain visible rather than being waived.
 
 ### 3.2 The migrations, on a clean local D1
 
@@ -173,6 +236,26 @@ npx vitest run --config vitest.integration.config.ts test/integration/pi-export-
 **What passing looks like.** A Pi turn's tool call and its completion both appear in the SessionDO's
 own `events` table. If a step ever stayed inside the Pi Durable Object, this test fails and the
 export would silently lose it.
+
+**The state of this proof right now.** Green on Pi 1.4 / Computer 0.6: the tool call and terminal
+completion are both projected into the SessionDO event ledger and survive export.
+
+### 3.5 The core alone
+
+The core is the tag `oi-core-end`. To run the core's lanes without the overlay:
+
+```bash
+git checkout oi-core-end          # in this worktree; the overlay is one commit on top
+npm install
+npm run build -w @open-inspect/shared
+npm test -w @open-inspect/control-plane
+cd packages/control-plane && npx vitest run --config vitest.integration.config.ts
+git checkout compound/pi-overlay
+```
+
+**What passing looks like.** The core's lanes are green on their own. The overlay's three
+capabilities are absent there — no personal MCP, no external actions, no cross-session — and their
+migration numbers (`9001`–`9004`) are not in the core's ledger.
 
 ---
 

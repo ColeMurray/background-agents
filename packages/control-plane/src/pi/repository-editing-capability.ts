@@ -18,6 +18,7 @@ import {
 } from "../pi/computer-workspace-quota";
 import type { WorkspaceMutationFifo } from "../pi/computer-workspace-quota";
 import { COMPUTER_WORKSPACE_MUTATION_EFFECTS } from "./computer-workspace-extension";
+import { PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS } from "@open-inspect/shared";
 import {
   WORKSPACE_MUTATION_MAX_BYTES,
   createWorkspaceMutationPolicyDelegate,
@@ -43,6 +44,7 @@ interface RepositoryEditingCapabilityOptions {
   scratchMode: "off" | "read_only" | "enabled";
   publishDiff(bundle: SessionDiffUpload): Promise<void>;
   triggerMessageId(): Promise<string | null>;
+  execBackends?: Readonly<Record<string, { readonly description?: string }>>;
 }
 
 /** One canonical workspace contribution routing scratch and repository paths through one FIFO. */
@@ -52,8 +54,9 @@ export function createRepositoryEditingWorkspaceCapability(
   const scratch = createPiTools({
     workspace: options.scratchWorkspace,
     root: COMPUTER_SCRATCH_ROOT,
-    readonly: options.scratchMode !== "enabled",
-    exec: {},
+    readonly:
+      options.scratchMode !== "enabled" && Object.keys(options.execBackends ?? {}).length === 0,
+    exec: options.execBackends ?? {},
     assets: false,
     write: { maxBytes: WORKSPACE_MUTATION_MAX_BYTES },
     edit: { maxBytes: WORKSPACE_MUTATION_MAX_BYTES },
@@ -69,9 +72,12 @@ export function createRepositoryEditingWorkspaceCapability(
     edit: { maxBytes: WORKSPACE_MUTATION_MAX_BYTES },
     constrainedSampling: "prefer",
   });
-  const declarations = repository.tools.filter(
-    ({ name }) => readToolNames.has(name) || mutationToolNames.has(name)
-  );
+  const declarations = [
+    ...repository.tools.filter(
+      ({ name }) => readToolNames.has(name) || mutationToolNames.has(name)
+    ),
+    ...scratch.tools.filter(({ name }) => name === "exec"),
+  ];
   const names = new Set(declarations.map(({ name }) => name));
   for (const name of [...READ_TOOL_NAMES, ...MUTATION_TOOL_NAMES]) {
     if (!names.has(name)) throw new Error(`Repository workspace tool is missing: ${name}`);
@@ -235,7 +241,11 @@ function toolError(error: unknown): ToolExecutionResult {
 }
 
 function toolEffect(name: string): ToolEffectRegistration | undefined {
-  return PI_TOOL_EFFECT_REGISTRY.get(name) ?? mutationEffects.get(name);
+  return (
+    PI_TOOL_EFFECT_REGISTRY.get(name) ??
+    mutationEffects.get(name) ??
+    PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS.find((effect) => effect.name === name)
+  );
 }
 
 function targetsRepository(args: Record<string, unknown>): boolean {

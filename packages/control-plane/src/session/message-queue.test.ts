@@ -926,6 +926,31 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it("keeps a parked Pi prompt claimed without scheduling a reconcile loop", async () => {
+    const h = buildQueue();
+    h.repository.getSession.mockReturnValue(
+      createSession({ harness: "pi", model: "openai/gpt-5.6-sol" })
+    );
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.piOperations.get.mockReturnValue({
+      operationId: "msg-1",
+      state: "ambiguous",
+      lastProjectionSequence: 0,
+    });
+    h.piRuntime.lookup.mockResolvedValue({ status: "parked" });
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(h.piOperations.transition).toHaveBeenCalledWith(
+      "msg-1",
+      ["dispatching", "ambiguous"],
+      "admitted",
+      expect.any(Number)
+    );
+    expect(h.setAlarm).not.toHaveBeenCalled();
+  });
+
   it("does not emit the started callback again when the same operation id is redriven", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

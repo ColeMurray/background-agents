@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createManagedSkillsExtension } from "../../src/pi/managed-skills-extension";
 import { skillSourceFromInstallation } from "../../src/pi/skill-source";
 
@@ -39,7 +40,7 @@ const source = skillSourceFromInstallation({
   ],
 });
 
-const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
+const context = BACKGROUND_CONTEXT;
 const api = { taskId: 1 } as ToolExecutionApi;
 
 describe("the installed Agents SDK's pi skills extension", () => {
@@ -63,7 +64,7 @@ describe("the installed Agents SDK's pi skills extension", () => {
         expect.objectContaining({ type: "text", text: expect.stringContaining("Use evidence.") }),
       ],
     });
-    // The legacy field is gone. Pi Durable 1.3 reads `output`; a result that
+    // The legacy field is gone. Pi Durable reads `output`; a result that
     // carried `content` again would mean the SDK and Pi Durable disagree.
     expect(result).not.toHaveProperty("content");
   });

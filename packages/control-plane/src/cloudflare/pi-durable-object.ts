@@ -1,6 +1,7 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Workspace, type DurableObjectStorageLike } from "@cloudflare/computer";
+import { WorkerJavaScriptBackend } from "@cloudflare/computer/backends/worker-javascript";
 import {
   PI_BROWSER_TOOL_EFFECT_REGISTRATIONS,
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
@@ -49,7 +50,11 @@ import {
   RetryablePiProjectionError,
 } from "../pi/projection-retry-policy";
 import { translatePiEvents, type PiEventTranslationState } from "../pi/event-translator";
-import { piBlockedReason, sanitizePiInspection } from "../pi/inspection-sanitizer";
+import {
+  piAgentActivityStatus,
+  piBlockedReason,
+  sanitizePiInspection,
+} from "../pi/inspection-sanitizer";
 import {
   toPiModel,
   toPiThinkingLevel,
@@ -83,7 +88,10 @@ import {
 } from "../pi/open-inspect-extension";
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
-import { createComputerWorkspaceCapability } from "../pi/computer-workspace-extension";
+import {
+  WORKER_JAVASCRIPT_EXEC_BACKENDS,
+  createComputerWorkspaceCapability,
+} from "../pi/computer-workspace-extension";
 import {
   COMPUTER_SCRATCH_ROOT,
   WorkspaceMutationFifo,
@@ -91,6 +99,7 @@ import {
   createLazyWorkspaceToolFacade,
   createWorkspaceToolFacade,
   ensureRealWorkspaceDirectory,
+  withWorkspaceRuntime,
   type WorkspaceToolFacade,
 } from "../pi/computer-workspace-quota";
 import { createRepositoryEditingWorkspaceCapability } from "../pi/repository-editing-capability";
@@ -175,7 +184,6 @@ import {
 } from "../pi/repository-diff-outbox";
 import { RepositoryDiffPublicationCapability } from "../pi/repository-diff-publication";
 import { OpenInspectPiTelemetryContext } from "../pi/pi-telemetry";
-import { PiHarnessWakeController } from "../pi/pi-harness-wake";
 import { piTraceHeader, piTraceId } from "../pi/pi-trace";
 import { modelAcceptsImages } from "../pi/model-image-support";
 import { createLogger } from "../logger";
@@ -187,7 +195,7 @@ import { createLogger } from "../logger";
  * owning session, whose gateway authorizes every request and drives the
  * browser itself. The agent proposes; the session acts.
  */
-type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
+type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX" | "WORKSPACE_LOADER">;
 
 /**
  * The bindings this object is allowed to hold.
@@ -201,7 +209,7 @@ type PiWorkerBindings = Pick<WorkerBindings, "SESSION" | "CODEMODE_SANDBOX">;
  * holds an object that physically has no secret in it: the containment is
  * structural, not a promise about a type.
  */
-const PI_DO_BINDING_KEYS = ["SESSION", "CODEMODE_SANDBOX"] as const;
+const PI_DO_BINDING_KEYS = ["SESSION", "CODEMODE_SANDBOX", "WORKSPACE_LOADER"] as const;
 
 /** What the owning session answers to one browser request. */
 type BrowserReadBody = { allowed?: boolean; reason?: string; outcome?: PiBrowserOutcome };
@@ -303,7 +311,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     execution_backend: "durable_object",
   });
   private readonly telemetry = new OpenInspectPiTelemetryContext({ logger: this.log });
-  private wakeController: PiHarnessWakeController | undefined;
   private readonly credentials = new CodexBrokerCredentialStore((version, signal) =>
     this.fetchCodexCredential(version, signal)
   );
@@ -315,7 +322,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     createFixedActionCeiling(HARNESS_ACTION_CEILING);
   private readonly prices = createPiPriceTable(this.models);
   private readonly trustedUsage = new TrustedUsageMeter(this.ctx.storage, this.prices);
-  private readonly registry = createRegistry();
   private workspace: WorkspaceToolFacade | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private codeModeCoordinator: PiCodeModeExecutionCoordinator | undefined;
@@ -347,7 +353,13 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     this.drainRepositoryDiffPublication()
   );
   readonly harness = new PiHarness({
-    harness: async ({ storage, context }) => {
+    harness: async ({ storage, context, onWake }) => {
+      // PiHarness may invoke this factory again after a storage failure. Keep
+      // every extension registry scoped to this object activation and this
+      // open, so reopening cannot duplicate registrations or retain a closed
+      // harness through an old registry subscription.
+      const registry = createRegistry();
+      await this.codeModeCoordinator?.close(new Error("Pi Durable harness reopened"));
       const snapshot = await readPiFeatureCapabilitySnapshot(this.ctx.storage);
       if (!snapshot) throw new Error("Pi Durable capability authority is not initialized");
       const { capabilities } = snapshot;
@@ -458,18 +470,31 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
       const repositoryEditing =
         capabilities.repositoryEditing === "enabled" && sessionContext.repositories.length > 0;
+      const computerExecutionEnabled =
+        capabilities.sandboxExecution === "enabled" &&
+        capabilities.scratchWorkspace !== "off" &&
+        this.env.WORKSPACE_LOADER !== undefined;
+      const execBackends = computerExecutionEnabled ? WORKER_JAVASCRIPT_EXEC_BACKENDS : {};
       if (repositoryEditing) {
-        const scratchWorkspace = createLazyWorkspaceToolFacade(() =>
-          this.openWorkspace(capabilities.scratchWorkspace === "enabled")
-        );
+        const scratchWorkspace = computerExecutionEnabled
+          ? await this.openWorkspace(capabilities.scratchWorkspace === "enabled", true)
+          : createLazyWorkspaceToolFacade(() =>
+              this.openWorkspace(capabilities.scratchWorkspace === "enabled", false)
+            );
         this.workspace = scratchWorkspace;
         const repositoryWorkspace = createLazyWorkspaceToolFacade(async () => {
-          await this.openWorkspace(capabilities.scratchWorkspace === "enabled");
+          await this.openWorkspace(
+            capabilities.scratchWorkspace === "enabled",
+            computerExecutionEnabled
+          );
           if (!this.rawWorkspace) throw new Error("Pi repository workspace is unavailable");
           return createWorkspaceToolFacade(this.rawWorkspace);
         });
         this.repositoryWorkspaceInitializer = async (signal) => {
-          await this.openWorkspace(capabilities.scratchWorkspace === "enabled");
+          await this.openWorkspace(
+            capabilities.scratchWorkspace === "enabled",
+            computerExecutionEnabled
+          );
           return this.initializeRepositoryWorkspace(
             (await this.ensureRepositoryPins(signal)).repositories,
             workspaceMutations,
@@ -484,6 +509,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           scratchMode: capabilities.scratchWorkspace,
           publishDiff: (bundle) => this.publishDiffBundle(bundle),
           triggerMessageId: () => this.currentOperationId(),
+          execBackends,
         });
         workspacePolicyDelegate = capability.toolPolicyDelegate;
         extensions.push({
@@ -501,14 +527,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
           effects: [],
         });
       } else if (capabilities.scratchWorkspace !== "off") {
-        const workspace = createLazyWorkspaceToolFacade(() =>
-          this.openWorkspace(capabilities.scratchWorkspace === "enabled")
-        );
+        const workspace = computerExecutionEnabled
+          ? await this.openWorkspace(capabilities.scratchWorkspace === "enabled", true)
+          : createLazyWorkspaceToolFacade(() =>
+              this.openWorkspace(capabilities.scratchWorkspace === "enabled", false)
+            );
         this.workspace = workspace;
         const capability = createComputerWorkspaceCapability(
           workspace,
           capabilities.scratchWorkspace,
-          workspaceMutations
+          workspaceMutations,
+          execBackends
         );
         workspacePolicyDelegate = capability.toolPolicyDelegate;
         extensions.push({
@@ -593,7 +622,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         });
       }
       const assembly = assembleExtensions(extensions, capabilities);
-      for (const extension of assembly.extensions) this.registry.install(extension);
+      for (const extension of assembly.extensions) registry.install(extension);
       // The provider is wrapped so the budget is checked before *every*
       // model call, not only after a step is priced.
       const providerFactory = piProviderFactories.factoryFor(PI_MODEL_PROVIDER_ID);
@@ -613,7 +642,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         storage,
         {
           models: this.models,
-          registry: this.registry,
+          registry,
+          onWake,
           // The Durable Object stays resident between turns, so nothing is
           // kept in memory after a conversation goes idle: no rendered
           // context, no loaded documents. A later turn reads them again from
@@ -633,16 +663,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         cold: !this.harnessOpened,
       });
       this.harnessOpened = true;
-      // A reopened harness keeps interrupted work pending but does not schedule
-      // it until something asks for progress. Resuming here is what lets a
-      // hibernated or evicted session continue a run it lost.
-      this.wakeController = new PiHarnessWakeController({
-        harness: opened,
-        hasPendingWork: async () =>
-          (await this.harness.pending({ session: ROOT_SESSION })).length > 0,
-        nextDeadline: async () => null,
-      });
-      this.wakeController.resume();
       return opened;
     },
     defaults: {
@@ -772,10 +792,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!sessionId) return;
     await this.ensureSession(sessionId);
     const pending = await this.harness.pending({ session: ROOT_SESSION });
-    // A hibernated object wakes with its harness closed over pending work but
-    // no scheduler. Resume before reattaching relays so a run that lost its
-    // instance continues.
-    if (pending.length > 0) this.resumeHarness();
     const completionRecords = await this.ctx.storage.list<NativeControlCompletion>({
       prefix: CONTROL_COMPLETION_PREFIX,
     });
@@ -796,23 +812,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         });
       }),
     ]);
-  }
-
-  /**
-   * Resume the Pi scheduler after a reopen or a hibernation.
-   *
-   * `resume()` is idempotent and throws only after the harness closed, which
-   * a deleting session reaches; a closed harness has nothing to resume.
-   */
-  private resumeHarness(): void {
-    try {
-      this.wakeController?.resume();
-    } catch (error) {
-      this.log.debug("pi.resume_skipped", {
-        event: "pi.resume_skipped",
-        error_type: error instanceof Error ? error.constructor.name : typeof error,
-      });
-    }
   }
 
   async submit(input: PiRuntimePrompt): Promise<PiRuntimeReceipt> {
@@ -1189,6 +1188,12 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       const outcome = await pi.abortTask(input.taskId as TaskId, BACKGROUND_CONTEXT);
       return { requestId: input.requestId, state: "completed", result: { outcome } };
     }
+    if (input.action === "retry_parked") {
+      const retried = await this.harness.retry({
+        session: input.conversationId === undefined ? ROOT_SESSION : String(input.conversationId),
+      });
+      return { requestId: input.requestId, state: "completed", result: { retried } };
+    }
     const conversation = await this.controlConversation(
       pi,
       "conversationId" in input ? input.conversationId : undefined
@@ -1530,18 +1535,18 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         if (!conversation) throw new Error("Pi conversation not found");
         const view = await conversation.viewState(BACKGROUND_CONTEXT);
         try {
-          const tasks = inspection.tasks
+          const inspectedTasks = inspection.tasks
             .filter((task) => task.record.conversationId === record.id)
-            .slice(0, 16)
-            .map((task) => ({
-              id: task.record.id,
-              kind: task.record.kind,
-              status: task.state.kind,
-              phase: "phase" in task.record.state ? task.record.state.phase : undefined,
-              // A blocked agent says why it cannot run.
-              ...(task.state.kind === "blocked" ? { blocked: piBlockedReason(task.state) } : {}),
-              abortRequested: task.record.abortRequested,
-            }));
+            .slice(0, 16);
+          const tasks = inspectedTasks.map((task) => ({
+            id: task.record.id,
+            kind: task.record.kind,
+            status: task.state.kind,
+            phase: "phase" in task.record.state ? task.record.state.phase : undefined,
+            // A blocked agent says why it cannot run.
+            ...(task.state.kind === "blocked" ? { blocked: piBlockedReason(task.state) } : {}),
+            abortRequested: task.record.abortRequested,
+          }));
           const queued = inspection.submissions.filter(
             (submission) =>
               submission.conversationId === record.id && submission.status === "queued"
@@ -1569,7 +1574,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
                   },
                 }
               : {}),
-            status: tasks.length > 0 || placed > 0 ? "active" : queued > 0 ? "queued" : "idle",
+            status: piAgentActivityStatus(inspectedTasks, queued, placed),
             queued,
             tasks,
             usage,
@@ -1691,11 +1696,39 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     await this.repositoryDiffPublication.schedule();
   }
 
-  private async openWorkspace(writable: boolean): Promise<WorkspaceToolFacade> {
+  private async openWorkspace(
+    writable: boolean,
+    executionEnabled: boolean
+  ): Promise<WorkspaceToolFacade> {
     if (this.rawWorkspace && this.workspace) return this.workspace;
+    const loader = this.env.WORKSPACE_LOADER;
+    if (executionEnabled && !loader) {
+      throw new Error("Computer JavaScript execution requires WORKSPACE_LOADER");
+    }
     const workspace = new Workspace({
       storage: this.ctx.storage as unknown as DurableObjectStorageLike,
       sessionId: this.ctx.id.toString(),
+      backends:
+        executionEnabled && loader
+          ? [
+              new WorkerJavaScriptBackend({
+                loader,
+                root: COMPUTER_SCRATCH_ROOT,
+                access: "read",
+                egress: { mode: "none" },
+                defaultTimeoutMs: 30_000,
+                maxTimeoutMs: 60_000,
+                maxCpuMs: 30_000,
+                maxSourceBytes: 128 * 1024,
+                maxInputBytes: 128 * 1024,
+                maxResultBytes: 256 * 1024,
+                maxStdioBytes: 256 * 1024,
+              }),
+            ]
+          : [],
+      // A read-only execution backend must not bypass scratch quota by
+      // writing full-output spill files through the raw Workspace.
+      output: executionEnabled ? false : undefined,
     });
     try {
       await ensureRealWorkspaceDirectory(workspace.fs, "/workspace");
@@ -1706,9 +1739,10 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw error;
     }
     this.rawWorkspace = workspace;
-    this.workspace = writable
+    const files = writable
       ? createQuotaWorkspace(workspace, this.ctx.storage)
       : createWorkspaceToolFacade(workspace);
+    this.workspace = executionEnabled ? withWorkspaceRuntime(files, workspace) : files;
     return this.workspace;
   }
 

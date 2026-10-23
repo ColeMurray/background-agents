@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { piBlockedReason, sanitizePiInspection } from "./inspection-sanitizer";
+import {
+  piAgentActivityStatus,
+  piBlockedReason,
+  sanitizePiInspection,
+} from "./inspection-sanitizer";
 
 function inspection(overrides: Partial<Parameters<typeof sanitizePiInspection>[0]> = {}) {
   return {
@@ -99,5 +103,35 @@ describe("the blocked reason", () => {
 
   it("names an unknown reason rather than hiding it", () => {
     expect(piBlockedReason({ kind: "blocked" })).toEqual({ reason: "unknown" });
+  });
+});
+
+describe("Pi 1.4 agent activity", () => {
+  it("reports sleeping tasks without calling them active", () => {
+    expect(piAgentActivityStatus([{ state: { kind: "sleeping" } }], 0, 0)).toBe("sleeping");
+  });
+
+  it("reports restart-limited tasks as parked", () => {
+    expect(
+      piAgentActivityStatus(
+        [{ state: { kind: "blocked", reason: "restart_limit" } as never }],
+        0,
+        0
+      )
+    ).toBe("parked");
+  });
+
+  it("keeps runnable work ahead of sleeping and parked diagnostics", () => {
+    expect(
+      piAgentActivityStatus(
+        [
+          { state: { kind: "sleeping" } },
+          { state: { kind: "blocked", reason: "restart_limit" } as never },
+          { state: { kind: "ready" } },
+        ],
+        0,
+        0
+      )
+    ).toBe("active");
   });
 });

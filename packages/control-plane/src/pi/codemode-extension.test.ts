@@ -3,6 +3,7 @@ import {
   createToolEffectRegistry,
 } from "@open-inspect/shared/pi-runtime-tool-effects";
 import type { HookApi, ToolHookCall } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { describe, expect, it } from "vitest";
 import {
   CODEMODE_MAX_QUEUED_CALLS,
@@ -18,7 +19,7 @@ const effects = createToolEffectRegistry([
   { name: "unstable", effect: "external_read", callers: ["tools"], replay: "unsafe" },
   ...PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
 ]);
-const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
+const context = BACKGROUND_CONTEXT;
 
 function call(name: string, parent?: { taskId: number; callId: string }): ToolHookCall {
   return {

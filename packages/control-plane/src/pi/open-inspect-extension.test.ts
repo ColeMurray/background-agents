@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createOpenInspectExtension, createSubagentExtension } from "./open-inspect-extension";
 
 describe("createOpenInspectExtension", () => {
@@ -28,11 +29,11 @@ describe("createOpenInspectExtension", () => {
     expect(extension.sections?.[0]?.render({} as never, {} as never)).not.toContain("Delegate");
 
     const list = extension.tools?.find((tool) => tool.name === "repository_list");
-    const result = await list?.execute({ path: "src" }, { taskId: 17 } as ToolExecutionApi, {
-      abortSignal: undefined,
-      value: () => undefined,
-      toString: () => "test",
-    });
+    const result = await list?.execute(
+      { path: "src" },
+      { taskId: 17 } as ToolExecutionApi,
+      BACKGROUND_CONTEXT
+    );
     expect(invokeRepository).toHaveBeenCalledWith("repository_list", { path: "src" }, undefined);
     expect(result).toMatchObject({ structuredOutput: { entries: [] } });
   });
@@ -82,11 +83,7 @@ describe("createOpenInspectExtension", () => {
       ),
     };
     await expect(
-      tool.execute({ task: "bounded work" }, api as unknown as ToolExecutionApi, {
-        abortSignal: undefined,
-        value: () => undefined,
-        toString: () => "test",
-      })
+      tool.execute({ task: "bounded work" }, api as unknown as ToolExecutionApi, BACKGROUND_CONTEXT)
     ).rejects.toThrow("Pi active subagent limit reached");
     expect(createConversation).not.toHaveBeenCalled();
   });

@@ -33,6 +33,7 @@ const HUMAN_CONTROL_ACTIONS = new Set([
   "send",
   "follow_up",
   "cancel_exact",
+  "retry_parked",
   "fork",
   "reset",
   "handoff",

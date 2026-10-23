@@ -8,7 +8,6 @@ import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
-import type { PiHarnessWakeController } from "../../src/pi/pi-harness-wake";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
 import type { WorkspaceToolFacade } from "../../src/pi/computer-workspace-quota";
@@ -163,6 +162,26 @@ async function executeAgentTool(
 }
 
 describe("PiSessionDO", () => {
+  it("opens Pi SQLite at irreversible schema v2 with sleeping task support", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-schema-v2");
+
+    await stub.status(sessionName);
+
+    const schema = await runInPiSessionDO(stub, (_instance, state) => ({
+      version: state.storage.sql
+        .exec<{ version: number }>("SELECT version FROM pi_durable_schema WHERE singleton = 1")
+        .one().version,
+      tasksSql: state.storage.sql
+        .exec<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pi_tasks'"
+        )
+        .one().sql,
+    }));
+
+    expect(schema.version).toBe(2);
+    expect(schema.tasksSql).toContain("'sleeping'");
+  });
+
   it("holds no deployment secret in its runtime bindings", async () => {
     const sessionName = `pi-binding-scope-${crypto.randomUUID()}`;
     const stub = piStub(sessionName);
@@ -175,7 +194,7 @@ describe("PiSessionDO", () => {
     // assertion fails.
     expect(names.length).toBeGreaterThan(0);
     for (const name of names) {
-      expect(["SESSION", "CODEMODE_SANDBOX"]).toContain(name);
+      expect(["SESSION", "CODEMODE_SANDBOX", "WORKSPACE_LOADER"]).toContain(name);
     }
     expect(names).toContain("SESSION");
     for (const secret of [
@@ -1019,6 +1038,14 @@ describe("PiSessionDO", () => {
         handoff: "continue safely",
       })
     ).resolves.toMatchObject({ state: "completed" });
+    await expect(
+      controlPi(stub, {
+        sessionId: sessionName,
+        requestId: "retry-parked-1",
+        action: "retry_parked",
+        conversationId: rootId,
+      })
+    ).resolves.toMatchObject({ state: "completed", result: { retried: false } });
     const compact = await controlPi(stub, {
       sessionId: sessionName,
       requestId: "compact-1",
@@ -2760,18 +2787,34 @@ describe("PiSessionDO", () => {
       runInPiSessionDO(stub, (_instance, state) => state.abort("test: hibernation"))
     ).rejects.toThrow();
 
-    // A reopened object must schedule the Pi work that survived the eviction,
-    // which is what the upstream onWake contract does for a serverless host.
+    // A reopened object uses Pi 1.4's native wake contract. PiHarness owns the
+    // single durable wake job and calls resume as part of recovery.
     const restored = piStub(sessionName);
     await runInPiSessionDO(restored, async (instance) => {
-      await instance.harness.pi();
-      const controller = (instance as unknown as { wakeController?: PiHarnessWakeController })
-        .wakeController;
-      expect(controller).toBeDefined();
-      expect(controller?.resumes).toBeGreaterThan(0);
-      expect(controller?.nativeWakeSupported).toBe(false);
-      await expect(controller?.wake()).resolves.toMatchObject({ active: expect.any(Boolean) });
+      const pi = await instance.harness.pi();
+      expect(pi.wake()).toMatchObject({ active: expect.any(Boolean) });
     });
+  });
+
+  it("reopens the Pi harness factory without duplicating registry extensions", async () => {
+    const { sessionName, stub } = await initializedPiStub("pi-factory-reopen");
+    await stub.status(sessionName);
+
+    const names = await runInPiSessionDO(stub, async (instance) => {
+      const first = await instance.harness.pi();
+      const firstNames = (
+        await (await first.root(BACKGROUND_CONTEXT)).agent(BACKGROUND_CONTEXT)
+      ).extensions.map((extension) => extension.name);
+      await instance.harness.dispose();
+      const reopened = await instance.harness.pi();
+      const reopenedNames = (
+        await (await reopened.root(BACKGROUND_CONTEXT)).agent(BACKGROUND_CONTEXT)
+      ).extensions.map((extension) => extension.name);
+      return { firstNames, reopenedNames };
+    });
+
+    expect(names.reopenedNames).toEqual(names.firstNames);
+    expect(new Set(names.reopenedNames).size).toBe(names.reopenedNames.length);
   });
 
   it("drains an undelivered Pi projection through Lifecycle after object eviction", async () => {
@@ -2828,7 +2871,15 @@ describe("PiSessionDO", () => {
     ).rejects.toThrow();
 
     const restored = piStub(sessionName);
-    await runInPiSessionDO(restored, async (instance) => {
+    await runInPiSessionDO(restored, async (instance, state) => {
+      // Agents 0.30 fences single-flight jobs left marked running by a crash
+      // until their hung deadline. Make the persisted attempt stale to model
+      // the recovery alarm arriving after that deadline.
+      state.storage.sql.exec(
+        `UPDATE cf_agents_jobs
+         SET time = 0, execution_started_at = 0
+         WHERE capability = 'pi-projection' AND id = 'message-1'`
+      );
       await (instance as unknown as { alarm(): Promise<void> }).alarm();
     });
     await expect(

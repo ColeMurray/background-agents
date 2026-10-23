@@ -22,6 +22,8 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   PI_SESSION?: DurableObjectNamespace<PiSessionDO>;
   /** External, separately deployed VM object. Never adapt this into the application Platform. */
   CODEMODE_SANDBOX?: DurableObjectNamespace<CodemodeSandboxDurableObject>;
+  /** Optional isolate loader for the read-only Computer JavaScript backend. */
+  WORKSPACE_LOADER?: WorkerLoader;
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
@@ -52,6 +54,7 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     SESSION,
     PI_SESSION,
     CODEMODE_SANDBOX: _CODEMODE_SANDBOX,
+    WORKSPACE_LOADER: _WORKSPACE_LOADER,
     REPOS_CACHE,
     MEDIA_BUCKET,
     SLACK_BOT,
@@ -86,6 +89,9 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
 // of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
-  Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX">,
+  Exclude<
+    keyof WorkerBindings,
+    keyof Platform | keyof JobQueueBindings | "CODEMODE_SANDBOX" | "WORKSPACE_LOADER"
+  >,
   keyof EnvConfig
 >;

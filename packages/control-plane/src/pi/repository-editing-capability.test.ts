@@ -1,5 +1,6 @@
 import type { Workspace } from "@cloudflare/computer";
 import type { Context } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type { ToolEffectRegistration } from "@open-inspect/shared/pi-runtime-tool-effects";
 import type {
   HookApi,
@@ -24,11 +25,7 @@ import { WorkspaceMutationFifo } from "../pi/computer-workspace-quota";
 import type { PiRepositoryWorkspace } from "./repository-workspace";
 
 const parameters = { type: "object", properties: { path: { type: "string" } } };
-const context = {
-  abortSignal: new AbortController().signal,
-  value: () => undefined,
-  toString: () => "test",
-};
+const context = withAbortSignal(new AbortController().signal, BACKGROUND_CONTEXT);
 
 function declaredTool(name: string) {
   return { name, description: `${name} workspace files`, parameters };

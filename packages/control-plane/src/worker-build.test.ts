@@ -26,7 +26,7 @@ describe("control-plane worker build", () => {
         readFileSync(resolve(packageDirectory, "package.json"), "utf8")
       ) as { dependencies: Record<string, string> };
 
-      expect(packageJson.dependencies["@earendil-works/pi-codemode"]).toBe("1.3.0");
+      expect(packageJson.dependencies["@earendil-works/pi-codemode"]).toBe("1.4.0");
 
       expect(bundle.includes('"node:async_hooks"')).toBe(true);
       expect(bundle.includes("AsyncLocalStoragePolyfill")).toBe(false);
@@ -44,9 +44,11 @@ describe("control-plane worker build", () => {
       expect(bundledSources).toContain(
         "../../node_modules/@cloudflare/computer/dist/tools/pi-ai.js"
       );
-      expect(bundledSources).toContain(
-        "../../node_modules/@earendil-works/pi-codemode/dist/runtime/remote.js"
-      );
+      expect(
+        bundledSources.some((input) =>
+          input.endsWith("node_modules/@earendil-works/pi-codemode/dist/runtime/remote.js")
+        )
+      ).toBe(true);
       expect(
         bundledSources.filter(
           (input) =>
@@ -55,10 +57,16 @@ describe("control-plane worker build", () => {
       ).toEqual([]);
       expect(bundle).not.toContain("quickjs.wasm");
       expect(
+        bundledSources.some((input) =>
+          input.includes("@cloudflare/computer/dist/backends/worker-javascript/")
+        )
+      ).toBe(true);
+      expect(
         bundledSources.filter(
           (input) =>
             input.includes("@cloudflare/computer") &&
-            (input.includes("/backends/") ||
+            (input.includes("/backends/worker-shell/") ||
+              input.includes("/backends/container/") ||
               input.endsWith("/dist/git.js") ||
               input.includes("/modules/git"))
         )

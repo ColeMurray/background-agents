@@ -60,6 +60,9 @@ describe("Pi runtime contract", () => {
     expect(piRuntimeOperationStatusSchema.parse({ status: "running" })).toEqual({
       status: "running",
     });
+    expect(piRuntimeOperationStatusSchema.parse({ status: "parked" })).toEqual({
+      status: "parked",
+    });
     expect(() => piRuntimeOperationStatusSchema.parse({ status: "settled" })).toThrow();
     expect(
       piRuntimeOperationStatusSchema.parse({
@@ -73,5 +76,21 @@ describe("Pi runtime contract", () => {
         },
       })
     ).toMatchObject({ status: "settled", result: { operationId: "message-1" } });
+  });
+
+  it("admits an explicit retry for parked work", () => {
+    expect(
+      piRuntimeControlSchema.parse({
+        sessionId: "s",
+        requestId: "retry-1",
+        action: "retry_parked",
+        conversationId: 2,
+      })
+    ).toEqual({
+      sessionId: "s",
+      requestId: "retry-1",
+      action: "retry_parked",
+      conversationId: 2,
+    });
   });
 });

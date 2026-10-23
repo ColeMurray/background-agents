@@ -112,7 +112,7 @@ describe("the Pi harness emergency vocabulary", () => {
     expect(current).toHaveBeenCalledWith(abort.signal);
   });
 
-  it("dynamically denies new run, build, and test calls without affecting Code Mode", async () => {
+  it("dynamically denies Computer, run, build, and test execution without affecting Code Mode", async () => {
     const current = vi.fn(async () =>
       resolvePiFeatureCapabilities({ codeMode: "enabled", sandboxExecution: "off" })
     );
@@ -121,7 +121,7 @@ describe("the Pi harness emergency vocabulary", () => {
       requirementFor: piEmergencyRequirement,
     });
 
-    for (const name of ["run_shell", "run_build", "run_tests"]) {
+    for (const name of ["exec", "run_shell", "run_build", "run_tests"]) {
       await expect(
         policy.beforeFeatureDelegates(
           call(name),

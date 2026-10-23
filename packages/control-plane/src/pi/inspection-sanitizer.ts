@@ -19,6 +19,34 @@ export interface PiInspectionTask {
   readonly state: { readonly kind: string };
 }
 
+export type PiAgentActivityStatus = "active" | "queued" | "sleeping" | "parked" | "idle";
+
+/** Summarize Pi 1.4 task states without treating durable sleep or parking as CPU-active work. */
+export function piAgentActivityStatus(
+  tasks: readonly Pick<PiInspectionTask, "state">[],
+  queued: number,
+  placed: number
+): PiAgentActivityStatus {
+  if (
+    placed > 0 ||
+    tasks.some(({ state }) => state.kind !== "sleeping" && state.kind !== "blocked")
+  ) {
+    return "active";
+  }
+  if (
+    tasks.some(
+      ({ state }) =>
+        state.kind === "blocked" &&
+        "reason" in state &&
+        (state as { reason?: string }).reason === "restart_limit"
+    )
+  ) {
+    return "parked";
+  }
+  if (tasks.some(({ state }) => state.kind === "sleeping")) return "sleeping";
+  return queued > 0 ? "queued" : "idle";
+}
+
 export interface PiInspection {
   readonly scheduling: string;
   readonly tasks: readonly PiInspectionTask[];

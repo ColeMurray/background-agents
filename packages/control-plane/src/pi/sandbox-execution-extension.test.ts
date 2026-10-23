@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   createSandboxExecutionExtension,
   createSandboxExecutionPolicyDelegate,
@@ -24,7 +25,7 @@ function api() {
   } as unknown as ToolExecutionApi;
 }
 
-const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
+const context = BACKGROUND_CONTEXT;
 
 describe("sandbox execution Pi extension", () => {
   it("registers model-only shell, build, and test tools with identical authority", () => {

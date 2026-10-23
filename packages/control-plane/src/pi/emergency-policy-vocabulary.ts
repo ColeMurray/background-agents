@@ -22,7 +22,7 @@ export function piEmergencyRequirement(
     };
   }
 
-  if (["run_shell", "run_build", "run_tests"].includes(call.name)) {
+  if (["exec", "run_shell", "run_build", "run_tests"].includes(call.name)) {
     return {
       feature: "sandboxExecution",
       reason: "Sandbox execution is disabled by deployment policy",

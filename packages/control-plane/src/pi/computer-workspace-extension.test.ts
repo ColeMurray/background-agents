@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 
 const computer = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -11,7 +12,10 @@ vi.mock("@cloudflare/computer/tools/pi-ai", () => ({
   createPiTools: computer.createPiTools,
 }));
 
-import { createComputerWorkspaceCapability } from "./computer-workspace-extension";
+import {
+  WORKER_JAVASCRIPT_EXEC_BACKENDS,
+  createComputerWorkspaceCapability,
+} from "./computer-workspace-extension";
 import { WorkspaceMutationFifo } from "../pi/computer-workspace-quota";
 
 const parameters = { type: "object", properties: { path: { type: "string" } } };
@@ -46,11 +50,7 @@ function arrangeComputerTools() {
   });
 }
 
-const context = {
-  abortSignal: new AbortController().signal,
-  value: () => undefined,
-  toString: () => "test",
-};
+const context = withAbortSignal(new AbortController().signal, BACKGROUND_CONTEXT);
 
 function createExtension(mode: "read_only" | "enabled", mutations?: WorkspaceMutationFifo) {
   return createComputerWorkspaceCapability({} as Workspace, mode, mutations).extension;
@@ -95,7 +95,7 @@ describe("createComputerWorkspaceCapability", () => {
     });
   });
 
-  it("maps Computer results onto the Pi Durable 1.3 output contract", async () => {
+  it("maps Computer results onto the Pi Durable output contract", async () => {
     arrangeComputerTools();
     computer.execute.mockResolvedValue({
       content: [{ type: "text", text: "notes" }],
@@ -189,6 +189,37 @@ describe("createComputerWorkspaceCapability", () => {
       ["edit", "unsafe", "sequential"],
       ["delete", "safe", "sequential"],
     ]);
+  });
+
+  it("offers only the explicitly authorized Worker JavaScript backend", () => {
+    arrangeComputerTools();
+
+    const capability = createComputerWorkspaceCapability(
+      {} as Workspace,
+      "read_only",
+      new WorkspaceMutationFifo(),
+      WORKER_JAVASCRIPT_EXEC_BACKENDS
+    );
+
+    expect(computer.createPiTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readonly: false,
+        exec: WORKER_JAVASCRIPT_EXEC_BACKENDS,
+      })
+    );
+    expect(capability.extension.tools?.map((tool) => tool.name)).toEqual([
+      "read",
+      "ls",
+      "find",
+      "grep",
+      "exec",
+    ]);
+    expect(capability.effects.at(-1)).toEqual({
+      name: "exec",
+      effect: "sandbox_execution",
+      callers: ["model"],
+      replay: "unsafe",
+    });
   });
 
   it("exports canonical effects and a scratch policy contribution", () => {

@@ -1,10 +1,14 @@
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { describe, expect, it, vi } from "vitest";
-import { createComputerWorkspaceCapability } from "./computer-workspace-extension";
+import {
+  WORKER_JAVASCRIPT_EXEC_BACKENDS,
+  createComputerWorkspaceCapability,
+} from "./computer-workspace-extension";
 import type { WorkspaceToolFacade } from "../pi/computer-workspace-quota";
 
-function realComputerTools() {
+function realComputerTools(options: { execution?: boolean } = {}) {
   const files = new Map<string, Uint8Array>();
   const grep = vi.fn(async () => []);
   const fs = {
@@ -48,9 +52,29 @@ function realComputerTools() {
     },
     grep,
   };
+  const workspace = {
+    fs,
+    ...(options.execution
+      ? {
+          runtime: {
+            backends: () => [
+              {
+                id: "worker-javascript",
+                protocol: "module" as const,
+                callable: true,
+                description: "Isolated JavaScript",
+              },
+            ],
+            exec: vi.fn(),
+          },
+        }
+      : {}),
+  } as unknown as WorkspaceToolFacade;
   const extension = createComputerWorkspaceCapability(
-    { fs } as unknown as WorkspaceToolFacade,
-    "enabled"
+    workspace,
+    options.execution ? "read_only" : "enabled",
+    undefined,
+    options.execution ? WORKER_JAVASCRIPT_EXEC_BACKENDS : {}
   ).extension;
   return { extension, files, grep };
 }
@@ -65,14 +89,26 @@ async function executePrepared(
   const prepared = tool.prepareArguments?.(raw) ?? raw;
   const call = { type: "toolCall", id: `${name}-compat`, name, arguments: prepared };
   const validated = validateToolArguments(tool as never, call as never) as Record<string, unknown>;
-  return tool.execute(validated, { callId: call.id } as ToolExecutionApi, {
-    abortSignal: new AbortController().signal,
-    value: () => undefined,
-    toString: () => "test",
-  });
+  return tool.execute(
+    validated,
+    { callId: call.id } as ToolExecutionApi,
+    withAbortSignal(new AbortController().signal, BACKGROUND_CONTEXT)
+  );
 }
 
-describe("workspace input compatibility with Computer 0.5.1", () => {
+describe("workspace input compatibility with Computer 0.6", () => {
+  it("publishes exec only for the explicitly listed Worker JavaScript backend", () => {
+    const { extension } = realComputerTools({ execution: true });
+
+    expect(extension.tools?.map((tool) => tool.name)).toEqual([
+      "read",
+      "ls",
+      "find",
+      "grep",
+      "exec",
+    ]);
+  });
+
   it("preserves optional-null normalization before strict dispatch validation", async () => {
     const tools = realComputerTools();
     const raw = {

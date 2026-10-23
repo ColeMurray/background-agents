@@ -26,7 +26,7 @@ export interface InProcessHarnessCapabilitySnapshot {
 
 export type InProcessHarnessOperationStatus =
   | { status: "not_found" }
-  | { status: "queued" | "running" }
+  | { status: "queued" | "running" | "parked" }
   | {
       status: "settled";
       result: { status: "done" | "unanswered"; reason?: string };

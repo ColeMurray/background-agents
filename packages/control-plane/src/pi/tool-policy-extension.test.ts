@@ -6,6 +6,7 @@ import {
   type ToolHooks,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createFixedActionCeiling } from "../harness/action-ceiling";
 import { createToolPolicyExtension } from "./tool-policy-extension";
 import type { PiToolEmergencyPolicy, PiToolPolicyDelegate } from "./tool-policy-types";
@@ -15,7 +16,7 @@ const effects = createToolEffectRegistry([
   { name: "nested_tool", effect: "local_read", callers: ["tools"], replay: "safe" },
 ]);
 
-const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
+const context = BACKGROUND_CONTEXT;
 const api = {} as HookApi;
 
 function beforeTool() {

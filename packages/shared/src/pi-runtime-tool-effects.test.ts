@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MEMORY_TOOL_NAMES, harnessMemoryToolName } from "./memory-tools";
 import {
   PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS,
+  PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS,
   PI_MEMORY_TOOL_EFFECT_REGISTRATIONS,
   PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS,
   PI_TOOL_EFFECT_REGISTRY,
@@ -84,6 +85,17 @@ describe("Pi tool effect registry", () => {
         replay: "safe",
       }))
     );
+  });
+
+  it("keeps Computer exec model-only and unsafe to replay", () => {
+    expect(PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS).toEqual([
+      {
+        name: "exec",
+        effect: "sandbox_execution",
+        callers: ["model"],
+        replay: "unsafe",
+      },
+    ]);
   });
 
   it("declares the memory tools under the shared contract's canonical names", () => {

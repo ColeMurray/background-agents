@@ -90,6 +90,21 @@ export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
 ] as const satisfies readonly ToolEffectRegistration[];
 
 /**
+ * Computer's isolated JavaScript backend. It is contributed only when the
+ * deployment supplies a Worker Loader and the session's canonical sandbox
+ * execution capability is enabled. Keeping it separate prevents
+ * createPiTools' default of exposing every registered backend.
+ */
+export const PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS = [
+  {
+    name: "exec",
+    effect: SANDBOX_EXECUTION_TOOL_EFFECT,
+    callers: ["model"],
+    replay: "unsafe",
+  },
+] as const satisfies readonly ToolEffectRegistration[];
+
+/**
  * The MCP read tool.
  *
  * The tool is declared here, before any extension is assembled, so the

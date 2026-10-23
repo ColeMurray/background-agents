@@ -1,6 +1,7 @@
 import { createPiTools, type PiToolResult } from "@cloudflare/computer/tools/pi-ai";
 import {
   PI_TOOL_EFFECT_REGISTRY,
+  PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS,
   type ToolEffectRegistration,
 } from "@open-inspect/shared/pi-runtime-tool-effects";
 import {
@@ -25,7 +26,6 @@ import { validateWorkspaceToolInput } from "./workspace-input-limits";
 
 const READ_ONLY_TOOL_NAMES = ["read", "ls", "find", "grep"] as const;
 const MUTATION_TOOL_NAMES = ["write", "edit", "delete"] as const;
-const readOnlyToolNames = new Set<string>(READ_ONLY_TOOL_NAMES);
 
 /**
  * Whether repeating a mutation is harmless.
@@ -51,31 +51,48 @@ export const COMPUTER_WORKSPACE_MUTATION_EFFECTS = MUTATION_TOOL_NAMES.map(
 const mutationEffects = new Map(
   COMPUTER_WORKSPACE_MUTATION_EFFECTS.map((effect) => [effect.name, effect])
 );
+const executionEffects = new Map<string, ToolEffectRegistration>(
+  PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS.map((effect) => [effect.name, effect])
+);
+export const WORKER_JAVASCRIPT_EXEC_BACKENDS = {
+  "worker-javascript": {
+    description:
+      "Run isolated JavaScript with read-only access to the durable scratch workspace and no network access.",
+  },
+} as const;
 
 /**
- * Cloudflare Computer's credential-free VFS tools, adapted to Pi Durable 1.3.
+ * Cloudflare Computer's credential-free VFS tools, adapted to Pi Durable.
  * The explicit allowlist prevents an upstream release from widening the
  * model's capabilities merely by returning another declaration.
  */
 export function createComputerWorkspaceCapability(
   workspace: WorkspaceToolFacade,
   mode: Exclude<FeatureCapabilityMode, "off">,
-  mutations = new WorkspaceMutationFifo()
+  mutations = new WorkspaceMutationFifo(),
+  execBackends: Readonly<Record<string, { readonly description?: string }>> = {}
 ) {
   const writable = mode === "enabled";
   const { tools, execute } = createPiTools({
     workspace,
     root: COMPUTER_SCRATCH_ROOT,
-    readonly: !writable,
-    exec: {},
+    // Computer's readonly mode also removes exec. Keep its declarations
+    // writable when execution is authorized, then the Open-Inspect allowlist
+    // below withholds file mutations unless scratch itself is writable.
+    readonly: !writable && Object.keys(execBackends).length === 0,
+    // Never omit this option: Computer's omission means every registered
+    // backend, which would let a dependency change widen model authority.
+    exec: execBackends,
     assets: false,
     write: { maxBytes: WORKSPACE_MUTATION_MAX_BYTES },
     edit: { maxBytes: WORKSPACE_MUTATION_MAX_BYTES },
     constrainedSampling: "prefer",
   });
-  const allowedNames = writable
-    ? new Set<string>([...READ_ONLY_TOOL_NAMES, ...MUTATION_TOOL_NAMES])
-    : readOnlyToolNames;
+  const allowedNames = new Set<string>([
+    ...READ_ONLY_TOOL_NAMES,
+    ...(writable ? MUTATION_TOOL_NAMES : []),
+    ...(Object.keys(execBackends).length > 0 ? ["exec"] : []),
+  ]);
   const selected = tools.filter((tool) => allowedNames.has(tool.name));
   const selectedNames = new Set(selected.map((tool) => tool.name));
   for (const name of READ_ONLY_TOOL_NAMES) {
@@ -85,6 +102,9 @@ export function createComputerWorkspaceCapability(
     for (const name of MUTATION_TOOL_NAMES) {
       if (!selectedNames.has(name)) throw new Error(`Computer workspace tool is missing: ${name}`);
     }
+  }
+  if (Object.keys(execBackends).length > 0 && !selectedNames.has("exec")) {
+    throw new Error("Computer workspace tool is missing: exec");
   }
 
   const extension = defineExtension({
@@ -207,7 +227,9 @@ function toolError(error: unknown): ToolExecutionResult {
 }
 
 function workspaceToolEffect(name: string): ToolEffectRegistration | undefined {
-  return PI_TOOL_EFFECT_REGISTRY.get(name) ?? mutationEffects.get(name);
+  return (
+    PI_TOOL_EFFECT_REGISTRY.get(name) ?? mutationEffects.get(name) ?? executionEffects.get(name)
+  );
 }
 
 function normalizeDetails(value: unknown) {

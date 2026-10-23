@@ -32,10 +32,26 @@ type ToolFileSystem = Pick<
   Workspace["fs"],
   "stat" | "lstat" | "readFile" | "writeFile" | "mkdir" | "rm" | "find" | "grep" | "readdir"
 >;
+type ToolRuntime = Pick<Workspace["runtime"], "exec" | "backends">;
 
 /** The complete object handed to Computer's tool adapter. No Workspace authority is reachable. */
 export interface WorkspaceToolFacade {
   readonly fs: ToolFileSystem;
+  readonly runtime?: ToolRuntime;
+}
+
+/** Add only Computer's execution surface, never the owning Workspace. */
+export function withWorkspaceRuntime(
+  facade: WorkspaceToolFacade,
+  workspace: Workspace
+): WorkspaceToolFacade {
+  return {
+    ...facade,
+    runtime: {
+      exec: workspace.runtime.exec.bind(workspace.runtime),
+      backends: workspace.runtime.backends.bind(workspace.runtime),
+    },
+  };
 }
 
 /** One workspace-wide admission queue for every mutating tool in a Pi session. */

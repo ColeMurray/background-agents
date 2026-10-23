@@ -5,7 +5,7 @@
  * `@earendil-works/pi-durable` so Open-Inspect spans compose with Pi's own
  * spans once the Durable harness exposes its telemetry option. Upstream ships
  * the schema on its unreleased `main` branch; the published
- * `@earendil-works/pi-telemetry@1.3.0` package already provides the
+ * `@earendil-works/pi-telemetry` package provides the
  * `TelemetryContext` contract used here.
  *
  * Attributes are content-free by construction: they carry identifiers,
@@ -166,6 +166,12 @@ export class OpenInspectPiTelemetryContext implements TelemetryContext {
     this.parentSpanIds.push(spanId);
     const span: TelemetrySpan = {
       startSpan: async (_nested, nestedCallback) => this.startSpan(_nested, nestedCallback),
+      addLink: (link) => {
+        // This log adapter has no portable span identity to serialize. It
+        // still validates link attributes so telemetry cannot become a
+        // content escape hatch, then deliberately drops the correlation.
+        assertContentFreeAttributes(link.attributes ?? {});
+      },
       addEvent: (name, eventAttributes) => {
         assertContentFreeAttributes(eventAttributes ?? {});
         events.push({ name, attributes: { ...eventAttributes } });
@@ -212,6 +218,7 @@ export function createNoopPiTelemetryContext(): TelemetryContext {
     startSpan: async (_options, callback) =>
       callback({
         startSpan: async (_nested, nestedCallback) => nestedCallback(noopSpan()),
+        addLink: () => {},
         addEvent: () => {},
         setAttributes: () => {},
         setStatus: () => {},
@@ -222,6 +229,7 @@ export function createNoopPiTelemetryContext(): TelemetryContext {
 function noopSpan(): TelemetrySpan {
   return {
     startSpan: async (_options, callback) => callback(noopSpan()),
+    addLink: () => {},
     addEvent: () => {},
     setAttributes: () => {},
     setStatus: () => {},

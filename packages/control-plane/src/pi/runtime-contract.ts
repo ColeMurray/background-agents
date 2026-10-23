@@ -81,12 +81,14 @@ export type PiRuntimeOperationStatus =
   | { status: "not_found" }
   | { status: "queued" }
   | { status: "running" }
+  | { status: "parked" }
   | { status: "settled"; result: PiRuntimeResult };
 
 export const piRuntimeOperationStatusSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("not_found") }),
   z.object({ status: z.literal("queued") }),
   z.object({ status: z.literal("running") }),
+  z.object({ status: z.literal("parked") }),
   z.object({ status: z.literal("settled"), result: piRuntimeResultSchema }),
 ]) satisfies z.ZodType<PiRuntimeOperationStatus>;
 
@@ -134,6 +136,10 @@ export const piRuntimeControlSchema = z
       taskId: z.number().int().positive(),
     }),
     controlBase.extend({
+      action: z.literal("retry_parked"),
+      conversationId: conversationId.optional(),
+    }),
+    controlBase.extend({
       action: z.literal("fork"),
       conversationId,
       entryId: z.number().int().positive(),
@@ -166,7 +172,7 @@ export type PiHumanControl =
   | (PiMessageControl & { action: "send" | "follow_up" })
   | Extract<
       PiRuntimeControl,
-      { action: "cancel_exact" | "fork" | "reset" | "handoff" | "compact" }
+      { action: "cancel_exact" | "retry_parked" | "fork" | "reset" | "handoff" | "compact" }
     >;
 export interface PiRuntimeControlResult {
   requestId: string;

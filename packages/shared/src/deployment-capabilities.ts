@@ -3,10 +3,10 @@ import { harnessIdSchema } from "./harnesses";
 import { piFeatureCapabilityMatrixSchema } from "./pi-runtime-feature-capabilities";
 
 export const OPEN_INSPECT_RUNTIME_VERSIONS = Object.freeze({
-  piDurable: "1.3.0",
-  piHarness: "0.28.1",
-  computer: "0.5.1",
-  codeMode: "1.3.0",
+  piDurable: "1.4.0",
+  piHarness: "0.30.0",
+  computer: "0.6.0",
+  codeMode: "1.4.0",
   mcp: "2.3.1",
   wrangler: "4.103.0",
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createManagedSkillsExtension } from "./managed-skills-extension";
 import { skillSourceFromInstallation } from "./skill-source";
 
@@ -58,7 +59,7 @@ const source = skillSourceFromInstallation({
   ],
 });
 
-const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
+const context = BACKGROUND_CONTEXT;
 const api = { taskId: 1 } as ToolExecutionApi;
 
 describe("createManagedSkillsExtension", () => {

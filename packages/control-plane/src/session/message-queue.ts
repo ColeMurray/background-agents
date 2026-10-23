@@ -168,6 +168,8 @@ function piControlTimelineContent(control: PiHumanControl): string {
       return control.handoff;
     case "cancel_exact":
       return "Requested Pi agent cancellation.";
+    case "retry_parked":
+      return "Retried parked Pi agent work.";
     case "fork":
       return "Forked a Pi agent conversation.";
     case "reset":
@@ -1083,7 +1085,7 @@ export class SessionMessageQueue {
         }
         return;
       }
-      if (status.status === "queued" || status.status === "running") {
+      if (status.status === "queued" || status.status === "running" || status.status === "parked") {
         this.piOperations.transition(operationId, ["dispatching", "ambiguous"], "admitted", now);
         return;
       }

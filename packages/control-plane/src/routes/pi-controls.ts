@@ -58,7 +58,14 @@ const COLLABORATION_ACTIONS = new Set(["send", "follow_up"]);
  * session": the session's `lifecycle` action, which the sandbox harness's
  * own stop, cancel and diff routes already require.
  */
-const LIFECYCLE_ACTIONS = new Set(["cancel_exact", "fork", "reset", "handoff", "compact"]);
+const LIFECYCLE_ACTIONS = new Set([
+  "cancel_exact",
+  "retry_parked",
+  "fork",
+  "reset",
+  "handoff",
+  "compact",
+]);
 function post(allowed: Set<string>) {
   return async (
     request: Request,
