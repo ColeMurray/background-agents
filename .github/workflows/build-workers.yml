@@ -1,0 +1,89 @@
+# Builds the control-plane and bot Worker bundles once per run, so Terraform
+# deploys these files instead of rebuilding them during apply
+# (build_workers_in_terraform = false).
+#
+# Download the artifact named by the `artifact-name` output into the workspace
+# root. It holds each packages/<package>/dist/index.js, packages/shared/dist
+# (imported by apply-time snapshot builders) and worker-bundles.json, the
+# bundles' SHA-256s. The `worker-bundle-sha256` output is the same JSON, for
+# TF_VAR_worker_bundle_sha256: Terraform rejects a bundle that doesn't match.
+#
+# The Cloudflare web app is still built during apply, because its bundle
+# inlines NEXT_PUBLIC_* values that Terraform derives.
+name: Build Workers
+
+on:
+  workflow_call:
+    outputs:
+      artifact-name:
+        description: "Actions artifact holding the bundles and worker-bundles.json"
+        value: ${{ jobs.build.outputs.artifact-name }}
+      worker-bundle-sha256:
+        description: "JSON map of package directory to bundle SHA-256, the shape worker_bundle_sha256 takes"
+        value: ${{ jobs.build.outputs.worker-bundle-sha256 }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Worker bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      artifact-name: worker-bundles
+      worker-bundle-sha256: ${{ steps.manifest.outputs.sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build worker packages
+        run: |
+          npm run build -w @open-inspect/shared
+          npm run build -w @open-inspect/control-plane
+          npm run build -w @open-inspect/slack-bot
+          npm run build -w @open-inspect/github-bot
+          npm run build -w @open-inspect/linear-bot
+
+      - name: Record bundle checksums
+        id: manifest
+        run: |
+          set -euo pipefail
+          sha256() { sha256sum "packages/$1/dist/index.js" | cut -d' ' -f1; }
+          # Keyed by package directory, the keys worker_bundle_sha256 accepts.
+          jq -n \
+            --arg control-plane "$(sha256 control-plane)" \
+            --arg slack-bot "$(sha256 slack-bot)" \
+            --arg github-bot "$(sha256 github-bot)" \
+            --arg linear-bot "$(sha256 linear-bot)" \
+            '$ARGS.named' > worker-bundles.json
+          cat worker-bundles.json
+          echo "sha256=$(jq -c . worker-bundles.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-bundles
+          # Uploaded from the workspace root so a download restores each file
+          # at the path Terraform reads it from. packages/shared/dist is not
+          # deployed; the Vercel and OpenComputer snapshot builders import it
+          # during apply, so they reuse this build.
+          path: |
+            worker-bundles.json
+            packages/control-plane/dist/index.js
+            packages/slack-bot/dist/index.js
+            packages/github-bot/dist/index.js
+            packages/linear-bot/dist/index.js
+            packages/shared/dist/
+          if-no-files-found: error

@@ -125,6 +125,14 @@ resource "cloudflare_worker_version" "this" {
       condition     = length(var.deleted_classes) == 0 || var.enable_durable_object_bindings
       error_message = "Durable Object class deletion requires enable_durable_object_bindings = true, otherwise the same version drops every surviving DO binding."
     }
+
+    # Terraform deploys whatever file sits at script_path. When the caller
+    # knows which bundle it built, pin it, so a stale or swapped file fails
+    # the plan rather than shipping.
+    precondition {
+      condition     = var.script_sha256 == null || filesha256(var.script_path) == var.script_sha256
+      error_message = "The bundle at script_path does not match script_sha256. Rebuild it, or re-fetch the bundle the checksum was recorded for."
+    }
   }
 }
 
