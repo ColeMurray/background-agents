@@ -127,14 +127,14 @@
       "tests": [
         {
           "file": "packages/control-plane/src/auth/identity-enforcement.test.ts",
-          "name": "returns the canonical id only when it matches the admitted authorization subject"
+          "name": "fails closed for %s"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/routing/identity-enforcement.ts",
         "find": "  if (userId && ctx.authorization?.userId === userId) return userId;",
         "replace": "  if (userId) return userId;",
-        "cmd": "npm test -w @open-inspect/control-plane -- src/auth/identity-enforcement.test.ts -t \"returns the canonical id only\""
+        "cmd": "npm test -w @open-inspect/control-plane -- src/auth/identity-enforcement.test.ts -t \"fails closed for\""
       }
     },
     "B-3": {
@@ -370,8 +370,8 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/sandbox-events/execution.handler.ts",
-        "find": "      this.messenger.broadcast({ type: \"sandbox_event\", event });",
-        "replace": "      void event;",
+        "find": "        context.processingMessage?.id === event.messageId",
+        "replace": "        false",
         "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
       }
     },
@@ -434,8 +434,8 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/pi/codemode-extension.ts",
-        "find": "              return policy.coordinator.run(deadline.deadlineMs, context.abortSignal, async () => {",
-        "replace": "              return policy.coordinator.run(deadline.deadlineMs, undefined, async () => {",
+        "find": "                await policy.parents.set(api.taskId, api.callId);",
+        "replace": "                await Promise.resolve();",
         "cmd": "npm test -w @open-inspect/control-plane -- src/pi/codemode-durable.test.ts -t \"aborts the active script and its nested call\""
       }
     },
@@ -661,7 +661,10 @@
     },
     "E-9": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:35"],
+      "code": [
+        "packages/control-plane/src/mcp/connection-saga.ts:80",
+        "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:574"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
@@ -669,9 +672,9 @@
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts",
-        "find": "    await this.env.DB.prepare(\"DELETE FROM mcp_oauth_storage WHERE connection_id = ?\")",
-        "replace": "    await this.env.DB.prepare(\"DELETE FROM mcp_oauth_storage WHERE 0 AND connection_id = ?\")",
+        "file": "packages/control-plane/src/mcp/connection-saga.ts",
+        "find": "    await this.broker.destroy(connectionId, ownerUserId);",
+        "replace": "    await Promise.resolve();",
         "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"closes the dormant transport cache\""
       }
     },
@@ -886,14 +889,14 @@
       "tests": [
         {
           "file": "packages/shared/src/types/audit-events.test.ts",
-          "name": "keeps shadow observations separate from operation actions"
+          "name": "interprets a shadow denial as an observation regardless of stored result %s"
         }
       ],
       "mutation": {
         "file": "packages/shared/src/types/audit-events.ts",
         "find": "    return { kind: \"observation\", observation: \"would_deny\" };",
         "replace": "    return { kind: \"operation\", result: event.operationResult };",
-        "cmd": "npm test -w @open-inspect/shared -- src/types/audit-events.test.ts -t \"keeps shadow observations separate\""
+        "cmd": "npm test -w @open-inspect/shared -- src/types/audit-events.test.ts -t \"interprets a shadow denial\""
       }
     },
     "H-1": {

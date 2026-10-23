@@ -407,6 +407,7 @@ The remaining thin hooks also include:
 The overlay's test-only package selections are also explicit:
 
 - `packages/control-plane/test/integration/cleanup.ts`
+- `packages/control-plane/src/scheduler/scheduler.test.ts`
 - `packages/shared/src/pi-runtime-feature-capabilities.test.ts`
 - `packages/shared/src/pi-runtime-tool-effects.test.ts`
 - `packages/shared/src/types/integrations.test.ts`

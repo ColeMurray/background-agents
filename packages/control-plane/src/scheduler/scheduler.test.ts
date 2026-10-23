@@ -944,6 +944,10 @@ describe("Scheduler", () => {
       const scheduler = createScheduler();
       await scheduler.tick();
       expect(mockResolveSessionProviderAuth).toHaveBeenCalledTimes(1);
+      expect(mockResolveSessionProviderAuth).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ unattended: true })
+      );
       expect(mockSessionStoreCreate).toHaveBeenCalledTimes(2);
       expect(mockSessionStoreCreate.mock.calls.map(([session]) => session.providerAuth)).toEqual([
         invocationProviderAuth,
