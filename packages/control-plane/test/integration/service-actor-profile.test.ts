@@ -123,6 +123,79 @@ describe("known service actor profile claims", () => {
     });
   });
 
+  it.each(["another user", "the same user", "a different email"] as const)(
+    "handles a concurrent claim for %s between the owner lookup and guarded write",
+    async (race) => {
+      const nameless = await enrollNameless("slack", "U-CLAIM-RACE");
+      const other = await users.createUser({ displayName: "Other User" });
+      const email = "race@corp.test";
+      const claimStore = new IdentityClaimStore(env.DB);
+      const claimEmail = claimStore.claimEmail.bind(claimStore);
+      const ownerLookup = vi.spyOn(claimStore, "findEmailOwnerId");
+      // Let the initial lookup see no owner, then commit a real competing
+      // write before the actor's guarded UPDATE. No database result is mocked.
+      const guardedClaim = vi
+        .spyOn(claimStore, "claimEmail")
+        .mockImplementationOnce(async (userId, claimedEmail) => {
+          expect(ownerLookup).toHaveBeenCalledExactlyOnceWith(email);
+          expect(await ownerLookup.mock.results[0].value).toBeNull();
+          expect(
+            await claimEmail(
+              race === "another user" ? other.id : nameless.id,
+              race === "a different email" ? "different@corp.test" : claimedEmail
+            )
+          ).toBe(true);
+          return claimEmail(userId, claimedEmail);
+        });
+      const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const info = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await new KnownActorProfileClaim(users, claimStore).claim(
+        {
+          provider: "slack",
+          providerUserId: "U-CLAIM-RACE",
+          participantUserId: "slack:U-CLAIM-RACE",
+          canonicalUserId: nameless.id,
+        },
+        { email }
+      );
+
+      await expect(guardedClaim.mock.results[0].value).resolves.toBe(false);
+      const collisions = warnings.mock.calls
+        .map(([line]) => JSON.parse(String(line)))
+        .filter(({ event }) => event === "auth.subject_email_collision");
+      if (race === "another user") {
+        expect(collisions).toEqual([
+          expect.objectContaining({
+            level: "warn",
+            provider: "slack",
+            subject: "U-CLAIM-RACE",
+            subject_user_id: nameless.id,
+            email_owner_user_id: other.id,
+          }),
+        ]);
+      } else {
+        expect(collisions).toEqual([]);
+      }
+      expect(info.mock.calls.map(([line]) => JSON.parse(String(line)))).not.toContainEqual(
+        expect.objectContaining({ event: "auth.email_claimed" })
+      );
+      await expect(users.getUserById(nameless.id)).resolves.toMatchObject({
+        email:
+          race === "another user" ? null : race === "the same user" ? email : "different@corp.test",
+        emailVerified: race !== "another user",
+      });
+      await expect(users.getUserById(other.id)).resolves.toMatchObject({
+        email: race === "another user" ? email : null,
+        emailVerified: race === "another user",
+      });
+      await expect(users.getIdentity("slack", "U-CLAIM-RACE")).resolves.toMatchObject({
+        userId: nameless.id,
+        providerEmail: null,
+      });
+    }
+  );
+
   it("keeps a known actor's existing name, avatar, and email", async () => {
     const known = await users.resolveOrCreateUser({
       provider: "linear",
