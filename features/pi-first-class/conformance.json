@@ -516,10 +516,10 @@
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts",
-        "find": "      if (!approval && this.options.operationIsUnattended(operationId)) {",
+        "file": "packages/control-plane/src/pi/external-action-policy-extension.ts",
+        "find": "        if (admission && !admission.allowed) {",
         "replace": "      if (false) {",
-        "cmd": "npm test -w @open-inspect/control-plane -- pi-bridge.handler"
+        "cmd": "npm test -w @open-inspect/control-plane -- external-action-policy-extension -t \"refuses a new effect when the live deployment policy denies it\""
       }
     },
     "E-1": {
