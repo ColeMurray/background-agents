@@ -623,7 +623,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               write: (request, signal) => this.writeMemory(request, signal),
               search: (request, signal) => this.searchMemory(request, signal),
             },
-            memory: sessionContext.memory,
+            currentMemory: (signal) => this.fetchCurrentMemory(signal),
             mode: capabilities.memory,
           }),
           effects: memoryEffects,
@@ -2058,7 +2058,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
 
   private async fetchSessionContext(
     mode: "bootstrap" | "pin",
-    repositoryPins?: z.infer<typeof piRepositoryPinsSchema>
+    repositoryPins?: z.infer<typeof piRepositoryPinsSchema>,
+    options: { operationId?: string; signal?: AbortSignal } = {}
   ): Promise<PiSessionContext> {
     if (await this.ctx.storage.get<string>(DELETION_STATE_KEY)) {
       throw new Error("Pi Durable session was deleted");
@@ -2068,12 +2069,33 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     const response = await this.env.SESSION.getByName(sessionId).fetch(
       new Request(`http://session${SessionInternalPaths.piContext}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.operationId
+            ? {
+                "X-Pi-Operation-ID": options.operationId,
+                ...piTraceHeader(options.operationId),
+              }
+            : {}),
+        },
         body: JSON.stringify({ mode, ...(repositoryPins ? { repositoryPins } : {}) }),
+        signal: options.signal,
       })
     );
     if (!response.ok) throw new Error(`Pi session context unavailable (${response.status})`);
     return piSessionContextSchema.parse(await response.json());
+  }
+
+  /** Reauthorize and refetch rendered memory for one provider request. */
+  private async fetchCurrentMemory(signal?: AbortSignal): Promise<PiSessionContext["memory"]> {
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
+    return (
+      await this.fetchSessionContext("bootstrap", undefined, {
+        operationId,
+        signal,
+      })
+    ).memory;
   }
 
   private async ensureRepositoryPins(signal?: AbortSignal): Promise<{

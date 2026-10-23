@@ -1,3 +1,5 @@
+import type { Message } from "@earendil-works/pi-ai";
+import type { Extension, GenerationHooks } from "@earendil-works/pi-durable";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemorySandboxContract,
@@ -71,6 +73,15 @@ const contract = buildMemorySandboxContract();
 const contractSchema = (name: string) =>
   comparable(contract.tools.find((tool) => tool.name === name)?.inputSchema);
 
+function beforeRequest(extension: Extension): GenerationHooks["beforeRequest"] {
+  const registration = extension.hooks?.[0] as { handlers?: Partial<GenerationHooks> } | undefined;
+  const handler = registration?.handlers?.beforeRequest;
+  if (!handler) throw new Error("The extension contributes no generation hook");
+  return handler;
+}
+
+const noRenderedMemory = async () => null;
+
 describe("memory extension", () => {
   it("exposes the shared contract's canonical names and descriptions", () => {
     expect(PI_MEMORY_TOOL_NAMES).toEqual({
@@ -84,6 +95,7 @@ describe("memory extension", () => {
         write: async () => ({ id: "mem_1", status: "active", revisionId: "mrev_1" }),
         search: async () => ({ results: [], hasMore: false }),
       },
+      currentMemory: noRenderedMemory,
       mode: "enabled",
     });
     for (const tool of extension.tools ?? []) {
@@ -126,6 +138,7 @@ describe("memory extension", () => {
         write: async () => ({ id: "mem_1", status: "active", revisionId: "mrev_1" }),
         search: async () => ({ results: [], hasMore: false }),
       },
+      currentMemory: noRenderedMemory,
       mode: "enabled",
     });
     const tool = extension.tools?.find((candidate) => candidate.name === PI_MEMORY_TOOL_NAMES.read);
@@ -150,6 +163,7 @@ describe("memory extension", () => {
         write: async () => ({ id: "mem_1", status: "proposed", revisionId: "mrev_1" }),
         search: async () => ({ results: [], hasMore: false }),
       },
+      currentMemory: noRenderedMemory,
       mode: "enabled",
     });
     const tool = extension.tools?.find(
@@ -181,6 +195,7 @@ describe("memory extension", () => {
         write: async () => ({ id: "mem_1", status: "active", revisionId: "mrev_1" }),
         search: async () => ({ results: [], hasMore: false }),
       },
+      currentMemory: noRenderedMemory,
       mode: "read_only",
     });
 
@@ -190,28 +205,72 @@ describe("memory extension", () => {
     ]);
   });
 
-  it("renders the session's memory into the prompt and omits it when there is none", async () => {
-    const withMemory = createMemoryExtension({
+  it("refetches rendered memory before every model request", async () => {
+    const currentMemory = vi
+      .fn()
+      .mockResolvedValueOnce({ rendered: "# Current memory A" })
+      .mockResolvedValueOnce({ rendered: "# Current memory B" });
+    const extension = createMemoryExtension({
       client: {
         read: async () => ({ id: "mem_1", status: "archived" }) as never,
         write: async () => ({ id: "mem_1", status: "active", revisionId: "mrev_1" }),
         search: async () => ({ results: [], hasMore: false }),
       },
-      memory: { rendered: "# Memory (stored data)" },
+      currentMemory,
       mode: "enabled",
     });
-    const withoutMemory = createMemoryExtension({
-      client: {
-        read: async () => ({ id: "mem_1", status: "archived" }) as never,
-        write: async () => ({ id: "mem_1", status: "active", revisionId: "mrev_1" }),
-        search: async () => ({ results: [], hasMore: false }),
+    const messages: Message[] = [
+      {
+        role: "system",
+        content: "Base prompt",
+        sections: { memory: "# Stale memory" },
+        timestamp: 1,
       },
-      mode: "enabled",
-    });
+      { role: "user", content: "Continue", timestamp: 2 },
+    ];
+    const hook = beforeRequest(extension);
 
-    const section = withMemory.sections?.[0];
-    const empty = withoutMemory.sections?.[0];
-    expect(await section?.render({} as never, {} as never)).toBe("# Memory (stored data)");
-    expect(await empty?.render({} as never, {} as never)).toBeUndefined();
+    const first = await hook({ messages }, {} as never, { abortSignal: undefined } as never);
+    const second = await hook(
+      { messages: first?.messages ?? messages },
+      {} as never,
+      { abortSignal: undefined } as never
+    );
+
+    expect(currentMemory).toHaveBeenCalledTimes(2);
+    expect(first?.messages.at(-1)).toMatchObject({
+      role: "system",
+      sections: { memory: "# Current memory A" },
+    });
+    expect(second?.messages.at(-1)).toMatchObject({
+      role: "system",
+      sections: { memory: "# Current memory B" },
+    });
+  });
+
+  it("fails closed instead of reusing rendered memory when refresh fails", async () => {
+    const extension = createMemoryExtension({
+      client: {
+        read: async () => ({ id: "mem_1", status: "archived" }) as never,
+        write: async () => ({ id: "mem_1", status: "active", revisionId: "mrev_1" }),
+        search: async () => ({ results: [], hasMore: false }),
+      },
+      currentMemory: async () => {
+        throw new Error("current author unavailable");
+      },
+      mode: "enabled",
+    });
+    const messages: Message[] = [
+      {
+        role: "system",
+        content: "Base prompt",
+        sections: { memory: "# Stale memory" },
+        timestamp: 1,
+      },
+    ];
+
+    await expect(
+      beforeRequest(extension)({ messages }, {} as never, { abortSignal: undefined } as never)
+    ).rejects.toThrow("current author unavailable");
   });
 });

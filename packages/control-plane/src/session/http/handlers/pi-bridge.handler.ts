@@ -182,6 +182,10 @@ export class PiBridgeHandler {
     const sessionRepositories = this.options.sessions.getSessionRepositories();
     const skills = await this.options.skills.getSandboxInstallation(sessionId);
     if (parsed.data.mode === "bootstrap") {
+      const requestsMemory = request.headers.has("X-Pi-Operation-ID");
+      if (requestsMemory && !(await this.authorizedOperation(request))) {
+        return Response.json({ error: "Pi execution is not active" }, { status: 409 });
+      }
       return Response.json(
         piSessionContextSchema.parse({
           repositories: sessionRepositories.map((repository) => ({
@@ -194,7 +198,7 @@ export class PiBridgeHandler {
           })),
           skills,
           ...(await this.options.contextContributions?.()),
-          memory: await this.renderedMemory(sessionId, request),
+          memory: requestsMemory ? await this.renderedMemory(sessionId, request) : null,
         }),
         { headers: { "Cache-Control": "no-store" } }
       );
@@ -405,9 +409,10 @@ export class PiBridgeHandler {
   /**
    * The session's pinned memory, rendered for Pi.
    *
-   * A session that has no memory selection, or that may no longer reach the
-   * partitions it pinned, gets none: the boot context is empty and the
-   * memory tools refuse. An unexpected failure is not swallowed.
+   * The caller has already rechecked the live operation and its current human
+   * author. A session that has no memory selection, or that may no longer
+   * reach the partitions it pinned, gets none. An unexpected failure is not
+   * swallowed, so the generation hook fails closed.
    */
   private async renderedMemory(
     sessionId: string,

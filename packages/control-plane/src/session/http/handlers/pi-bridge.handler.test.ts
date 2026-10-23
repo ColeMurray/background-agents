@@ -18,6 +18,8 @@ function harness(
       created_at: number;
     };
     attachmentBytes?: Uint8Array;
+    authorMayAct?: boolean;
+    renderedMemory?: { rendered: string };
   } = {}
 ) {
   const fullSha = "a".repeat(40);
@@ -59,6 +61,16 @@ function harness(
   const agentControls = {
     handle: vi.fn(async (_request: Request) => Response.json({ state: "completed" })),
   };
+  const authorMayAct = vi.fn(async () =>
+    options.authorMayAct === false
+      ? ({ kind: "denied", reason: "The turn author lost access" } as const)
+      : ({ kind: "allowed" } as const)
+  );
+  const renderedContext = vi.fn(async () =>
+    options.renderedMemory
+      ? ({ schemaVersion: 1, manifestSha256: "manifest", ...options.renderedMemory } as const)
+      : null
+  );
   const handler = new PiBridgeHandler({
     sessions: {
       getPiFeatureCapabilitySnapshot: () => null,
@@ -85,6 +97,7 @@ function harness(
       getMessageHumanActor: (messageId) => (messageId ? "user-1" : null),
     },
     controls: { isActiveOperation: () => options.activeControl === true },
+    authorMayAct,
     agentControls,
     credentials: {
       getProviderAccess: vi.fn(async () => ({
@@ -132,6 +145,7 @@ function harness(
       materializeBatch,
     },
     diffs: { claimBaselines },
+    memory: { renderedContext },
     getSessionId: () => "session-1",
   });
   return {
@@ -143,8 +157,54 @@ function harness(
     materializeBatch,
     fullSha,
     agentControls,
+    authorMayAct,
+    renderedContext,
   };
 }
+
+it("reauthorizes and refetches rendered memory for every active turn request", async () => {
+  const h = harness({
+    processingMessageId: "message-1",
+    authorMayAct: true,
+    renderedMemory: { rendered: "# Current memory" },
+  });
+  const request = () =>
+    new Request("http://session/internal/pi-context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+      body: JSON.stringify({ mode: "bootstrap" }),
+    });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await h.handler.context(request());
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      memory: { rendered: "# Current memory" },
+    });
+  }
+
+  expect(h.authorMayAct).toHaveBeenCalledTimes(2);
+  expect(h.renderedContext).toHaveBeenCalledTimes(2);
+});
+
+it("fails closed before rendering memory when the turn author loses authority", async () => {
+  const h = harness({
+    processingMessageId: "message-1",
+    authorMayAct: false,
+    renderedMemory: { rendered: "# Must not escape" },
+  });
+
+  const response = await h.handler.context(
+    new Request("http://session/internal/pi-context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+      body: JSON.stringify({ mode: "bootstrap" }),
+    })
+  );
+
+  expect(response.status).toBe(409);
+  expect(h.renderedContext).not.toHaveBeenCalled();
+});
 
 it("authorizes a Code Mode run for the turn that owns it", async () => {
   const h = harness({ processingMessageId: "message-1" });

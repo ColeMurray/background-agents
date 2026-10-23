@@ -225,6 +225,28 @@ describe("Pi Durable admission", () => {
     ).resolves.toEqual({ model: "openai/gpt-6.1-sol", reasoningEffort: "low" });
   });
 
+  it("skips enabled models absent from Pi's provider registry when choosing a default", async () => {
+    await expect(
+      resolveHarnessSelection(
+        db,
+        { PI_DURABLE_ENABLED: "true", PI_SESSION: {} },
+        { harness: "pi" },
+        ["openai/gpt-5.5", "openai/gpt-5.6-sol"]
+      )
+    ).resolves.toEqual({ model: "openai/gpt-5.6-sol", reasoningEffort: "low" });
+  });
+
+  it("rejects an explicitly enabled model absent from Pi's provider registry", async () => {
+    await expect(
+      resolveHarnessSelection(
+        db,
+        { PI_DURABLE_ENABLED: "true", PI_SESSION: {} },
+        { harness: "pi", model: "openai/gpt-5.5" },
+        ["openai/gpt-5.5", "openai/gpt-5.6-sol"]
+      )
+    ).rejects.toThrow("cannot run");
+  });
+
   it("keeps existing Pi sessions executable after new admission is disabled", async () => {
     await expect(
       validateHarnessExecution(

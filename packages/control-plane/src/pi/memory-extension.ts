@@ -1,8 +1,9 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type, type Message } from "@earendil-works/pi-ai";
 import {
   defineExtension,
   defineTool,
-  section,
+  GenerationTask,
+  hook,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
@@ -141,8 +142,8 @@ export interface MemoryToolClient {
 
 export interface MemoryExtensionOptions {
   client: MemoryToolClient;
-  /** The session's pinned memory, rendered by the control plane for this harness. */
-  memory?: { rendered: string } | null;
+  /** Reauthorize and render the session's pinned memory for one model request. */
+  currentMemory(signal?: AbortSignal): Promise<{ rendered: string } | null>;
   /**
    * The capability this session was admitted with.
    *
@@ -150,6 +151,15 @@ export interface MemoryExtensionOptions {
    * tenant's memory, and may not change it.
    */
   mode: FeatureCapabilityMode;
+}
+
+function shownMemory(messages: readonly Message[]): string | undefined {
+  let rendered: string | undefined;
+  for (const message of messages) {
+    if (message.role !== "system" || message.sections?.memory === undefined) continue;
+    rendered = message.sections.memory ?? undefined;
+  }
+  return rendered;
 }
 
 /**
@@ -164,7 +174,6 @@ export function createMemoryExtension(options: MemoryExtensionOptions) {
   const readEffect = declaredEffect(PI_MEMORY_TOOL_NAMES.read);
   const writeEffect = declaredEffect(PI_MEMORY_TOOL_NAMES.write);
   const searchEffect = declaredEffect(PI_MEMORY_TOOL_NAMES.search);
-  const rendered = options.memory?.rendered;
   const tools: ToolRegistration[] = [
     defineTool({
       name: PI_MEMORY_TOOL_NAMES.read,
@@ -235,9 +244,28 @@ export function createMemoryExtension(options: MemoryExtensionOptions) {
   }
   return defineExtension({
     name: "open-inspect.memory",
-    sections: [
-      section("memory", () => (rendered && rendered.length > 0 ? rendered : undefined), {
-        tag: false,
+    hooks: [
+      hook(GenerationTask, {
+        beforeRequest: async ({ messages }, _api, context) => {
+          // This runs for every provider attempt. The owning session re-reads
+          // the operation's current human author and memory access before it
+          // returns any text. A rejected or unavailable lookup throws here,
+          // so Pi never falls back to a previously rendered section.
+          const current = await options.currentMemory(context.abortSignal);
+          const rendered = current?.rendered || undefined;
+          if (shownMemory(messages) === rendered) return undefined;
+          return {
+            messages: [
+              ...messages,
+              {
+                role: "system" as const,
+                content: "",
+                sections: { memory: rendered ?? null },
+                timestamp: Date.now(),
+              },
+            ],
+          };
+        },
       }),
     ],
     tools,

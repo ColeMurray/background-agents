@@ -272,9 +272,11 @@ describe("pi memory gateway", () => {
     });
   });
 
-  it("serves the rendered memory in the Pi session context", async () => {
+  it("serves rendered memory only for an authorized live Pi turn", async () => {
     const sessionId = `pi-memory-context-${crypto.randomUUID()}`;
     const stub = await piSession(sessionId);
+    const operationId = "turn-context";
+    await liveTurn(stub, operationId);
     await new MemoryRecordStore(env.DB).create(
       {
         partition: { type: "repository", repoId: repo.repoId },
@@ -287,7 +289,10 @@ describe("pi memory gateway", () => {
     const response = await stub.fetch(
       new Request(`http://session${SessionInternalPaths.piContext}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Pi-Operation-ID": operationId,
+        },
         body: JSON.stringify({ mode: "bootstrap" }),
       })
     );

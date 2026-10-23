@@ -18,8 +18,10 @@ import {
   getReasoningConfig,
   getCodexReasoningConfig,
   getValidModelOrDefault,
+  modelHasCapability,
   normalizeModelId,
 } from "./models";
+import type { ModelCapability } from "./models";
 import type {
   ModelProviderSelections,
   ProviderAuthMode,
@@ -38,6 +40,10 @@ export interface HarnessCapabilities {
   readonly selectionPolicy: "legacy_fallback" | "strict";
   /** Model providers (catalog id prefixes) the harness can run, or any. */
   readonly modelFamilies: "any" | readonly string[];
+  /** Optional pinned runtime catalog every admitted model must exist in. */
+  readonly modelCapability?: ModelCapability;
+  /** Reasoning vocabulary exposed by this harness runtime. */
+  readonly reasoningProfile: "standard" | "codex";
   /** Provider id → auth modes the harness can *select* for that provider. */
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
   /** How a sandbox restore resumes the conversation. */
@@ -51,6 +57,7 @@ export const HARNESS_CATALOG = {
     label: "OpenCode",
     selectionPolicy: "legacy_fallback",
     modelFamilies: "any",
+    reasoningProfile: "standard",
     providerAuth: {
       anthropic: ["api_key"],
       openai: ["api_key", "provider_account"],
@@ -63,6 +70,7 @@ export const HARNESS_CATALOG = {
     label: "Claude Agent",
     selectionPolicy: "legacy_fallback",
     modelFamilies: ["anthropic"],
+    reasoningProfile: "standard",
     providerAuth: {
       anthropic: ["api_key", "provider_account"],
     },
@@ -73,6 +81,8 @@ export const HARNESS_CATALOG = {
     label: "Codex",
     selectionPolicy: "strict",
     modelFamilies: ["openai"],
+    modelCapability: "codex",
+    reasoningProfile: "codex",
     providerAuth: { openai: ["api_key", "provider_account"] },
     resume: "session_id",
     execution: "sandbox",
@@ -81,6 +91,8 @@ export const HARNESS_CATALOG = {
     label: "Pi Durable",
     selectionPolicy: "strict",
     modelFamilies: ["openai"],
+    modelCapability: "openai-codex",
+    reasoningProfile: "codex",
     providerAuth: { openai: ["provider_account"] },
     resume: "session_id",
     execution: "in_process",
@@ -162,8 +174,13 @@ export function selectHarnessProviderSelections(
 
 /** Whether the harness can run a model (by its catalog provider prefix). */
 export function harnessSupportsModel(harness: HarnessId, model: string): boolean {
-  if (harness === "codex" || harness === "pi") return getCodexReasoningConfig(model) !== undefined;
-  const families = getHarnessCapabilities(harness).modelFamilies;
+  const capabilities = getHarnessCapabilities(harness);
+  if (
+    capabilities.modelCapability !== undefined &&
+    !modelHasCapability(model, capabilities.modelCapability)
+  )
+    return false;
+  const families = capabilities.modelFamilies;
   if (families === "any") return true;
   const { provider } = extractProviderAndModel(model);
   return families.includes(provider);
@@ -285,7 +302,13 @@ export function checkHarnessCompatibility(
 }
 
 export function getHarnessReasoningConfig(harness: HarnessId, model: string) {
-  return harness === "codex" || harness === "pi"
+  const capabilities = getHarnessCapabilities(harness);
+  if (
+    capabilities.modelCapability !== undefined &&
+    !modelHasCapability(model, capabilities.modelCapability)
+  )
+    return undefined;
+  return capabilities.reasoningProfile === "codex"
     ? getCodexReasoningConfig(model)
     : getReasoningConfig(model);
 }

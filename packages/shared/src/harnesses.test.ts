@@ -95,6 +95,7 @@ describe("harnessSupportsModel", () => {
 
   it("restricts Pi Durable to native Codex subscription models", () => {
     expect(harnessSupportsModel("pi", "openai/gpt-6.1-sol")).toBe(true);
+    expect(harnessSupportsModel("pi", "openai/gpt-5.5")).toBe(false);
     expect(harnessSupportsModel("pi", "openai/gpt-5.4")).toBe(false);
     expect(harnessSupportsModel("pi", "anthropic/claude-sonnet-4-6")).toBe(false);
   });
@@ -247,6 +248,7 @@ describe("Codex pinned native compatibility", () => {
     expect(checkHarnessCompatibility("pi", "openai/gpt-6.1-sol", { openai: "api_key" })?.code).toBe(
       "provider_auth"
     );
+    expect(getHarnessReasoningConfig("pi", "openai/gpt-5.5")).toBeUndefined();
   });
   it("accepts native max but never none or automatic ultra delegation", () => {
     expect(checkHarnessCompatibility("codex", "openai/gpt-5.6-sol", undefined, "max")).toBeNull();
