@@ -527,7 +527,8 @@ def test_boat_launcher_matches_the_control_plane_contract():
     # script waits for the launch marker, then execs the launcher.
     assert "path: BOAT_TUNNEL_ENV_FILE_PATH," in provider
     assert 'export const BOAT_LAUNCH_MARKER_PATH = "/tmp/openinspect-launch";' in lifecycle
-    assert "then exec ${BOAT_LAUNCHER_PATH}; fi" in lifecycle
+    assert "until [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; do sleep 0.2; done" in lifecycle
+    assert "`exec ${BOAT_LAUNCHER_PATH}`," in lifecycle
     assert 'ensure_link /workspace "$OI_USER_HOME/workspace"' in launcher
     assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
     assert "flock -n 9" in launcher

@@ -83,8 +83,6 @@ const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
  * keeps, so no image or restored disk can carry one.
  */
 export const BOAT_LAUNCH_MARKER_PATH = "/tmp/openinspect-launch";
-/** How long the setup script waits for the marker before giving up, in 200 ms polls. */
-const LAUNCH_MARKER_POLLS = 1500;
 /**
  * Where the runtime reads its tunnel URLs: `/workspace/.tunnels.env`, through
  * the `/workspace` link the launcher keeps into the home directory. Boat's
@@ -98,25 +96,23 @@ export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";
  * bash as the sandbox user, with the create-time env applied, the moment the
  * machine is up, so the runtime starts with the machine instead of after the
  * control plane has noticed it: the way Modal and Daytona start the runtime
- * as the container's command. It waits for the launch marker first, then
- * `exec`s the launcher, which execs into the runtime in turn, so the script
- * never returns and Boat reports it `running` for the sandbox's life; a
- * launcher that exits at once shows as `failed`, with the exit code and
- * stderr in `setupError`, and so does a marker that never arrives. A resume
- * cannot use it (it is create-time only) and starts the launcher with
- * {@link BoatSandboxLifecycle.launchRuntime} instead.
+ * as the container's command. It waits for the launch marker first, for as
+ * long as the create takes to release it, retries included: a deadline of its
+ * own could only expire while this side is still completing the create, and a
+ * sandbox whose create fails is deleted, its script with it. Then it `exec`s
+ * the launcher, which execs into the runtime in turn, so the script never
+ * returns and Boat reports it `running` for the sandbox's life; a launcher
+ * that exits at once shows as `failed`, with the exit code and stderr in
+ * `setupError`. A resume cannot use it (it is create-time only) and starts
+ * the launcher with {@link BoatSandboxLifecycle.launchRuntime} instead.
  */
 export const BOAT_SETUP_SCRIPT = [
   "#!/bin/bash",
   "# Started by Boat the moment the machine is up. The control plane writes the",
   "# launch marker once the sandbox is known private and its tunnel env file is",
   "# in the workspace, so the runtime can outrun neither.",
-  `for _ in $(seq 1 ${LAUNCH_MARKER_POLLS}); do`,
-  `  if [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; then exec ${BOAT_LAUNCHER_PATH}; fi`,
-  "  sleep 0.2",
-  "done",
-  'echo "launch marker never arrived" >&2',
-  "exit 1",
+  `until [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; do sleep 0.2; done`,
+  `exec ${BOAT_LAUNCHER_PATH}`,
   "",
 ].join("\n");
 

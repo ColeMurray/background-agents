@@ -138,8 +138,9 @@ runtime the same way Open-Inspect does on every other provider:
 2. the control plane writes the tunnel URLs to `/workspace/.tunnels.env`, then the launch marker
    (`/tmp/openinspect-launch`), so the runtime starts neither before the sandbox is known private
    nor before its tunnel file exists. Boat holds a write to a sandbox that is still starting until
-   the sandbox is ready, so both land on the disk the sandbox keeps. A port the create could not
-   route is hosted again with its own call
+   the sandbox is ready, so the tunnel file lands in the workspace, which snapshots keep, while the
+   marker, under `/tmp`, exists only for this machine's launch. A port the create could not route is
+   hosted again with its own call
 3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
    toolchain, takes a single-instance lock in `/tmp`, and execs the supervisor
    (`python -m sandbox_runtime.entrypoint`) with its output in

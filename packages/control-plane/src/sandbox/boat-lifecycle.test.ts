@@ -84,11 +84,16 @@ describe("BoatSandboxLifecycle archive", () => {
 });
 
 describe("BOAT_SETUP_SCRIPT", () => {
-  it("execs the launcher once the launch marker is there and fails if it never arrives", () => {
-    expect(BOAT_SETUP_SCRIPT).toContain(
-      `if [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; then exec ${BOAT_LAUNCHER_PATH}; fi`
+  it("waits for the launch marker as long as it takes, then execs the launcher", () => {
+    const wait = BOAT_SETUP_SCRIPT.indexOf(
+      `until [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; do sleep 0.2; done`
     );
-    expect(BOAT_SETUP_SCRIPT).toContain('echo "launch marker never arrived" >&2');
+    const exec = BOAT_SETUP_SCRIPT.indexOf(`exec ${BOAT_LAUNCHER_PATH}`);
+    expect(wait).toBeGreaterThan(-1);
+    expect(exec).toBeGreaterThan(wait);
+    // No deadline of its own: one could expire while a create is still
+    // completing its retries, and a sandbox whose create fails is deleted.
+    expect(BOAT_SETUP_SCRIPT).not.toContain("exit 1");
     // Under /tmp, which no Boat snapshot keeps: no image or restored disk can
     // carry a marker that would let a launch outrun this side.
     expect(BOAT_LAUNCH_MARKER_PATH.startsWith("/tmp/")).toBe(true);
