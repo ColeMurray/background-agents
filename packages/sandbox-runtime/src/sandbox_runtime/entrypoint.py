@@ -151,7 +151,13 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         config.repository_config(),
         log,
         warnings,
-        TunnelEnvironment(config.sandbox_id, log),
+        TunnelEnvironment(
+            config.sandbox_id,
+            log,
+            control_plane_url=config.control_plane_url,
+            session_id=config.session_id,
+            sandbox_token=config.sandbox_token,
+        ),
         RepositoryHooks(log),
         RepositorySynchronizer(config.vcs_host, log),
     )
