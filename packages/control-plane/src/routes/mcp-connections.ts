@@ -117,7 +117,9 @@ async function authorizeConnection(
   ctx: UserRouteContext
 ): Promise<Response> {
   if (!ctx.db) return error("Database not configured", 503);
-  if (!env.MCP_CONNECTION) return error("Personal MCP connections are disabled", 503);
+  if (!mcpConnectionsEnabled(env) || !env.MCP_CONNECTION) {
+    return error("Personal MCP connections are disabled", 503);
+  }
   // The body is optional: an owner who only wants to start the authorization
   // sends nothing. Anything else is parsed and validated.
   const raw = await request.text();
@@ -157,7 +159,9 @@ async function oauthCallback(
   params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  if (!env.MCP_CONNECTION) return error("Personal MCP connections are disabled", 503);
+  if (!mcpConnectionsEnabled(env) || !env.MCP_CONNECTION) {
+    return error("Personal MCP connections are disabled", 503);
+  }
   const connection = await new McpConnectionStore(ctx.db).getOwned(params.id, ctx.principal.userId);
   if (!connection) return error("MCP connection not found", 404);
   return env.MCP_CONNECTION.handleCallback(params.id, request);

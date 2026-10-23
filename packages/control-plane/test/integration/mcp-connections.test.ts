@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { env, runInDurableObject, SELF } from "cloudflare:test";
+import { createExecutionContext, env, runInDurableObject, SELF } from "cloudflare:test";
 import type { McpConnectionDO } from "../../src/cloudflare/mcp-connection-durable-object";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch, serviceRequestHeaders, sqlDatabase } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders, sqlDatabase } from "./helpers";
+import type { WorkerBindings } from "../../src/cloudflare/platform";
 import {
   D1McpOAuthStorage,
   EncryptedMcpOAuthClientProvider,
@@ -65,6 +66,23 @@ async function createRemoteServer(options?: {
   });
   expect(response.status).toBe(201);
   return response.json<McpServerMetadata>();
+}
+
+async function fetchWithMcpConnectionFlag(
+  url: string,
+  flag: string | undefined,
+  init: { method: "GET" | "POST" | "DELETE"; body?: string }
+): Promise<Response> {
+  const bindings = { ...env, MCP_CONNECTIONS_ENABLED: flag } as WorkerBindings;
+  return routeRequest(
+    new Request(url, {
+      method: init.method,
+      body: init.body,
+      headers: await serviceRequestHeaders(url, init),
+    }),
+    bindings,
+    createExecutionContext()
+  );
 }
 
 describe("personal MCP connections API", () => {
@@ -309,6 +327,43 @@ describe("personal MCP connections API", () => {
       ownerUserId: "11111111111111111111111111111111",
     });
   });
+
+  it.each(["false", "unexpected"])(
+    "blocks authorize and callback when the feature flag is %s but still permits revocation",
+    async (flag) => {
+      const server = await createRemoteServer({ name: `flag-${flag}` });
+      const staged = await serviceFetch("https://test.local/mcp-connections", {
+        method: "POST",
+        body: JSON.stringify({ serverId: server.id }),
+      });
+      const connection = await staged.json<McpConnectionMetadata>();
+      const authorizeUrl = `https://test.local/mcp-connections/${connection.id}/authorize`;
+      const callbackUrl = `https://test.local/mcp/oauth/callback/${connection.id}?code=ignored&state=ignored`;
+
+      const authorize = await fetchWithMcpConnectionFlag(authorizeUrl, flag, {
+        method: "POST",
+        body: "{}",
+      });
+      const callback = await fetchWithMcpConnectionFlag(callbackUrl, flag, { method: "GET" });
+
+      expect(authorize.status).toBe(503);
+      expect(callback.status).toBe(503);
+      await expect(authorize.json()).resolves.toEqual({
+        error: "Personal MCP connections are disabled",
+      });
+      await expect(callback.json()).resolves.toEqual({
+        error: "Personal MCP connections are disabled",
+      });
+
+      const revoked = await fetchWithMcpConnectionFlag(
+        `https://test.local/mcp-connections/${connection.id}`,
+        flag,
+        { method: "DELETE" }
+      );
+      expect(revoked.status).toBe(200);
+      await expect(revoked.json()).resolves.toEqual({ ok: true, result: "deleted" });
+    }
+  );
 
   it("returns only reviewed read-only tools from the pinned server revision", async () => {
     const server = await createRemoteServer();
