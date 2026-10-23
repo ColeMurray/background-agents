@@ -533,13 +533,16 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   }
 
   /**
-   * Deletion is a local no-op for now: Modal's only deletion surface is the
-   * experimental `image_delete` API, whose adoption is deferred until
-   * validated (#1658). The HTTP endpoint this replaced deleted nothing
-   * either, so reaped images were already retained provider-side. Callers
-   * (the image reaper and finalizer) log each attempt and outcome.
+   * Real deletion is deferred until Modal's experimental `image_delete` API
+   * is validated (#1658). Reject so the reaper retains artifact references
+   * and the finalizer quarantines artifacts that could not be persisted.
    */
-  async deleteProviderImage(): Promise<void> {}
+  async deleteProviderImage(): Promise<void> {
+    throw new SandboxProviderError(
+      "Modal image deletion is deferred pending validation (#1658)",
+      "permanent"
+    );
+  }
 
   private classifyImageBuildError(message: string, error: unknown): SandboxProviderError {
     if (error instanceof SandboxProviderError) return error;
