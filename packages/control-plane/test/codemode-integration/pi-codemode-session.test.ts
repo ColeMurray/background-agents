@@ -126,20 +126,7 @@ describe("PiSessionDO native Code Mode", () => {
       };
     });
 
-    expect(agent.modelTools).toEqual([
-      "subagent",
-      "list_agents",
-      "send_agent_message",
-      "get_last_message",
-      "follow_up_agent",
-      "cancel_agent",
-      "inspect_agents",
-      "read",
-      "ls",
-      "find",
-      "grep",
-      "codemode",
-    ]);
+    expect(agent.modelTools).toEqual(["subagent", "read", "ls", "find", "grep", "codemode"]);
     expect(agent.callableTools).toEqual(["read", "ls", "find", "grep"]);
     await expect(
       runInDurableObject(stub, (_instance, state) =>

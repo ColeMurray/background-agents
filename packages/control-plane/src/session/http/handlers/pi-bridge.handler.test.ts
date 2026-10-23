@@ -270,19 +270,3 @@ it("routes bounded same-session agent controls through active SessionDO authorit
     control: { sessionId: "session-1", action: "follow_up", conversationId: 2 },
   });
 });
-
-it("advertises agent messaging only for explicitly allowed session origins", async () => {
-  const user = harness({ spawnSource: "user" });
-  const automation = harness({ spawnSource: "automation" });
-  const request = () =>
-    new Request("http://session/internal/pi-context", {
-      method: "POST",
-      body: JSON.stringify({ mode: "bootstrap" }),
-    });
-  await expect((await user.handler.context(request())).json()).resolves.toMatchObject({
-    agentMessagingEnabled: true,
-  });
-  await expect((await automation.handler.context(request())).json()).resolves.toMatchObject({
-    agentMessagingEnabled: false,
-  });
-});

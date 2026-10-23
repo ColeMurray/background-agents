@@ -195,8 +195,6 @@ export class PiBridgeHandler {
               (repository.isPrimary ? (session?.base_branch ?? null) : null),
           })),
           skills,
-          agentMessagingEnabled:
-            session?.spawn_source === "user" || session?.spawn_source === "slack-bot",
           ...(await this.options.contextContributions?.()),
           memory: await this.renderedMemory(sessionId, request),
         }),

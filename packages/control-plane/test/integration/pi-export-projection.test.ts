@@ -72,7 +72,9 @@ describe("the Pi projection the export reads", () => {
         },
       ],
       responses: [
-        fauxAssistantMessage(fauxToolCall("list_agents", {}), { stopReason: "toolUse" }),
+        fauxAssistantMessage(fauxToolCall("read", { path: "/workspace/missing.txt" }), {
+          stopReason: "toolUse",
+        }),
         fauxAssistantMessage("there are no other agents"),
       ],
     });

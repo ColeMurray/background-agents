@@ -412,15 +412,7 @@ describe("PiSessionDO", () => {
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
       return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
     });
-    expect(tools).toEqual([
-      "subagent",
-      "list_agents",
-      "send_agent_message",
-      "get_last_message",
-      "follow_up_agent",
-      "cancel_agent",
-      "inspect_agents",
-    ]);
+    expect(tools).toEqual(["subagent"]);
   });
 
   it("does not let an early blank open poison a committed creation snapshot", async () => {
@@ -2066,12 +2058,6 @@ describe("PiSessionDO", () => {
       "repository_list",
       "repository_read",
       "subagent",
-      "list_agents",
-      "send_agent_message",
-      "get_last_message",
-      "follow_up_agent",
-      "cancel_agent",
-      "inspect_agents",
       "read",
       "ls",
       "find",
@@ -2084,7 +2070,6 @@ describe("PiSessionDO", () => {
       "open-inspect.tool-policy",
       "open-inspect",
       "open-inspect.subagent",
-      "open-inspect.agent-messaging",
       "open-inspect.workspace",
       "open-inspect.repository-overlay",
     ]);

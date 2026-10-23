@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolExecutionApi } from "@earendil-works/pi-durable";
-import {
-  createAgentMessagingExtension,
-  createOpenInspectExtension,
-  createSubagentExtension,
-} from "./open-inspect-extension";
-import type { PiAgentControlRequest } from "./open-inspect-extension";
+import { createOpenInspectExtension, createSubagentExtension } from "./open-inspect-extension";
 
 describe("createOpenInspectExtension", () => {
   it("offers replay-safe repository tools only when the session has repositories", async () => {
@@ -62,7 +57,7 @@ describe("createOpenInspectExtension", () => {
     );
   });
 
-  it("rejects a fifth active same-session subagent before creating its conversation", async () => {
+  it("rejects a fourth active subagent so parent plus children stay capped at four", async () => {
     const extension = createSubagentExtension();
     const tool = extension.tools?.find((candidate) => candidate.name === "subagent");
     if (!tool) throw new Error("Expected subagent tool");
@@ -76,7 +71,7 @@ describe("createOpenInspectExtension", () => {
             .fn()
             .mockResolvedValueOnce({ items: [] })
             .mockResolvedValueOnce({
-              items: Array.from({ length: 4 }, (_, index) => ({
+              items: Array.from({ length: 3 }, (_, index) => ({
                 id: index + 1,
                 owner: { conversationId: 1, taskId: index + 10 },
               })),
@@ -94,35 +89,5 @@ describe("createOpenInspectExtension", () => {
       })
     ).rejects.toThrow("Pi active subagent limit reached");
     expect(createConversation).not.toHaveBeenCalled();
-  });
-
-  it("gives same-session agent controls stable idempotency keys", async () => {
-    const invoke = vi.fn(async (_control: PiAgentControlRequest, _conversationId: number) => ({
-      ok: true,
-    }));
-    const extension = createAgentMessagingExtension({ invoke });
-    expect(extension.tools?.map((tool) => tool.name)).toEqual([
-      "list_agents",
-      "send_agent_message",
-      "get_last_message",
-      "follow_up_agent",
-      "cancel_agent",
-      "inspect_agents",
-    ]);
-    const followUp = extension.tools?.find((tool) => tool.name === "follow_up_agent");
-    if (!followUp) throw new Error("Expected follow_up_agent tool");
-    const api = { taskId: 7, callId: "call-1", conversationId: 1 } as ToolExecutionApi;
-    const context = { abortSignal: undefined, value: () => undefined, toString: () => "test" };
-    await followUp.execute({ conversationId: 2, content: "focus" }, api, context);
-    await followUp.execute({ conversationId: 2, content: "focus" }, api, context);
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke.mock.calls[0]?.[0]).toEqual(invoke.mock.calls[1]?.[0]);
-    expect(invoke.mock.calls[0]?.[0]).toMatchObject({
-      action: "follow_up",
-      conversationId: 2,
-      content: "focus",
-      requestId: expect.stringMatching(/^agent:[0-9a-f]{64}$/),
-    });
-    expect(invoke.mock.calls[0]?.[1]).toBe(1);
   });
 });

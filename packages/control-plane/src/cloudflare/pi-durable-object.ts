@@ -77,12 +77,9 @@ import {
   type PiRepositoryMaterializationManifest,
 } from "../pi/repository-materialization-contract";
 import {
-  createAgentMessagingExtension,
   createOpenInspectExtension,
   createSubagentExtension,
-  AGENT_MESSAGING_EXTENSION_NAME,
   SUBAGENT_EXTENSION_NAME,
-  type PiAgentControlRequest,
 } from "../pi/open-inspect-extension";
 import { skillSourceFromInstallation } from "../pi/skill-source";
 import { createManagedSkillsExtension } from "../pi/managed-skills-extension";
@@ -383,10 +380,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         invokeRepository: (tool, args, signal) => this.invokeRepositoryTool(tool, args, signal),
       });
       const delegation = createSubagentExtension();
-      const agentMessaging = createAgentMessagingExtension({
-        invoke: (control, callerConversationId, signal) =>
-          this.invokeAgentControl(control, callerConversationId as ConversationId, signal),
-      });
       let workspacePolicyDelegate: PiToolPolicyDelegate | undefined;
       const workspaceMutations = new WorkspaceMutationFifo();
       const overlay = createRegisteredPiRuntimeExtensions(
@@ -451,13 +444,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         },
       ];
       extensions.push(...overlay.extensions);
-      if (sessionContext.agentMessagingEnabled) {
-        extensions.push({
-          slot: "agent_messaging",
-          extension: agentMessaging,
-          effects: declaredEffects(agentMessaging),
-        });
-      }
       if (sessionContext.skills && sessionContext.skills.skills.length > 0) {
         const skills = await createManagedSkillsExtension([
           skillSourceFromInstallation(sessionContext.skills),
@@ -1294,9 +1280,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       if (!source) throw new Error("Pi conversation not found");
       if (source.parent || source.owner) throw new Error("Pi fork depth limit reached");
       const forkExtensions = (await conversation.agent(BACKGROUND_CONTEXT)).extensions.filter(
-        (extension) =>
-          extension.name !== SUBAGENT_EXTENSION_NAME &&
-          extension.name !== AGENT_MESSAGING_EXTENSION_NAME
+        (extension) => extension.name !== SUBAGENT_EXTENSION_NAME
       );
       const fork = await conversation.fork(
         input.entryId as EntryId,
@@ -2337,44 +2321,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       throw new Error(message);
     }
     return sandboxExecutionToolResponseSchema.parse(body);
-  }
-
-  private async invokeAgentControl(
-    control: PiAgentControlRequest,
-    callerConversationId: ConversationId,
-    signal?: AbortSignal
-  ): Promise<JsonValue> {
-    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
-    if (!sessionId) throw new Error("Pi Durable session is not initialized");
-    const caller = await (
-      await this.harness.pi()
-    ).commit((tx) => tx.conversation(callerConversationId), BACKGROUND_CONTEXT);
-    if (!caller || caller.parent || caller.owner || String(caller.id) !== ROOT_SESSION) {
-      throw new Error("Pi agent messaging is restricted to the root conversation");
-    }
-    const operationId = await this.attributedOperationId(ROOT_SESSION);
-    if (!operationId) throw new Error("Pi Durable has no attributed active operation");
-    const response = await this.env.SESSION.getByName(sessionId).fetch(
-      new Request(`http://session${SessionInternalPaths.piAgentControl}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Pi-Operation-ID": operationId,
-          ...piTraceHeader(operationId),
-        },
-        body: JSON.stringify(control),
-        signal,
-      })
-    );
-    const body = (await response.json().catch(() => null)) as JsonValue;
-    if (!response.ok) {
-      const message =
-        body && typeof body === "object" && !Array.isArray(body) && typeof body.error === "string"
-          ? body.error
-          : `Pi agent control failed (${response.status})`;
-      throw new Error(message);
-    }
-    return body;
   }
 
   /**

@@ -46,7 +46,6 @@ export const piSessionContextSchema = z.object({
     piRepositoryIdentitySchema.extend({ commitSha: fullGitObjectIdSchema.optional() })
   ),
   skills: sandboxSkillInstallationSchema.nullable(),
-  agentMessagingEnabled: z.boolean().default(false),
   /**
    * The session's pinned memory, rendered for Pi.
    *
