@@ -10,7 +10,7 @@ describe("SessionDO schema extension registry", () => {
     const migration: SchemaMigration = {
       id: 90_001,
       description: "test-owned extension",
-      feature: "externalActions",
+      feature: "coreAuthority",
       run: "CREATE TABLE test_owned_extension (id TEXT PRIMARY KEY)",
     };
 
@@ -26,7 +26,7 @@ describe("SessionDO schema extension registry", () => {
     const migration: SchemaMigration = {
       id: 90_002,
       description: "first owner",
-      feature: "externalActions",
+      feature: "coreAuthority",
       run: "CREATE TABLE first_owner (id TEXT PRIMARY KEY)",
     };
     registerSessionSchemaMigrations([migration]);

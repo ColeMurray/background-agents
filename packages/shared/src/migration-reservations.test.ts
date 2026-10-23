@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION,
-  PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
   PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION,
   PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
   PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
@@ -49,9 +48,8 @@ describe("Pi migration reservations", () => {
       PI_D1_MCP_REVIEWED_TOOLS_MIGRATION_VERSION,
       PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
       PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
-      PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
       IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
-    ]).toEqual([1, 2, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 9002, 67]);
+    ]).toEqual([1, 2, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 67]);
     expect(MIGRATION_RESERVATIONS).toEqual([
       {
         store: "pi_do",
@@ -142,12 +140,6 @@ describe("Pi migration reservations", () => {
         version: PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
         feature: "slackIngress",
         purpose: "durable Slack thread mapping projection",
-      },
-      {
-        store: "d1",
-        version: PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
-        feature: "mcp",
-        purpose: "the dormant foundation of the personal MCP lane",
       },
     ]);
     expect(() => validateMigrationReservations(MIGRATION_RESERVATIONS)).not.toThrow();
