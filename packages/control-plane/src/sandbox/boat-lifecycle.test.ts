@@ -96,6 +96,13 @@ describe("BOAT_SETUP_SCRIPT", () => {
     expect(staged).toBeGreaterThan(marker);
     expect(copy).toBeGreaterThan(staged);
     expect(exec).toBeGreaterThan(copy);
+    // A copy that fails ends the setup script non-zero instead of starting a
+    // runtime that would wait for URLs the create has already handed out.
+    const copyFailure = BOAT_SETUP_SCRIPT.indexOf(
+      'echo "tunnel env file copy failed" >&2; exit 1;'
+    );
+    expect(copyFailure).toBeGreaterThan(copy);
+    expect(copyFailure).toBeLessThan(exec);
     // The staging path is outside the home directory, which Boat's snapshot
     // mount covers; the destination is where the runtime reads the file.
     expect(BOAT_TUNNEL_ENV_STAGING_PATH.startsWith("/tmp/")).toBe(true);

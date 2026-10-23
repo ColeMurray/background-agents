@@ -108,7 +108,8 @@ const LAUNCH_MARKER_POLLS = 1500;
  * `exec`s the launcher, which execs into the runtime in turn, so the script
  * never returns and Boat reports it `running` for the sandbox's life; a
  * launcher that exits at once shows as `failed`, with the exit code and
- * stderr in `setupError`, and so does a marker that never arrives. A resume
+ * stderr in `setupError`, and so do a marker that never arrives and a tunnel
+ * env file that could not be copied into place. A resume
  * cannot use it (it is create-time only) and starts the launcher with
  * {@link BoatSandboxLifecycle.launchRuntime} instead.
  */
@@ -118,13 +119,15 @@ export const BOAT_SETUP_SCRIPT = [
   "# launch marker once the sandbox is private and its tunnel env file is",
   "# staged, so the runtime can outrun neither. The staged file is copied into",
   "# the workspace here, with the snapshot mounted over the home directory;",
-  "# written there any earlier, it would be hidden by that mount.",
+  "# written there any earlier, it would be hidden by that mount. A copy that",
+  "# fails ends the launch, as a launcher that exits at once does, rather than",
+  "# starting a runtime that would wait for URLs this side has already handed out.",
   `for _ in $(seq 1 ${LAUNCH_MARKER_POLLS}); do`,
   `  if [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; then`,
   `    if [ -f ${BOAT_TUNNEL_ENV_STAGING_PATH} ]; then`,
   `      mkdir -p "$(dirname ${BOAT_TUNNEL_ENV_FILE_PATH})" &&`,
   `        cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH} ||`,
-  '        echo "tunnel env file copy failed" >&2',
+  '        { echo "tunnel env file copy failed" >&2; exit 1; }',
   "    fi",
   `    exec ${BOAT_LAUNCHER_PATH}`,
   "  fi",
