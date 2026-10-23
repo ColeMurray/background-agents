@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Open-Inspect runtime launcher for Boat sandboxes.
 #
-# Baked into the base snapshot at /home/user/openinspect/launcher.sh and
-# started by the control plane, detached, on every boot of a session sandbox:
-# the first boot after a create and every boot after a resume (a resumed
-# sandbox runs on a fresh machine, so nothing started by hand survives). It
+# Baked into the base snapshot at /home/user/openinspect/launcher.sh. A new
+# session sandbox starts it from its create-time setup script once the machine
+# is up; the control plane starts it, detached, after every resume and for an
+# image build. A resume usually lands on a fresh machine, where nothing from
+# the previous boot survives, but one soon after the stop can get the parked
+# machine back with its runtime still running, which step 3 detects. It
 # runs as `user` with the session env Boat applies from the sandbox's
 # create-time env; nothing rides its command line. An image build's env arrives
 # as a file instead (see step 5).
@@ -16,13 +18,18 @@
 #   2. waits for the restored toolchain under /opt/openinspect, which a resumed
 #      machine copies in shortly after it reports ready;
 #   3. takes the single-instance lock, exiting EXIT_ALREADY_RUNNING when a
-#      runtime already holds it;
+#      runtime already holds it. The lock file lives in /tmp, which belongs to
+#      the machine for its whole life. The first boot takes the lock while
+#      Boat's lazy restore still serves the home directory from the snapshot;
+#      once the disk has hydrated, the same path under /home names a different
+#      file, which a second launcher would lock just as easily, starting a
+#      second runtime beside the first;
 #   4. points the runtime's cross-boot state (OPENINSPECT_STATE_DIR: the
 #      harness session id, the repository manifest with the session-start
 #      commits) at the home directory, because a Boat snapshot keeps /home but
 #      never /tmp, where that state lives on other providers. An image build
 #      (IMAGE_BUILD_MODE=true, stated by the control plane on every boot) is
-#      the exception: its lock, log and state stay under /tmp, so the disk the
+#      the exception: its log and state stay under /tmp too, so the disk the
 #      build leaves behind, which is saved as the prebuilt image, carries the
 #      workspace and nothing of the build that produced it;
 #   5. in image-build mode, loads the build's env — the repository set, the
@@ -52,7 +59,8 @@ if [[ "${IMAGE_BUILD_MODE:-}" == "true" ]]; then
 else
   OI_STATE_DIR=$OI_USER_HOME/.openinspect
 fi
-OI_LOCK_FILE=$OI_STATE_DIR/runtime.lock
+# The machine's own /tmp, never the state directory under /home (step 3).
+OI_LOCK_FILE=/tmp/openinspect-runtime.lock
 OI_BOOT_COMPLETE_MARKER=$OI_STATE_DIR/boot-complete
 OI_RUNTIME_STATE_DIR=$OI_STATE_DIR/state
 OI_SUPERVISOR_LOG=$OI_STATE_DIR/supervisor.log

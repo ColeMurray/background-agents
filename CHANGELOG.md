@@ -18,6 +18,13 @@ every boot waited 30 seconds for a file it could not see before running `start.s
 URLs. The create now stages the file under `/tmp` and the setup script copies it into the workspace
 before the launcher starts.
 
+**One runtime per Boat sandbox after a quick resume.** A resume soon after a stop can get the parked
+machine back with its runtime still running. The launcher's single-instance lock lived under the
+home directory, which Boat remounts when a lazy restore finishes, so the resumed launcher did not
+see the lock the first boot held and started a second runtime. The two then took turns on the
+session's connection every few seconds, and a turn could be reported complete twice. The lock now
+lives in `/tmp`, so the resumed launcher finds the runtime running and leaves it be.
+
 ## October 22, 2026
 
 **Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A

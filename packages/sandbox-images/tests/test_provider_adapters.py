@@ -531,6 +531,13 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert 'ensure_link /workspace "$OI_USER_HOME/workspace"' in launcher
     assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
     assert "flock -n 9" in launcher
+    # The lock guards one machine, so it lives in that machine's /tmp. The first
+    # boot takes it while Boat's lazy restore still serves the home directory;
+    # once the disk has hydrated, the same path under /home names a different
+    # file, and a resumed launcher on the parked machine would start a second
+    # runtime beside the first.
+    assert "OI_LOCK_FILE=/tmp/openinspect-runtime.lock" in launcher
+    assert 'exec 9>"$OI_LOCK_FILE"' in launcher
     assert "export RESTORED_FROM_SNAPSHOT=true" in launcher
     # The runtime, not the launcher, records a completed boot (constants.py).
     constants = (ROOT / "packages/sandbox-runtime/src/sandbox_runtime/constants.py").read_text()

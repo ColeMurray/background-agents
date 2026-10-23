@@ -19,10 +19,12 @@ the base snapshot, plus the launcher it bakes in.
   (written once the sandbox is private and its tunnel env file is staged under `/tmp`), copies that
   file to `/workspace/.tunnels.env`, and execs it; the control plane starts it again, detached, on
   every resume. It links `/workspace` and `/app` into the home directory (the part of the disk a
-  Boat snapshot saves), waits for the restored toolchain, holds a single-instance lock (exit 75
-  means a runtime is already running), picks the boot mode from the completed-boot marker the
-  runtime writes (`OI_BOOT_COMPLETE_MARKER`), and execs `python -m sandbox_runtime.entrypoint` with
-  its output in `/home/user/.openinspect/supervisor.log`.
+  Boat snapshot saves), waits for the restored toolchain, holds a single-instance lock in `/tmp`,
+  which the remount that ends Boat's lazy restore never touches (exit 75 means a runtime is already
+  running, as when a resume gets the parked machine back), picks the boot mode from the
+  completed-boot marker the runtime writes (`OI_BOOT_COMPLETE_MARKER`), and execs
+  `python -m sandbox_runtime.entrypoint` with its output in
+  `/home/user/.openinspect/supervisor.log`.
 
 The snapshot runs nothing of its own. On every sandbox create the control plane passes the
 per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, auth token, user secrets — as create-time

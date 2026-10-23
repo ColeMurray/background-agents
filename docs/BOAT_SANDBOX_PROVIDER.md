@@ -145,7 +145,7 @@ runtime the same way Open-Inspect does on every other provider:
    the workspace because Boat mounts the snapshot over the home directory while the machine comes
    up, which hides anything written there earlier; `/tmp` is outside the snapshot
 3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
-   toolchain, takes a single-instance lock, and execs the supervisor
+   toolchain, takes a single-instance lock in `/tmp`, and execs the supervisor
    (`python -m sandbox_runtime.entrypoint`) with its output in
    `/home/user/.openinspect/supervisor.log`. The supervisor records a completed boot in
    `/home/user/.openinspect/boot-complete`; a later launch that finds that file boots in restored
@@ -213,12 +213,15 @@ Open-Inspect drives the lifecycle through the shared lifecycle manager, treating
 - Before the TTL lapses, the control plane drains the session and stops the sandbox itself; a
   sandbox that reaches its TTL is archived by Boat the same way.
 - The next prompt **resumes** the archived sandbox on a new machine (or the same one within about
-  ten minutes of the stop) and starts the runtime again. A sandbox whose earlier boot completed
-  resumes in restored mode, so the checkout is kept and `setup.sh` does not run twice; one whose
-  boot was interrupted before the harness came up boots fresh again. The hosted URLs stay the same
-  across a stop and resume, and so do the code-server and VNC passwords: the control plane keeps the
-  create-time credentials of a retained sandbox, so rotating `BOAT_API_KEY` does not lock existing
-  sessions out.
+  ten minutes of the stop) and starts the runtime again. On the same machine the earlier runtime is
+  still running, so the launcher finds its lock taken, exits at once, and that runtime carries on.
+  The lock lives in `/tmp` because the first boot takes it while Boat's lazy restore still serves
+  the home directory; once the disk has hydrated, a lock file there would be a different file that a
+  second launcher could take as well. A sandbox whose earlier boot completed resumes in restored
+  mode, so the checkout is kept and `setup.sh` does not run twice; one whose boot was interrupted
+  before the harness came up boots fresh again. The hosted URLs stay the same across a stop and
+  resume, and so do the code-server and VNC passwords: the control plane keeps the create-time
+  credentials of a retained sandbox, so rotating `BOAT_API_KEY` does not lock existing sessions out.
 - Boat keeps a stopped sandbox's disk for **14 days**. After that, and when Boat has lost the
   sandbox, the next prompt spawns a fresh sandbox instead.
 - Only sandboxes that fail before becoming usable, or are being replaced, are **deleted**.
