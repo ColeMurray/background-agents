@@ -43,6 +43,7 @@ export interface McpSessionBridge {
    */
   callTool(request: {
     connectionId: string;
+    ownerUserId: string;
     toolName: string;
     arguments: Record<string, unknown>;
   }): Promise<unknown>;
@@ -81,8 +82,8 @@ export interface McpSessionBridge {
     reasonCode: string;
     occurredAt: number;
   }): Promise<void>;
-  /** The human actor whose turn the current operation belongs to. */
-  operationActor(operationId: string): string | null;
+  /** The current canonical author and whether the operation is unattended. */
+  operationAuthor(operationId: string): { userId: string; unattended: boolean } | null;
   /** Re-read the turn author's current authority before every operation. */
   authorMayAct(operationId: string): Promise<boolean>;
   /**
@@ -170,7 +171,16 @@ export class McpSessionHandler {
         { status: 403 }
       );
     }
-    const grants = await bridge.grants();
+    const author = bridge.operationAuthor(operationId);
+    if (!author) {
+      return Response.json(
+        { error: "The originating turn has no canonical author" },
+        { status: 403 }
+      );
+    }
+    const grants = author.unattended
+      ? []
+      : (await bridge.grants()).filter((grant) => grant.ownerUserId === author.userId);
     const shared = await bridge.sharedServers();
     return Response.json(
       {
@@ -220,10 +230,14 @@ export class McpSessionHandler {
         { status: 403 }
       );
     }
-    const actorId = bridge.operationActor(operationId);
-    if (!actorId) {
-      return Response.json({ error: "The originating turn has no human actor" }, { status: 403 });
+    const author = bridge.operationAuthor(operationId);
+    if (!author) {
+      return Response.json(
+        { error: "The originating turn has no canonical author" },
+        { status: 403 }
+      );
     }
+    const actorId = author.userId;
     if (!(await this.authorMayAct(operationId))) {
       return Response.json(
         { error: "The originating turn's author may no longer act on this session" },
@@ -340,8 +354,28 @@ export class McpSessionHandler {
     }
 
     const connectionId = parsed.data.connectionId ?? "";
+    if (author.unattended) {
+      await bridge.audit({
+        requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
+        actorUserId: actorId,
+        connectionId,
+        toolName: parsed.data.toolName,
+        outcome: "refused",
+        reasonCode: "mcp_personal_unattended_denied",
+        occurredAt: Date.now(),
+      });
+      return Response.json(
+        {
+          error: "Personal MCP is unavailable to unattended operations",
+          code: "mcp_personal_unattended_denied",
+        },
+        { status: 403 }
+      );
+    }
     const grants = await bridge.grants();
-    const grant = grants.find((entry) => entry.connectionId === connectionId);
+    const grant = grants.find(
+      (entry) => entry.connectionId === connectionId && entry.ownerUserId === actorId
+    );
     if (!grant) {
       await bridge.audit({
         requestId: request.headers.get("X-Request-ID") ?? crypto.randomUUID(),
@@ -383,6 +417,7 @@ export class McpSessionHandler {
     try {
       content = await bridge.callTool({
         connectionId: connectionId,
+        ownerUserId: actorId,
         toolName: parsed.data.toolName,
         arguments: parsed.data.arguments,
       });

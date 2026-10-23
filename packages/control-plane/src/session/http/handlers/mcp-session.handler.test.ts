@@ -6,6 +6,7 @@ function harness(
     sessionCapability?: "off" | "read_only" | "enabled";
     liveMode?: "off" | "read_only" | "enabled";
     actorId?: string | null;
+    unattended?: boolean;
     authorMayAct?: boolean;
     sharedServers?: Array<{ serverId: string; serverName: string; toolNames: string[] }>;
     sharedResult?: unknown;
@@ -46,7 +47,10 @@ function harness(
     grants: async () => grants,
     callTool,
     audit,
-    operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
+    operationAuthor: () => {
+      const userId = options.actorId === undefined ? "user-1" : options.actorId;
+      return userId ? { userId, unattended: options.unattended ?? false } : null;
+    },
     sharedServers: vi.fn(async () =>
       options.sharedServers === undefined
         ? []
@@ -107,6 +111,7 @@ describe("McpSessionHandler", () => {
     });
     expect(h.callTool).toHaveBeenCalledWith({
       connectionId: "mcpconn_1",
+      ownerUserId: "user-1",
       toolName: "search",
       arguments: { query: "open inspect" },
     });
@@ -146,6 +151,63 @@ describe("McpSessionHandler", () => {
     expect(h.audit).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "refused", reasonCode: "mcp_connection_not_granted" })
     );
+  });
+
+  it("lists only personal pins owned by the active canonical turn author", async () => {
+    const h = harness({
+      actorId: "user-2",
+      grants: [
+        {
+          id: "pin-1",
+          connectionId: "mcpconn_1",
+          serverName: "Docs",
+          endpointHost: "mcp.example.com",
+          toolNames: ["search"],
+          sessionId: "session-1",
+          createdAt: 1_000,
+          ownerUserId: "user-1",
+        },
+      ],
+    });
+
+    const response = await h.handler.list(
+      new Request("http://session/internal/pi-mcp/list", {
+        headers: { "X-Pi-Operation-ID": "operation-1" },
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ pins: [] });
+  });
+
+  it("refuses a personal pin owned by anyone other than the active canonical turn author", async () => {
+    const h = harness({ actorId: "user-2" });
+
+    const response = await h.handler.read(readRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "mcp_connection_not_granted",
+    });
+    expect(h.callTool).not.toHaveBeenCalled();
+  });
+
+  it("fails unattended personal MCP closed before the credential broker", async () => {
+    const h = harness({ actorId: "user-1", unattended: true });
+
+    const list = await h.handler.list(
+      new Request("http://session/internal/pi-mcp/list", {
+        headers: { "X-Pi-Operation-ID": "operation-1" },
+      })
+    );
+    const response = await h.handler.read(readRequest());
+
+    await expect(list.json()).resolves.toMatchObject({ pins: [] });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "mcp_personal_unattended_denied",
+    });
+    expect(h.callTool).not.toHaveBeenCalled();
   });
 
   it("refuses a tool that is not part of the reviewed catalog", async () => {
@@ -214,6 +276,18 @@ describe("McpSessionHandler", () => {
     expect(h.audit).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "refused", reasonCode: "mcp_tool_failed" })
     );
+  });
+
+  it("keeps a credential echoed in a broker failure out of the response and audit", async () => {
+    const credential = "integration-access-token";
+    const h = harness({ failure: credential });
+
+    const response = await h.handler.read(readRequest());
+    const body = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(body).not.toContain(credential);
+    expect(JSON.stringify(h.audit.mock.calls)).not.toContain(credential);
   });
 
   it("refuses a grant list with no active operation", async () => {

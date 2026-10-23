@@ -264,7 +264,10 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
         const broker = env.MCP_CONNECTION;
         if (!broker) throw new Error("MCP connections are not enabled for this deployment");
         const pins = await new McpSessionPinStore(db).listForSession(getPublicSessionId());
-        const pin = pins.find((entry) => entry.connectionId === request.connectionId);
+        const pin = pins.find(
+          (entry) =>
+            entry.connectionId === request.connectionId && entry.ownerUserId === request.ownerUserId
+        );
         if (!pin) throw new Error("This MCP connection is not granted to the session");
         // The pin is an input to this decision, not the decision. The server's
         // scope, its enabled flag and its current reviewed catalogue are read
@@ -291,7 +294,11 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
       audit: async (input) => {
         await new McpReadAuditStore(db).write({ ...input, sessionId: getPublicSessionId() });
       },
-      operationActor: (operationId) => messageRepository.getMessageCanonicalActor(operationId),
+      operationAuthor: (operationId) => {
+        const actor = messageRepository.getMessageActor(operationId);
+        const userId = messageRepository.getMessageCanonicalActor(operationId);
+        return actor && userId ? { userId, unattended: actor.kind !== "user" } : null;
+      },
       authorMayAct: turnAuthorMayAct,
     },
     getSessionId: getPublicSessionId,
