@@ -82,6 +82,9 @@ const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
  */
 const BOAT_SANDBOX_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
+/** Boat's web dashboard; a sandbox's page is a query on it (buildBoatSandboxDashboardUrl). */
+const BOAT_DASHBOARD_URL = "https://boat.dev/dashboard";
+
 /** Idempotent create attempts after a lost response. */
 const CREATE_ATTEMPTS = 3;
 
@@ -265,6 +268,19 @@ export async function boatIdempotencyKey(
 /** The display name a sandbox carries in Boat's dashboard: the deployment and the logical id. */
 export function boatSandboxName(deploymentName: string, sandboxId: string): string {
   return `openinspect-${deploymentName}-${sandboxId}`.slice(0, BOAT_MAX_NAME_CHARS);
+}
+
+/**
+ * A sandbox's detail page on Boat's dashboard: the Sandboxes tab with the
+ * sandbox selected by id, the link the dashboard itself pushes when a row is
+ * opened. The dashboard scopes the list to the organization selected in it, so
+ * an organization-billed sandbox opens once that organization is selected.
+ */
+export function buildBoatSandboxDashboardUrl(
+  providerObjectId: string | null | undefined
+): string | null {
+  if (!providerObjectId) return null;
+  return `${BOAT_DASHBOARD_URL}?tab=sandboxes&sandbox=${encodeURIComponent(providerObjectId)}`;
 }
 
 /** Refuse a Boat sandbox id before it is persisted or interpolated anywhere. */

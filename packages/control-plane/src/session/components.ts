@@ -463,11 +463,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sockets: lifecycleSockets,
     canResumeAfterStop: () => providerResumesAfterStop(sandboxProvider),
     getLogger: () => accessLog,
-    sandboxDashboardUrlBuilder:
-      sandboxBackend === "modal" || sandboxBackend === "modal-vm"
-        ? (providerObjectId) =>
-            resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
-        : undefined,
+    sandboxDashboardUrlBuilder: (providerObjectId) =>
+      resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId),
   });
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
