@@ -332,6 +332,20 @@ describe("applyMigrations", () => {
     expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_id TEXT");
   });
 
+  it("adds sandbox.active_socket_attached_at for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("active_socket_attached_at INTEGER");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 57);
+    expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_attached_at INTEGER");
+  });
+
+  it("adds sandbox.instance_reserved_at for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("instance_reserved_at INTEGER");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 58);
+    expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN instance_reserved_at INTEGER");
+  });
+
   it("adds sandbox boot phase and fencing columns for fresh and migrated DOs", () => {
     expect(SCHEMA_SQL).toContain("boot_phase TEXT");
     expect(SCHEMA_SQL).toContain("boot_seq INTEGER");

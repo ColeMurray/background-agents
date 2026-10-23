@@ -804,3 +804,43 @@ class TestOversizedEvents:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestUnacknowledgedMessageIds:
+    @pytest.mark.asyncio
+    async def test_covers_in_flight_and_buffered_terminals_until_acknowledged(self):
+        """A reconnecting bridge must still name a prompt whose result may be
+        in flight on the connection that died, or waiting for the next one."""
+        forwarder = make_forwarder()
+
+        release_failure = asyncio.Event()
+        old_ws = MagicMock()
+        old_ws.state = State.OPEN
+
+        async def wedged_send(data):
+            await release_failure.wait()
+            raise ConnectionError("connection timed out")
+
+        old_ws.send = wedged_send
+        await forwarder.bind(old_ws)
+        send_task = asyncio.create_task(
+            forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
+        )
+        await asyncio.sleep(0)  # in flight on old_ws
+        forwarder.unbind()
+        await forwarder.send({"type": "execution_complete", "messageId": "msg-2"})  # buffered
+        await forwarder.send({"type": "token", "messageId": "msg-3", "content": "x"})
+
+        assert forwarder.unacknowledged_message_ids("execution_complete") == ["msg-1", "msg-2"]
+
+        new_ws = open_ws()
+        await forwarder.bind(new_ws)
+        release_failure.set()
+        await send_task
+        # The failed send drained msg-1 through the new connection after msg-2.
+        assert forwarder.unacknowledged_message_ids("execution_complete") == ["msg-2", "msg-1"]
+
+        assert forwarder.acknowledge("execution_complete:msg-1") is True
+        assert forwarder.unacknowledged_message_ids("execution_complete") == ["msg-2"]
+        assert forwarder.acknowledge("execution_complete:msg-2") is True
+        assert forwarder.unacknowledged_message_ids("execution_complete") == []

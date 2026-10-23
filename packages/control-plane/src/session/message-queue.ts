@@ -46,6 +46,8 @@ import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
 import type { MessageFailureService } from "./message-failure-service";
+import { interruptionMessage } from "./interruption-messages";
+import type { SandboxStateReader } from "./sandbox-ports";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
@@ -62,6 +64,22 @@ import type {
 
 const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const STUCK_PROCESSING_ERROR = "Execution timed out (stuck processing)";
+
+/**
+ * Whether a processing prompt was dispatched before `boundaryMs`: the
+ * reservation of the current sandbox instance (`sandbox.instance_reserved_at`)
+ * or the accept of the current bridge socket. Dispatch, reservation and
+ * accept all read this control plane's clock, and a dispatch targets only an
+ * instance and socket that already exist, so an earlier `started_at` proves
+ * the prompt went to a runtime since replaced. A prompt with no recorded
+ * dispatch time proves nothing.
+ */
+export function dispatchedBefore(
+  prompt: { started_at: number | null },
+  boundaryMs: number | null | undefined
+): boolean {
+  return prompt.started_at !== null && boundaryMs != null && prompt.started_at < boundaryMs;
+}
 
 type EnqueueAutofixResponse = Extract<
   GitHubAutofixSessionResponse,
@@ -175,7 +193,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly sandboxState: SandboxStateReader
   ) {}
 
   async enqueueAutofix(
@@ -421,6 +440,8 @@ export class SessionMessageQueue {
     if (currentSession.budget_exhausted === 1) {
       return;
     }
+    // A processing prompt blocks dispatch only while a runtime can finish it.
+    await this.reconcileProcessingMessage();
     if (this.messageRepository.getProcessingMessage()) {
       this.log.debug("processMessageQueue: already processing, returning");
       return;
@@ -430,7 +451,6 @@ export class SessionMessageQueue {
     if (!message) {
       return;
     }
-    const now = Date.now();
     const session = this.repository.getSession();
     const harness = getValidHarnessOrDefault(session?.harness);
     const resolvedModel = resolveHarnessModel(harness, message.model || session?.model);
@@ -448,6 +468,9 @@ export class SessionMessageQueue {
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
+    // Read after the lookup: `started_at` orders this dispatch against the
+    // generation and socket it targets, so it must not predate either.
+    const now = Date.now();
     if (!this.mayDispatch()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
@@ -664,6 +687,55 @@ export class SessionMessageQueue {
     if (!this.failMessage(message, error, Date.now(), "pending")) return;
     this.broadcastPromptQueue();
     await this.sessionStatus.reconcileAfterExecution(false);
+  }
+
+  /**
+   * Fail a processing prompt that no runtime will finish, and report whether
+   * one was failed. A prompt dispatched before the current sandbox instance
+   * was reserved (`instance_reserved_at`: advanced by a spawn or a snapshot
+   * restore, kept by an in-place resume of the same sandbox and bridge) went
+   * to a sandbox since replaced. When the bridge reports the prompt it still
+   * owes a result for (`activeMessageId`: the one it runs, else the newest
+   * whose terminal event is unacknowledged; null for none), a prompt it does
+   * not name that was dispatched before the current socket was accepted went
+   * to a runtime process that is gone. A prompt dispatched on the current
+   * socket is never judged by that report: on a reconnect the bridge sends
+   * `ready` before it reads any command on the new socket, and on a first
+   * connect a prompt it received while booting is in its report. The socket's
+   * accept time is persisted with its identity, so a hibernation or restart
+   * between the accept and the report does not lose it. A restarted runtime
+   * reports no owner only after it has contained whatever its vendor session
+   * still ran for its predecessor, so the prompt dispatched next does not
+   * share an execution with the failed one.
+   */
+  async reconcileProcessingMessage(activeMessageId?: string | null): Promise<boolean> {
+    const processing = this.messageRepository.getProcessingMessageWithStartedAt();
+    if (!processing) return false;
+    const instanceReservedAt = this.sandboxState.getSandbox()?.instance_reserved_at ?? null;
+    const socketAttachedAt = this.wsManager.sandboxSocketAttachedAt();
+    let reason: "sandbox_replaced" | "runtime_restarted";
+    if (dispatchedBefore(processing, instanceReservedAt)) {
+      reason = "sandbox_replaced";
+    } else if (
+      activeMessageId !== undefined &&
+      activeMessageId !== processing.id &&
+      dispatchedBefore(processing, socketAttachedAt)
+    ) {
+      reason = "runtime_restarted";
+    } else {
+      return false;
+    }
+    this.log.warn("prompt.orphaned", {
+      event: "prompt.orphaned",
+      message_id: processing.id,
+      reason,
+      started_at_ms: processing.started_at,
+      instance_reserved_at_ms: instanceReservedAt,
+      socket_attached_at_ms: socketAttachedAt,
+      runtime_active_message_id: activeMessageId ?? null,
+    });
+    await this.failStuckProcessingMessage(interruptionMessage(reason));
+    return true;
   }
 
   /**

@@ -131,6 +131,10 @@ class OpencodeHarness:
             return False
         return await self.client.request_stop(self.session_id, reason="command")
 
+    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
+        """The server outlives a bridge process: stop what it still runs for one."""
+        return await self.stop_execution(timeout_seconds)
+
     async def stop_execution(self, timeout_seconds: float) -> bool:
         """Abort, then require the server's independent idle observation."""
         deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)

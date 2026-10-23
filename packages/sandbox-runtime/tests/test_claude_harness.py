@@ -652,6 +652,25 @@ class TestReconnectPolicy:
         assert h.clients[1].options["resume"] == h.harness.session_id
 
     @pytest.mark.asyncio
+    async def test_resume_containment_does_not_spend_the_reconnect_budget(
+        self, tmp_path: Path
+    ) -> None:
+        """The bridge contains every resumed session before ``ready``. The SDK
+        child belongs to this process, so there is nothing to contain and the
+        session keeps its full budget of three reconnects."""
+        h = Harness(tmp_path, turns=[[_result(0.1)] for _ in range(5)])
+        await h.harness.open()
+        await h.harness.create_session()
+        assert await h.harness.contain_inherited_execution(15.0) is True
+        assert h.harness._needs_reconnect is False
+
+        await _run(h.harness)
+        for _ in range(3):
+            h.harness._needs_reconnect = True
+            _, outcome = await _run(h.harness)
+            assert outcome.success is True, outcome.error
+
+    @pytest.mark.asyncio
     async def test_reconnect_budget_is_three_per_session(self, tmp_path: Path) -> None:
         h = Harness(tmp_path, turns=[[_result(0.1)] for _ in range(6)])
         await h.harness.open()

@@ -610,6 +610,12 @@ class CodexHarness:
                 return True
         return False
 
+    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
+        # Nothing to contain: the app-server this process opened is its own and
+        # carries nothing of a predecessor's. Stopping it here would only make
+        # the first prompt spawn, initialize and authenticate another.
+        return True
+
     async def stop_execution(self, timeout_seconds: float) -> bool:
         # Never wait for the open/authentication lock before containing a process.
         # Invalidating the epoch also fences late login and refresh callbacks.

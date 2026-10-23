@@ -556,6 +556,10 @@ class ClaudeHarness:
         # interrupt would stall every later command; bound it like cleanup.
         return await self._interrupt_within_budget()
 
+    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
+        """Nothing to contain: the SDK child this process starts carries nothing of a predecessor."""
+        return True
+
     async def stop_execution(self, timeout_seconds: float) -> bool:
         """Contain the SDK-owned Claude child, escalating to disconnect.
 

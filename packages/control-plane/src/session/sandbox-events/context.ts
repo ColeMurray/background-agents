@@ -13,8 +13,12 @@ export interface SandboxEventContext {
   now: number;
   /** `event.messageId ?? processingMessage?.id ?? null`, resolved once. */
   messageId: string | null;
-  /** The processing message as of event arrival (single DO turn — stable). */
-  processingMessage: { id: string } | null;
+  /**
+   * The processing message as of event arrival (single DO turn — stable),
+   * with the clock reading of its dispatch; `started_at` is null only on
+   * rows written outside the dispatch path.
+   */
+  processingMessage: { id: string; started_at: number | null } | null;
 }
 
 /**

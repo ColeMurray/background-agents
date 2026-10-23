@@ -222,6 +222,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
+  active_socket_attached_at INTEGER,                -- When that socket was accepted, by the control plane's clock
+  instance_reserved_at INTEGER,                     -- When modal_sandbox_id was reserved: set by spawn and restore, kept by an in-place resume
   boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
@@ -758,6 +760,16 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Add active_socket_attached_at to sandbox",
+    run: "ALTER TABLE sandbox ADD COLUMN active_socket_attached_at INTEGER",
+  },
+  {
+    id: 58,
+    description: "Add instance_reserved_at to sandbox",
+    run: "ALTER TABLE sandbox ADD COLUMN instance_reserved_at INTEGER",
   },
 ];
 

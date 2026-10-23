@@ -15,6 +15,7 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxStateReader } from "./sandbox-ports";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
@@ -169,6 +170,9 @@ function buildQueue(
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
     listPromptQueue: vi.fn(() => []),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
+    getProcessingMessageWithStartedAt: vi.fn(
+      () => null as { id: string; started_at: number | null } | null
+    ),
     getMessageContent: vi.fn(() => null as string | null),
     getMessageAwaitingStopConfirmation: vi.fn(() => awaitingStop),
     clearMessageAwaitingStopConfirmation: vi.fn((messageId: string) => {
@@ -189,7 +193,7 @@ function buildQueue(
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => ({
       messageId: event.messageId,
       messageCreatedAt: 1000,
-      messageStartedAt: 1100,
+      messageStartedAt: 1100 as number | null,
       completedAt,
       status: "failed" as const,
     })),
@@ -212,6 +216,12 @@ function buildQueue(
       return socket ? { kind: "dispatch", socket } : { kind: "unavailable" };
     }),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
+    sandboxSocketAttachedAt: vi.fn((): number | null => null),
+  };
+  const sandboxState = {
+    getSandbox: vi.fn(
+      (): { created_at: number; instance_reserved_at: number | null } | null => null
+    ),
   };
 
   const participantService = {
@@ -306,7 +316,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    sandboxState as unknown as SandboxStateReader
   );
 
   return {
@@ -315,6 +326,7 @@ function buildQueue(
     repository,
     attachmentRepository,
     wsManager,
+    sandboxState,
     participantService,
     broadcast,
     sessionStatus,
@@ -459,7 +471,11 @@ describe("SessionMessageQueue", () => {
         sandboxId: "sb",
         timestamp: 2,
       },
-      { now: 2000, messageId: "msg-finishing", processingMessage: { id: "msg-finishing" } }
+      {
+        now: 2000,
+        messageId: "msg-finishing",
+        processingMessage: { id: "msg-finishing", started_at: 1_100 },
+      }
     );
     await h.queue.processMessageQueue();
     try {
@@ -2615,5 +2631,220 @@ describe("SessionMessageQueue", () => {
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("SessionMessageQueue processing prompt reconciliation", () => {
+  const INSTANCE_RESERVED_AT = 10_000;
+
+  /** A processing prompt whose claim is released once it is recorded as failed. */
+  function withProcessingPrompt(h: ReturnType<typeof buildQueue>, startedAt: number | null) {
+    h.sandboxState.getSandbox.mockReturnValue({
+      created_at: INSTANCE_RESERVED_AT,
+      instance_reserved_at: INSTANCE_RESERVED_AT,
+    });
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
+    h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "msg-running",
+      started_at: startedAt,
+    });
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-running",
+      created_at: 5_000,
+    });
+    h.repository.recordMessageCompletion.mockImplementation((event, completedAt) => {
+      h.repository.getProcessingMessage.mockReturnValue(null);
+      h.repository.getProcessingMessageWithStartedAt.mockReturnValue(null);
+      return {
+        messageId: event.messageId,
+        messageCreatedAt: 5_000,
+        messageStartedAt: startedAt,
+        completedAt,
+        status: "failed" as const,
+      };
+    });
+  }
+
+  function expectFailed(h: ReturnType<typeof buildQueue>, error: string, reason: string) {
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-running", success: false, error }),
+      expect.any(Number),
+      "processing"
+    );
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
+    expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "prompt.orphaned",
+      expect.objectContaining({ message_id: "msg-running", reason })
+    );
+  }
+
+  it("fails a prompt dispatched to a replaced sandbox instance and dispatches the next one", async () => {
+    const h = buildQueue();
+    withProcessingPrompt(h, INSTANCE_RESERVED_AT - 1);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expectFailed(h, "The sandbox running this prompt was replaced.", "sandbox_replaced");
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "msg-next",
+      expect.any(Number),
+      expect.objectContaining({ type: "user_message", messageId: "msg-next" })
+    );
+  });
+
+  it("keeps a prompt dispatched to the current sandbox instance", async () => {
+    const h = buildQueue();
+    withProcessingPrompt(h, INSTANCE_RESERVED_AT);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+  });
+
+  it("keeps a prompt across an in-place resume, which advances the generation but not the instance", async () => {
+    const h = buildQueue();
+    withProcessingPrompt(h, INSTANCE_RESERVED_AT + 1_000);
+    h.sandboxState.getSandbox.mockReturnValue({
+      created_at: INSTANCE_RESERVED_AT + 60_000,
+      instance_reserved_at: INSTANCE_RESERVED_AT,
+    });
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+  });
+
+  it("keeps a prompt when the row predates the instance stamp", async () => {
+    const h = buildQueue();
+    withProcessingPrompt(h, INSTANCE_RESERVED_AT - 1);
+    h.sandboxState.getSandbox.mockReturnValue({
+      created_at: INSTANCE_RESERVED_AT,
+      instance_reserved_at: null,
+    });
+
+    await expect(h.queue.reconcileProcessingMessage()).resolves.toBe(false);
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+  });
+
+  it("keeps a prompt whose dispatch time is unknown", async () => {
+    const h = buildQueue();
+    withProcessingPrompt(h, null);
+
+    await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(false);
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+  });
+
+  it("keeps a prompt when the sandbox row is gone", async () => {
+    const h = buildQueue();
+    withProcessingPrompt(h, INSTANCE_RESERVED_AT - 1);
+    h.sandboxState.getSandbox.mockReturnValue(null);
+
+    await expect(h.queue.reconcileProcessingMessage()).resolves.toBe(false);
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+  });
+
+  describe("with the bridge's report of the prompt it holds", () => {
+    const SOCKET_ATTACHED_AT = 25_000;
+
+    it("fails a prompt dispatched before the socket attached that the bridge does not hold", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+
+      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(true);
+
+      expectFailed(
+        h,
+        "The sandbox runtime restarted while this prompt was running.",
+        "runtime_restarted"
+      );
+    });
+
+    it("treats a different held prompt the same as none", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+
+      await expect(h.queue.reconcileProcessingMessage("msg-other")).resolves.toBe(true);
+    });
+
+    it("keeps the prompt the bridge holds", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+
+      await expect(h.queue.reconcileProcessingMessage("msg-running")).resolves.toBe(false);
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("never judges a prompt dispatched on the current socket by the report", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+
+      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(false);
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("keeps the prompt when the socket's attach time is unknown", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(null);
+
+      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(false);
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("keeps the prompt without a report, whatever the socket boundary says", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+
+      await expect(h.queue.reconcileProcessingMessage()).resolves.toBe(false);
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("names the replaced instance when both boundaries apply", async () => {
+      const h = buildQueue();
+      withProcessingPrompt(h, INSTANCE_RESERVED_AT - 1);
+      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+
+      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(true);
+
+      expectFailed(h, "The sandbox running this prompt was replaced.", "sandbox_replaced");
+    });
+  });
+
+  it("stamps the dispatch with the clock read after the provider lookup", async () => {
+    vi.useFakeTimers({ now: 50_000 });
+    try {
+      const h = buildQueue();
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.getProviderAuthenticationError.mockImplementation(async () => {
+        // A generation reserved during the lookup must not postdate the dispatch.
+        vi.setSystemTime(60_000);
+        return null;
+      });
+
+      await h.queue.processMessageQueue();
+
+      expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+        "msg-next",
+        60_000,
+        expect.objectContaining({ type: "user_message", messageId: "msg-next" })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

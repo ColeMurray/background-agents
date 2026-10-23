@@ -203,6 +203,17 @@ export const sandboxRowSchema = z.object({
    * `''` once revoked, NULL only on rows that predate persisted identities.
    */
   active_socket_id: z.string().nullable(),
+  /**
+   * When that socket was accepted, by the control plane's clock. NULL while
+   * no socket holds dispatch authority and on rows that predate the column.
+   */
+  active_socket_attached_at: z.number().nullable(),
+  /**
+   * When the row's `modal_sandbox_id` was reserved: a spawn or a snapshot
+   * restore sets it with `created_at`, an in-place resume keeps it. NULL on
+   * rows that predate the column.
+   */
+  instance_reserved_at: z.number().nullable(),
   /** JSON `SandboxBootPhase` the runtime last reported while booting; NULL once ready. */
   boot_phase: z.string().nullable(),
   /** Sequence number of that report, so a resend after a reconnect is recognised. */

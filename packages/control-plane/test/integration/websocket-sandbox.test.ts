@@ -794,8 +794,8 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       content: "Finish once",
       source: "web",
       status: "processing",
-      createdAt: 100,
-      startedAt: 200,
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_000,
     });
     const { ws } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,

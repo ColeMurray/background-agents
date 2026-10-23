@@ -156,6 +156,10 @@ class ScriptedHarness:
         self.session_id = session_id
         self.prompts: list[HarnessPrompt] = []
         self.abort_calls = 0
+        self.stop_execution_calls = 0
+        self.stop_execution_result = True
+        self.contain_calls = 0
+        self.contain_result = True
         self.opened = False
         self.closed = False
 
@@ -191,6 +195,14 @@ class ScriptedHarness:
     async def abort(self) -> bool:
         self.abort_calls += 1
         return True
+
+    async def stop_execution(self, timeout_seconds: float) -> bool:
+        self.stop_execution_calls += 1
+        return self.stop_execution_result
+
+    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
+        self.contain_calls += 1
+        return self.contain_result
 
 
 __all__ = [

@@ -767,3 +767,30 @@ async def test_turn_ending_without_completion_keeps_recorded_native_error(
     else:
         assert fallback in outcome.error
         assert errors == []
+
+
+async def test_resume_containment_keeps_the_app_server_this_process_opened(tmp_path):
+    """The bridge contains every resumed session before ``ready``. The app-server
+    it would contain was started by this process moments ago, so containment
+    must leave it alone or the first prompt spawns, initializes and
+    authenticates a second one."""
+
+    def reply(method, params):
+        if method in {"thread/start", "thread/resume"}:
+            return {"thread": {"id": "thread"}}
+        return {"account": {"type": "apiKey"}}
+
+    harness, client = build(tmp_path)
+    client.request.side_effect = reply
+    await harness.create_session()
+    await harness.close()
+
+    resumed, client = build(tmp_path)
+    client.request.side_effect = reply
+    factory = resumed._factory
+    await resumed.open()
+    assert await resumed.resume_session("thread") is True
+    assert await resumed.contain_inherited_execution(15.0) is True
+    await resumed.create_session()
+
+    assert factory.call_count == 1

@@ -177,7 +177,8 @@ export class SandboxRepository {
     providerObjectId: string | null
   ): "failed" | "retained" | "superseded" {
     const assignments = `modal_object_id = ?, fenced = 1, startup_rejected = 1,
-         auth_token_hash = '', auth_token = NULL, active_socket_id = ''`;
+         auth_token_hash = '', auth_token = NULL, active_socket_id = '',
+         active_socket_attached_at = NULL`;
     const identity = `id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ?`;
     const args = [providerObjectId, generation.sandboxId, generation.createdAt];
@@ -279,7 +280,8 @@ export class SandboxRepository {
    */
   fenceSandboxGeneration(): void {
     this.sql.exec(
-      `UPDATE sandbox SET auth_token_hash = '', auth_token = NULL, active_socket_id = '', fenced = 1
+      `UPDATE sandbox SET auth_token_hash = '', auth_token = NULL, active_socket_id = '',
+         active_socket_attached_at = NULL, fenced = 1
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
@@ -297,6 +299,7 @@ export class SandboxRepository {
       `UPDATE sandbox SET
          status = ?,
          created_at = ?,
+         instance_reserved_at = ?,
          last_heartbeat = NULL,
          auth_token_hash = '',
          auth_token = NULL,
@@ -311,34 +314,40 @@ export class SandboxRepository {
          ttyd_token = NULL,
          runtime_version = NULL,
          active_socket_id = '',
+         active_socket_attached_at = NULL,
          boot_phase = NULL,
          boot_seq = NULL,
          fenced = 0, startup_rejected = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
+      data.createdAt,
       data.modalSandboxId
     );
   }
 
   /**
-   * Make `socketId` the socket the session dispatches to; every earlier
-   * socket loses authority. `active_socket_id` is three-valued: a tag id,
-   * `''` for revoked (no socket matches, see `revokeActiveSocketId` and the
-   * spawn reservation above), and NULL only on rows that predate persisted
-   * identities.
+   * Make `socketId` the socket the session dispatches to, accepted at
+   * `attachedAt`; every earlier socket loses authority. `active_socket_id`
+   * is three-valued: a tag id, `''` for revoked (no socket matches, see
+   * `revokeActiveSocketId` and the spawn reservation above), and NULL only on
+   * rows that predate persisted identities. The attach time is persisted with
+   * the identity so that it, too, survives hibernation and restarts.
    */
-  setActiveSocketId(socketId: string): void {
+  setActiveSocketId(socketId: string, attachedAt: number): void {
     this.sql.exec(
-      `UPDATE sandbox SET active_socket_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      socketId
+      `UPDATE sandbox SET active_socket_id = ?, active_socket_attached_at = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      socketId,
+      attachedAt
     );
   }
 
   /** Leave the session with no authoritative bridge socket until the next accept. */
   revokeActiveSocketId(): void {
     this.sql.exec(
-      `UPDATE sandbox SET active_socket_id = '' WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+      `UPDATE sandbox SET active_socket_id = '', active_socket_attached_at = NULL
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
 

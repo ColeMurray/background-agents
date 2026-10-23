@@ -82,7 +82,7 @@ export class SessionSandboxEventProcessor {
     this.log[level]("sandbox.event.received", fields);
     const startedAt = performance.now();
     try {
-      const processingMessage = this.messageRepository.getProcessingMessage();
+      const processingMessage = this.messageRepository.getProcessingMessageWithStartedAt();
       const context: SandboxEventContext = {
         now,
         messageId: eventMessageId ?? processingMessage?.id ?? null,

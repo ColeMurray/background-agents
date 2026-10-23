@@ -111,6 +111,17 @@ const nonArtifactSandboxEventSchemas = [
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
     preservationProtocolVersion: z.literal(1).optional(),
+    /**
+     * The prompt the runtime still owes a result for as it reports ready: the
+     * one it is running, else the newest whose terminal event the control
+     * plane has not acknowledged (it may still be in flight on the socket
+     * that died). Null for none, which a restarted process reports only after
+     * it has stopped whatever the vendor session still ran for its
+     * predecessor. Absent from runtimes that predate the field. On a
+     * reconnect it tells a process that still owes a prompt's result from a
+     * restarted one that lost it.
+     */
+    activeMessageId: z.string().min(1).nullable().optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   sandboxEventBaseSchema.extend({

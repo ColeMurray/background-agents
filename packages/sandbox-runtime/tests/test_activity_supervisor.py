@@ -225,3 +225,64 @@ async def test_ordinary_stop_does_not_replace_shutdown_override() -> None:
 
     await asyncio.wait_for(wait_for_terminal(), timeout=0.1)
     assert events[0]["error"] == "sandbox_lifetime_expiring"
+
+
+@pytest.mark.asyncio
+async def test_current_prompt_message_id_follows_the_held_prompt() -> None:
+    events: list[dict] = []
+    release = asyncio.Event()
+
+    async def prompt() -> dict:
+        await release.wait()
+        return {"type": "execution_complete", "messageId": "message-1", "success": True}
+
+    supervisor = make_supervisor(events)
+    assert supervisor.current_prompt_message_id is None
+
+    supervisor.start_prompt("message-1", prompt)
+    assert supervisor.current_prompt_message_id == "message-1"
+
+    release.set()
+
+    async def wait_for_terminal() -> None:
+        while not events:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_terminal(), timeout=0.1)
+    assert supervisor.current_prompt_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_finished_prompt_is_owed_until_the_forwarder_takes_its_terminal() -> None:
+    events: list[dict] = []
+    release_send = asyncio.Event()
+
+    async def send(event: dict) -> None:
+        await release_send.wait()
+        events.append(event)
+
+    supervisor = ActivitySupervisor(
+        send_event=send,
+        prompt_finished=lambda: None,
+        refresh_diff=lambda _message_id: None,
+        log=MagicMock(),
+    )
+
+    async def prompt() -> dict:
+        return {"type": "execution_complete", "messageId": "message-1", "success": True}
+
+    supervisor.start_prompt("message-1", prompt)
+    await asyncio.wait_for(supervisor.current_prompt_task, timeout=1)
+
+    # The prompt is no longer current, but its result has not left this process.
+    assert supervisor.current_prompt_message_id is None
+    assert supervisor.undelivered_terminal_message_ids() == ["message-1"]
+
+    release_send.set()
+
+    async def wait_for_handoff() -> None:
+        while supervisor.undelivered_terminal_message_ids():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_handoff(), timeout=0.1)
+    assert [event["messageId"] for event in events] == ["message-1"]

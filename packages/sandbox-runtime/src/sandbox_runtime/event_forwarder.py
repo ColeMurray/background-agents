@@ -287,6 +287,19 @@ class BufferedEventForwarder:
             self._ws = None
         ws.transport.abort()
 
+    def unacknowledged_message_ids(self, event_type: str) -> list[str]:
+        """Message ids of ``event_type`` events the control plane has not acknowledged.
+
+        Sent and awaiting an ack (possibly in flight on a connection that
+        died), then buffered for the next connection; oldest first, each once.
+        """
+        ids: dict[str, None] = {}
+        for event in [*self._pending_acks.values(), *self._event_buffer]:
+            message_id = event.get("messageId")
+            if event.get("type") == event_type and isinstance(message_id, str):
+                ids.setdefault(message_id, None)
+        return list(ids)
+
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.
 

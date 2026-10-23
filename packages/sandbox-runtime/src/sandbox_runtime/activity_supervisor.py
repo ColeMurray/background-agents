@@ -53,11 +53,26 @@ class ActivitySupervisor:
         self._prompts: dict[asyncio.Task[Event], _PromptActivity] = {}
         self._push_lock = asyncio.Lock()
         self._pushes: dict[asyncio.Task[Event], _PushActivity] = {}
-        self._deliveries: set[asyncio.Task[None]] = set()
+        self._deliveries: dict[asyncio.Task[None], Event] = {}
 
     @property
     def current_prompt_task(self) -> asyncio.Task[Event] | None:
         return self._current_prompt.task if self._current_prompt is not None else None
+
+    @property
+    def current_prompt_message_id(self) -> str | None:
+        """The prompt this process holds, tracked from receipt; None when idle."""
+        return self._current_prompt.message_id if self._current_prompt is not None else None
+
+    def undelivered_terminal_message_ids(self) -> list[str]:
+        """Prompts whose terminal event is scheduled but not yet handed to the forwarder, oldest first."""
+        return [
+            event["messageId"]
+            for task, event in self._deliveries.items()
+            if not task.done()
+            and event.get("type") == "execution_complete"
+            and isinstance(event.get("messageId"), str)
+        ]
 
     @property
     def push_tasks(self) -> tuple[asyncio.Task[Event], ...]:
@@ -205,10 +220,10 @@ class ActivitySupervisor:
                 self._refresh_diff(refresh_message_id)
 
         task = asyncio.create_task(deliver())
-        self._deliveries.add(task)
+        self._deliveries[task] = event
 
         def finish(completed: asyncio.Task[None]) -> None:
-            self._deliveries.discard(completed)
+            self._deliveries.pop(completed, None)
             if not completed.cancelled() and (error := completed.exception()) is not None:
                 self._log.error("bridge.activity_delivery_error", exc=error)
 

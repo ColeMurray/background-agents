@@ -135,6 +135,10 @@ class OpeningHarness(ScriptedHarness):
         self.session_id = persisted_id
         return True
 
+    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
+        self.calls.append("contain")
+        return await super().contain_inherited_execution(timeout_seconds)
+
 
 def _bridge(tmp_path, monkeypatch, *, factory=None, early_connect=True) -> AgentBridge:
     bridge = AgentBridge(
@@ -188,13 +192,85 @@ class TestHarnessAttach:
 
         await bridge.boot_attach._relay_boot_events()
 
-        assert calls == ["open", "resume:oc-persisted", "signing", "ready"]
+        assert calls == ["open", "resume:oc-persisted", "contain", "signing", "ready"]
         assert bridge.harness is harness
         assert bridge.boot_attach._boot_ready.is_set()
         ready = bridge._send_event.await_args.args[0]
         assert ready["opencodeSessionId"] == "oc-persisted"
         assert ready["harness"] == "opencode"
         assert bridge.session_id_file.read_text() == "oc-persisted"
+
+    async def test_a_session_this_process_starts_is_not_contained(self, tmp_path, monkeypatch):
+        calls: list[str] = []
+        harness = OpeningHarness(calls)
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        bridge.git_signing.initialize = AsyncMock(
+            side_effect=lambda _author: calls.append("signing")
+        )
+        bridge._send_event = AsyncMock(side_effect=lambda event: calls.append(event["type"]))
+        _write_lines(HARNESS_COMPLETED)
+
+        await bridge.boot_attach._relay_boot_events()
+
+        assert calls == ["open", "signing", "ready"]
+
+    async def test_a_resumed_session_that_stays_busy_keeps_the_bridge_from_ready(
+        self, tmp_path, monkeypatch
+    ):
+        """After a bridge crash the server may still run the old prompt; a bridge
+        that cannot stop it must not report ready, or the queue would dispatch
+        into that execution. Attempts repeat within the budget, then the cause
+        is recorded for the supervisor and the bridge exits for good."""
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.RESUMED_EXECUTION_CONTAINMENT_BUDGET_SECONDS", 0.0
+        )
+        calls: list[str] = []
+        harness = OpeningHarness(calls)
+        harness.contain_result = False
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        bridge.session_id_file.write_text("oc-persisted")
+        bridge._send_event = AsyncMock(side_effect=lambda event: calls.append(event["type"]))
+        _connect_quiet(bridge, monkeypatch)
+        _write_lines(HARNESS_COMPLETED)
+
+        with pytest.raises(bridge_module.ResumedExecutionUncontainedError, match="oc-persisted"):
+            await asyncio.wait_for(bridge.run(), timeout=2)
+
+        assert calls == ["open", "resume:oc-persisted", "contain"]
+        assert harness.closed
+        assert bridge.harness is None
+        assert not bridge.boot_attach._boot_ready.is_set()
+        assert isinstance(
+            bridge_module.ResumedExecutionUncontainedError("x"), bridge_module.HarnessStartError
+        )
+        assert "oc-persisted" in fatal_path.read_text()
+        assert _run_complete(bridge) == ("harness_start_failed", 1)
+
+    async def test_containment_is_retried_within_its_budget(self, tmp_path, monkeypatch):
+        """A server mid-tool-call may need a moment to honour the abort."""
+        monkeypatch.setattr("sandbox_runtime.bridge.RESUMED_EXECUTION_CONTAINMENT_SECONDS", 0.0)
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.RESUMED_EXECUTION_CONTAINMENT_RETRY_DELAY_SECONDS", 0.0
+        )
+        calls: list[str] = []
+        harness = OpeningHarness(calls)
+        outcomes = iter([False, False, True])
+
+        async def contain(_timeout: float) -> bool:
+            calls.append("contain")
+            return next(outcomes)
+
+        harness.contain_inherited_execution = contain  # type: ignore[method-assign]
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        bridge.session_id_file.write_text("oc-persisted")
+        bridge._send_event = AsyncMock(side_effect=lambda event: calls.append(event["type"]))
+        _write_lines(HARNESS_COMPLETED)
+
+        await bridge.boot_attach._relay_boot_events()
+
+        assert calls == ["open", "resume:oc-persisted", "contain", "contain", "contain", "ready"]
 
     async def test_registry_harness_is_built_only_at_attach(self, tmp_path, monkeypatch):
         build = MagicMock(return_value=ScriptedHarness())
@@ -430,6 +506,123 @@ class TestConnectSnapshot:
         await bridge._connect_and_run()
 
         assert [event["type"] for event in ws.sent] == ["ready"]
+        assert ws.sent[0]["activeMessageId"] is None
+
+    async def test_ready_names_the_prompt_the_process_holds(self, tmp_path, monkeypatch):
+        """A reconnect lets the control plane keep the prompt this process still runs."""
+        harness = OpeningHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        _write_lines(HARNESS_COMPLETED)
+        bridge.event_forwarder.send = AsyncMock()
+        await bridge.boot_attach._relay_boot_events()
+        bridge._send_event = AsyncMock(return_value=True)
+        release = asyncio.Event()
+
+        async def held_prompt() -> dict:
+            await release.wait()
+            return {"type": "execution_complete", "messageId": "msg-held", "success": True}
+
+        bridge.activity.start_prompt("msg-held", held_prompt)
+        self._connect(bridge, monkeypatch)
+
+        await bridge._connect_and_run()
+
+        ready_events = [
+            call.args[0]
+            for call in bridge._send_event.await_args_list
+            if call.args[0]["type"] == "ready"
+        ]
+        assert [event["activeMessageId"] for event in ready_events] == ["msg-held"]
+        release.set()
+        await asyncio.wait_for(bridge.activity.current_prompt_task, timeout=1)
+
+    async def test_ready_names_a_finished_prompt_until_its_result_is_acknowledged(
+        self, tmp_path, monkeypatch
+    ):
+        """A result the control plane has not acknowledged may still be in flight
+        on the socket that died; the reconnect must not disown that prompt."""
+        harness = OpeningHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        _write_lines(HARNESS_COMPLETED)
+        bridge.event_forwarder.send = AsyncMock()
+        await bridge.boot_attach._relay_boot_events()
+        bridge.event_forwarder.send = bridge.event_forwarder.__class__.send.__get__(
+            bridge.event_forwarder
+        )
+
+        async def finished_prompt() -> dict:
+            return {"type": "execution_complete", "messageId": "msg-done", "success": True}
+
+        bridge.activity.start_prompt("msg-done", finished_prompt)
+        await asyncio.wait_for(bridge.activity.current_prompt_task, timeout=1)
+
+        # No connection: the terminal is buffered for the next one.
+        async def buffered() -> None:
+            while not bridge.event_forwarder.unacknowledged_message_ids("execution_complete"):
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(buffered(), timeout=1)
+        assert bridge._build_ready_event()["activeMessageId"] == "msg-done"
+
+        ws = FakeWs()
+        await bridge.event_forwarder.bind(ws)
+        assert [event["type"] for event in ws.sent] == ["execution_complete"]
+        assert bridge._build_ready_event()["activeMessageId"] == "msg-done"
+
+        assert bridge.event_forwarder.acknowledge("execution_complete:msg-done") is True
+        assert bridge._build_ready_event()["activeMessageId"] is None
+
+    async def test_ready_names_a_prompt_that_finishes_while_the_reconnect_flushes(
+        self, tmp_path, monkeypatch
+    ):
+        """The prompt's terminal is selected but not yet handed to the forwarder
+        when the flushed backlog lets ``ready`` go out; it must still be named."""
+        harness = OpeningHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        _write_lines(HARNESS_COMPLETED)
+        bridge.event_forwarder.send = AsyncMock()
+        await bridge.boot_attach._relay_boot_events()
+        bridge.event_forwarder.send = bridge.event_forwarder.__class__.send.__get__(
+            bridge.event_forwarder
+        )
+        # Something the reconnect will flush before it reports ready.
+        await bridge._send_event({"type": "token", "messageId": "msg-x", "content": "…"})
+        finish = asyncio.Event()
+
+        async def prompt() -> dict:
+            await finish.wait()
+            return {"type": "execution_complete", "messageId": "msg-x", "success": True}
+
+        bridge.activity.start_prompt("msg-x", prompt)
+        await asyncio.sleep(0)
+        flushing = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowFlushWs(FakeWs):
+            async def send(self, data: str) -> None:
+                flushing.set()
+                await release.wait()
+                await super().send(data)
+
+        ws = SlowFlushWs()
+        monkeypatch.setattr(
+            "sandbox_runtime.bridge.websockets.connect",
+            lambda *_args, **_kwargs: ConnectionContext(ws),
+        )
+        run = asyncio.create_task(bridge._connect_and_run())
+        await asyncio.wait_for(flushing.wait(), timeout=1)
+        finish.set()  # the prompt completes while the flush is blocked
+        await asyncio.wait_for(bridge.activity.current_prompt_task, timeout=1)
+        release.set()
+        await asyncio.wait_for(run, timeout=1)
+
+        types = [event["type"] for event in ws.sent]
+        assert "ready" in types and "execution_complete" in types
+        for event in ws.sent:
+            if event["type"] == "execution_complete":
+                break
+            if event["type"] == "ready":
+                assert event["activeMessageId"] == "msg-x"
 
     async def test_nothing_relayed_while_booting_is_buffered(self, tmp_path, monkeypatch):
         """A warning with nowhere to go is held by the relay, not buffered."""

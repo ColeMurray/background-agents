@@ -4,9 +4,9 @@ import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
-import type { SessionMessageQueue } from "../message-queue";
+import { dispatchedBefore, type SessionMessageQueue } from "../message-queue";
 import type { SessionMessenger } from "../messenger";
-import type { SandboxRuntimeFacts } from "../sandbox-ports";
+import type { SandboxRuntimeFacts, SandboxStateReader } from "../sandbox-ports";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
@@ -27,7 +27,7 @@ import { sandboxBootPhaseLogFields } from "../../sandbox/boot-phase";
 export class SandboxRuntimeEventHandler {
   constructor(
     private readonly repository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRuntimeFacts,
+    private readonly sandboxRepository: SandboxRuntimeFacts & SandboxStateReader,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
@@ -39,7 +39,10 @@ export class SandboxRuntimeEventHandler {
     private readonly refreshSlackActivity: (messageId: string, timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly backgroundTasks: BackgroundTasks,
-    private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
+    private readonly messageQueue: Pick<
+      SessionMessageQueue,
+      "processMessageQueue" | "reconcileProcessingMessage"
+    >,
     private readonly log: Logger,
     private readonly lifecycle: SandboxReadiness
   ) {}
@@ -49,12 +52,18 @@ export class SandboxRuntimeEventHandler {
     // A quiet tool call may emit no events for longer than the inactivity
     // timeout. While its message is processing, the bridge heartbeat proves
     // the sandbox is still occupied and should renew its activity timestamp.
-    if (context.processingMessage !== null) {
+    // A prompt dispatched to a sandbox instance this one replaced occupies
+    // no runtime: it renews nothing, and the next queue pump fails it.
+    const processing = context.processingMessage;
+    if (
+      processing !== null &&
+      !dispatchedBefore(processing, this.sandboxRepository.getSandbox()?.instance_reserved_at)
+    ) {
       this.updateLastActivity(context.now);
       // The same proof drives Slack's assistant-thread indicator, which Slack
       // clears two minutes after the last update. Refreshing it from here, and
       // not from a timer, is what keeps it from outliving the turn it claims.
-      this.refreshSlackActivity(context.processingMessage.id, context.now);
+      this.refreshSlackActivity(processing.id, context.now);
     }
   }
 
@@ -86,14 +95,25 @@ export class SandboxRuntimeEventHandler {
 
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (
-      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
-    ) {
-      return;
-    }
-    this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
-      name: "message_queue.process",
-    });
+    const becameReady = this.lifecycle.onRuntimeReady(
+      context.now,
+      event.harness,
+      event.preservationProtocolVersion
+    );
+    // The bridge names the prompt it still owes a result for. A processing
+    // prompt no runtime will finish is failed in the background, and the
+    // queue is woken for the prompts behind it even when this readiness is a
+    // reconnect; neither sits in front of the readiness publication below.
+    this.backgroundTasks.submit(
+      async () => {
+        const orphanFailed = await this.messageQueue.reconcileProcessingMessage(
+          event.activeMessageId
+        );
+        if (becameReady || orphanFailed) await this.messageQueue.processMessageQueue();
+      },
+      { name: "message_queue.process" }
+    );
+    if (!becameReady) return;
     // Armed last: the bridge does not resend `ready` unless it reconnects, so
     // the readiness commit and its publication must not sit behind a fallible
     // step. The arm itself is best-effort — an alarm is always pending while

@@ -655,6 +655,15 @@ export async function openSandboxWs(
  * Waits out the (always-failing) test spawn first so its status write can't
  * clobber the seeded status.
  */
+/**
+ * How long before the test the fixture sandbox was reserved. Tests seed
+ * prompts that have been processing for a while, and a processing prompt
+ * cannot predate its sandbox instance: the queue fails one that does as
+ * orphaned. Short enough to stay inside every spawn cooldown and watchdog
+ * window measured from `created_at`.
+ */
+const FIXTURE_GENERATION_AGE_MS = 10_000;
+
 export async function seedSandboxAuth(
   stub: DurableObjectStub,
   opts: { authToken: string; sandboxId: string; status?: SandboxStatus }
@@ -667,11 +676,13 @@ export async function seedSandboxAuth(
     // Shutdown-aware tests seed their matching generation explicitly.
     state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
-      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?",
+      "UPDATE sandbox SET auth_token = ?, auth_token_hash = ?, modal_sandbox_id = ?, status = ?, created_at = ?, instance_reserved_at = ?",
       opts.authToken,
       tokenHash,
       opts.sandboxId,
-      opts.status ?? "ready"
+      opts.status ?? "ready",
+      Date.now() - FIXTURE_GENERATION_AGE_MS,
+      Date.now() - FIXTURE_GENERATION_AGE_MS
     );
   });
 }
@@ -692,10 +703,12 @@ export async function seedSandboxAuthHash(
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.sql.exec("DELETE FROM sandbox_preservation");
     state.storage.sql.exec(
-      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?",
+      "UPDATE sandbox SET auth_token_hash = ?, auth_token = NULL, modal_sandbox_id = ?, status = ?, created_at = ?, instance_reserved_at = ?",
       tokenHash,
       opts.sandboxId,
-      opts.status ?? "ready"
+      opts.status ?? "ready",
+      Date.now() - FIXTURE_GENERATION_AGE_MS,
+      Date.now() - FIXTURE_GENERATION_AGE_MS
     );
   });
 }

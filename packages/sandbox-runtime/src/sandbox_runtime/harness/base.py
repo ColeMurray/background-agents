@@ -165,6 +165,18 @@ class AgentHarness(Protocol):
         """
         ...
 
+    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
+        """Stop whatever a session this process did not start may still run.
+
+        Called once a persisted session resumed, before the bridge reports
+        ready. ``True`` confirms that nothing an earlier bridge process started
+        is still executing in the vendor this harness talks to. A harness whose
+        vendor process is a child this process starts itself reaches nothing of
+        a predecessor through that child, so it returns ``True`` without side
+        effects.
+        """
+        ...
+
 
 @runtime_checkable
 class HarnessProcessOwner(Protocol):

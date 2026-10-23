@@ -110,12 +110,18 @@ function createMockRepository() {
 
   const repo = {
     getSandbox,
-    setActiveSocketId: (socketId: string) => {
+    setActiveSocketId: (socketId: string, attachedAt: number) => {
       // Like the UPDATE it stands in for: nothing to write without a row.
-      if (sandboxRow) sandboxRow.active_socket_id = socketId;
+      if (sandboxRow) {
+        sandboxRow.active_socket_id = socketId;
+        sandboxRow.active_socket_attached_at = attachedAt;
+      }
     },
     revokeActiveSocketId: () => {
-      if (sandboxRow) sandboxRow.active_socket_id = "";
+      if (sandboxRow) {
+        sandboxRow.active_socket_id = "";
+        sandboxRow.active_socket_attached_at = null;
+      }
     },
     getWsClientMapping: (wsId: string) => mappings.get(wsId) ?? null,
     hasWsClientMapping: (wsId: string) => mappings.has(wsId),
@@ -205,6 +211,8 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    active_socket_attached_at: null,
+    instance_reserved_at: null,
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
@@ -310,6 +318,24 @@ describe("SessionWebSocketManagerImpl", () => {
       const tags = sockets.get(ws)!;
       expect(tags).toContain("sandbox");
       expect(tags).toContain("sid:sandbox-abc");
+    });
+
+    it("persists when the accepted socket attached, and clears it with the socket's authority", () => {
+      const { manager, mockRepo } = createManager();
+      const row = createSandboxRow("sandbox-abc");
+      mockRepo.setSandbox(row);
+      expect(manager.sandboxSocketAttachedAt()).toBeNull();
+      const before = Date.now();
+
+      manager.acceptAndSetSandboxSocket(createFakeWebSocket(), "sandbox-abc");
+
+      expect(row.active_socket_attached_at).not.toBeNull();
+      expect(row.active_socket_attached_at!).toBeGreaterThanOrEqual(before);
+      expect(manager.sandboxSocketAttachedAt()).toBe(row.active_socket_attached_at);
+
+      manager.detachSandboxSocket(1000, "done");
+
+      expect(manager.sandboxSocketAttachedAt()).toBeNull();
     });
 
     it("accepts with only sandbox tag when no sandboxId", () => {

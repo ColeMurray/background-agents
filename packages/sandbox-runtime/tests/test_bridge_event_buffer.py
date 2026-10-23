@@ -39,6 +39,9 @@ class MockHttpClient:
     async def get(self, url: str, timeout: float = 10.0) -> Any:
         if self.get_responses:
             return self.get_responses.pop(0)
+        if url.endswith("/session/status"):
+            # An idle server: a resumed session has nothing left to contain.
+            return MockResponse(200, {})
         return MockResponse(200, [])
 
     async def aclose(self):

@@ -468,7 +468,7 @@ describe("sandbox state retention", () => {
         const { manager, sandbox } = realLifecycleHarness(instance, durableState, provider, {
           socket: {} as WebSocket,
         });
-        sandbox.setActiveSocketId("live-bridge");
+        sandbox.setActiveSocketId("live-bridge", Date.now());
         await sandbox.updateSandboxAccess("codeServer", "https://preview.test", "preview-secret");
         const before = sandbox.getSandbox()!;
         if (trigger === "fatal")

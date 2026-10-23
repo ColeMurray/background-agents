@@ -275,7 +275,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 1000,
-      startedAt: Date.now() - 500,
+      startedAt: Date.now(),
     });
 
     const processingHeartbeat = await stub.fetch("http://internal/internal/sandbox-event", {
@@ -371,7 +371,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 1000,
-      startedAt: Date.now() - 500,
+      startedAt: Date.now(),
     });
 
     const res = await stub.fetch("http://internal/internal/sandbox-event", {
@@ -414,7 +414,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 1000,
-      startedAt: Date.now() - 500,
+      startedAt: Date.now(),
     });
     const postEvent = (event: Record<string, unknown>) =>
       stub.fetch("http://internal/internal/sandbox-event", {
@@ -468,7 +468,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 1000,
-      startedAt: Date.now() - 500,
+      startedAt: Date.now(),
     });
     const postEvent = (event: Record<string, unknown>) =>
       stub.fetch("http://internal/internal/sandbox-event", {
@@ -531,7 +531,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 1000,
-      startedAt: Date.now() - 500,
+      startedAt: Date.now(),
     });
     await seedMessage(stub, {
       id: queuedId,
@@ -627,7 +627,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 1000,
-      startedAt: Date.now() - 500,
+      startedAt: Date.now(),
     });
 
     await stub.fetch("http://internal/internal/sandbox-event", {
@@ -671,7 +671,7 @@ describe("POST /internal/sandbox-event", () => {
       source: "web",
       status: "processing",
       createdAt: Date.now() - 2000,
-      startedAt: Date.now() - 1000,
+      startedAt: Date.now(),
     });
 
     const queuedMsgId = "msg-queued";

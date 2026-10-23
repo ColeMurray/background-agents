@@ -16,7 +16,9 @@ function createProcessor() {
   const sandboxSocket = {} as WebSocket;
   const log = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const repository = {
-    getProcessingMessage: vi.fn<() => { id: string } | null>(() => null),
+    getProcessingMessageWithStartedAt: vi.fn<
+      () => { id: string; started_at: number | null } | null
+    >(() => null),
   };
   const wsManager = {
     getSandboxSocket: vi.fn<() => WebSocket | null>(() => sandboxSocket),
@@ -159,7 +161,10 @@ describe("SessionSandboxEventProcessor event diagnostics", () => {
 
   it("uses resolved message attribution and bounds oversized metadata", async () => {
     const h = createProcessor();
-    h.repository.getProcessingMessage.mockReturnValue({ id: "fallback-message" });
+    h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+      id: "fallback-message",
+      started_at: 1_000,
+    });
     await h.processor.processSandboxEvent({
       type: "snapshot_ready",
       sandboxId: "s".repeat(1000),
@@ -204,7 +209,7 @@ describe("SessionSandboxEventProcessor event diagnostics", () => {
   ])("logs receipt and attribution failure for $event.type", async ({ event, messageId }) => {
     const h = createProcessor();
     const failure = new TypeError("secret-persisted-row-detail");
-    h.repository.getProcessingMessage.mockImplementationOnce(() => {
+    h.repository.getProcessingMessageWithStartedAt.mockImplementationOnce(() => {
       throw failure;
     });
 
@@ -218,7 +223,7 @@ describe("SessionSandboxEventProcessor event diagnostics", () => {
     };
     expect(h.log.info).toHaveBeenCalledWith("sandbox.event.received", expected);
     expect(h.log.info.mock.invocationCallOrder[0]).toBeLessThan(
-      h.repository.getProcessingMessage.mock.invocationCallOrder[0]
+      h.repository.getProcessingMessageWithStartedAt.mock.invocationCallOrder[0]
     );
     expect(h.log.error).toHaveBeenCalledWith("sandbox.event.processing_failed", {
       ...expected,

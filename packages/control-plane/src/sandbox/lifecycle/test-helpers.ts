@@ -103,6 +103,8 @@ export function createMockSandbox(
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    active_socket_attached_at: null,
+    instance_reserved_at: null,
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
@@ -187,6 +189,7 @@ export function createMockStorage(
       sandbox.auth_token_hash = "";
       sandbox.auth_token = null;
       sandbox.active_socket_id = "";
+      sandbox.active_socket_attached_at = null;
       return failed ? "failed" : "retained";
     }),
     commitProviderStartup: vi.fn((generation, providerObjectId, allowFailedSelfHeal) => {
@@ -214,6 +217,7 @@ export function createMockStorage(
         sandbox.startup_rejected = 0;
         sandbox.fenced = 0;
         sandbox.created_at = data.createdAt;
+        sandbox.instance_reserved_at = data.createdAt;
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;
         sandbox.last_heartbeat = null;
@@ -344,6 +348,7 @@ export function createMockStorage(
         sandbox.auth_token_hash = "";
         sandbox.auth_token = null;
         sandbox.active_socket_id = "";
+        sandbox.active_socket_attached_at = null;
         sandbox.fenced = 1;
       }
     }),

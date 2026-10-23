@@ -1,4 +1,4 @@
-/** User-facing text for a prompt interrupted by a shutdown; reasons are internal codes. */
+/** User-facing text for a prompt its runtime will not finish; reasons are internal codes. */
 const INTERRUPTION_MESSAGES: Record<string, string> = {
   heartbeat_timeout: "The sandbox stopped responding.",
   prompt_dispatch_send_failed: "The sandbox stopped responding.",
@@ -8,6 +8,9 @@ const INTERRUPTION_MESSAGES: Record<string, string> = {
   fatal_runtime_error: "The sandbox runtime failed.",
   inactivity_timeout: "The sandbox was stopped after a period of inactivity.",
   sandbox_lifetime_expiring: "The sandbox reached its maximum lifetime.",
+  // Found by reconciliation, not a shutdown: `SessionMessageQueue.reconcileProcessingMessage`.
+  sandbox_replaced: "The sandbox running this prompt was replaced.",
+  runtime_restarted: "The sandbox runtime restarted while this prompt was running.",
 };
 
 /** What a prompt interrupted for `reason` reports to its author. */
