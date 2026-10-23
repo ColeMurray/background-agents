@@ -78,6 +78,20 @@ describe("PiControlHandler", () => {
     expect((await h.handler.handle(request())).status).toBe(202);
     expect(h.runtime.control).toHaveBeenCalledOnce();
   });
+  it("re-reads a duplicate receipt when completion races message projection", async () => {
+    const h = fixture();
+    expect((await h.handler.handle(request())).status).toBe(202);
+    h.recordHumanControl.mockImplementationOnce(() => {
+      h.receipts.complete("request-1", "completed", undefined, Date.now());
+      return { conflict: false, deduplicated: true };
+    });
+
+    const replay = await h.handler.handle(request());
+
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({ state: "completed" });
+    expect(h.runtime.control).toHaveBeenCalledOnce();
+  });
   it("fails mutation controls closed for archived and exhausted sessions", async () => {
     expect((await fixture({ status: "archived" }).handler.handle(request())).status).toBe(409);
     expect((await fixture({ budget_exhausted: 1 }).handler.handle(request())).status).toBe(409);

@@ -180,10 +180,14 @@ export class PiControlHandler {
       );
     }
     if (!admission.created) {
-      if (receipt.state !== "processing")
+      // Completion may race the duplicate between admission and message
+      // projection. Re-read the durable receipt instead of returning the
+      // stale snapshot captured by admit().
+      const current = this.receipts.get(control.requestId) ?? receipt;
+      if (current.state !== "processing")
         return Response.json(
-          { requestId: receipt.requestId, state: receipt.state, result: receipt.result },
-          { status: receipt.state === "accepted" ? 202 : 200 }
+          { requestId: current.requestId, state: current.state, result: current.result },
+          { status: current.state === "accepted" ? 202 : 200 }
         );
       return Response.json(
         { requestId: control.requestId, state: "indeterminate" },

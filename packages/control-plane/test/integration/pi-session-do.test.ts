@@ -8,7 +8,6 @@ import type { ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { Workspace } from "@cloudflare/computer";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import type { SourceControlProvider } from "../../src/source-control";
-import type { UsageAccountingSnapshot } from "../../src/harness/accounting";
 import type { PiHarnessWakeController } from "../../src/pi/pi-harness-wake";
 import { PI_FEATURE_CAPABILITY_SNAPSHOT_KEY } from "../../src/pi/capability-snapshot";
 import { WORKSPACE_QUOTA_STATE_KEY } from "../../src/pi/computer-workspace-quota";
@@ -1090,6 +1089,29 @@ describe("PiSessionDO", () => {
   });
 
   it("projects a human control once into SessionDO while keeping Pi assistant state subordinate", async () => {
+    const faux = createFauxCodexProvider({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "Faux gpt-5.6-sol",
+          cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+        },
+      ],
+      responses: [
+        {
+          ...fauxAssistantMessage("native answer"),
+          usage: {
+            input: 10,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 12,
+            cost: { input: 999, output: 999, cacheRead: 0, cacheWrite: 0, total: 1_998 },
+          },
+        },
+      ],
+    });
+    piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
     const now = Date.now();
     const accountId = crypto.randomUUID().replaceAll("-", "");
     await env.DB.prepare(
@@ -1133,36 +1155,11 @@ describe("PiSessionDO", () => {
     const stub = piStub(sessionName);
     await stub.status(sessionName);
     await runInPiSessionDO(stub, async (instance) => {
-      const faux = createFauxCodexProvider({
-        models: [
-          {
-            id: "gpt-5.6-sol",
-            name: "Faux gpt-5.6-sol",
-            cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
-          },
-        ],
-        responses: [fauxAssistantMessage("native answer")],
-      });
-      piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
-      (instance as unknown as { models: MutableModels }).models.setProvider(faux.provider);
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
       await root.configure(
         { model: { provider: "openai-codex", modelId: "gpt-5.6-sol" } },
         BACKGROUND_CONTEXT
       );
-      const totals = vi
-        .fn()
-        .mockResolvedValueOnce({
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          costUsd: 0,
-        })
-        .mockResolvedValue({
-          usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, total: 12 },
-          costUsd: 0.25,
-        });
-      (
-        instance as unknown as { accountingTotals(): Promise<UsageAccountingSnapshot> }
-      ).accountingTotals = totals;
     });
     const sessionStub = env.SESSION.getByName(sessionName);
     const response = await sessionStub.fetch(
@@ -1171,13 +1168,13 @@ describe("PiSessionDO", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           actorId: "user-1",
+          canonicalUserId: "user-1",
           source: "web",
           control: {
             sessionId: sessionName,
             requestId: "native-submit-1",
             action: "send",
             content: "native input",
-            model: "openai/gpt-5.6-sol",
           },
         }),
       })
