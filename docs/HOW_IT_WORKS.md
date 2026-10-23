@@ -443,13 +443,16 @@ The sandbox runtime applies the allowlist per harness (`mcp_tool_access.py`):
   server whose name overlaps, since Claude Code splits names on `__`), so a `PreToolUse` hook also
   refuses every unselected `mcp__<server>__*` tool of a restricted server. An unrestricted server
   named `docs__extra` next to a restricted `docs` therefore gets no tools.
-- Servers whose names differ only in characters both harnesses replace with `_` (`my.docs` and
-  `my_docs`) produce the same tool names. They are treated as one: restricted if any of them is, to
-  the tools every restricted one allows.
-- Tools whose names render identically cannot be told apart by either harness, with or without an
-  allowlist: an MCP tool that renders as a built-in, Open-Inspect or repository tool name (an
-  `apply` server's `patch` tool versus OpenCode's `apply_patch`, or a `docs` server's `search` tool
-  versus a `search` export in `.opencode/tool/docs.ts`, tool or not), or as another server's
+- **Codex** receives the allowlist as the server's native `enabled_tools`. Codex leaves the other
+  tools out of what the model sees, including the `ALL_TOOLS` list its `exec` tool exposes, and
+  refuses calls to them.
+- Servers whose names differ only in characters OpenCode and Claude Agent replace with `_`
+  (`my.docs` and `my_docs`) produce the same tool names there. They are treated as one: restricted
+  if any of them is, to the tools every restricted one allows.
+- Tools whose names render identically cannot be told apart by OpenCode or Claude Agent, with or
+  without an allowlist: an MCP tool that renders as a built-in, Open-Inspect or repository tool name
+  (an `apply` server's `patch` tool versus OpenCode's `apply_patch`, or a `docs` server's `search`
+  tool versus a `search` export in `.opencode/tool/docs.ts`, tool or not), or as another server's
   selected tool. That name stays allowed, so the MCP tool does too.
 
 ### When Snapshots Are Taken

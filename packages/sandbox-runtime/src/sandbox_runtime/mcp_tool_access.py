@@ -12,11 +12,10 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from claude_agent_sdk import HookMatcher
-
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterable, Mapping
 
+    from claude_agent_sdk import HookMatcher
     from claude_agent_sdk.types import (
         HookCallback,
         HookContext,
@@ -206,6 +205,9 @@ def claude_tool_policy(
     restricted = {ns: allowlist for ns, allowlist in allowlists.items() if allowlist is not None}
     if not restricted:
         return ClaudeToolPolicy(allowed, disallowed)
+    # Imported here so the other harnesses can use this module without the Claude SDK.
+    from claude_agent_sdk import HookMatcher
+
     guard = HookMatcher(hooks=[_claude_tool_guard(restricted)])
     return ClaudeToolPolicy(allowed, disallowed, {"PreToolUse": [guard]})
 

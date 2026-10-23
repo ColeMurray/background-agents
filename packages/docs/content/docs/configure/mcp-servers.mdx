@@ -4,7 +4,7 @@ description: Give agents extra tools by registering local or remote MCP servers,
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-11"
+lastReviewed: "2026-10-23"
 relatedCode:
   - packages/shared/src/types/integrations.ts
   - packages/web/src/components/settings/mcp-servers-settings.tsx
@@ -94,8 +94,9 @@ How each harness applies the selection:
 
 - OpenCode: tools outside the selection are left out of every request, so they take no context.
 - Claude Agent: only the selected tools are allowed, and calls to any other tool of that server are refused, even when Claude settings in the repository allow them. Those tools can still appear in Claude Agent's tool list.
+- Codex: tools outside the selection are hidden from the agent, and calls to them are refused.
 
-Both harnesses build a tool's name from the server and tool names, so they cannot always tell apart servers whose names overlap. While a server such as `docs` is limited, a server whose name extends it (`docs_extra` in OpenCode, `docs__extra` in either harness) gets no tools rather than expose the limited server's other tools. Rename one of them to avoid this.
+OpenCode and Claude Agent build a tool's name from the server and tool names, so they cannot always tell apart servers whose names overlap. While a server such as `docs` is limited, a server whose name extends it (`docs_extra` in OpenCode, `docs__extra` in either) gets no tools rather than expose the limited server's other tools. Rename one of them to avoid this.
 
 A selection takes effect the next time a session's sandbox starts; a running session keeps the tools it started with.
 
