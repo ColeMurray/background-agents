@@ -79,6 +79,18 @@ export interface HarnessToolPolicyOptions<
   Context extends HarnessToolContext = HarnessToolContext,
   Result = unknown,
 > {
+  /**
+   * Fresh authorization for the human who owns the active turn.
+   *
+   * This is deliberately independent of a tool declaration: it is the first
+   * decision for every model-visible invocation, before the policy reads the
+   * effect registry, consumes the turn ceiling, or enters a feature delegate.
+   */
+  readonly authorizeToolCall: (
+    call: Call,
+    api: Api,
+    context: Context
+  ) => { readonly block: string } | undefined | Promise<{ readonly block: string } | undefined>;
   /** The exact effect registry the runtime exposes. */
   readonly effects: ReadonlyMap<string, ToolEffectRegistration>;
   /** The feature-specific decisions, in order. */
@@ -119,11 +131,12 @@ export interface HarnessToolPolicyHooks<
 /**
  * The one canonical policy.
  *
- * The order is fixed and it is the order that matters: the tool must be
- * declared, the turn must have something left to do, the caller must be one the
- * declaration allows, the deployment must not be closed, and only then do the
- * feature delegates speak. The allow memos are written last, and only when
- * every delegate allowed the call.
+ * The order is fixed and it is the order that matters: the active turn author
+ * must still be authorized, the tool must be declared, the turn must have
+ * something left to do, the caller must be one the declaration allows, the
+ * deployment must not be closed, and only then do the feature delegates speak.
+ * The allow memos are written last, and only when every delegate allowed the
+ * call.
  */
 export function createToolPolicy<
   Call = unknown,
@@ -134,6 +147,7 @@ export function createToolPolicy<
   options: HarnessToolPolicyOptions<Call, Api, Context, Result>
 ): HarnessToolPolicyHooks<Call, Api, Context, Result> {
   const {
+    authorizeToolCall,
     effects,
     delegates = [],
     emergencyPolicy,
@@ -145,6 +159,14 @@ export function createToolPolicy<
 
   return {
     async beforeTool(call, api, context) {
+      try {
+        const authorDecision = await authorizeToolCall(call, api, context);
+        if (authorDecision !== undefined) return authorDecision;
+      } catch (error) {
+        if (isCancellation?.(error, context)) throw error;
+        return { block: "Tool authorization failed closed" };
+      }
+
       const facts = factsOf(call);
       const declaration = effects.get(facts.name);
       if (!declaration) return { block: `Tool is not declared: ${facts.name}` };

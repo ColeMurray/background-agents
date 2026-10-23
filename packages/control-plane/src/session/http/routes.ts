@@ -51,6 +51,7 @@ export interface SessionInternalRouteHandlers {
   openaiTokenRefresh: SessionInternalRouteHandler;
   piCredential: SessionInternalRouteHandler;
   piCapabilityAuthority: SessionInternalRouteHandler;
+  harnessToolAuthorize: SessionInternalRouteHandler;
   budgetState: SessionInternalRouteHandler;
   piContext: SessionInternalRouteHandler;
   piControl: SessionInternalRouteHandler;
@@ -164,6 +165,11 @@ export function createSessionInternalRoutes(
       method: "GET",
       path: SessionInternalPaths.piCapabilityAuthority,
       handler: handlers.piCapabilityAuthority,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.harnessToolAuthorize,
+      handler: handlers.harnessToolAuthorize,
     },
     { method: "POST", path: SessionInternalPaths.piContext, handler: handlers.piContext },
     { method: "POST", path: SessionInternalPaths.piControl, handler: handlers.piControl },

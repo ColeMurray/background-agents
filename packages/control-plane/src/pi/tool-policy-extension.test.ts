@@ -19,7 +19,10 @@ const context = { abortSignal: undefined, value: () => undefined, toString: () =
 const api = {} as HookApi;
 
 function beforeTool() {
-  const extension = createToolPolicyExtension({ effects });
+  const extension = createToolPolicyExtension({
+    effects,
+    authorizeToolCall: async () => undefined,
+  });
   const registration = extension.hooks?.[0];
   expect(registration?.task).toBe("pi.tool");
   const handler = (registration?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
@@ -28,14 +31,22 @@ function beforeTool() {
 }
 
 function beforeToolWithDelegates(delegates: readonly PiToolPolicyDelegate[]) {
-  const extension = createToolPolicyExtension({ effects, delegates });
+  const extension = createToolPolicyExtension({
+    effects,
+    delegates,
+    authorizeToolCall: async () => undefined,
+  });
   const handler = (extension.hooks?.[0]?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
   if (!handler) throw new Error("Expected Pi tool policy beforeTool hook");
   return handler;
 }
 
 function afterTool(delegates: readonly PiToolPolicyDelegate[], hookApi: HookApi = api) {
-  const extension = createToolPolicyExtension({ effects, delegates });
+  const extension = createToolPolicyExtension({
+    effects,
+    delegates,
+    authorizeToolCall: async () => undefined,
+  });
   const registration = extension.hooks?.[0];
   const handler = (registration?.handlers as Partial<ToolHooks> | undefined)?.afterTool;
   if (!handler) throw new Error("Expected Pi tool policy afterTool hook");
@@ -53,11 +64,86 @@ function call(name: string, nested = false): ToolHookCall {
 }
 
 describe("createToolPolicyExtension", () => {
+  it("freshly authorizes the turn before ceilings, effects, emergency policy, or delegates", async () => {
+    const order: string[] = [];
+    const ceiling = {
+      remaining: vi.fn(() => {
+        order.push("ceiling");
+        return 10;
+      }),
+      consume: vi.fn(),
+    };
+    const extension = createToolPolicyExtension({
+      effects,
+      authorizeToolCall: vi.fn(async () => {
+        order.push("author");
+        return { block: "The turn author is no longer authorized" };
+      }),
+      ceiling: () => ceiling,
+      emergencyPolicy: {
+        beforeFeatureDelegates: vi.fn(async () => {
+          order.push("emergency");
+          return undefined;
+        }),
+      },
+      delegates: [
+        {
+          beforeTool: vi.fn(async () => {
+            order.push("delegate");
+            return undefined;
+          }),
+        },
+      ],
+    });
+    const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
+
+    await expect(hook(call("model_tool"), api, context)).resolves.toEqual({
+      block: "The turn author is no longer authorized",
+    });
+    expect(order).toEqual(["author"]);
+    expect(ceiling.consume).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before every model-visible tool class when fresh authorization is unavailable", async () => {
+    const allEffects = createToolEffectRegistry([
+      { name: "scratch_read", effect: "local_read", callers: ["model"], replay: "safe" },
+      { name: "scratch_write", effect: "local_mutation", callers: ["model"], replay: "unsafe" },
+      {
+        name: "repository_publish",
+        effect: "external_mutation",
+        callers: ["model"],
+        replay: "unsafe",
+      },
+      { name: "subagent", effect: "control", callers: ["model"], replay: "unsafe" },
+      { name: "code_mode", effect: "sandbox_execution", callers: ["model"], replay: "unsafe" },
+    ]);
+    const delegate = vi.fn(async () => undefined);
+    const extension = createToolPolicyExtension({
+      effects: allEffects,
+      authorizeToolCall: async () => {
+        throw new Error("authority unavailable");
+      },
+      delegates: [{ beforeTool: delegate }],
+    });
+    const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
+
+    for (const name of allEffects.keys()) {
+      await expect(hook(call(name), api, context)).resolves.toEqual({
+        block: "Tool authorization failed closed",
+      });
+    }
+    expect(delegate).not.toHaveBeenCalled();
+  });
+
   it("refuses the turn when the action ceiling is reached", async () => {
     // The ceiling is the harness's own wall: a harness with no sandbox has no
     // other bound on a runaway turn, so the count is the wall.
     const ceiling = createFixedActionCeiling(1);
-    const extension = createToolPolicyExtension({ effects, ceiling: () => ceiling });
+    const extension = createToolPolicyExtension({
+      effects,
+      ceiling: () => ceiling,
+      authorizeToolCall: async () => undefined,
+    });
     const handler = (extension.hooks?.[0]?.handlers as Partial<ToolHooks> | undefined)?.beforeTool;
     if (!handler) throw new Error("Expected the tool policy beforeTool hook");
 
@@ -127,6 +213,7 @@ describe("createToolPolicyExtension", () => {
       effects,
       delegates: [delegate],
       emergencyPolicy: emergency,
+      authorizeToolCall: async () => undefined,
     });
     const hook = (extension.hooks?.[0]?.handlers as Partial<ToolHooks>).beforeTool!;
 
@@ -138,6 +225,7 @@ describe("createToolPolicyExtension", () => {
     const memoFinalAllow = vi.fn(async () => undefined);
     const extension = createToolPolicyExtension({
       effects,
+      authorizeToolCall: async () => undefined,
       delegates: [
         { beforeTool: async () => undefined, memoFinalAllow },
         { beforeTool: async () => ({ block: "later denial" }) },

@@ -21,6 +21,12 @@ import type { PiToolEmergencyPolicy, PiToolPolicyDelegate } from "./tool-policy-
  * becomes the runtime's block.
  */
 export interface PiToolPolicyOptions {
+  /** Fresh SessionDO authorization for the active turn author. */
+  readonly authorizeToolCall: (
+    call: ToolHookCall,
+    api: HookApi,
+    context: Context
+  ) => { readonly block: string } | undefined | Promise<{ readonly block: string } | undefined>;
   /** The exact effect registry the runtime exposes. */
   readonly effects: ReadonlyMap<string, ToolEffectRegistration>;
   /** The feature-specific decisions, in order. */
@@ -45,6 +51,7 @@ function isCancellation(error: unknown, context: Context): boolean {
 /** The Pi runtime's extension that carries the seam's policy. */
 export function createToolPolicyExtension(options: PiToolPolicyOptions) {
   const policy = createToolPolicy<ToolHookCall, HookApi, Context, ToolExecutionResult>({
+    authorizeToolCall: options.authorizeToolCall,
     effects: options.effects,
     delegates: options.delegates,
     emergencyPolicy: options.emergencyPolicy,

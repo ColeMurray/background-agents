@@ -944,6 +944,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     }
   );
   const piControlRepository = new PiControlRepository(sql);
+  const activeHarnessOperation = createHarnessOperationFence({
+    isHarnessSession: isInProcessSession,
+    messages: messageRepository,
+    controls: piControlRepository,
+    operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
+    controlRequestId: piControlRequestIdFromMessageId,
+  });
   const extensionServices = createRegisteredSessionExtensionServices({
     env,
     db,
@@ -960,13 +967,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     eventRepository,
     messageService,
     alarmScheduler,
-    activeOperation: createHarnessOperationFence({
-      isHarnessSession: isInProcessSession,
-      messages: messageRepository,
-      controls: piControlRepository,
-      operationId: (request) => request.headers.get("X-Pi-Operation-ID"),
-      controlRequestId: piControlRequestIdFromMessageId,
-    }),
+    activeOperation: activeHarnessOperation,
     turnAuthorMayAct,
   });
   const piControlHandler = new PiControlHandler(
@@ -1456,6 +1457,26 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         },
         { headers: { "Cache-Control": "no-store" } }
       );
+    },
+    harnessToolAuthorize: async (request) => {
+      const session = sessionCoreRepository.getSession();
+      if (!session) return Response.json({ error: "Session is not initialized" }, { status: 404 });
+      const operationId = request.headers.get("X-Harness-Operation-ID");
+      if (!operationId || !(await turnAuthorMayAct(operationId))) {
+        return Response.json(
+          { error: "The originating turn's author may no longer act on this session" },
+          { status: 403, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+      const active =
+        messageRepository.getProcessingMessage()?.id === operationId ||
+        piControlRepository.isActiveOperation(
+          piControlRequestIdFromMessageId(operationId) ?? operationId
+        );
+      if (!isInProcessSession() || !active) {
+        return Response.json({ error: "Tool invocation has no active turn" }, { status: 409 });
+      }
+      return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
     },
     piContext: (request) => piBridgeHandler.context(request),
     piRepositoryTool: (request) => piBridgeHandler.repositoryTool(request),

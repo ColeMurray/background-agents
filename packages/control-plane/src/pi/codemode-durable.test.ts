@@ -76,6 +76,7 @@ function registryWith(
         createExtension: (effects) =>
           createToolPolicyExtension({
             effects,
+            authorizeToolCall: async () => undefined,
             delegates: [createPiCodeModePolicyDelegate(codeModePolicy)],
             emergencyPolicy: createDeploymentEmergencyPolicy({
               currentCapabilities: async (signal) => {

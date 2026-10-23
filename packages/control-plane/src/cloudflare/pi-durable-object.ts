@@ -414,6 +414,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
             });
             return createToolPolicyExtension({
               effects,
+              authorizeToolCall: (_call, _api, context) =>
+                this.authorizeToolInvocation(context.abortSignal),
               // The ceiling is per turn; the policy is installed once.
               ceiling: () => this.turnActionCeiling,
               delegates: workspacePolicyDelegate
@@ -932,6 +934,29 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     } catch {
       return refusedBudgetState();
     }
+  }
+
+  /**
+   * Ask the owning SessionDO whether the active turn author may still act.
+   *
+   * The Pi object has no database or ambient Worker environment. It presents
+   * only its attributed operation over the binding-only session port, and the
+   * SessionDO reuses Open-Inspect's fresh turn-author authority service.
+   */
+  private async authorizeToolInvocation(
+    signal?: AbortSignal
+  ): Promise<{ readonly block: string } | undefined> {
+    const sessionId = await this.ctx.storage.get<string>(SESSION_ID_KEY);
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    if (!sessionId || !operationId) return { block: "Tool authorization failed closed" };
+    const response = await this.env.SESSION.getByName(sessionId).fetch(
+      new Request(`http://session${SessionInternalPaths.harnessToolAuthorize}`, {
+        method: "POST",
+        headers: { "X-Harness-Operation-ID": operationId },
+        signal,
+      })
+    );
+    return response.ok ? undefined : { block: "Tool authorization failed closed" };
   }
 
   /**

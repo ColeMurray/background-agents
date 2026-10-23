@@ -166,4 +166,129 @@ describe("a Pi session, end to end", () => {
     // And the tool call the model made: the step is visible in the export.
     expect(exportedEvents.map((event) => event.type)).toContain("tool_call");
   }, 30_000);
+
+  it("blocks a tool when the author is suspended after the model response but before beforeTool", async () => {
+    const now = Date.now();
+    const accountId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    await env.DB.prepare(
+      "INSERT INTO model_preferences (id, enabled_models, revision, updated_at) VALUES (?, ?, 1, ?) ON CONFLICT(id) DO UPDATE SET enabled_models = excluded.enabled_models"
+    )
+      .bind("global", JSON.stringify(["openai/gpt-5.6-sol"]), now)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO model_provider_accounts
+         (id, provider, display_name, external_account_id, status, created_at, updated_at)
+       VALUES (?, 'openai', 'OpenAI', 'acct-suspension', 'active', ?, ?)`
+    )
+      .bind(accountId, now, now)
+      .run();
+    await new ProviderCredentialStore(env.DB, env.PROVIDER_ACCOUNTS_ENCRYPTION_KEY!).create({
+      providerAccountId: accountId,
+      provider: "openai",
+      credentialSchemaVersion: 1,
+      payload: {
+        refreshToken: "openai-refresh-secret",
+        accessToken: "openai-access-secret",
+        accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1000,
+      },
+      accessTokenExpiresAt: now + 365 * 24 * 60 * 60 * 1000,
+      now,
+    });
+    await seedActiveUser("user-1");
+    const faux = createFauxCodexProvider({
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "Faux gpt-5.6-sol",
+          cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+        },
+      ],
+      responses: [
+        fauxAssistantMessage(fauxToolCall("write", { path: "blocked.txt", content: "blocked" }), {
+          stopReason: "toolUse",
+        }),
+        fauxAssistantMessage("tool was blocked"),
+      ],
+    });
+    piProviderFactories.register(PI_MODEL_PROVIDER_ID, () => faux.provider);
+    const session = await initSession({
+      title: "pi-suspend-before-tool",
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      providerAuth: [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: accountId,
+          selectionSource: "explicit",
+        },
+        { provider: "xai", authMode: "api_key", selectionSource: "explicit" },
+        { provider: "anthropic", authMode: "api_key", selectionSource: "explicit" },
+      ],
+    });
+    const sessionStub = env.SESSION.getByName(session.sessionName);
+    const piStub = env.PI_SESSION?.getByName(session.sessionName);
+    if (!piStub) throw new Error("PI_SESSION test binding is missing");
+    let authorizationChecks = 0;
+
+    await runInDurableObject(piStub as unknown as DurableObjectStub, async (raw) => {
+      const instance = raw as unknown as PiSessionDO;
+      const piEnv = (instance as unknown as { env: { SESSION: unknown } }).env;
+      const real = piEnv.SESSION as {
+        getByName(name: string): { fetch(request: Request): Promise<Response> };
+      };
+      await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
+      piEnv.SESSION = {
+        getByName: (name: string) => ({
+          fetch: async (request: Request) => {
+            if (new URL(request.url).pathname === SessionInternalPaths.harnessToolAuthorize) {
+              authorizationChecks += 1;
+              await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+                .bind(Date.now(), "user-1")
+                .run();
+            }
+            return real.getByName(name).fetch(request);
+          },
+        }),
+      };
+    });
+
+    const prompted = await sessionStub.fetch(
+      new Request(`http://session${SessionInternalPaths.prompt}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "write the file", authorId: "user-1", source: "web" }),
+      })
+    );
+    const { messageId } = await prompted.json<{ messageId: string }>();
+
+    await vi.waitFor(
+      async () => {
+        const events = await queryDO<{ type: string; data: string }>(
+          sessionStub,
+          "SELECT type, data FROM events WHERE message_id = ? ORDER BY timeline_sequence",
+          messageId
+        );
+        expect(events.map(({ type }) => type)).toContain("execution_complete");
+      },
+      { timeout: 20_000, interval: 250 }
+    );
+    expect(authorizationChecks).toBe(1);
+    await expect(
+      env.DB.prepare("SELECT suspended_at FROM users WHERE id = ?")
+        .bind("user-1")
+        .first<{ suspended_at: number | null }>()
+    ).resolves.toEqual({ suspended_at: expect.any(Number) });
+    await expect(
+      runInDurableObject(piStub as unknown as DurableObjectStub, async (raw) => {
+        const instance = raw as unknown as {
+          workspace?: { fs: { readFile(path: string, encoding: string): Promise<string> } };
+        };
+        return instance.workspace?.fs.readFile("/workspace/scratch/blocked.txt", "utf8");
+      })
+    ).rejects.toThrow();
+  }, 30_000);
 });

@@ -129,11 +129,31 @@ async function executeAgentTool(
   ]);
   const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
   await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
-  const submission = await root.submit(
-    { type: "input", content: `call ${name}`, requestId },
-    BACKGROUND_CONTEXT
-  );
-  await submission.wait(BACKGROUND_CONTEXT);
+  // These focused adapter tests invoke Pi directly rather than through a
+  // SessionDO processing message. Admit only the universal author gate here;
+  // the end-to-end suite exercises that gate against the real current author.
+  const piEnv = (instance as unknown as { env: { SESSION: typeof env.SESSION } }).env;
+  const sessionNamespace = piEnv.SESSION;
+  piEnv.SESSION = {
+    getByName: (sessionId: string) => {
+      const session = sessionNamespace.getByName(sessionId);
+      return {
+        fetch: (request: Request) =>
+          new URL(request.url).pathname === SessionInternalPaths.harnessToolAuthorize
+            ? Promise.resolve(new Response(null, { status: 204 }))
+            : session.fetch(request),
+      };
+    },
+  } as typeof env.SESSION;
+  try {
+    const submission = await root.submit(
+      { type: "input", content: `call ${name}`, requestId },
+      BACKGROUND_CONTEXT
+    );
+    await submission.wait(BACKGROUND_CONTEXT);
+  } finally {
+    piEnv.SESSION = sessionNamespace;
+  }
   const view = await root.context(BACKGROUND_CONTEXT);
   const result = [...view.messages]
     .reverse()

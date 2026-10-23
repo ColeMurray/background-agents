@@ -109,6 +109,7 @@ export const SessionInternalPaths = {
   openaiTokenRefresh: "/internal/openai-token-refresh",
   piCredential: "/internal/pi-credential",
   piCapabilityAuthority: "/internal/pi-capability-authority",
+  harnessToolAuthorize: "/internal/harness-tool-authorize",
   budgetState: "/internal/budget-state",
   piContext: "/internal/pi-context",
   piControl: "/internal/pi-control",

@@ -59,7 +59,10 @@ function policy(capture?: (effects: ReadonlyMap<string, ToolEffectRegistration>)
     effects: [],
     createExtension: (effects: ReadonlyMap<string, ToolEffectRegistration>) => {
       capture?.(effects);
-      return createToolPolicyExtension({ effects });
+      return createToolPolicyExtension({
+        effects,
+        authorizeToolCall: async () => undefined,
+      });
     },
   } as const satisfies ExtensionContribution;
 }
