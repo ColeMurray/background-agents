@@ -314,6 +314,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     createFixedActionCeiling(HARNESS_ACTION_CEILING);
   private readonly prices = createPiPriceTable(this.models);
   private readonly trustedUsage = new TrustedUsageMeter(this.ctx.storage, this.prices);
+  /** Current open's registry; replaced on every PiHarness reopen. */
+  private registry: ReturnType<typeof createRegistry> | undefined;
   private workspace: WorkspaceToolFacade | undefined;
   private codemodeSandbox: RemoteCodemodeSandbox | undefined;
   private codeModeCoordinator: PiCodeModeExecutionCoordinator | undefined;
@@ -350,6 +352,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       // open, so reopening cannot duplicate registrations or retain a closed
       // harness through an old registry subscription.
       const registry = createRegistry();
+      this.registry = registry;
       await this.codeModeCoordinator?.close(new Error("Pi Durable harness reopened"));
       const snapshot = await readPiFeatureCapabilitySnapshot(this.ctx.storage);
       if (!snapshot) throw new Error("Pi Durable capability authority is not initialized");
@@ -1610,6 +1613,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       this.repositoryWorkspaceAbort.abort(new Error("Pi Durable session was deleted"));
       await this.lifecycle.dispose();
       this.harnessOpened = false;
+      this.registry = undefined;
       const codeModeDrain = this.codeModeCoordinator?.close(
         new Error("Pi Durable session was deleted")
       );
