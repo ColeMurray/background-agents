@@ -518,8 +518,16 @@ def test_boat_launcher_matches_the_control_plane_contract():
     assert "const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;" in lifecycle
     assert "EXIT_ALREADY_RUNNING=75" in launcher
     assert (
-        'export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";' in provider
+        'export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";' in lifecycle
     )
+    # A create stages the file under /tmp, which the snapshot mount over the home
+    # directory does not cover, and the setup script copies it into the
+    # workspace before it execs the launcher; a resume writes it into place.
+    assert (
+        'export const BOAT_TUNNEL_ENV_STAGING_PATH = "/tmp/openinspect-tunnels.env";' in lifecycle
+    )
+    assert "cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH}" in lifecycle
+    assert "BOAT_TUNNEL_ENV_STAGING_PATH\n" in provider
     assert 'ensure_link /workspace "$OI_USER_HOME/workspace"' in launcher
     assert 'ensure_link /app "$OI_INSTALL_HOME/app"' in launcher
     assert "flock -n 9" in launcher

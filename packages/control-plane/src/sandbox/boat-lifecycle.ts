@@ -81,13 +81,12 @@ const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
  * can outrun neither. Under `/tmp`, which no Boat snapshot keeps.
  */
 export const BOAT_LAUNCH_MARKER_PATH = "/tmp/openinspect-launch";
-/** The workspace directory inside the home directory; the image links `/workspace` to it. */
-const BOAT_WORKSPACE_DIR = "/home/user/workspace";
 /**
- * Where the runtime reads its tunnel URLs (`/workspace/.tunnels.env`, through
- * the image's link). Boat's file API writes under `/home/user` and `/tmp`.
+ * Where the runtime reads its tunnel URLs: `/workspace/.tunnels.env`, through
+ * the `/workspace` link the launcher keeps into the home directory. Boat's
+ * file API writes under `/home/user` and `/tmp`.
  */
-export const BOAT_TUNNEL_ENV_FILE_PATH = `${BOAT_WORKSPACE_DIR}/.tunnels.env`;
+export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";
 /**
  * Where a create writes the tunnel env file for the setup script to copy into
  * place. A create's writes land while the machine is still coming up, and
@@ -123,7 +122,8 @@ export const BOAT_SETUP_SCRIPT = [
   `for _ in $(seq 1 ${LAUNCH_MARKER_POLLS}); do`,
   `  if [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; then`,
   `    if [ -f ${BOAT_TUNNEL_ENV_STAGING_PATH} ]; then`,
-  `      mkdir -p ${BOAT_WORKSPACE_DIR} && cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH} ||`,
+  `      mkdir -p "$(dirname ${BOAT_TUNNEL_ENV_FILE_PATH})" &&`,
+  `        cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH} ||`,
   '        echo "tunnel env file copy failed" >&2',
   "    fi",
   `    exec ${BOAT_LAUNCHER_PATH}`,
