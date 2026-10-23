@@ -32,7 +32,7 @@ const server: McpSharedServer = {
   type: "remote",
   url: "https://mcp.example.com/mcp",
   endpointHost: "mcp.example.com",
-  headers: { Authorization: "Bearer integration-static-secret" },
+  headers: { Authorization: "Bearer secret" },
 };
 
 describe("callSharedMcpTool", () => {
@@ -60,8 +60,9 @@ describe("callSharedMcpTool", () => {
   );
 
   it.each([
-    ["a string", "Bearer integration-static-secret"],
-    ["a neutral field", { note: "Bearer integration-static-secret" }],
+    ["the full authorization value", "Bearer secret"],
+    ["the Bearer credential", "secret"],
+    ["a neutral field", { note: "secret" }],
   ])("rejects a configured static credential echoed through %s", async (_label, content) => {
     transportMocks.callTool.mockResolvedValue({ content });
 
@@ -69,7 +70,7 @@ describe("callSharedMcpTool", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toBe("Error: The MCP tool did not complete");
-    expect(JSON.stringify(error)).not.toContain("integration-static-secret");
+    expect(JSON.stringify(error)).not.toContain("secret");
   });
 
   it("returns credential-free provider content", async () => {
