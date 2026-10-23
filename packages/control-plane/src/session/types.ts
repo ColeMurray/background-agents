@@ -2,7 +2,6 @@
  * Session-specific type definitions.
  */
 
-import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import {
   messageStatusSchema,
@@ -46,7 +45,10 @@ export const sessionRowSchema = z.object({
   base_sha: z.string().nullable(),
   current_sha: z.string().nullable(),
   agent_session_id: z.string().nullable(), // The agent's own conversation id
-  harness: harnessIdSchema, // Agent harness the session runs on; fixed at create
+  // Persisted ids may have been written by a newer binary. Consumers must
+  // resolve this string with getStoredHarnessOrRefuse rather than silently
+  // interpreting an unknown id as the built-in harness.
+  harness: z.string(), // Agent harness the session runs on; fixed at create
   model: z.string(), // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
   reasoning_effort: z.string().nullable(), // Reasoning effort level (e.g., "high", "max")
   status: sessionStatusSchema,

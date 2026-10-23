@@ -1,4 +1,4 @@
-import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
+import { getStoredHarnessOrRefuse } from "@open-inspect/shared/harnesses";
 import {
   sessionSnapshotSchema,
   type SessionSnapshotState,
@@ -24,6 +24,13 @@ import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
 import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-shutdown";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+
+class UnsupportedStoredHarnessError extends Error {
+  constructor(harness: string) {
+    super(`Session harness "${harness}" is not supported by this deployment`);
+    this.name = "UnsupportedStoredHarnessError";
+  }
+}
 
 export interface SessionSnapshotEnrichment {
   environmentId: string | null;
@@ -56,7 +63,15 @@ export class SessionSnapshotReader {
   async handleSnapshot(): Promise<Response> {
     const headers = { "Cache-Control": "private, no-store" };
     const enrichment = await this.resolveSessionSnapshotEnrichment();
-    const snapshot = this.readSessionSnapshot(enrichment);
+    let snapshot;
+    try {
+      snapshot = this.readSessionSnapshot(enrichment);
+    } catch (error) {
+      if (error instanceof UnsupportedStoredHarnessError) {
+        return Response.json({ error: error.message }, { status: 409, headers });
+      }
+      throw error;
+    }
     if (!snapshot) {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
@@ -90,6 +105,8 @@ export class SessionSnapshotReader {
   ): { session: SessionSnapshotState; sandbox: SandboxRow | null } | null {
     const session = this.deps.sessionCoreRepository.getSession();
     if (!session) return null;
+    const harness = getStoredHarnessOrRefuse(session.harness);
+    if (harness === null) throw new UnsupportedStoredHarnessError(session.harness);
     const sandbox = this.deps.sandboxRepository.getSandbox();
     const publicSession: SessionSnapshotState = {
       id: resolvePublicSessionId(session, this.deps.durableObjectId),
@@ -100,15 +117,13 @@ export class SessionSnapshotReader {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
-      executionBackend: session.harness === "pi" ? "durable" : "sandbox",
+      executionBackend: harness === "pi" ? "durable" : "sandbox",
       piFeatureCapabilities:
-        session.harness === "pi"
-          ? this.deps.sessionCoreRepository.getPiFeatureCapabilitySnapshot()
-          : null,
+        harness === "pi" ? this.deps.sessionCoreRepository.getPiFeatureCapabilitySnapshot() : null,
       sandboxPreservation: this.deps.getShutdown?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,
-      harness: getValidHarnessOrDefault(session.harness),
+      harness,
       model: session.model ?? DEFAULT_MODEL,
       reasoningEffort: session.reasoning_effort ?? undefined,
       isProcessing: this.getIsProcessing(),

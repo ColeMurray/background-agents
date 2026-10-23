@@ -83,6 +83,38 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     await closeWebSocket(ws!);
   });
 
+  it("keeps a pending prompt queued when readiness finds an unknown persisted harness", async () => {
+    const name = `ws-unknown-harness-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const messageId = await enqueuePrompt(stub, "Never dispatch through a fallback harness");
+    const { ws } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await queryDO(stub, "UPDATE session SET harness = 'newer-harness'");
+    const delivery = collectMessages(ws!, {
+      until: (message) => message.type === "prompt",
+      timeoutMs: 500,
+    });
+
+    ws!.send(sandboxEvent({ type: "ready", harness: "opencode" }));
+
+    await waitForSandboxStatus(stub, "ready");
+    expect(await delivery).toEqual([]);
+    expect(
+      await queryDO<{ status: string }>(stub, "SELECT status FROM messages WHERE id = ?", messageId)
+    ).toEqual([{ status: "pending" }]);
+
+    await closeWebSocket(ws!);
+  });
+
   it("cancels an attached booting sandbox and does not revive it on late readiness", async () => {
     const name = `ws-early-connect-cancel-${Date.now()}`;
     const { stub } = await initNamedSession(name);

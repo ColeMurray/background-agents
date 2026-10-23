@@ -4,6 +4,7 @@ import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import {
   getValidHarnessOrDefault,
   getHarnessCapabilities,
+  getStoredHarnessOrRefuse,
   harnessIdSchema,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
@@ -146,7 +147,14 @@ export class SessionInitHandler {
     // spawn, the first prompt spawns through processMessageQueue.
     const existingSession = this.sessionCoreRepository.getSession();
     if (existingSession) {
-      if (this.runtimeMatches(existingSession.harness)) {
+      const storedHarness = getStoredHarnessOrRefuse(existingSession.harness);
+      if (storedHarness === null) {
+        return Response.json(
+          { error: `Session harness "${existingSession.harness}" is not supported` },
+          { status: 409 }
+        );
+      }
+      if (this.runtimeMatches(storedHarness)) {
         const snapshot = this.sessionCoreRepository.getPiFeatureCapabilitySnapshot();
         if (snapshot) {
           const initialized = await this.initializeInProcessRuntime(
