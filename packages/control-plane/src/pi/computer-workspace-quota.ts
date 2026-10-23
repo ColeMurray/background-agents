@@ -1,4 +1,10 @@
-import type { Workspace } from "@cloudflare/computer";
+import type {
+  ExecEncoding,
+  Workspace,
+  WorkspaceRuntimeEvent,
+  WorkspaceRuntimeExecHandle,
+  WorkspaceRuntimeResult,
+} from "@cloudflare/computer";
 import type { SqliteDatabase } from "@earendil-works/chord/sqlite";
 
 export const COMPUTER_SCRATCH_ROOT = "/workspace/scratch";
@@ -114,12 +120,164 @@ export function createCoordinatedWorkspaceToolFacade(
       ? {
           runtime: {
             exec: ((...args: Parameters<ToolRuntime["exec"]>) =>
-              coordinate(() => workspace.runtime!.exec(...args))) as ToolRuntime["exec"],
+              coordinateComputerExecution(database, () =>
+                workspace.runtime!.exec(...args)
+              )) as ToolRuntime["exec"],
             backends: workspace.runtime.backends.bind(workspace.runtime),
           },
         }
       : {}),
   };
+}
+
+/**
+ * Keep the adapter transaction queued until Computer has finished using its
+ * synchronous SQLite connection. runtime.exec only spawns the execution; the
+ * database work continues while result() or the handle's event stream runs.
+ */
+async function coordinateComputerExecution<E extends ExecEncoding>(
+  database: SqliteDatabase,
+  spawn: () => Promise<WorkspaceRuntimeExecHandle<E>>
+): Promise<WorkspaceRuntimeExecHandle<E>> {
+  const spawned = deferred<
+    { ok: true; handle: WorkspaceRuntimeExecHandle<E> } | { ok: false; error: unknown }
+  >();
+  const completed = deferred<void>();
+  let transactionFailure: { error: unknown } | undefined;
+
+  const transactionSettled = database
+    .transaction(async () => {
+      try {
+        const handle = await spawn();
+        spawned.resolve({ ok: true, handle });
+        await completed.promise;
+      } catch (error) {
+        spawned.resolve({ ok: false, error });
+      }
+    })
+    .catch((error: unknown) => {
+      transactionFailure = { error };
+      spawned.resolve({ ok: false, error });
+    });
+
+  const outcome = await spawned.promise;
+  if (!outcome.ok) {
+    await transactionSettled;
+    if (transactionFailure) throw transactionFailure.error;
+    throw outcome.error;
+  }
+
+  return retainComputerExecutionQueue(outcome.handle, completed.resolve, async () => {
+    await transactionSettled;
+    if (transactionFailure) throw transactionFailure.error;
+  });
+}
+
+function retainComputerExecutionQueue<E extends ExecEncoding>(
+  handle: WorkspaceRuntimeExecHandle<E>,
+  releaseTransaction: () => void,
+  waitForTransaction: () => Promise<void>
+): WorkspaceRuntimeExecHandle<E> {
+  let released = false;
+  let reader: ReadableStreamDefaultReader<WorkspaceRuntimeEvent<E>> | undefined;
+
+  const release = async (): Promise<void> => {
+    if (!released) {
+      released = true;
+      releaseTransaction();
+    }
+    await waitForTransaction();
+  };
+  const releaseAfter = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      const value = await operation();
+      await release();
+      return value;
+    } catch (error) {
+      await release();
+      throw error;
+    }
+  };
+
+  const stream = new ReadableStream<WorkspaceRuntimeEvent<E>>(
+    {
+      async pull(controller) {
+        reader ??= handle.getReader();
+        try {
+          const next = await reader.read();
+          if (!next.done) {
+            controller.enqueue(next.value);
+            return;
+          }
+          reader.releaseLock();
+          reader = undefined;
+          await release();
+          controller.close();
+        } catch (error) {
+          reader?.releaseLock();
+          reader = undefined;
+          try {
+            await release();
+            controller.error(error);
+          } catch (transactionFailure) {
+            controller.error(transactionFailure);
+          }
+        }
+      },
+      async cancel(reason) {
+        const activeReader = reader;
+        reader = undefined;
+        try {
+          if (activeReader) await activeReader.cancel(reason);
+          else await handle.cancel(reason);
+        } finally {
+          activeReader?.releaseLock();
+          await release();
+        }
+      },
+    },
+    { highWaterMark: 0 }
+  );
+
+  Object.defineProperties(stream, {
+    id: { value: handle.id, enumerable: false },
+    backend: { value: handle.backend, enumerable: false },
+    result: {
+      value: (): Promise<WorkspaceRuntimeResult<E>> => releaseAfter(() => handle.result()),
+      enumerable: false,
+    },
+    kill: {
+      value: (signal?: Parameters<WorkspaceRuntimeExecHandle<E>["kill"]>[0]) => handle.kill(signal),
+      enumerable: false,
+    },
+    [Symbol.dispose]: {
+      value: () => {
+        const activeReader = reader;
+        reader = undefined;
+        if (activeReader) {
+          void activeReader
+            .cancel()
+            .catch(() => {})
+            .finally(() => activeReader.releaseLock())
+            .then(release)
+            .catch(() => {});
+        } else {
+          handle[Symbol.dispose]();
+          void release().catch(() => {});
+        }
+      },
+      enumerable: false,
+    },
+  });
+  return stream as WorkspaceRuntimeExecHandle<E>;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 /** One workspace-wide admission queue for every mutating tool in a Pi session. */

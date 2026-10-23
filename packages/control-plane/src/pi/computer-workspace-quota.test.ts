@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { Workspace } from "@cloudflare/computer";
+import type {
+  Workspace,
+  WorkspaceRuntimeEvent,
+  WorkspaceRuntimeExecHandle,
+  WorkspaceRuntimeResult,
+} from "@cloudflare/computer";
+import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "@earendil-works/chord/sqlite";
 import {
   WORKSPACE_QUOTA_STATE_KEY,
   WorkspaceMutationFifo,
+  createCoordinatedWorkspaceToolFacade,
   createLazyWorkspaceToolFacade,
   createQuotaWorkspace,
   createWorkspaceToolFacade,
 } from "../pi/computer-workspace-quota";
+import type { WorkspaceToolFacade } from "../pi/computer-workspace-quota";
 
 interface FileEntry {
   content?: Uint8Array;
@@ -24,6 +32,80 @@ class MemoryStorage {
   async put(key: string, value: unknown): Promise<void> {
     this.values.set(key, value);
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+class RollbackQueueDatabase implements SqliteDatabase {
+  records: string[] = [];
+  private tail: Promise<void> = Promise.resolve();
+
+  transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T> {
+    const result = this.tail.then(async () => {
+      const snapshot = [...this.records];
+      try {
+        return await callback(this);
+      } catch (error) {
+        this.records = snapshot;
+        throw error;
+      }
+    });
+    this.tail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  async exec(_sql: string): Promise<void> {}
+  async run(_sql: string, ..._params: SqliteValue[]): Promise<void> {}
+  async get<T extends object>(_sql: string, ..._params: SqliteValue[]): Promise<T | undefined> {
+    return undefined;
+  }
+  async all<T extends object>(_sql: string, ..._params: SqliteValue[]): Promise<T[]> {
+    return [];
+  }
+  async close(): Promise<void> {}
+}
+
+function runtimeHandle(
+  events: ReadableStream<WorkspaceRuntimeEvent<"utf8">>,
+  result: () => Promise<WorkspaceRuntimeResult<"utf8">>,
+  kill: (signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP") => Promise<void> = async () => {}
+): WorkspaceRuntimeExecHandle<"utf8"> {
+  Object.defineProperties(events, {
+    id: { value: "exec-1" },
+    backend: { value: "worker-javascript" },
+    result: { value: result },
+    kill: { value: kill },
+    [Symbol.dispose]: { value: () => void events.cancel() },
+  });
+  return events as WorkspaceRuntimeExecHandle<"utf8">;
+}
+
+function coordinatedRuntime(
+  database: SqliteDatabase,
+  exec: () => Promise<WorkspaceRuntimeExecHandle<"utf8">>
+) {
+  const workspace = {
+    fs: {},
+    runtime: {
+      exec,
+      backends: () => [],
+    },
+  } as unknown as WorkspaceToolFacade;
+  return createCoordinatedWorkspaceToolFacade(workspace, database).runtime!;
+}
+
+async function allowQueuedTransactionToStart(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function memoryWorkspace(seed: Record<string, string> = {}) {
@@ -443,6 +525,122 @@ describe("createQuotaWorkspace", () => {
       entries: 1,
       dirty: false,
     });
+  });
+});
+
+describe("createCoordinatedWorkspaceToolFacade", () => {
+  it("keeps concurrent rollback from undoing a Computer execution result", async () => {
+    const database = new RollbackQueueDatabase();
+    const execution = deferred<void>();
+    const rollback = deferred<void>();
+    const concurrentStarted = deferred<void>();
+    const handle = runtimeHandle(new ReadableStream(), async () => {
+      await execution.promise;
+      database.records.push("computer");
+      return {
+        status: "completed",
+        exitCode: 0,
+        stdout: "done",
+        stderr: "",
+        pushed: 0,
+        pulled: 0,
+        skipped: [],
+        sync: { status: "complete", applied: 0, skipped: [] },
+      };
+    });
+    const runtime = coordinatedRuntime(database, async () => handle);
+
+    const running = await runtime.exec("export default 1", { encoding: "utf8" });
+    const result = running.result();
+    const concurrent = database.transaction(async () => {
+      database.records.push("concurrent");
+      concurrentStarted.resolve();
+      await rollback.promise;
+      throw new Error("rollback concurrent transaction");
+    });
+
+    await allowQueuedTransactionToStart();
+    expect(database.records).toEqual([]);
+
+    execution.resolve();
+    await expect(result).resolves.toMatchObject({ stdout: "done" });
+    await concurrentStarted.promise;
+    rollback.resolve();
+    await expect(concurrent).rejects.toThrow("rollback concurrent transaction");
+    expect(database.records).toEqual(["computer"]);
+  });
+
+  it("holds the database queue through terminal streamed events", async () => {
+    const database = new RollbackQueueDatabase();
+    let events!: ReadableStreamDefaultController<WorkspaceRuntimeEvent<"utf8">>;
+    const source = new ReadableStream<WorkspaceRuntimeEvent<"utf8">>({
+      start(controller) {
+        events = controller;
+      },
+    });
+    const handle = runtimeHandle(source, async () => {
+      throw new Error("result should not be used while streaming");
+    });
+    const runtime = coordinatedRuntime(database, async () => handle);
+    const running = await runtime.exec("export default 1", { encoding: "utf8" });
+    const reader = running.getReader();
+    const concurrentStarted = deferred<void>();
+    let didStartConcurrent = false;
+    const concurrent = database.transaction(async () => {
+      didStartConcurrent = true;
+      concurrentStarted.resolve();
+    });
+
+    const first = reader.read();
+    events.enqueue({ id: "exec-1", seq: 1, name: "stdout", value: "live" });
+    await expect(first).resolves.toEqual({
+      done: false,
+      value: { id: "exec-1", seq: 1, name: "stdout", value: "live" },
+    });
+    await allowQueuedTransactionToStart();
+    expect(didStartConcurrent).toBe(false);
+
+    const terminal = reader.read();
+    events.close();
+    await expect(terminal).resolves.toEqual({ done: true, value: undefined });
+    await concurrentStarted.promise;
+    await concurrent;
+  });
+
+  it("forwards execution abort and releases only after its terminal event", async () => {
+    const database = new RollbackQueueDatabase();
+    let events!: ReadableStreamDefaultController<WorkspaceRuntimeEvent<"utf8">>;
+    const source = new ReadableStream<WorkspaceRuntimeEvent<"utf8">>({
+      start(controller) {
+        events = controller;
+      },
+    });
+    const killed = deferred<string | undefined>();
+    const handle = runtimeHandle(
+      source,
+      async () => {
+        throw new Error("result should not be used while streaming");
+      },
+      async (signal) => {
+        killed.resolve(signal);
+      }
+    );
+    const runtime = coordinatedRuntime(database, async () => handle);
+    const running = await runtime.exec("while (true) {}", { encoding: "utf8" });
+    const reader = running.getReader();
+    const terminal = reader.read();
+    let concurrentStarted = false;
+    const concurrent = database.transaction(async () => {
+      concurrentStarted = true;
+    });
+
+    await running.kill("SIGTERM");
+    await expect(killed.promise).resolves.toBe("SIGTERM");
+    expect(concurrentStarted).toBe(false);
+    events.close();
+    await expect(terminal).resolves.toEqual({ done: true, value: undefined });
+    await concurrent;
+    expect(concurrentStarted).toBe(true);
   });
 });
 
