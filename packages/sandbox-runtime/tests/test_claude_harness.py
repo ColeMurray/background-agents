@@ -42,8 +42,8 @@ from sandbox_runtime.harness.claude import (
     reasoning_options,
 )
 from sandbox_runtime.harness.claude_env import ClaudeAuthMode
-from sandbox_runtime.harness.claude_tools import OI_TOOL_SERVER_NAME, ToolServerConfig
 from sandbox_runtime.harness.claude_translate import AUTHENTICATION_FAILED_MESSAGE
+from sandbox_runtime.harness.tools import OI_TOOL_SERVER_NAME, ToolServerConfig
 from tests.claude_fakes import (
     FakeCredentialClient,
     Harness,
