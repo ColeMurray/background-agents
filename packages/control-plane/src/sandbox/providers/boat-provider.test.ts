@@ -367,6 +367,31 @@ describe("BoatSandboxProvider", () => {
       expect(client.hostPort).not.toHaveBeenCalled();
     });
 
+    it("releases the launch only after a lost create is repeated and the tunnel env file is written", async () => {
+      // The machine can come up, and Boat start the setup script, while this
+      // side is still waiting out a lost create response; the script waits for
+      // the marker, so start.sh can never run before its tunnel URLs.
+      const createSandbox = vi
+        .fn()
+        .mockRejectedValueOnce(new BoatApiError("upstream", 503))
+        .mockImplementationOnce(async (params: BoatCreateSandboxParams) => boatCreated(params));
+      const client = mockClient({ createSandbox });
+      await createProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { tunnelPorts: [3000] },
+      });
+
+      expect(createSandbox).toHaveBeenCalledTimes(2);
+      const writes = vi.mocked(client.writeFile).mock;
+      expect(writes.calls.map(([, file]) => file.path)).toEqual([
+        BOAT_TUNNEL_ENV_FILE_PATH,
+        BOAT_LAUNCH_MARKER_PATH,
+      ]);
+      const repeatedCreate = createSandbox.mock.invocationCallOrder[1];
+      expect(writes.invocationCallOrder[0]).toBeGreaterThan(repeatedCreate);
+      expect(writes.invocationCallOrder[1]).toBeGreaterThan(writes.invocationCallOrder[0]);
+    });
+
     it("does not retry a start-rate limit and classifies it transient", async () => {
       const client = mockClient({
         createSandbox: vi.fn(async () => {
