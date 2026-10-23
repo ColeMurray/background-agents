@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 23, 2026
+
+**Faster sandbox boots.** The runtime now fetches managed skills and session memory side by side
+instead of one after the other. On Boat, the control plane re-reads a starting sandbox as soon as
+the previous read has answered rather than every two seconds, watches the launcher for one second
+instead of five after starting it, and names the sandbox while it hosts its ports rather than
+before. Together these take a few seconds off every boot.
+
 ## October 22, 2026
 
 **Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A

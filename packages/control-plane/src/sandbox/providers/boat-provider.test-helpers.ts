@@ -97,6 +97,7 @@ export const baseCreateConfig = {
 /** Polling intervals shrunk so the provider's waits complete within a unit test. */
 export const fastTimings: BoatLifecycleTimings = {
   pollIntervalMs: 1,
+  readyPollIntervalMs: 1,
   readyTimeoutMs: 200,
   stopTimeoutMs: 200,
   launchSettleMs: 5,

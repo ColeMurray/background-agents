@@ -222,11 +222,15 @@ export class BoatSandboxProvider implements SandboxProvider {
       await this.lifecycle.ensurePrivate(created);
 
       const ready = await this.lifecycle.waitForReady(boatSandboxId);
-      await this.nameSandbox(boatSandboxId, config.sandboxId);
-      const access = await this.exposeAccess(boatSandboxId, config.sandboxId, portPlan, {
-        codeServerPassword,
-        vncPassword,
-      });
+      // The dashboard name is cosmetic and never fails a launch, so it rides
+      // alongside the port hosting instead of ahead of it.
+      const [access] = await Promise.all([
+        this.exposeAccess(boatSandboxId, config.sandboxId, portPlan, {
+          codeServerPassword,
+          vncPassword,
+        }),
+        this.nameSandbox(boatSandboxId, config.sandboxId),
+      ]);
       await this.lifecycle.launchRuntime(boatSandboxId);
 
       return {

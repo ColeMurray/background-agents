@@ -661,3 +661,59 @@ async def test_memory_failure_is_attributed_and_prevents_harness_start(tmp_path)
         ("memory", "started"),
         ("memory", "failed"),
     ]
+
+
+async def test_skills_and_memory_materialize_side_by_side(tmp_path):
+    events = []
+    supervisor = _supervisor(tmp_path, events)
+    skills_started = asyncio.Event()
+    memory_started = asyncio.Event()
+
+    async def materialize_skills(*_args):
+        skills_started.set()
+        await asyncio.wait_for(memory_started.wait(), timeout=1)
+        events.append("skills")
+
+    async def materialize_memory():
+        memory_started.set()
+        await asyncio.wait_for(skills_started.wait(), timeout=1)
+        events.append("memory")
+
+    supervisor.managed_skills.materialize = AsyncMock(side_effect=materialize_skills)
+    supervisor.memory = MagicMock()
+    supervisor.memory.materialize = AsyncMock(side_effect=materialize_memory)
+
+    # Each phase waits for the other to have started: run one after the other
+    # and the boot deadlocks on the first.
+    assert await asyncio.wait_for(supervisor.run(), timeout=3) is True
+
+    phases = [
+        (line["phase"], line["status"])
+        for line in _lines()
+        if line["phase"] in ("skills", "memory")
+    ]
+    assert phases[:2] == [("skills", "started"), ("memory", "started")]
+    assert sorted(phases[2:]) == [("memory", "completed"), ("skills", "completed")]
+    assert events.index("harness") > max(events.index("skills"), events.index("memory"))
+
+
+async def test_skills_failure_is_attributed_while_memory_still_finishes(tmp_path):
+    events = []
+    supervisor = _supervisor(tmp_path, events)
+    supervisor.managed_skills.materialize = AsyncMock(
+        side_effect=RuntimeError("catalog unavailable")
+    )
+    supervisor.memory = MagicMock()
+    supervisor.memory.materialize = AsyncMock(side_effect=lambda: events.append("memory"))
+
+    assert await supervisor.run() is False
+
+    supervisor.harness_process.start.assert_not_awaited()
+    assert "memory" in events
+    by_phase = {}
+    for line in _lines():
+        if line["phase"] in ("skills", "memory"):
+            by_phase.setdefault(line["phase"], []).append(line["status"])
+    assert by_phase == {"skills": ["started", "failed"], "memory": ["started", "completed"]}
+    reported = supervisor._report_fatal_error.await_args.args
+    assert isinstance(reported[1], BootPhaseError) and reported[1].phase == "skills"

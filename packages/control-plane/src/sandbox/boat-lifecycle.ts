@@ -87,17 +87,25 @@ const CREATE_ATTEMPTS = 3;
 
 /** How long a flow waits, and how often it looks, at each step of a sandbox's life. */
 export interface BoatLifecycleTimings {
-  /** How often a flow waiting on a Boat sandbox re-reads its state. */
+  /** How often a flow waiting on an archive re-reads the sandbox's state. */
   pollIntervalMs: number;
+  /**
+   * Pause between reads while a created or resumed sandbox is still starting.
+   * Every read is a round trip to Boat's API, so this is a floor under the
+   * cadence rather than the cadence: the next read goes out as soon as the
+   * previous one has answered and this pause has passed.
+   */
+  readyPollIntervalMs: number;
   /** Budget for a created or resumed sandbox to report `ready`. */
   readyTimeoutMs: number;
   /** Budget for an archive when the caller set no deadline of its own. */
   stopTimeoutMs: number;
   /**
    * How long the launcher is watched after a start for an early exit. The
-   * launcher execs into the long-lived runtime, so a process that is still
-   * running after this window has booted far enough for the bridge to take
-   * over readiness reporting.
+   * window only has to catch a launcher that fails at once (bad arguments, a
+   * lock another runtime holds); a process still running when it closes is
+   * the bridge's to report on, through its phone-home and the connecting
+   * timeout, as on every provider.
    */
   launchSettleMs: number;
   launchPollIntervalMs: number;
@@ -107,9 +115,10 @@ export interface BoatLifecycleTimings {
 
 const DEFAULT_BOAT_LIFECYCLE_TIMINGS: BoatLifecycleTimings = {
   pollIntervalMs: 2_000,
+  readyPollIntervalMs: 250,
   readyTimeoutMs: 150_000,
   stopTimeoutMs: 120_000,
-  launchSettleMs: 5_000,
+  launchSettleMs: 1_000,
   launchPollIntervalMs: 1_000,
   createRetryDelayMs: 2_000,
 };
@@ -377,7 +386,7 @@ export class BoatSandboxLifecycle {
           "transient"
         );
       }
-      await delayUnlessCancelled(this.timings.pollIntervalMs);
+      await delayUnlessCancelled(this.timings.readyPollIntervalMs);
     }
   }
 
