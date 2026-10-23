@@ -814,8 +814,8 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/session/schema.ts",
-        "find": "  ...CORE_MIGRATIONS,",
-        "replace": "  ...CORE_MIGRATIONS, CORE_MIGRATIONS[0]!,",
+        "find": "return [...CORE_MIGRATIONS, ...sessionSchemaExtensionMigrations()].sort(",
+        "replace": "return [...CORE_MIGRATIONS, ...sessionSchemaExtensionMigrations(), ...sessionSchemaExtensionMigrations()].sort(",
         "cmd": "npm test -w @open-inspect/control-plane -- src/session/schema.test.ts -t \"has unique, strictly increasing migration ids\""
       }
     },
