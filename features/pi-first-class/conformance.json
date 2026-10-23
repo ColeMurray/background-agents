@@ -844,14 +844,14 @@
       "tests": [
         {
           "file": "packages/control-plane/src/routes/session-index.test.ts",
-          "name": "destroys Pi state before deleting its D1 index row"
+          "name": "destroys the session runtime before deleting its D1 index row"
         }
       ],
       "mutation": {
         "file": "packages/control-plane/src/routes/session-index.ts",
-        "find": "  if (session?.harness === \"pi\") {",
+        "find": "  if (session) {",
         "replace": "  if (false) {",
-        "cmd": "npm test -w @open-inspect/control-plane -- src/routes/session-index.test.ts -t \"destroys Pi state before deleting its D1 index row\""
+        "cmd": "npm test -w @open-inspect/control-plane -- src/routes/session-index.test.ts -t \"destroys the session runtime before deleting its D1 index row\""
       }
     },
     "G-5": {

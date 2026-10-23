@@ -720,16 +720,6 @@
       "need": ["DEV:personal-mcp"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
-    "packages/control-plane/src/pi/pi-harness-wake.test.ts": {
-      "layer": "overbuilt-deleted",
-      "need": [],
-      "why": "Deleted in the Pi 1.4 upgrade: Agents 0.30 and Pi now provide the native onWake, wake, restart, sleep, and parked-task contract this compatibility test duplicated."
-    },
-    "packages/control-plane/src/pi/pi-harness-wake.ts": {
-      "layer": "overbuilt-deleted",
-      "need": [],
-      "why": "Deleted in the Pi 1.4 upgrade: its derived wake controller duplicated the native PiHarness onWake lifecycle and could keep recovery policy out of sync with Agents 0.30."
-    },
     "packages/control-plane/src/pi/pi-telemetry.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],

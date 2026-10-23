@@ -266,6 +266,19 @@ export class SessionMessageQueue {
     private readonly inProcessRuntime?: InProcessHarnessRuntime
   ) {}
 
+  private unsupportedStoredHarnessMessage(value: string | null | undefined): string {
+    return `Session harness "${value ?? ""}" is not supported by this deployment`;
+  }
+
+  private logUnsupportedStoredHarness(value: string | null | undefined): void {
+    this.log.error("prompt.dispatch", {
+      event: "prompt.dispatch",
+      outcome: "refused",
+      reason: "unsupported_stored_harness",
+      harness: value ?? null,
+    });
+  }
+
   async enqueueAutofix(
     command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
   ): Promise<EnqueueAutofixResponse> {
@@ -274,7 +287,7 @@ export class SessionMessageQueue {
     const harness = getStoredHarnessOrRefuse(session?.harness);
     const selectionError =
       harness === null
-        ? `Session harness "${session?.harness ?? ""}" is not supported by this deployment`
+        ? this.unsupportedStoredHarnessMessage(session?.harness)
         : getHarnessCapabilities(harness).selectionPolicy === "strict"
           ? await this.getProviderAuthenticationError(session?.model ?? DEFAULT_MODEL)
           : null;
@@ -594,7 +607,10 @@ export class SessionMessageQueue {
       return;
     }
     const currentHarness = getStoredHarnessOrRefuse(currentSession.harness);
-    if (currentHarness === null) return;
+    if (currentHarness === null) {
+      this.logUnsupportedStoredHarness(currentSession.harness);
+      return;
+    }
     const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
       if (this.inProcessRuntime?.harness === currentHarness) {
@@ -625,8 +641,12 @@ export class SessionMessageQueue {
       return;
     }
     const now = Date.now();
-    const session = currentSession;
-    const harness = currentHarness;
+    const session = this.repository.getSession();
+    const harness = getStoredHarnessOrRefuse(session?.harness);
+    if (harness === null) {
+      this.logUnsupportedStoredHarness(session?.harness);
+      return;
+    }
     const resolvedModel = resolveHarnessModel(harness, message.model || session?.model);
     const inheritedReasoningEffort = inheritReasoningEffort(
       harness,
@@ -1434,7 +1454,11 @@ export class SessionMessageQueue {
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
     const session = this.repository.getSession();
     const harness = getStoredHarnessOrRefuse(session?.harness);
-    if (harness === null) throw new HarnessModelIncompatibleError("Unsupported stored harness");
+    if (harness === null) {
+      throw new HarnessModelIncompatibleError(
+        this.unsupportedStoredHarnessMessage(session?.harness)
+      );
+    }
     const strictSelection = getHarnessCapabilities(harness).selectionPolicy === "strict";
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
