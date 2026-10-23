@@ -41,7 +41,7 @@ variables {
   enable_slack_bot = false
 
   # Each run enables the bot itself so the suite also covers the real default.
-  discord_application_id      = "123"
+  discord_application_id      = "123456789012345678"
   discord_public_key          = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   discord_bot_token           = "test-discord-token"
   discord_allowed_role_ids    = "456"
@@ -111,6 +111,28 @@ run "rejects_a_malformed_public_key" {
   }
 
   expect_failures = [var.discord_public_key]
+}
+
+run "rejects_a_malformed_application_id" {
+  command = plan
+
+  variables {
+    enable_discord_bot     = true
+    discord_application_id = "123"
+  }
+
+  expect_failures = [var.discord_application_id]
+}
+
+run "rejects_a_whitespace_bot_token" {
+  command = plan
+
+  variables {
+    enable_discord_bot = true
+    discord_bot_token  = "test discord token"
+  }
+
+  expect_failures = [var.discord_bot_token]
 }
 
 run "rejects_an_unknown_harness" {

@@ -350,9 +350,9 @@ variable "enable_discord_bot" {
 
   validation {
     condition = var.enable_discord_bot == false || (
-      length(var.discord_application_id) > 0 &&
-      length(var.discord_public_key) > 0 &&
-      length(var.discord_bot_token) > 0 &&
+      trimspace(var.discord_application_id) != "" &&
+      trimspace(var.discord_public_key) != "" &&
+      trimspace(var.discord_bot_token) != "" &&
       length(compact([for id in split(",", var.discord_allowed_role_ids) : trimspace(id)])) > 0
     )
     error_message = "When enable_discord_bot is true, discord_application_id, discord_public_key, and discord_bot_token must be non-empty, and discord_allowed_role_ids must name at least one role ID."
@@ -363,6 +363,12 @@ variable "discord_application_id" {
   description = "Discord application ID (Developer Portal → General Information)"
   type        = string
   default     = ""
+
+  # Anything but a snowflake breaks every interaction callback URL at runtime.
+  validation {
+    condition     = var.discord_application_id == "" || can(regex("^[0-9]{17,20}$", var.discord_application_id))
+    error_message = "discord_application_id must be the application's numeric snowflake ID."
+  }
 }
 
 variable "discord_public_key" {
@@ -382,6 +388,12 @@ variable "discord_bot_token" {
   type        = string
   default     = ""
   sensitive   = true
+
+  # Stray whitespace from a paste fails every Discord API call at runtime.
+  validation {
+    condition     = var.discord_bot_token == "" || can(regex("^[^[:space:]]+$", var.discord_bot_token))
+    error_message = "discord_bot_token must not contain whitespace."
+  }
 }
 
 variable "discord_allowed_role_ids" {
