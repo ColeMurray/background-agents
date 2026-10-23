@@ -20,6 +20,7 @@ const mockSessionIndexStore = {
   listInboxSnapshot: vi.fn(),
   get: vi.fn(),
   delete: vi.fn(),
+  get: vi.fn(),
   updateReadState: vi.fn(),
 };
 
