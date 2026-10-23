@@ -145,7 +145,7 @@ export class SessionBudgetService {
     now: number
   ): BudgetTransition {
     const reason = `Session cost limit reached: ${formatCost(totalCost)} of ${formatCost(limit)}`;
-    const stopPreparation = this.executionStop.prepare(reason, now);
+    const stopPreparation = this.executionStop.prepare(reason, now, false);
     return {
       warningEvent: this.persistWarning(
         `${reason}. ${stopPreparation ? "Execution stopped." : "Work paused."}`,

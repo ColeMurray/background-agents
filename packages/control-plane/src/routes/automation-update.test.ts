@@ -170,6 +170,23 @@ describe("automation read, update, and delete routes", () => {
   });
 
   describe("PUT /automations/:id (update)", () => {
+    it("updates the job retry budget, including disabling retries", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      for (const maxRetries of [2, 0]) {
+        const response = await callRoute("PUT", "/automations/auto-1", { body: { maxRetries } });
+        expect(response.status).toBe(200);
+        expect(mockStore.bindAutomationUpdate).toHaveBeenLastCalledWith(
+          "auto-1",
+          expect.objectContaining({ max_retries: maxRetries })
+        );
+      }
+      expect(mockStore.bindWithdrawIneligibleRetries).toHaveBeenCalledTimes(2);
+      expect(mockBatch).toHaveBeenLastCalledWith([
+        { sql: "update-automation" },
+        { sql: "withdraw-retries" },
+      ]);
+    });
+
     it("refuses target edits the current executor could not launch", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: "executor-1" });
       vi.mocked(isAutomationExecutionAuthorized).mockResolvedValue(false);

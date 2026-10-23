@@ -32,7 +32,7 @@ export class ExecutionStopCoordinator {
   ) {}
 
   async stop(reason = "Execution was stopped"): Promise<void> {
-    const preparation = this.repository.transaction(() => this.prepare(reason, Date.now()));
+    const preparation = this.repository.transaction(() => this.prepare(reason, Date.now(), true));
     if (!preparation) {
       this.messenger.broadcast({ type: "processing_status", isProcessing: false });
       return;
@@ -40,11 +40,11 @@ export class ExecutionStopCoordinator {
     await this.deliver(preparation);
   }
 
-  prepare(reason: string, now: number): ExecutionStopPreparation | null {
+  prepare(reason: string, now: number, cancelled = false): ExecutionStopPreparation | null {
     const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
     const failure = processingMessage
-      ? this.messageFailures.record(processingMessage.id, reason, now, "processing")
+      ? this.messageFailures.record(processingMessage.id, reason, now, "processing", cancelled)
       : null;
     if (!failure) return null;
     this.messageRepository.markMessageAwaitingStopConfirmation(

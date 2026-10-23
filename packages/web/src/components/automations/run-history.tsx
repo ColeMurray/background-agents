@@ -31,6 +31,17 @@ function statusBadge(status: AutomationInvocation["status"] | AutomationRun["sta
   return <Badge className={BADGE_TONE_CLASSES[presentation.tone]}>{presentation.label}</Badge>;
 }
 
+function RetryDetails({ run }: { run: AutomationRun }) {
+  if (run.attempt == null) return null;
+  return (
+    <span className="text-xs text-muted-foreground">
+      Attempt {run.attempt}
+      {run.supersededAt != null && " (superseded)"}
+      {run.retryAt != null && ` · Next attempt ${new Date(run.retryAt).toLocaleString()}`}
+    </span>
+  );
+}
+
 function formatDuration(startedAt: number | null, completedAt: number | null): string | null {
   if (!startedAt || !completedAt) return null;
   const durationMs = completedAt - startedAt;
@@ -53,6 +64,7 @@ function formatRunReason(reason: string): string {
 }
 
 function formatRunCounts(runs: AutomationRun[]): string {
+  runs = runs.filter((run) => run.supersededAt == null);
   const count = (status: AutomationRun["status"]) =>
     runs.filter((run) => run.status === status).length;
   const active = count("starting") + count("running");
@@ -60,6 +72,7 @@ function formatRunCounts(runs: AutomationRun[]): string {
   if (count("failed") > 0) parts.push(`${count("failed")} failed`);
   if (count("unauthorized") > 0) parts.push(`${count("unauthorized")} unauthorized`);
   if (count("skipped") > 0) parts.push(`${count("skipped")} skipped`);
+  if (count("retrying") > 0) parts.push(`${count("retrying")} retrying`);
   if (active > 0) parts.push(`${active} running`);
   return parts.join(", ");
 }
@@ -102,6 +115,7 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 min-w-0">
           {statusBadge(run.status)}
+          <RetryDetails run={run} />
           {run.sessionTitle && (
             <span className="text-sm text-foreground truncate">{run.sessionTitle}</span>
           )}
@@ -149,6 +163,7 @@ function TargetRunRow({
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {statusBadge(run.status)}
+          <RetryDetails run={run} />
           <span className="text-sm font-medium text-foreground truncate">{repoLabel}</span>
           {run.baseBranch && (
             <span className="text-xs text-muted-foreground">{run.baseBranch}</span>
@@ -194,6 +209,7 @@ function FanOutInvocationRow({
   environmentName: (environmentId: string) => string;
 }) {
   const duration = formatDuration(invocationStartedAt(invocation), invocation.completedAt);
+  const liveRuns = invocation.runs.filter((run) => run.supersededAt == null);
   return (
     <div className="px-4 py-3">
       <button
@@ -211,8 +227,8 @@ function FanOutInvocationRow({
           {statusBadge(invocation.status)}
           <span className="text-sm font-medium text-foreground">
             {invocation.runs.some((run) => run.environmentId)
-              ? `${invocation.runs.length} targets`
-              : `${invocation.runs.length} repositories`}
+              ? `${liveRuns.length} targets`
+              : `${liveRuns.length} ${liveRuns.length === 1 ? "repository" : "repositories"}`}
           </span>
           <span className="text-xs text-muted-foreground">{formatRunCounts(invocation.runs)}</span>
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}

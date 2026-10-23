@@ -295,7 +295,12 @@ export class CallbackNotificationService {
    * Best-effort notification of the originating client with retry.
    * Routes to the correct service binding based on the message source.
    */
-  async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
+  async notifyComplete(
+    messageId: string,
+    success: boolean,
+    error?: string,
+    cancelled?: boolean
+  ): Promise<void> {
     const startedAt = Date.now();
     let sessionId: string | null = null;
     let source: string | null = null;
@@ -339,7 +344,8 @@ export class CallbackNotificationService {
           automationContext.data,
           success,
           error,
-          messageId
+          messageId,
+          cancelled
         );
         return;
       }
@@ -477,7 +483,8 @@ export class CallbackNotificationService {
     context: { automationId: string; runId: string; automationName: string },
     success: boolean,
     error: string | undefined,
-    messageId: string
+    messageId: string,
+    cancelled?: boolean
   ): Promise<CallbackDeliveryResult> {
     const completeAutomationRun = this.completeAutomationRun;
     if (!completeAutomationRun) {
@@ -493,6 +500,7 @@ export class CallbackNotificationService {
       success,
       error,
       automationName: context.automationName,
+      ...(cancelled ? { cancelled: true } : {}),
     };
 
     const delivery = await retryDelivery<void, never>(

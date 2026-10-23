@@ -93,3 +93,12 @@ export async function isAutomationExecutionAuthorized(
     .first<{ authorized: number }>();
   return row?.authorized === 1;
 }
+
+/** Raised when an automation's execution principal lacks required authorization. */
+export class AutomationExecutionUnauthorizedError extends Error {
+  /** Create an error for an unauthorized automation execution principal. */
+  constructor(readonly reason = "execution_authorization_denied") {
+    super("Automation execution principal is not authorized");
+    this.name = "AutomationExecutionUnauthorizedError";
+  }
+}

@@ -149,6 +149,7 @@ describe("automation grant-denial statuses", () => {
     expect(automationInvocationStatusSchema.options).toEqual([
       "starting",
       "running",
+      "retrying",
       "completed",
       "failed",
       "partial_failed",

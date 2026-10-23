@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useState, useMemo } from "react";
+import {
+  AUTOMATION_RETRY_DELAY_MS,
+  MAX_AUTOMATION_RETRIES,
+} from "@open-inspect/shared/types/automations";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useResourceTeams } from "@/hooks/use-resource-teams";
@@ -67,6 +71,7 @@ export function AutomationForm({
     [initialValues?.repositories]
   );
 
+  const [maxRetries, setMaxRetries] = useState(initialValues?.maxRetries ?? 0);
   const [name, setName] = useState(initialDraft.name);
   const [providerSelections, setProviderSelections] = useState(initialDraft.providerSelections);
   const [agent, setAgent] = useState(initialDraft.agent);
@@ -163,7 +168,7 @@ export function AutomationForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formEvaluation.valid || !scopeValid || !environmentsUsable || submitting) return;
-    onSubmit({ ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) });
+    onSubmit({ ...formEvaluation.values, maxRetries, ...(mode === "create" ? { teamId } : {}) });
   };
 
   return (
@@ -253,6 +258,27 @@ export function AutomationForm({
         slackChannelError={slackChannelError}
         conditionErrors={conditionErrors}
       />
+
+      <div>
+        <label htmlFor="automation-max-retries" className="block text-sm font-medium mb-1.5">
+          Maximum retries
+        </label>
+        <Input
+          id="automation-max-retries"
+          type="number"
+          min={0}
+          max={MAX_AUTOMATION_RETRIES}
+          step={1}
+          value={maxRetries}
+          disabled={submitting}
+          onChange={(event) => setMaxRetries(Number(event.target.value))}
+        />
+        <FieldDescription>
+          Retry failed runs after {AUTOMATION_RETRY_DELAY_MS / 60_000} minutes, doubling the delay
+          each time. Zero disables retries. Each attempt starts a new session and may repeat work
+          done before the failure.
+        </FieldDescription>
+      </div>
 
       <AutomationInstructionsField
         value={instructions}

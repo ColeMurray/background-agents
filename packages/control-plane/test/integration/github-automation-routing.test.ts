@@ -664,6 +664,7 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       base_branch: STORED_REPOSITORY.base_branch,
     });
     await seedRun(activeRun, { concurrencyKey: event.concurrencyKey });
+    const storedActiveRun = (await fetchRuns(id)).find((run) => run.id === activeRun.id);
     const scheduler = createScheduler();
 
     for (let delivery = 0; delivery < 2; delivery++) {
@@ -677,9 +678,9 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     await expectUnauthorizedRun(id, event);
     const runs = await fetchRuns(id);
     expect(runs).toHaveLength(2);
-    expect(runs.find((run) => run.id === activeRun.id)).toEqual(activeRun);
+    expect(runs.find((run) => run.id === activeRun.id)).toEqual(storedActiveRun);
     const store = new AutomationStore(env.DB);
-    expect(await store.getActiveRunForKey(id, event.concurrencyKey)).toEqual(activeRun);
+    expect(await store.getActiveRunForKey(id, event.concurrencyKey)).toEqual(storedActiveRun);
     expect((await store.listInvocations(id, { limit: 10, offset: 0 })).total).toBe(2);
     expect(automationRepositories.resolveAutomationRepositories).not.toHaveBeenCalled();
     expect(automationSessionTargets.resolveAutomationSessionTarget).not.toHaveBeenCalled();

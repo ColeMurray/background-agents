@@ -151,6 +151,18 @@ describe("automation create route", () => {
       instructions: "Run tests",
     };
 
+    it("persists an opt-in job retry budget", async () => {
+      const handle = createTestRequestHandler([automationRoutes]);
+      const request = automationRequest((request, env, tasks) => handle(request, env, tasks));
+      const response = await request("POST", "/automations", {
+        body: { ...validBody, maxRetries: 3 },
+      });
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ max_retries: 3 })
+      );
+    });
+
     it("saves native max and effective OpenAI pins without rollout configuration", async () => {
       const preferences = vi
         .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")

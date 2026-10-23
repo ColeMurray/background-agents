@@ -64,6 +64,36 @@ function makeInvocation(overrides: Partial<AutomationInvocation> = {}): Automati
 }
 
 describe("RunHistory", () => {
+  it("shows pending retries, attempt counts, and superseded history", () => {
+    const invocation = makeInvocation({
+      status: "retrying",
+      completedAt: null,
+      runs: [
+        makeRun({
+          id: "old",
+          status: "failed",
+          attempt: 1,
+          supersededAt: FIRED_AT + 65_000,
+          failureReason: "D1 stalled",
+        }),
+        makeRun({
+          id: "retry",
+          status: "retrying",
+          attempt: 2,
+          retryAt: FIRED_AT + 240_000,
+          failureReason: "Transient failure",
+        }),
+      ],
+    });
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+    expect(screen.getByText("Retrying")).toBeInTheDocument();
+    expect(screen.getByText("0 completed, 1 retrying")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("Attempt 1 (superseded)")).toBeInTheDocument();
+    expect(screen.getByText(/Attempt 2 · Next attempt/)).toBeInTheDocument();
+    expect(screen.getByText("D1 stalled")).toBeInTheDocument();
+  });
+
   it("shows the empty state before any firing", () => {
     render(<RunHistory invocations={[]} total={0} loading={false} hasMore={false} />);
 

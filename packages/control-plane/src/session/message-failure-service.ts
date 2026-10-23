@@ -8,6 +8,7 @@ import type { SessionMessenger } from "./messenger";
 export interface RecordedMessageFailure {
   event: Extract<SandboxEvent, { type: "execution_complete" }>;
   completion: RecordedMessageCompletion;
+  cancelled?: boolean;
 }
 
 /** One failure policy for queued, timed-out, cancelled, and budget-stopped work. */
@@ -30,7 +31,8 @@ export class MessageFailureService {
     messageId: string,
     error: string,
     completedAt: number,
-    expectedStatus: "pending" | "processing"
+    expectedStatus: "pending" | "processing",
+    cancelled?: boolean
   ): RecordedMessageFailure | null {
     const event: RecordedMessageFailure["event"] = {
       type: "execution_complete",
@@ -41,11 +43,11 @@ export class MessageFailureService {
       timestamp: completedAt / 1000,
     };
     const completion = this.repository.recordMessageCompletion(event, completedAt, expectedStatus);
-    return completion ? { event, completion } : null;
+    return completion ? { event, completion, ...(cancelled ? { cancelled: true } : {}) } : null;
   }
 
   /** Publish only after the transaction containing record() has committed. */
-  deliver({ event, completion }: RecordedMessageFailure): void {
+  deliver({ event, completion, cancelled }: RecordedMessageFailure): void {
     this.backgroundTasks.submit(
       () =>
         this.projectTerminalMessage(
@@ -63,7 +65,10 @@ export class MessageFailureService {
       { name: "terminal_message.project", context: { message_id: completion.messageId } }
     );
     this.backgroundTasks.submit(
-      () => this.callbacks.notifyComplete(completion.messageId, false, event.error),
+      () =>
+        cancelled
+          ? this.callbacks.notifyComplete(completion.messageId, false, event.error, true)
+          : this.callbacks.notifyComplete(completion.messageId, false, event.error),
       { name: "callback.notify_complete", context: { message_id: completion.messageId } }
     );
   }

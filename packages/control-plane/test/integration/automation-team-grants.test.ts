@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import { AutomationExecutionUnauthorizedError } from "../../src/automation/authorization-guard";
 import * as automationRepositories from "../../src/automation/repository";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRepositoryInsert } from "../../src/db/automation-store";
@@ -8,7 +9,7 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import * as repositoryResolution from "../../src/repos/resolve";
-import { AutomationExecutionUnauthorizedError, Scheduler } from "../../src/scheduler/scheduler";
+import { Scheduler } from "../../src/scheduler/scheduler";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, sqlDatabase } from "./helpers";
