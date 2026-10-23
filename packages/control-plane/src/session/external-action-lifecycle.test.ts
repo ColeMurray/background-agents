@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { initSchema } from "./schema";
+import "./overlay-schema-migrations";
 import {
   ExternalActionGateway,
   type ExternalActionExecutionResult,

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { initSchema } from "./schema";
 import { ExternalActionGateway } from "./external-action-gateway";
+import "./overlay-schema-migrations";
 
 const request = {
   toolCallId: "call-1",

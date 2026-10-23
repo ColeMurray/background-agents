@@ -4,6 +4,7 @@ import { createNodeSqlStorage } from "../node/sqlite-storage";
 import { ExternalActionGateway } from "./external-action-gateway";
 import { ExternalActionAuditOutbox } from "./external-action-audit-outbox";
 import { initSchema } from "./schema";
+import "./overlay-schema-migrations";
 
 let database: DatabaseSync;
 

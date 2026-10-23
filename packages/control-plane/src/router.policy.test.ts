@@ -85,21 +85,21 @@ describe("route policy table", () => {
     });
     expect(routeFor("POST", "/mcp-connections")).toMatchObject({
       authentication: { kind: "user" },
-      authorization: { kind: "active-self" },
+      authorization: { kind: "active-user" },
       cacheControl: "private, no-store",
     });
     // The owner's own authorization of a connection is the owner's act on
     // their own account, so the same self authority decides.
     expect(routeFor("POST", "/mcp-connections/mcpconn_1/authorize")).toMatchObject({
       authentication: { kind: "user" },
-      authorization: { kind: "active-self" },
+      authorization: { kind: "active-user" },
       cacheControl: "private, no-store",
     });
     // The server's OAuth callback goes to the broker that owns the
     // connection, and only the connection's owner may reach it.
     expect(routeFor("GET", "/mcp/oauth/callback/mcpconn_1")).toMatchObject({
       authentication: { kind: "user" },
-      authorization: { kind: "active-self" },
+      authorization: { kind: "active-user" },
       cacheControl: "private, no-store",
     });
     // Attaching a personal MCP connection to a session is an action in that
