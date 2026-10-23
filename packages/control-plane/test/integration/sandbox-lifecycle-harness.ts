@@ -6,6 +6,7 @@ import {
 import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
 import { providerResumesAfterStop, type SandboxProvider } from "../../src/sandbox/provider";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
+import { ExpiryContinuation } from "../../src/session/expiry-continuation";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
   SandboxShutdownRepository,
@@ -20,12 +21,13 @@ import { SessionAttachmentRepository } from "../../src/session/session-attachmen
 import { MessageFailureService } from "../../src/session/message-failure-service";
 import { createLogger } from "../../src/logger";
 
-/** Real lifecycle/persistence; queue admission is observed, not dispatched, and status projection is omitted. */
+/** Real lifecycle/persistence; queue admission is observed, not dispatched; status projection is opt-in. */
 export function realLifecycleHarness(
   instance: SessionDO,
   durableState: DurableObjectState,
   provider: SandboxProvider,
   options: {
+    reconcileStatus?: boolean;
     store?: ShutdownStore;
     onQueueAdmission?: (decision: string) => void;
     onAnnouncement?: (message: object) => void;
@@ -95,6 +97,12 @@ export function realLifecycleHarness(
     session: sessions,
     messages,
     failures,
+    continuation: new ExpiryContinuation(
+      sessions,
+      messages,
+      new EventRepository(durableState.storage.sql, transaction),
+      () => 7_200_000
+    ),
     messenger: {
       broadcast: (message: object) => {
         options.onAnnouncement?.(message);
@@ -112,7 +120,10 @@ export function realLifecycleHarness(
       },
     },
     onLifecycleChange: processQueue,
-    reconcileStatusFromMessages: async () => undefined,
+    reconcileStatusFromMessages: async () => {
+      if (options.reconcileStatus)
+        await componentsOf(instance).statusService.reconcileFromMessageState();
+    },
     retireAccess: () => access.retireShutdownAccess(),
   } as never);
   const manager = new SandboxLifecycleManager(
@@ -146,6 +157,7 @@ export function realLifecycleHarness(
   );
   return {
     manager,
+    messages,
     shutdown,
     shutdownAnnouncements,
     lifecycleAnnouncements,

@@ -2617,3 +2617,39 @@ describe("SessionMessageQueue", () => {
     });
   });
 });
+
+describe("expiry continuation queue ordering", () => {
+  it("dispatches the restored task before later queued prompts", async () => {
+    const h = buildQueue();
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.repository.getNextPendingMessage.mockReturnValue(
+      createMessage({ id: "continuation", content: "Continue saved work" })
+    );
+    await h.queue.processMessageQueue();
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "continuation",
+      expect.any(Number),
+      expect.anything()
+    );
+  });
+
+  it("leaves queued work held until restored context is admitted", async () => {
+    const h = buildQueue(() => false);
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "queued-user" }));
+    await h.queue.processMessageQueue();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+  });
+
+  it("dispatches normal queued work after the continuation has finished", async () => {
+    const h = buildQueue();
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "queued-user" }));
+    await h.queue.processMessageQueue();
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "queued-user",
+      expect.any(Number),
+      expect.anything()
+    );
+  });
+});

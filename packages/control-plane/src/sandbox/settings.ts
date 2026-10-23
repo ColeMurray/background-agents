@@ -61,6 +61,14 @@ export function normalizeSandboxSettings(
   const settings = input as Record<string, unknown>;
   const result: SandboxSettings = {};
 
+  if (settings.autoContinueOnExpiry !== undefined) {
+    if (typeof settings.autoContinueOnExpiry !== "boolean") {
+      reject("autoContinueOnExpiry must be a boolean");
+    } else {
+      result.autoContinueOnExpiry = settings.autoContinueOnExpiry;
+    }
+  }
+
   if (settings.terminalEnabled !== undefined) {
     if (typeof settings.terminalEnabled !== "boolean") {
       reject("terminalEnabled must be a boolean");

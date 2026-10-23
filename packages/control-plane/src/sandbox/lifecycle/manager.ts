@@ -149,10 +149,12 @@ export interface SandboxShutdownLifecycle extends VmStartupReconciliationShutdow
   startupDecision(): SandboxStartupDecision;
   /** Holds a failed boot of the retained source, which deleting would lose; false for other objects. */
   holdFailedRetainedBoot(error: string, generation: SandboxGeneration): boolean;
+  /** A failed automatic restore settles its own prompt and holds later work. */
+  holdFailedContinuationBoot(error: string, generation: SandboxGeneration): boolean;
   /** Converts a failed or interrupted saved-state startup into a durable safety hold. */
   holdFailedRecovery(error: string, generation?: SandboxGeneration): void;
   /** Records runtime protocol support; does not itself grant lifecycle command readiness. */
-  runtimeReady(version?: 1): void;
+  runtimeReady(version?: 1, conversationId?: string | null): void;
   /** Accepts only acknowledgement of the current generation before allowing managed work. */
   generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
   /** Durably records correlated execution-stop evidence before terminal capture may begin. */
@@ -1676,6 +1678,27 @@ export class SandboxLifecycleManager
     });
 
     const finding = evaluateAlarmPolicy(sandbox, this.config, now, context.connectedClients);
+    const continuationBootFailure =
+      finding.outcome === "connecting_timeout"
+        ? "Sandbox failed to connect within the allowed time"
+        : finding.outcome === "boot_budget_exceeded"
+          ? formatBootBudgetFailure(sandbox.boot_phase, this.config.bootBudget.timeoutMs)
+          : finding.outcome === "heartbeat_stale"
+            ? "Sandbox stopped heartbeating before automatic continuation could start"
+            : null;
+    if (
+      continuationBootFailure &&
+      this.shutdown.holdFailedContinuationBoot(continuationBootFailure, alarmGeneration)
+    ) {
+      this.storage.updateSandboxStatus("failed");
+      this.recordSpawnFailure(now, sandbox.created_at);
+      this.access.retireShutdownAccess();
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.reportSandboxError(continuationBootFailure);
+      // The automatic message is already settled. Generic watchdog handling
+      // must neither fail a later user request nor retry this restoration.
+      return "no_action";
+    }
     switch (finding.outcome) {
       case "terminal":
         this.log.debug("Alarm: sandbox in terminal state, skipping", {
@@ -1920,8 +1943,13 @@ export class SandboxLifecycleManager
    * and activity follow the guarded commit; the event handler wakes the queue
    * and arms inactivity afterward, preserving their existing ordering.
    */
-  onRuntimeReady(timestamp: number, harness?: string, protocolVersion?: 1): boolean {
-    this.shutdown.runtimeReady(protocolVersion);
+  onRuntimeReady(
+    timestamp: number,
+    harness?: string,
+    protocolVersion?: 1,
+    conversationId?: string | null
+  ): boolean {
+    this.shutdown.runtimeReady(protocolVersion, conversationId);
     if (this.shutdown.isHolding()) return false;
     const row = this.storage.getSandbox();
     if (!row) return false;

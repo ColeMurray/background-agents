@@ -282,3 +282,23 @@ describe("sandbox resource limit drafts", () => {
     expect(providerDefault.values).toEqual(unedited.values);
   });
 });
+
+it("keeps automatic expiry continuation opt-in and allows a repository to opt out", () => {
+  expect(
+    resolveSandboxSettingsDraft({ isGlobal: true, provider: "modal", draft: {} }).values
+      .autoContinueOnExpiry
+  ).toBe(false);
+  const opted = resolveSandboxSettingsDraft({
+    isGlobal: true,
+    provider: "modal",
+    draft: { autoContinueOnExpiry: true },
+  });
+  expect(opted.result.settings).toMatchObject({ autoContinueOnExpiry: true });
+  const overridden = resolveSandboxSettingsDraft({
+    isGlobal: false,
+    provider: "modal",
+    baseDefaults: { autoContinueOnExpiry: true },
+    draft: { autoContinueOnExpiry: false },
+  });
+  expect(overridden.result.settings).toEqual({ autoContinueOnExpiry: false });
+});

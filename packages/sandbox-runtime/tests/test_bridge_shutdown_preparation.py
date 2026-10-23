@@ -637,3 +637,38 @@ async def test_late_generation_prepare_cannot_fence_current_generation() -> None
 def test_ready_advertises_shutdown_protocol_version() -> None:
     bridge = make_bridge(ShutdownPreparationHarness())
     assert bridge._build_ready_event()["preservationProtocolVersion"] == 1
+
+
+@pytest.mark.asyncio
+async def test_confirmed_preparation_names_the_persisted_conversation_for_handoff(tmp_path):
+    harness = ShutdownPreparationHarness()
+    bridge = make_bridge(harness)
+    bridge.session_id_file = tmp_path / "agent-session-id"
+    bridge.legacy_session_id_file = tmp_path / "opencode-session-id"
+    await establish_generation(bridge)
+    await bridge._handle_command(prepare_command())
+    prepared = bridge._send_event.await_args_list[-1].args[0]
+    assert prepared["executionStopped"] is True
+    assert prepared["agentSessionId"] == harness.session_id
+    assert bridge.session_id_file.read_text() == harness.session_id
+
+    restored_harness = ShutdownPreparationHarness()
+    restored_harness.session_id = None
+    restored = make_bridge(restored_harness)
+    restored.session_id_file = bridge.session_id_file
+    restored.legacy_session_id_file = bridge.legacy_session_id_file
+    await restored._load_session_id()
+    assert restored._build_ready_event()["opencodeSessionId"] == prepared["agentSessionId"]
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_preparation_does_not_certify_conversation_for_handoff(tmp_path):
+    harness = ShutdownPreparationHarness(stopped=False)
+    bridge = make_bridge(harness)
+    bridge.session_id_file = tmp_path / "agent-session-id"
+    bridge.legacy_session_id_file = tmp_path / "opencode-session-id"
+    await establish_generation(bridge)
+    await bridge._handle_command(prepare_command())
+    prepared = bridge._send_event.await_args_list[-1].args[0]
+    assert prepared["executionStopped"] is False
+    assert "agentSessionId" not in prepared

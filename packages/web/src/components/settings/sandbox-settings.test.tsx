@@ -61,7 +61,7 @@ function globalSettings(
 }
 
 function renderWithSWR(fallbackData: unknown) {
-  const fetchMock = vi.fn(async () => {
+  const fetchMock = vi.fn(async (): Promise<Response> => {
     throw new Error("unexpected fetch");
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -144,6 +144,28 @@ describe("sandbox settings response schemas", () => {
 
 describe("SandboxSettingsPage — tunnel ports editor", () => {
   const user = userEvent.setup();
+
+  it("requires an explicit opt-in and saves automatic expiry continuation", async () => {
+    const { fetchMock } = renderWithSWR({ integrationId: "sandbox", settings: null });
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ integrationId: "sandbox", settings: null }), { status: 200 })
+    );
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Automatically continue after sandbox expiry/,
+    });
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByText("Save Settings"));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"autoContinueOnExpiry":true'),
+        })
+      )
+    );
+  });
 
   it("renders configured session cost controls", () => {
     renderWithSWR(globalSettings([], undefined, { maxSessionCostUsd: 25 }));

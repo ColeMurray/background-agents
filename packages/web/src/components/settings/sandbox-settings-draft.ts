@@ -26,7 +26,7 @@ type DraftKey<K> = K extends "sandboxTimeoutMs"
 export type SandboxSettingsDraftValues = {
   [K in keyof SandboxSettings as DraftKey<K>]-?: K extends "tunnelPorts"
     ? string[]
-    : K extends "terminalEnabled"
+    : K extends "terminalEnabled" | "autoContinueOnExpiry"
       ? boolean
       : string;
 };
@@ -101,6 +101,13 @@ const fields: FieldRegistry = {
     },
     isChanged: (rows, current) =>
       JSON.stringify(normalizePorts(rows).ports) !== JSON.stringify(current.map(Number)),
+  },
+  autoContinueOnExpiry: {
+    draftKey: "autoContinueOnExpiry",
+    format: (value) => value ?? false,
+    parse: (value) => ({ value: value ? true : undefined }),
+    clearValue: false,
+    isChanged: (value, current) => value !== current,
   },
   terminalEnabled: {
     draftKey: "terminalEnabled",

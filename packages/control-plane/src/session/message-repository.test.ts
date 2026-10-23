@@ -112,7 +112,7 @@ describe("MessageRepository", () => {
 
   it("reads processing and pending messages", () => {
     const processingQuery = `SELECT id FROM messages WHERE status = 'processing' LIMIT 1`;
-    const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
+    const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY queue_priority DESC, created_at ASC, rowid ASC LIMIT 1`;
     mock.setData(processingQuery, [{ id: "msg-processing" }]);
     const pending = messageRow({ id: "msg-pending", created_at: 1 });
     mock.setData(pendingQuery, [pending]);
@@ -127,7 +127,7 @@ describe("MessageRepository", () => {
   });
 
   it("throws on malformed persisted message rows", () => {
-    const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`;
+    const pendingQuery = `SELECT * FROM messages WHERE status = 'pending' ORDER BY queue_priority DESC, created_at ASC, rowid ASC LIMIT 1`;
     mock.setData(pendingQuery, [{ ...messageRow(), source: "unknown" }]);
 
     expect(() => repository.getNextPendingMessage()).toThrow(SessionStorageIntegrityError);
@@ -193,7 +193,7 @@ describe("MessageRepository", () => {
   it("looks up idempotent requests and unfinished positions", () => {
     const lookup = `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`;
     const positions = `SELECT id FROM messages WHERE status IN ('pending', 'processing')
-       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`;
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, queue_priority DESC, created_at ASC, rowid ASC`;
     mock.setData(lookup, [messageRow({ id: "msg-2", client_request_id: "request-1" })]);
     mock.setData(positions, [{ id: "msg-1" }, { id: "msg-2" }]);
     expect(repository.getMessageByClientRequestId("request-1")).toEqual(
@@ -260,6 +260,7 @@ describe("MessageRepository", () => {
       null,
       "pending",
       1000,
+      0,
     ]);
   });
 
@@ -349,6 +350,7 @@ describe("MessageRepository", () => {
       "{}",
       "pending",
       2000,
+      0,
     ]);
   });
 
@@ -685,7 +687,7 @@ describe("MessageRepository", () => {
   });
 
   it("lists pending messages in deterministic order", () => {
-    const query = `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`;
+    const query = `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY queue_priority DESC, created_at ASC, rowid ASC`;
     mock.setData(query, [{ id: "msg-1", created_at: 1000 }]);
     expect(repository.listPendingMessagesWithCreatedAt()).toEqual([
       { id: "msg-1", created_at: 1000 },

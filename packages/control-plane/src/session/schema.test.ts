@@ -798,3 +798,31 @@ describe("applyMigrations", () => {
     }
   });
 });
+
+it("backfills priority for a pending durable continuation and preserves it on restart", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY, status TEXT)");
+    db.exec("INSERT INTO messages VALUES ('queued', 'pending'), ('continuation', 'pending')");
+    db.exec("CREATE TABLE sandbox_preservation (singleton INTEGER PRIMARY KEY, state TEXT)");
+    db.prepare("INSERT INTO sandbox_preservation VALUES (1, ?)").run(
+      JSON.stringify({ continuation: { enqueued: true, messageId: "continuation" } })
+    );
+    db.exec(
+      "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+    );
+    for (const migration of MIGRATIONS.filter(({ id }) => id !== 58))
+      db.prepare("INSERT INTO _schema_migrations VALUES (?, 0)").run(migration.id);
+    const sql = createDatabaseSql(db);
+    applyMigrations(sql);
+    applyMigrations(sql);
+    expect(
+      db.prepare("SELECT id, queue_priority FROM messages ORDER BY queue_priority DESC").all()
+    ).toEqual([
+      { id: "continuation", queue_priority: 1 },
+      { id: "queued", queue_priority: 0 },
+    ]);
+  } finally {
+    db.close();
+  }
+});

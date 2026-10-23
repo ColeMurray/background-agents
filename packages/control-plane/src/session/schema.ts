@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS messages (
   autofix_feedback_key TEXT,                        -- Stable provider feedback identity for idempotency
   autofix_pr_key TEXT,                              -- Stable provider PR identity for rolling attempt limits
   origin_context TEXT,                              -- Typed JSON describing the external feedback origin
+  queue_priority INTEGER NOT NULL DEFAULT 0,       -- Restored interrupted work precedes later requests
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
@@ -173,7 +174,8 @@ CREATE TABLE IF NOT EXISTS events (
   data TEXT NOT NULL,                               -- JSON payload
   message_id TEXT,
   created_at INTEGER NOT NULL,
-  timeline_sequence INTEGER NOT NULL UNIQUE
+  timeline_sequence INTEGER NOT NULL UNIQUE,
+  updated_at INTEGER
 );
 
 -- Per-step usage, distinct from the timeline and from cumulative session cost.
@@ -758,6 +760,26 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Track durable event update time independently of timeline order",
+    run: "ALTER TABLE events ADD COLUMN updated_at INTEGER",
+  },
+  {
+    id: 58,
+    description: "Persist canonical prompt queue priority",
+    run: (sql) => {
+      runMigration(
+        sql,
+        "ALTER TABLE messages ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0"
+      );
+      sql.exec(`UPDATE messages SET queue_priority = 1
+        WHERE status IN ('pending', 'processing') AND id IN (
+          SELECT json_extract(state, '$.continuation.messageId') FROM sandbox_preservation
+          WHERE json_valid(state) AND json_extract(state, '$.continuation.enqueued') = 1
+        )`);
+    },
   },
 ];
 

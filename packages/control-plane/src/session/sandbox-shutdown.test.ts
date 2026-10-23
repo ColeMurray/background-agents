@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxProvider } from "../sandbox/provider";
+import { ExpiryContinuation, EXPIRY_CONTINUATION_PROMPT } from "./expiry-continuation";
+import type { MessageRow } from "./types";
 import { SandboxShutdownCoordinator } from "./sandbox-shutdown";
 import {
   SandboxShutdownRepository,
@@ -97,14 +99,25 @@ function fixture(providerValue = provider(), options: { durable?: boolean } = {}
         id: "session-1",
         session_name: "external-session-1",
         sandbox_settings: JSON.stringify({ finalSnapshotBufferMs: 600_000 }),
+        status: "active",
+        budget_exhausted: 0,
+        max_cost_usd: null as number | null,
+        total_cost: 0,
       })),
       transaction: vi.fn((fn: () => unknown) => fn()),
     },
     messages: {
       getProcessingMessage: vi.fn<() => { id: string } | null>(() => null),
+      getMessageById: vi.fn<(id: string) => MessageRow | null>(() => null),
+      getMessageStatus: vi.fn<(id: string) => string | null>(() => null),
+      getPendingOrProcessingCount: vi.fn(() => 0),
+      createMessage: vi.fn(),
     },
     failures: { record: vi.fn(), deliver: vi.fn() },
-    events: { createEventIfAbsent: vi.fn(() => true) },
+    events: {
+      createEventIfAbsent: vi.fn(() => true),
+      hasRecentExecutionProgress: vi.fn(() => true),
+    },
     messenger: {
       broadcast: vi.fn((message: { type: string; preservation?: { phase: string } }) => {
         if (message.type === "sandbox_preservation" && message.preservation) {
@@ -126,10 +139,18 @@ function fixture(providerValue = provider(), options: { durable?: boolean } = {}
     now: () => now,
     log: { info: vi.fn(), warn: vi.fn() },
   };
-  const shutdown = new SandboxShutdownCoordinator(deps as never);
+  const getExecutionTimeoutMs = vi.fn(() => 7_200_000);
+  const continuation = new ExpiryContinuation(
+    deps.session as never,
+    deps.messages as never,
+    deps.events,
+    getExecutionTimeoutMs
+  );
+  const shutdown = new SandboxShutdownCoordinator({ ...deps, continuation } as never);
   return {
     shutdown,
-    deps,
+    deps: { ...deps, continuation },
+    getExecutionTimeoutMs,
     store,
     calls,
     backgroundTasks,
@@ -204,6 +225,363 @@ function preparedEvent(
 
 describe("SandboxShutdownCoordinator", () => {
   beforeEach(() => vi.restoreAllMocks());
+
+  describe("automatic expiry continuation", () => {
+    function automaticFixture() {
+      const f = fixture(
+        provider({
+          takeSnapshot: vi.fn(async () => ({
+            success: true,
+            imageId: "handoff-image",
+            sourceStopped: true,
+          })),
+        }),
+        { durable: true }
+      );
+      const session = {
+        ...f.deps.session.getSession(),
+        sandbox_settings: JSON.stringify({
+          autoContinueOnExpiry: true,
+          finalSnapshotBufferMs: 600_000,
+        }),
+      };
+      f.deps.session.getSession.mockImplementation(() => session);
+      const source = {
+        id: "interrupted-task",
+        author_id: "author-1",
+        content: "Original task with important context",
+        status: "processing",
+        started_at: 100_000,
+        created_at: 90_000,
+        source: "web",
+        model: null,
+        reasoning_effort: null,
+        origin_context: null,
+      } as MessageRow;
+      const messages = new Map([[source.id, source]]);
+      f.deps.messages.getProcessingMessage.mockImplementation(
+        () => [...messages.values()].find((message) => message.status === "processing") ?? null
+      );
+      f.deps.messages.getMessageById.mockImplementation((id) => messages.get(id) ?? null);
+      f.deps.messages.getMessageStatus.mockImplementation((id) => messages.get(id)?.status ?? null);
+      f.deps.messages.createMessage.mockImplementation((data) => {
+        expect(messages.has(data.id)).toBe(false);
+        messages.set(data.id, {
+          ...source,
+          id: data.id,
+          content: data.content,
+          status: data.status,
+        } as MessageRow);
+      });
+      f.deps.failures.record.mockImplementation((id, _error, _now, expectedStatus) => {
+        const message = messages.get(id);
+        if (!message || message.status !== expectedStatus) return null;
+        message.status = "failed";
+        return { event: { messageId: id }, completion: { messageId: id } };
+      });
+      return { ...f, source, messages, session };
+    }
+
+    async function drain(f: ReturnType<typeof automaticFixture>) {
+      await readyFinite(f);
+      const atMs = f.store.value!.drainAtMs!;
+      f.setNow(atMs);
+      f.sandboxRow.last_heartbeat = atMs;
+      await f.shutdown.handleAlarm();
+      return f.store.value!;
+    }
+
+    async function save(
+      f: ReturnType<typeof automaticFixture>,
+      conversationId: string | null = "vendor-conversation"
+    ) {
+      f.shutdown.prepared({
+        ...preparedEvent(f.store.value!),
+        agentSessionId: conversationId ?? undefined,
+      });
+      await f.shutdown.handleAlarm();
+    }
+
+    it("continues active work once after a confirmed save, preserving the original failure across restart", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      expect(f.source.status).toBe("failed");
+      expect(f.deps.messages.createMessage).not.toHaveBeenCalled();
+      await save(f);
+      const state = f.store.value!;
+      expect(state).toMatchObject({
+        phase: "saved",
+        continuationPaused: false,
+        automaticHandoffs: 1,
+        continuation: {
+          conversationId: "vendor-conversation",
+          enqueued: true,
+          sourceMessageId: f.source.id,
+        },
+      });
+      const continuation = f.messages.get(state.continuation!.messageId)!;
+      expect(continuation.content).toBe(EXPIRY_CONTINUATION_PROMPT);
+      expect(continuation.content).not.toContain(f.source.content);
+      const restarted = new SandboxShutdownCoordinator(f.deps as never);
+      expect(restarted.pendingContinuationMessageId()).toBe(continuation.id);
+      expect(restarted.startupDecision()).toMatchObject({
+        kind: "restore_snapshot",
+        snapshotId: "handoff-image",
+      });
+      const replacement = { sandboxId: "replacement", createdAt: 800_000 };
+      restarted.reserveStartup(replacement.createdAt, "confirmed", () => {
+        f.sandboxRow.modal_sandbox_id = replacement.sandboxId;
+        f.sandboxRow.created_at = replacement.createdAt;
+      });
+      restarted.markRecoveryInvoked(replacement);
+      // Runtime readiness may arrive before the provider's restore response.
+      restarted.runtimeReady(1, "vendor-conversation");
+      await restarted.recordProviderStartup(replacement, {
+        kind: "finite",
+        expiresAtMs: 8_000_000,
+        observedAtMs: 800_000,
+        source: "provider",
+      });
+      expect(restarted.admissionDecision()).toBe("held");
+      restarted.generationReady({
+        type: "sandbox_generation_ready",
+        generation: replacement,
+        sandboxId: replacement.sandboxId,
+        timestamp: 800,
+      });
+      expect(restarted.admissionDecision()).toBe("ready");
+      expect(f.source.status).toBe("failed");
+      expect(f.deps.messages.createMessage).toHaveBeenCalledOnce();
+      // A second lifetime boundary cannot grant a second unattended handoff.
+      continuation.status = "processing";
+      continuation.started_at = 7_300_000;
+      f.setNow(7_400_000);
+      f.sandboxRow.last_heartbeat = 7_400_000;
+      await restarted.handleAlarm();
+      expect(f.store.value?.continuation).toBeUndefined();
+      expect(f.store.value?.continuationPaused).toBe(true);
+      expect(f.store.value?.automaticHandoffs).toBe(1);
+      expect(f.deps.messages.createMessage).toHaveBeenCalledOnce();
+    });
+
+    it("releases admission when the web continuation is canceled during restore", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      await save(f);
+      const id = f.store.value!.continuation!.messageId;
+      const generation = { sandboxId: "replacement", createdAt: 800_000 };
+      f.shutdown.reserveStartup(generation.createdAt, "confirmed", () => {
+        f.sandboxRow.modal_sandbox_id = generation.sandboxId;
+        f.sandboxRow.created_at = generation.createdAt;
+      });
+      f.shutdown.markRecoveryInvoked(generation);
+      // cancelPendingMessage deletes web-origin messages without callbacks.
+      f.messages.delete(id);
+      f.shutdown.runtimeReady(1, "vendor-conversation");
+      await f.shutdown.recordProviderStartup(generation, {
+        kind: "finite",
+        expiresAtMs: 8_000_000,
+        observedAtMs: 800_000,
+        source: "provider",
+      });
+      f.shutdown.generationReady({
+        type: "sandbox_generation_ready",
+        generation,
+        sandboxId: generation.sandboxId,
+        timestamp: 800,
+      });
+      expect(f.shutdown.admissionDecision()).toBe("ready");
+      expect(f.store.value?.continuation).toBeUndefined();
+      expect(f.store.value?.automaticHandoffs).toBe(1);
+      expect(f.source.status).toBe("failed");
+    });
+
+    it("reconciles a single-task session before dispatching its inserted continuation", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      for (const task of f.backgroundTasks.splice(0)) await task();
+      f.session.status = "failed";
+      f.deps.reconcileStatusFromMessages.mockImplementation(async () => {
+        if ([...f.messages.values()].some((m) => m.status === "pending"))
+          f.session.status = "active";
+      });
+      f.deps.onLifecycleChange.mockImplementation(async () => {
+        if (f.shutdown.pendingContinuationMessageId()) expect(f.session.status).toBe("active");
+      });
+      await save(f);
+      for (const task of f.backgroundTasks) await task();
+      expect(f.session.status).toBe("active");
+    });
+
+    it.each(["web", "automation"] as const)(
+      "keeps scheduler-owned %s prompts under manual recovery",
+      async (source) => {
+        const f = automaticFixture();
+        f.source.source = source;
+        f.source.callback_context = JSON.stringify({
+          source: "automation",
+          automationId: "job",
+          runId: "run",
+          automationName: "Job",
+        });
+        await drain(f);
+        expect(f.store.value?.continuation).toBeUndefined();
+        await save(f);
+        expect(f.deps.messages.createMessage).not.toHaveBeenCalled();
+        expect(f.source.status).toBe("failed");
+        expect(f.store.value?.continuationPaused).toBe(true);
+      }
+    );
+
+    it("allows automation follow-ups without a run-owning callback", async () => {
+      const f = automaticFixture();
+      f.source.source = "automation";
+      f.source.callback_context = null;
+      await drain(f);
+      await save(f);
+      expect(f.deps.messages.createMessage).toHaveBeenCalledOnce();
+    });
+
+    it.each(["{broken", JSON.stringify({ source: "automation", runId: "unverified" })])(
+      "holds prompts with an unverifiable callback (%s)",
+      async (callback) => {
+        const f = automaticFixture();
+        f.source.callback_context = callback;
+        await drain(f);
+        expect(f.store.value?.continuation).toBeUndefined();
+      }
+    );
+
+    it.each([
+      "opt-out",
+      "stalled",
+      "execution-limit",
+      "budget",
+      "cost-limit",
+      "closed",
+      "heartbeat",
+      "queue-full",
+      "invalid-settings",
+    ])("keeps %s work under manual recovery", async (condition) => {
+      const f = automaticFixture();
+      if (condition === "opt-out") f.session.sandbox_settings = "{}";
+      if (condition === "stalled") f.deps.events.hasRecentExecutionProgress.mockReturnValue(false);
+      if (condition === "execution-limit") f.getExecutionTimeoutMs.mockReturnValue(1);
+      if (condition === "budget") f.session.budget_exhausted = 1;
+      if (condition === "cost-limit") {
+        f.session.max_cost_usd = 5;
+        f.session.total_cost = 5;
+      }
+      if (condition === "closed") f.session.status = "archived";
+      if (condition === "queue-full")
+        f.deps.messages.getPendingOrProcessingCount.mockReturnValue(1_000);
+      await readyFinite(f);
+      if (condition === "invalid-settings") f.session.sandbox_settings = "not-json";
+      const atMs = f.store.value!.drainAtMs!;
+      f.setNow(atMs);
+      f.sandboxRow.last_heartbeat = condition === "heartbeat" ? 0 : atMs;
+      await f.shutdown.handleAlarm();
+      await save(f);
+      expect(f.store.value).toMatchObject({ phase: "saved", continuationPaused: true });
+      expect(f.deps.messages.createMessage).not.toHaveBeenCalled();
+      expect(f.shutdown.admissionDecision()).toBe("held");
+    });
+
+    it.each(["missing-context", "unconfirmed-stop", "snapshot-failure"])(
+      "does not enqueue a continuation after %s",
+      async (condition) => {
+        const f = automaticFixture();
+        await drain(f);
+        if (condition === "snapshot-failure")
+          vi.mocked(f.deps.provider.takeSnapshot!).mockRejectedValue(new Error("snapshot failed"));
+        if (condition === "unconfirmed-stop") {
+          f.shutdown.prepared({ ...preparedEvent(f.store.value!), executionStopped: false });
+          await Promise.all(f.backgroundTasks.splice(0).map((task) => task()));
+        } else await save(f, condition === "missing-context" ? null : "vendor-conversation");
+        expect(f.deps.messages.createMessage).not.toHaveBeenCalled();
+        expect(f.source.status).toBe("failed");
+        expect(f.shutdown.admissionDecision()).toBe("held");
+      }
+    );
+
+    it.each([null, "different-conversation"])(
+      "holds missing or mismatched restored context (%s)",
+      async (context) => {
+        const f = automaticFixture();
+        await drain(f);
+        await save(f);
+        const continuationId = f.shutdown.pendingContinuationMessageId()!;
+        reserveGeneration(f, { sandboxId: "replacement", createdAt: 800_000 }, "confirmed");
+        f.shutdown.runtimeReady(1, context);
+        expect(f.store.value).toMatchObject({ phase: "unknown", continuationPaused: true });
+        expect(f.messages.get(continuationId)?.status).toBe("failed");
+        expect(f.shutdown.admissionDecision()).toBe("held");
+        expect(f.source.status).toBe("failed");
+      }
+    );
+
+    it("keeps a confirmed recovery point manual if continuation persistence fails", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      f.deps.messages.createMessage.mockImplementation(() => {
+        throw new Error("message insert failed");
+      });
+      await save(f);
+      expect(f.store.value).toMatchObject({
+        phase: "saved",
+        continuationPaused: true,
+        receipt: { artifactId: "handoff-image" },
+      });
+      expect(f.shutdown.admissionDecision()).toBe("held");
+    });
+
+    it("keeps a saved recovery point manual if source retirement fails", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      f.deps.provider.takeSnapshot = vi.fn(async () => ({
+        success: true,
+        imageId: "handoff-image",
+        sourceStopped: false,
+      }));
+      f.deps.provider.stopSandbox = vi.fn(async () => ({ success: false, error: "stop failed" }));
+      await save(f);
+      expect(f.store.value).toMatchObject({
+        phase: "unknown",
+        continuationPaused: true,
+        receipt: { artifactId: "handoff-image" },
+      });
+      expect(f.deps.messages.createMessage).not.toHaveBeenCalled();
+    });
+
+    it("rechecks context on reconnect before the automatic message starts", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      await save(f);
+      const continuationId = f.shutdown.pendingContinuationMessageId()!;
+      reserveGeneration(f, { sandboxId: "replacement", createdAt: 800_000 }, "confirmed");
+      f.shutdown.runtimeReady(1, "vendor-conversation");
+      expect(f.store.value?.continuation?.contextVerified).toBe(true);
+      f.shutdown.runtimeReady(1, "different-conversation");
+      expect(f.store.value).toMatchObject({ phase: "unknown", continuationPaused: true });
+      expect(f.messages.get(continuationId)?.status).toBe("failed");
+    });
+
+    it("holds a failed restore without leaving an executable automatic message", async () => {
+      const f = automaticFixture();
+      await drain(f);
+      await save(f);
+      const continuationId = f.shutdown.pendingContinuationMessageId()!;
+      const replacement = { sandboxId: "replacement", createdAt: 800_000 };
+      reserveGeneration(f, replacement, "confirmed");
+      f.shutdown.holdFailedRecovery("provider restore failed", replacement);
+      expect(f.messages.get(continuationId)?.status).toBe("failed");
+      expect(f.store.value).toMatchObject({
+        phase: "unknown",
+        continuationPaused: true,
+        receipt: { artifactId: "handoff-image" },
+      });
+    });
+  });
 
   function pendingVmFixture(overrides: Partial<SandboxProvider> = {}) {
     const takeSnapshot = vi.fn(async () => ({
@@ -515,6 +893,71 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.deps.reconcileStatusFromMessages).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { lifetimeMs: 7_200_000, activePrompt: true },
+    { lifetimeMs: 14_400_000, activePrompt: true },
+    { lifetimeMs: 7_200_000, activePrompt: false },
+    { lifetimeMs: 14_400_000, activePrompt: false },
+  ])(
+    "lifetime expiry with lifetimeMs=$lifetimeMs and activePrompt=$activePrompt preserves the continuation policy",
+    async ({ lifetimeMs, activePrompt }) => {
+      const takeSnapshot = vi.fn(async () => ({
+        success: true as const,
+        imageId: "expiry-snapshot",
+        sourceStopped: true,
+      }));
+      const f = fixture(provider({ takeSnapshot }), { durable: true });
+      f.deps.messages.getProcessingMessage.mockReturnValue(
+        activePrompt ? { id: "active-at-expiry" } : null
+      );
+      await readyFinite(f, GENERATION.createdAt + lifetimeMs);
+      const drainAtMs = f.store.value!.drainAtMs!;
+
+      f.setNow(drainAtMs - 1);
+      await f.shutdown.handleAlarm();
+      expect(f.store.value?.phase).toBe("running");
+      expect(f.deps.failures.record).not.toHaveBeenCalled();
+
+      // A fresh heartbeat does not renew the provider's absolute lifetime.
+      f.setNow(drainAtMs);
+      f.sandboxRow.last_heartbeat = drainAtMs;
+      await f.shutdown.handleAlarm();
+      expect(f.store.value).toMatchObject({
+        phase: "draining",
+        reason: "sandbox_lifetime_expiring",
+      });
+      if (activePrompt) {
+        expect(f.deps.failures.record).toHaveBeenCalledExactlyOnceWith(
+          "active-at-expiry",
+          "The sandbox reached its maximum lifetime.",
+          drainAtMs,
+          "processing"
+        );
+      } else {
+        expect(f.deps.failures.record).not.toHaveBeenCalled();
+      }
+
+      f.shutdown.prepared(preparedEvent(f.store.value!));
+      await f.shutdown.handleAlarm();
+      expect(takeSnapshot).toHaveBeenCalledOnce();
+      expect(f.store.value).toMatchObject({
+        phase: "saved",
+        sourceRetired: true,
+        receipt: { artifactId: "expiry-snapshot" },
+      });
+
+      const restarted = new SandboxShutdownCoordinator(f.deps as never);
+      expect(restarted.admissionDecision()).toBe(activePrompt ? "held" : "restore_required");
+      expect(restarted.startupDecision().kind).toBe(activePrompt ? "hold" : "restore_snapshot");
+      if (activePrompt) {
+        expect(restarted.snapshot()?.continuationPaused).toBe(true);
+        await restarted.recover("restore_saved");
+        expect(restarted.admissionDecision()).toBe("restore_required");
+        expect(f.deps.failures.record).toHaveBeenCalledOnce();
+      }
+    }
+  );
+
   it("requires a matching generation acknowledgement and ignores a late generation", async () => {
     const f = fixture();
     reserveGeneration(f, GENERATION, "confirmed");
@@ -556,8 +999,7 @@ describe("SandboxShutdownCoordinator", () => {
       }));
       const f = fixture(provider({ takeSnapshot }));
       f.deps.session.getSession.mockReturnValue({
-        id: "session-1",
-        session_name: "external-session-1",
+        ...f.deps.session.getSession(),
         sandbox_settings: JSON.stringify({ finalSnapshotBufferMs: bufferMs }),
       });
       const expiresAtMs = 1_300_000;

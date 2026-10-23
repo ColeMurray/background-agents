@@ -57,6 +57,21 @@ export class EventRepository {
     private readonly transactionSync: TransactionSync
   ) {}
 
+  /** Heartbeats alone cannot qualify a stalled turn for unattended continuation. */
+  hasRecentExecutionProgress(messageId: string, sinceMs: number, untilMs: number): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM events WHERE message_id = ? AND COALESCE(updated_at, created_at) BETWEEN ? AND ?
+       AND type IN ('token', 'tool_call') LIMIT 1`,
+          messageId,
+          sinceMs,
+          untilMs
+        )
+        .toArray().length > 0
+    );
+  }
+
   createEvent(data: CreateEventData): void {
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
@@ -104,9 +119,10 @@ export class EventRepository {
     preserveCreatedAt = false
   ): void {
     this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
+      `INSERT INTO events (id, type, data, message_id, created_at, updated_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
+         updated_at = excluded.updated_at,
          data = excluded.data,
          message_id = excluded.message_id,
          created_at = ${preserveCreatedAt ? "events.created_at" : "excluded.created_at"}`,
@@ -114,6 +130,7 @@ export class EventRepository {
       type,
       JSON.stringify(event),
       messageId,
+      createdAt,
       createdAt
     );
   }
@@ -128,15 +145,17 @@ export class EventRepository {
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
     const id = `tool_call:${toolCallIdentityKey(event)}`;
     this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
+      `INSERT INTO events (id, type, data, message_id, created_at, updated_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
+         updated_at = excluded.updated_at,
          data = excluded.data,
          message_id = excluded.message_id`,
       id,
       event.type,
       JSON.stringify(event),
       messageId,
+      createdAt,
       createdAt
     );
   }

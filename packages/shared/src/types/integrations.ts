@@ -300,6 +300,8 @@ export const sandboxSettingsSchema = z.strictObject({
   sandboxTimeoutMs: z.number().optional(),
   /** Time reserved before provider expiry for final sandbox preservation. */
   finalSnapshotBufferMs: z.number().optional(),
+  /** Opt in to one context-preserving automatic handoff at sandbox lifetime expiry. */
+  autoContinueOnExpiry: z.boolean().optional(),
   /** Repo-image build timeout (the build sandbox lifetime), in seconds. */
   buildTimeoutSeconds: z.number().optional(),
   /** Maximum OpenCode-reported session cost in USD. */

@@ -60,6 +60,16 @@ const stateSchema = sandboxShutdownSchema
     captureFailure: z.boolean().optional(),
     /** A durably claimed discard; no other recovery may act while it is set. */
     discarding: z.string().optional(),
+    automaticHandoffs: z.number().int().nonnegative().optional(),
+    continuation: z
+      .object({
+        sourceMessageId: z.string().min(1),
+        messageId: z.string().min(1),
+        conversationId: z.string().min(1).optional(),
+        enqueued: z.literal(true).optional(),
+        contextVerified: z.literal(true).optional(),
+      })
+      .optional(),
     operationId: z.string().optional(),
     messageId: z.string().optional(),
     stopByMs: z.number().optional(),

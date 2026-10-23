@@ -68,6 +68,8 @@ export interface CreateMessageData {
   reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
+  /** Restored interrupted work precedes later pending requests. */
+  prioritize?: boolean;
   clientRequestId?: string | null;
   requestFingerprint?: string | null;
   autofixFeedbackKey?: string | null;
@@ -200,7 +202,7 @@ export class MessageRepository {
 
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
+      `SELECT * FROM messages WHERE status = 'pending' ORDER BY queue_priority DESC, created_at ASC, rowid ASC LIMIT 1`
     );
     const rows = parseMessageRows(result.toArray());
     return rows[0] ?? null;
@@ -287,7 +289,7 @@ export class MessageRepository {
   getUnfinishedMessagePosition(messageId: string): number | null {
     const result = this.sql.exec(
       `SELECT id FROM messages WHERE status IN ('pending', 'processing')
-       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, queue_priority DESC, created_at ASC, rowid ASC`
     );
     const index = (result.toArray() as Array<{ id: string }>).findIndex(
       (row) => row.id === messageId
@@ -298,7 +300,7 @@ export class MessageRepository {
   listUnfinishedMessages(): MessageRow[] {
     const result = this.sql.exec(
       `SELECT * FROM messages WHERE status IN ('pending', 'processing')
-       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, queue_priority DESC, created_at ASC, rowid ASC`
     );
     return parseMessageRows(result.toArray());
   }
@@ -361,8 +363,8 @@ export class MessageRepository {
       `INSERT INTO messages (
          id, author_id, content, source, model, reasoning_effort, attachments,
          callback_context, client_request_id, request_fingerprint, autofix_feedback_key,
-         autofix_pr_key, origin_context, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         autofix_pr_key, origin_context, status, created_at, queue_priority
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -377,7 +379,8 @@ export class MessageRepository {
       data.autofixPrKey ?? null,
       data.originContext ?? null,
       data.status,
-      data.createdAt
+      data.createdAt,
+      data.prioritize ? 1 : 0
     );
   }
 
@@ -471,7 +474,7 @@ export class MessageRepository {
 
   listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
     const result = this.sql.exec(
-      `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
+      `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY queue_priority DESC, created_at ASC, rowid ASC`
     );
     return result.toArray() as Array<{ id: string; created_at: number }>;
   }

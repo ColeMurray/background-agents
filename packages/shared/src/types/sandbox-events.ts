@@ -122,6 +122,8 @@ const nonArtifactSandboxEventSchemas = [
     operationId: z.string().min(1),
     generation: sandboxGenerationSchema,
     executionStopped: z.boolean(),
+    /** Persisted vendor conversation available in the recovery point. */
+    agentSessionId: z.string().min(1).optional(),
     error: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
