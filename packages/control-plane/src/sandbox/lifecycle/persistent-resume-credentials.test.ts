@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { BOAT_SETUP_SCRIPT } from "../boat-lifecycle";
 import { BoatSandboxProvider } from "../providers/boat-provider";
 import { fastTimings, mockClient, providerConfig } from "../providers/boat-provider.test-helpers";
 import {
@@ -60,10 +61,12 @@ describe("persistent resume keeps the create-time service credentials", () => {
     sandbox.vnc_url = null;
     await managerFor("secret-after-rotation").spawnSandbox();
 
-    // One create, then one resume (the mock sandbox is still live, so the
-    // resume refreshes its deadline) that relaunches the runtime.
+    // One create, whose launch rides the request as Boat's setup script, then
+    // one resume (the mock sandbox is still live, so the resume refreshes its
+    // deadline) that relaunches the runtime with a start command.
     expect(client.createSandbox).toHaveBeenCalledOnce();
-    expect(client.startDetachedCommand).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].setupScript).toBe(BOAT_SETUP_SCRIPT);
+    expect(client.startDetachedCommand).toHaveBeenCalledOnce();
     expect(storage.completeProviderResume).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
@@ -98,7 +101,8 @@ describe("persistent resume keeps the create-time service credentials", () => {
     sandbox.code_server_password = null;
     await manager.spawnSandbox();
 
-    expect(client.startDetachedCommand).toHaveBeenCalledTimes(2);
+    // Only the resume issues a start command; the create's launch is Boat's.
+    expect(client.startDetachedCommand).toHaveBeenCalledOnce();
     expect(storage.completeProviderResume).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
