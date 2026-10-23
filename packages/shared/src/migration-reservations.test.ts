@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION,
   PI_D1_MCP_OAUTH_FOUNDATION_MIGRATION_VERSION,
@@ -23,6 +24,15 @@ import {
 } from "./migration-reservations";
 
 describe("Pi migration reservations", () => {
+  it("keeps personal MCP migration reservations out of the neutral core registry", () => {
+    const coreRegistry = readFileSync(
+      new URL("./migration-reservations.ts", import.meta.url),
+      "utf8"
+    );
+
+    expect(coreRegistry).not.toMatch(/MCP_OAUTH|9002|personal MCP/i);
+  });
+
   it("assigns the cross-cutting feature migration ranges", () => {
     expect([
       PI_DO_OUTBOX_MIGRATION_ID,
