@@ -38,10 +38,10 @@
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/session/message-queue.ts",
-        "find": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness);\n    if (currentHarness === null) return;",
-        "replace": "    const currentHarness = getStoredHarnessOrRefuse(currentSession.harness) ?? \"opencode\";\n    if (false) return;",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- sandbox-early-connect -t \"unknown persisted harness\""
+        "file": "packages/shared/src/harnesses.ts",
+        "find": "  return isValidHarness(value) ? value : null;",
+        "replace": "  return isValidHarness(value) ? value : DEFAULT_HARNESS;",
+        "cmd": "npm run build -w @open-inspect/shared && npm run test:integration -w @open-inspect/control-plane -- session-snapshot -t \"unknown persisted harness\""
       }
     },
     "A3": {
@@ -113,8 +113,8 @@
       ],
       "mutation": {
         "file": "packages/control-plane/src/routing/route-admission.ts",
-        "find": "    if (policy.authorization.kind !== \"none\") {",
-        "replace": "    if (false) {",
+        "find": "  const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);",
+        "replace": "  const principalFailure = null;",
         "cmd": "npm run test:integration -w @open-inspect/control-plane -- route-admission-matrix -t \"admits exactly the credential classes\""
       }
     },
