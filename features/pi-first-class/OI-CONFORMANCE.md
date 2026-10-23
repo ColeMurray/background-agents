@@ -152,6 +152,20 @@ citations are in `conformance.json`.
    until explicit restore.
 7. Core initialization, queue, stop, archive, restore, and deletion use neutral in-process runtime
    ports rather than Pi identity branches.
+8. Model budget reads and memory actions re-enter the turn author's current D1 authority and fail
+   closed when SessionDO cannot answer.
+9. Native model-producing controls use the same action ceiling and runtime deadline as queued
+   prompts; busy follow-ups are refused rather than becoming mid-turn steering.
+10. Slack and automation launch paths preserve the stored harness and refuse an unavailable or
+    unknown selection instead of falling back to OpenCode.
+11. Personal MCP connection creation and authorization require the current `mcp_servers.read`
+    entitlement, in addition to owner checks.
+12. Unattended external actions decline deterministically unless a current automation grant
+    authorizes the exact provider and action.
+13. SessionDO's canonical messages/events projection is the authoritative bounded export; Pi no
+    longer advertises an intentionally incomplete parallel transcript.
+14. Core composes deployment extensions through default-empty runtime, session-service, route, and
+    schema registries. Only the overlay composition root imports Compound implementations.
 
 ## Verification state
 

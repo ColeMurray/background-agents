@@ -44,7 +44,7 @@ export function componentsOf(instance: SessionDO): SessionRuntime["internals"] &
   externalActionDefinitions: ExternalActionDefinitionRegistry;
 } {
   const internals = (instance as unknown as SessionDOInternals).runtime.internals;
-  return { ...internals, ...internals.extensionComponents } as SessionRuntime["internals"] & {
+  return Object.assign(internals, internals.extensionComponents) as SessionRuntime["internals"] & {
     externalActionGateway: ExternalActionGateway;
     externalActionDefinitions: ExternalActionDefinitionRegistry;
   };

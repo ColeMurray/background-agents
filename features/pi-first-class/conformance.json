@@ -43,7 +43,7 @@
         "file": "packages/shared/src/harnesses.ts",
         "find": "    execution: \"in_process\",",
         "replace": "    execution: \"sandbox\",",
-        "cmd": "npm run test:integration -w @open-inspect/control-plane -- d1-session-index automation-store"
+        "cmd": "npm run build -w @open-inspect/shared && npm run test:integration -w @open-inspect/control-plane -- d1-session-index automation-store"
       }
     },
     "A3": {
@@ -200,12 +200,18 @@
       "status": "PASS",
       "code": [
         "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts:1",
-        "packages/control-plane/src/harness/turn-authority.ts:1"
+        "packages/control-plane/src/harness/turn-authority.ts:1",
+        "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts:87",
+        "packages/control-plane/src/session/components.ts:1425"
       ],
       "tests": [
         {
           "file": "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.test.ts",
           "name": "refuses a command after the turn author loses current authority"
+        },
+        {
+          "file": "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts",
+          "name": "refuses memory after the turn author loses current authority"
         }
       ],
       "mutation": {
@@ -437,18 +443,26 @@
     },
     "D-3": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/harness/turn-deadline.ts:60"],
+      "code": [
+        "packages/control-plane/src/harness/turn-deadline.ts:60",
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:1226",
+        "packages/control-plane/src/session/http/handlers/pi-control.handler.ts:209"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/src/harness/turn-deadline.test.ts",
           "name": "expires when the deadline passes"
+        },
+        {
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "refuses follow-up controls while another turn is active"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/harness/turn-deadline.ts",
-        "find": "    get expired(): boolean {\n      return expired;\n    },",
-        "replace": "    get expired(): boolean {\n      return false;\n    },",
-        "cmd": "npm test -w @open-inspect/control-plane -- src/harness/turn-deadline.test.ts"
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "      if (input.action === \"follow_up\" && conversationBusy) {",
+        "replace": "      if (false) {",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do -t \"refuses follow-up controls while another turn is active\""
       }
     },
     "D-4": {
@@ -489,18 +503,25 @@
     },
     "D-6": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/pi/external-action-policy-extension.ts:117"],
+      "code": [
+        "packages/control-plane/src/pi/external-action-policy-extension.ts:117",
+        "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts:177"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/src/pi/external-action-policy-extension.test.ts",
           "name": "refuses a new effect when the live deployment policy denies it"
+        },
+        {
+          "file": "packages/control-plane/src/session/http/handlers/pi-bridge.handler.test.ts",
+          "name": "deterministically declines unattended work without a live grant"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/pi/external-action-policy-extension.ts",
-        "find": "export function createExternalActionPolicyDelegate(",
-        "replace": "export function removedCreateExternalActionPolicyDelegate(",
-        "cmd": "npm test -w @open-inspect/control-plane -- external-action-policy-extension"
+        "file": "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts",
+        "find": "      if (!approval && this.options.operationIsUnattended(operationId)) {",
+        "replace": "      if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- pi-bridge.handler"
       }
     },
     "E-1": {
@@ -604,7 +625,10 @@
     },
     "E-7": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63"],
+      "code": [
+        "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63",
+        "packages/control-plane/src/routes/mcp-connections.ts:25"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
@@ -684,7 +708,10 @@
     },
     "F-3": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/scheduler/scheduler.ts:622"],
+      "code": [
+        "packages/control-plane/src/scheduler/scheduler.ts:622",
+        "packages/control-plane/src/scheduler/scheduler.ts:2033"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/src/scheduler/scheduler.test.ts",
@@ -823,12 +850,18 @@
       "status": "PASS",
       "code": [
         "packages/control-plane/src/cloudflare/pi-durable-object.ts:1",
-        "packages/control-plane/src/pi/projection-outbox.ts:1"
+        "packages/control-plane/src/pi/projection-outbox.ts:1",
+        "packages/control-plane/src/routes/session-export.ts:122",
+        "packages/control-plane/test/integration/session-export.test.ts:109"
       ],
       "tests": [
         {
           "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
           "name": "refuses to confirm an archive while a transcript event is undelivered"
+        },
+        {
+          "file": "packages/control-plane/test/integration/session-export.test.ts",
+          "name": "exports Pi through the canonical projection without an incomplete parallel marker"
         }
       ],
       "mutation": {
@@ -895,34 +928,48 @@
     },
     "H-3": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/harness/budget-gate.ts:52"],
+      "code": [
+        "packages/control-plane/src/harness/budget-gate.ts:52",
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:906"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/src/harness/budget-gate.test.ts",
           "name": "refuses the call once the limit is reached"
+        },
+        {
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "fails the model budget gate closed without an attributable active operation"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/harness/budget-gate.ts",
-        "find": "    if (state.exhausted) {",
-        "replace": "    if (false) {",
-        "cmd": "npm test -w @open-inspect/control-plane -- src/harness/budget-gate.test.ts"
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "    if (!sessionId || !operationId) return refusedBudgetState();",
+        "replace": "    if (!sessionId || !operationId) return { exhausted: false, spentUsd: 0, capUsd: null };",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do -t \"fails the model budget gate closed\""
       }
     },
     "I-1": {
       "status": "PASS",
-      "code": ["packages/control-plane/src/memory/session-memory-service.ts:39"],
+      "code": [
+        "packages/control-plane/src/memory/session-memory-service.ts:39",
+        "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts:87"
+      ],
       "tests": [
         {
           "file": "packages/control-plane/src/memory/session-memory-service.test.ts",
           "name": "denies a write when the principal can no longer read the partition"
+        },
+        {
+          "file": "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts",
+          "name": "refuses memory after the turn author loses current authority"
         }
       ],
       "mutation": {
-        "file": "packages/control-plane/src/memory/session-memory-service.ts",
-        "find": "export class SessionMemoryService",
-        "replace": "export class RemovedSessionMemoryService",
-        "cmd": "npm test -w @open-inspect/control-plane -- session-memory-service"
+        "file": "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts",
+        "find": "    if (!(await this.options.authorMayAct(request))) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- pi-memory.handler"
       }
     },
     "I-2": {

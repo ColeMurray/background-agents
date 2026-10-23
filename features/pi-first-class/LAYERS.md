@@ -479,14 +479,16 @@ every one of them is named here.
 These six titles tested behavior that is intentionally no longer permitted. They were not removed to
 hide failures; each was replaced by a stricter regression test for the new boundary.
 
-| Removed reference title                                                                    | Why it no longer describes permitted behavior                                                          | Replacement                                                                 |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| `reads a page as markdown`                                                                 | Browser Rendering cannot constrain redirects and subresources, so it must never fetch.                 | `fails closed when the binding cannot constrain redirects and subresources` |
-| `cuts a page that is longer than the bound`                                                | The transport rejects before receiving page bytes; bounding a forbidden response is unreachable.       | `fails closed when the binding cannot constrain redirects and subresources` |
-| `cuts a screenshot that is longer than the bound`                                          | The transport rejects before receiving screenshot bytes; bounding a forbidden response is unreachable. | `fails closed when the binding cannot constrain redirects and subresources` |
-| `never carries the provider's own error to the model`                                      | The Browser Rendering provider is never called, so it cannot return an error to sanitize.              | `fails closed when the binding cannot constrain redirects and subresources` |
-| `uses Pi's accumulated per-request costs across models, child work, compaction, and tools` | Runtime-supplied prices are no longer trusted or used for accounting.                                  | `prices measured usage only through the server-held price table`            |
-| `rejects malformed provider cost totals instead of guessing`                               | Runtime-provided cost totals are ignored rather than validated as authority.                           | `prices measured usage only through the server-held price table`            |
+| Removed reference title                                                                    | Why it no longer describes permitted behavior                                                          | Replacement                                                                         |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `reads a page as markdown`                                                                 | Browser Rendering cannot constrain redirects and subresources, so it must never fetch.                 | `fails closed when the binding cannot constrain redirects and subresources`         |
+| `cuts a page that is longer than the bound`                                                | The transport rejects before receiving page bytes; bounding a forbidden response is unreachable.       | `fails closed when the binding cannot constrain redirects and subresources`         |
+| `cuts a screenshot that is longer than the bound`                                          | The transport rejects before receiving screenshot bytes; bounding a forbidden response is unreachable. | `fails closed when the binding cannot constrain redirects and subresources`         |
+| `never carries the provider's own error to the model`                                      | The Browser Rendering provider is never called, so it cannot return an error to sanitize.              | `fails closed when the binding cannot constrain redirects and subresources`         |
+| `uses Pi's accumulated per-request costs across models, child work, compaction, and tools` | Runtime-supplied prices are no longer trusted or used for accounting.                                  | `prices measured usage only through the server-held price table`                    |
+| `rejects malformed provider cost totals instead of guessing`                               | Runtime-provided cost totals are ignored rather than validated as authority.                           | `prices measured usage only through the server-held price table`                    |
+| `keeps active A and explicit steer/follow-up controls attributed to one conversation`      | Mid-turn follow-up is outside Open-Inspect's one-processing-message model and is now refused.          | `refuses follow-up controls while another turn is active`                           |
+| `says plainly that a Pi session's own durable record is not in the export`                 | SessionDO's canonical projection is the authoritative export; declaring it incomplete violated G-5.    | `exports Pi through the canonical projection without an incomplete parallel marker` |
 
 ### The other local branches (SHAPE-3)
 
@@ -498,8 +500,12 @@ here is cherry-picked from either. This branch is `compound/pi-overlay`, its his
 
 ### The type and lint escapes (TEST-3)
 
-The branch adds 151 type or lint escapes. Every one of them is listed here with the reason it is
+The branch adds 153 type or lint escapes. Every one of them is listed here with the reason it is
 there.
+
+The three assertions in `packages/control-plane/test/integration/session-do-access.ts` are confined
+to the test-only Durable Object accessor. They merge registered extension internals into the core
+component graph for overlay integration tests without exposing overlay types in production.
 
 | The file                                                                         | The escapes | Why they are there                                                                                                                                                                                                                                                  |
 | -------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

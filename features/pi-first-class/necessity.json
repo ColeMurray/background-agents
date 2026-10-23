@@ -870,6 +870,11 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
+    "packages/control-plane/src/pi/runtime-extension-registry.ts": {
+      "layer": "core-adapter",
+      "need": ["B-4", "D-2"],
+      "why": "Provides a default-empty Pi adapter registration hook so Compound extensions are injected only by the deployment composition root."
+    },
     "packages/control-plane/src/pi/sandbox-execution-extension.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -1061,11 +1066,6 @@
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
     },
     "packages/control-plane/src/routes/session-create.ts": {
-      "layer": "core-seam",
-      "need": ["OI:harness-seam"],
-      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
-    },
-    "packages/control-plane/src/routes/session-export.ts": {
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
@@ -1364,6 +1364,11 @@
       "layer": "core-seam",
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/extension-services.ts": {
+      "layer": "core-seam",
+      "need": ["B-4", "D-6", "E-7", "F-6"],
+      "why": "Provides a default-empty harness-neutral hook for deployment-only session routes, alarms, context, and test internals."
     },
     "packages/control-plane/src/session/external-action-audit-outbox.test.ts": {
       "layer": "overlay",
@@ -1825,6 +1830,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/session/schema-extension-registry.ts": {
+      "layer": "core-seam",
+      "need": ["G-2"],
+      "why": "Provides a default-empty migration registration hook so core schema never imports deployment-only tables."
+    },
     "packages/control-plane/src/session/schema.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -2084,6 +2094,11 @@
       "layer": "core-support",
       "need": ["SUPPORT:test"],
       "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/session-do-access.ts": {
+      "layer": "overlay-hook",
+      "need": ["SUPPORT:test", "DEV:external-actions"],
+      "why": "Test-only accessor exposes registered overlay internals without adding overlay fields to the production core component type."
     },
     "packages/control-plane/test/integration/session-do-collaborator-wiring.test.ts": {
       "layer": "core-support",
