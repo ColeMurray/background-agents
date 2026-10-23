@@ -723,7 +723,7 @@
     "packages/control-plane/src/pi/open-inspect-extension.ts": {
       "layer": "core-adapter",
       "need": ["PI:§9"],
-      "why": "Adapts Pi foreground owned tasks from pi-durable README:82-101,237-253,534-575 to the containment shape in upstream PR #2467: one level, four total threads, parent waits, no direct messaging."
+      "why": "Adapts Pi foreground owned tasks from pi-durable README:82-101,237-253,534-575 to the containment shape in ColeMurray/background-agents PR #2467 (https://github.com/ColeMurray/background-agents/pull/2467): one level, four total threads, parent waits, no direct messaging."
     },
     "packages/control-plane/src/pi/personal-mcp-extension.ts": {
       "layer": "overlay",

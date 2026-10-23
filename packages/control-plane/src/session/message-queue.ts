@@ -1316,13 +1316,13 @@ export class SessionMessageQueue {
     originContext?: string | null
   ): UserMessageEventWithOrigin {
     let origin: GitHubAutofixOrigin | undefined;
-    let crossSessionOrigin: CrossSessionOrigin | undefined;
+    let provenance: CrossSessionOrigin | undefined;
     if (originContext) {
       try {
         const parsed: unknown = JSON.parse(originContext);
         const crossSession = crossSessionOriginSchema.safeParse(parsed);
         if (crossSession.success) {
-          crossSessionOrigin = crossSession.data;
+          provenance = crossSession.data;
         } else {
           origin = githubAutofixOriginSchema.parse(parsed);
         }
@@ -1343,7 +1343,7 @@ export class SessionMessageQueue {
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       ...(origin ? { origin } : {}),
-      ...(crossSessionOrigin ? { crossSessionOrigin } : {}),
+      ...(provenance ? { provenance } : {}),
     };
   }
 
