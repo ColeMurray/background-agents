@@ -77,10 +77,27 @@ const LAUNCHER_ALREADY_RUNNING_EXIT_CODE = 75;
 /**
  * The file whose presence lets a create-time launch proceed. The control
  * plane writes it (see {@link BoatSandboxLifecycle.releaseLaunch}) only once
- * the sandbox is private and its tunnel env file is in place, so the runtime
+ * the sandbox is private and its tunnel env file is staged, so the runtime
  * can outrun neither. Under `/tmp`, which no Boat snapshot keeps.
  */
 export const BOAT_LAUNCH_MARKER_PATH = "/tmp/openinspect-launch";
+/** The workspace directory inside the home directory; the image links `/workspace` to it. */
+const BOAT_WORKSPACE_DIR = "/home/user/workspace";
+/**
+ * Where the runtime reads its tunnel URLs (`/workspace/.tunnels.env`, through
+ * the image's link). Boat's file API writes under `/home/user` and `/tmp`.
+ */
+export const BOAT_TUNNEL_ENV_FILE_PATH = `${BOAT_WORKSPACE_DIR}/.tunnels.env`;
+/**
+ * Where a create writes the tunnel env file for the setup script to copy into
+ * place. A create's writes land while the machine is still coming up, and
+ * Boat mounts the snapshot's filesystem over the home directory as part of
+ * that, so a file put under `/home/user` that early is hidden once the mount
+ * is in place and the runtime waits its full timeout for it. `/tmp` is
+ * outside the snapshot and keeps such a write, as it keeps the launch marker.
+ * A resume writes the file into place directly: its machine is already up.
+ */
+export const BOAT_TUNNEL_ENV_STAGING_PATH = "/tmp/openinspect-tunnels.env";
 /** How long the setup script waits for the marker before giving up, in 200 ms polls. */
 const LAUNCH_MARKER_POLLS = 1500;
 /**
@@ -99,10 +116,16 @@ const LAUNCH_MARKER_POLLS = 1500;
 export const BOAT_SETUP_SCRIPT = [
   "#!/bin/bash",
   "# Started by Boat the moment the machine is up. The control plane writes the",
-  "# launch marker once the sandbox is private and its tunnel env file is in",
-  "# place, so the runtime can outrun neither.",
+  "# launch marker once the sandbox is private and its tunnel env file is",
+  "# staged, so the runtime can outrun neither. The staged file is copied into",
+  "# the workspace here, with the snapshot mounted over the home directory;",
+  "# written there any earlier, it would be hidden by that mount.",
   `for _ in $(seq 1 ${LAUNCH_MARKER_POLLS}); do`,
   `  if [ -f ${BOAT_LAUNCH_MARKER_PATH} ]; then`,
+  `    if [ -f ${BOAT_TUNNEL_ENV_STAGING_PATH} ]; then`,
+  `      mkdir -p ${BOAT_WORKSPACE_DIR} && cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH} ||`,
+  '        echo "tunnel env file copy failed" >&2',
+  "    fi",
   `    exec ${BOAT_LAUNCHER_PATH}`,
   "  fi",
   "  sleep 0.2",

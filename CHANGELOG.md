@@ -12,6 +12,12 @@ before. Together these take a few seconds off every boot. Boat also now starts t
 create request itself, as Modal and Daytona do, instead of through a start command issued once the
 control plane notices the machine is up; a resume still uses the start command.
 
+**Boat tunnel URLs reach the runtime again.** With the create-request launch, the tunnel env file
+was written into the workspace before the machine was up, where Boat's snapshot mount hid it, and
+every boot waited 30 seconds for a file it could not see before running `start.sh` without tunnel
+URLs. The create now stages the file under `/tmp` and the setup script copies it into the workspace
+before the launcher starts.
+
 ## October 22, 2026
 
 **Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A

@@ -16,19 +16,21 @@ the base snapshot, plus the launcher it bakes in.
   created. Used both for manual builds and by the Terraform module.
 - **`launcher.sh`** — baked at `/home/user/openinspect/launcher.sh`. A create-time setup script that
   Boat starts the moment a new sandbox's machine is up waits for the control plane's launch marker
-  (written once the sandbox is private and its tunnel env file is in place) and execs it; the
-  control plane starts it again, detached, on every resume. It links `/workspace` and `/app` into
-  the home directory (the part of the disk a Boat snapshot saves), waits for the restored toolchain,
-  holds a single-instance lock (exit 75 means a runtime is already running), picks the boot mode
-  from the completed-boot marker the runtime writes (`OI_BOOT_COMPLETE_MARKER`), and execs
-  `python -m sandbox_runtime.entrypoint` with its output in
-  `/home/user/.openinspect/supervisor.log`.
+  (written once the sandbox is private and its tunnel env file is staged under `/tmp`), copies that
+  file to `/workspace/.tunnels.env`, and execs it; the control plane starts it again, detached, on
+  every resume. It links `/workspace` and `/app` into the home directory (the part of the disk a
+  Boat snapshot saves), waits for the restored toolchain, holds a single-instance lock (exit 75
+  means a runtime is already running), picks the boot mode from the completed-boot marker the
+  runtime writes (`OI_BOOT_COMPLETE_MARKER`), and execs `python -m sandbox_runtime.entrypoint` with
+  its output in `/home/user/.openinspect/supervisor.log`.
 
 The snapshot runs nothing of its own. On every sandbox create the control plane passes the
 per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, auth token, user secrets — as create-time
 `env`, plus a create-time setup script that waits for the launch marker the control plane writes
-once the sandbox is private and its tunnel env file is in place, then execs the launcher; on every
-resume it starts the launcher again, detached, which boots the runtime in restored mode.
+once the sandbox is private and its tunnel env file is staged, copies that file into the workspace
+(a file written there before the machine is up is hidden once Boat mounts the snapshot over the home
+directory), then execs the launcher; on every resume it starts the launcher again, detached, which
+boots the runtime in restored mode.
 
 Prebuilt images are named snapshots too, saved by the control plane as `oi-img-<scope>-<digest>`
 from a build sandbox that deployed from this base snapshot. A build sandbox is created with the boot

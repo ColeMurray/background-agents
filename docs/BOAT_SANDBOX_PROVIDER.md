@@ -138,9 +138,12 @@ runtime the same way Open-Inspect does on every other provider:
    execs the baked launcher
 2. while the machine is still provisioning, the enabled service ports (code-server, terminal, noVNC)
    and the configured tunnel ports are routed to `https://<subdomain>-<port>.on.boat.dev` URLs,
-   tunnel URLs are written to `/workspace/.tunnels.env`, and the control plane then writes the
-   launch marker (`/tmp/openinspect-launch`): the runtime starts neither before the sandbox is
-   private nor before its tunnel file exists
+   tunnel URLs are staged in `/tmp/openinspect-tunnels.env`, and the control plane then writes the
+   launch marker (`/tmp/openinspect-launch`); the setup script copies the staged file to
+   `/workspace/.tunnels.env` before it execs the launcher, so the runtime starts neither before the
+   sandbox is private nor before its tunnel file exists. The file is staged rather than written into
+   the workspace because Boat mounts the snapshot over the home directory while the machine comes
+   up, which hides anything written there earlier; `/tmp` is outside the snapshot
 3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
    toolchain, takes a single-instance lock, and execs the supervisor
    (`python -m sandbox_runtime.entrypoint`) with its output in

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertBoatEnvWithinLimits,
+  BOAT_LAUNCH_MARKER_PATH,
+  BOAT_LAUNCHER_PATH,
+  BOAT_SETUP_SCRIPT,
+  BOAT_TUNNEL_ENV_FILE_PATH,
+  BOAT_TUNNEL_ENV_STAGING_PATH,
   BoatSandboxLifecycle,
   boatIdempotencyKey,
   resolveBoatMachineType,
@@ -76,6 +81,25 @@ describe("BoatSandboxLifecycle archive", () => {
     await expect(
       new BoatSandboxLifecycle(refused, fastTimings).archive("bx_abcdefgh")
     ).rejects.toBeInstanceOf(BoatApiError);
+  });
+});
+
+describe("BOAT_SETUP_SCRIPT", () => {
+  it("waits for the marker, copies the staged tunnel env file into the workspace, then execs the launcher", () => {
+    const marker = BOAT_SETUP_SCRIPT.indexOf(`[ -f ${BOAT_LAUNCH_MARKER_PATH} ]`);
+    const staged = BOAT_SETUP_SCRIPT.indexOf(`[ -f ${BOAT_TUNNEL_ENV_STAGING_PATH} ]`);
+    const copy = BOAT_SETUP_SCRIPT.indexOf(
+      `cp ${BOAT_TUNNEL_ENV_STAGING_PATH} ${BOAT_TUNNEL_ENV_FILE_PATH}`
+    );
+    const exec = BOAT_SETUP_SCRIPT.indexOf(`exec ${BOAT_LAUNCHER_PATH}`);
+    expect(marker).toBeGreaterThan(-1);
+    expect(staged).toBeGreaterThan(marker);
+    expect(copy).toBeGreaterThan(staged);
+    expect(exec).toBeGreaterThan(copy);
+    // The staging path is outside the home directory, which Boat's snapshot
+    // mount covers; the destination is where the runtime reads the file.
+    expect(BOAT_TUNNEL_ENV_STAGING_PATH.startsWith("/tmp/")).toBe(true);
+    expect(BOAT_TUNNEL_ENV_FILE_PATH).toBe("/home/user/workspace/.tunnels.env");
   });
 });
 

@@ -67,6 +67,8 @@ import {
   resolveBoatTtlSeconds,
   type BoatArchiveOutcome,
   type BoatLifecycleTimings,
+  BOAT_TUNNEL_ENV_FILE_PATH,
+  BOAT_TUNNEL_ENV_STAGING_PATH,
 } from "../boat-lifecycle";
 import {
   buildSandboxEnvVars,
@@ -112,12 +114,7 @@ export const BOAT_RESERVED_PORTS: ReadonlySet<number> = new Set([
 /** noVNC's shared default (6080) is a Boat port, so Boat sandboxes default to the next one. */
 export const BOAT_DEFAULT_VNC_PORT = 6081;
 
-/**
- * Where the tunnel env file is written. Boat's file API writes under
- * `/home/user` and `/tmp`; the runtime reads `/workspace/.tunnels.env`, and
- * the image links `/workspace` to `/home/user/workspace`.
- */
-export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";
+export { BOAT_TUNNEL_ENV_FILE_PATH, BOAT_TUNNEL_ENV_STAGING_PATH } from "../boat-lifecycle";
 // Mirrors TUNNEL_ENV_SANDBOX_ID_KEY in sandbox_runtime/constants.py: tags the
 // tunnel env file with the sandbox it was written for, so the supervisor's
 // stale-file cleanup keeps a fresh write instead of deleting it.
@@ -230,17 +227,23 @@ export class BoatSandboxProvider implements SandboxProvider {
 
       // All of this usually lands while the machine is still provisioning:
       // Boat takes routes, names and file writes before the machine is live.
+      // The tunnel env file goes to its staging path under `/tmp`, because a
+      // write under the home directory this early is hidden once Boat mounts
+      // the snapshot over it; the setup script copies it into the workspace.
       // The dashboard name is cosmetic and never fails a launch, so it rides
       // alongside the port hosting instead of ahead of it.
       const [access] = await Promise.all([
-        this.exposeAccess(boatSandboxId, config.sandboxId, portPlan, {
-          codeServerPassword,
-          vncPassword,
-        }),
+        this.exposeAccess(
+          boatSandboxId,
+          config.sandboxId,
+          portPlan,
+          { codeServerPassword, vncPassword },
+          BOAT_TUNNEL_ENV_STAGING_PATH
+        ),
         this.nameSandbox(boatSandboxId, config.sandboxId),
       ]);
-      // Private, and the tunnel env file in place: the setup script Boat starts
-      // at machine-up may now exec the launcher.
+      // Private, and the tunnel env file staged: the setup script Boat starts
+      // at machine-up may now copy the file into place and exec the launcher.
       await this.lifecycle.releaseLaunch(boatSandboxId);
       const releasedAtMs = Date.now();
 
@@ -331,11 +334,13 @@ export class BoatSandboxProvider implements SandboxProvider {
               this.providerConfig.sandboxAccessPasswordSecret
             )
           : undefined;
+        // The machine is up, so the tunnel env file can go straight into place.
         const access = await this.exposeAccess(
           config.providerObjectId,
           config.sandboxId,
           portPlan,
-          { codeServerPassword, vncPassword }
+          { codeServerPassword, vncPassword },
+          BOAT_TUNNEL_ENV_FILE_PATH
         );
         // A resumed machine runs nothing, and the create's setup script does
         // not run again: the launcher is started here, and, finding the
@@ -510,7 +515,8 @@ export class BoatSandboxProvider implements SandboxProvider {
     boatSandboxId: string,
     logicalSandboxId: string,
     portPlan: SandboxPortPlan,
-    passwords: { codeServerPassword?: string; vncPassword?: string }
+    passwords: { codeServerPassword?: string; vncPassword?: string },
+    tunnelEnvPath: string
   ): Promise<BoatAccess> {
     const requests: Array<{
       kind: "codeServer" | "terminal" | "vnc" | "tunnel";
@@ -578,7 +584,7 @@ export class BoatSandboxProvider implements SandboxProvider {
     }
     if (Object.keys(tunnelUrls).length > 0) {
       access.tunnelUrls = tunnelUrls;
-      await this.writeTunnelEnvFile(boatSandboxId, logicalSandboxId, tunnelUrls);
+      await this.writeTunnelEnvFile(boatSandboxId, logicalSandboxId, tunnelUrls, tunnelEnvPath);
     }
     return access;
   }
@@ -586,7 +592,8 @@ export class BoatSandboxProvider implements SandboxProvider {
   private async writeTunnelEnvFile(
     boatSandboxId: string,
     logicalSandboxId: string,
-    tunnelUrls: Record<string, string>
+    tunnelUrls: Record<string, string>,
+    path: string
   ): Promise<void> {
     const lines = [
       `${TUNNEL_ENV_SANDBOX_ID_KEY}=${logicalSandboxId}`,
@@ -595,7 +602,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         .map(([port, url]) => `TUNNEL_${port}=${url}`),
     ];
     await this.client.writeFile(boatSandboxId, {
-      path: BOAT_TUNNEL_ENV_FILE_PATH,
+      path,
       content: lines.join("\n") + "\n",
     });
   }

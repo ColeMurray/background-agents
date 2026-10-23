@@ -8,7 +8,11 @@ import {
   BOAT_SETUP_SCRIPT,
   boatIdempotencyKey,
 } from "../boat-lifecycle";
-import { BOAT_TUNNEL_ENV_FILE_PATH, BoatSandboxProvider } from "./boat-provider";
+import {
+  BOAT_TUNNEL_ENV_FILE_PATH,
+  BOAT_TUNNEL_ENV_STAGING_PATH,
+  BoatSandboxProvider,
+} from "./boat-provider";
 import {
   baseCreateConfig,
   boatSandbox,
@@ -123,7 +127,7 @@ describe("BoatSandboxProvider", () => {
       expect(env).not.toHaveProperty("GITHUB_TOKEN");
     });
 
-    it("defaults noVNC to 6081, keeps tunnels protected and writes the tunnel env file", async () => {
+    it("defaults noVNC to 6081, keeps tunnels protected and stages the tunnel env file", async () => {
       const client = mockClient();
       const result = await createProvider(client, providerConfig).createSandbox({
         ...baseCreateConfig,
@@ -157,19 +161,26 @@ describe("BoatSandboxProvider", () => {
         public: false,
         title: "tunnel 3000",
       });
+      // A create stages the file under /tmp for the setup script to copy into
+      // the workspace: a write under the home directory before the machine is
+      // up is hidden once Boat mounts the snapshot over it.
       expect(client.writeFile).toHaveBeenCalledWith("bx_abcdefgh", {
-        path: BOAT_TUNNEL_ENV_FILE_PATH,
+        path: BOAT_TUNNEL_ENV_STAGING_PATH,
         content:
           "TUNNEL_SANDBOX_ID=sandbox-logical\n" +
           "TUNNEL_3000=https://sub-3000.on.boat.dev?_token=tok3000\n" +
           "TUNNEL_5173=https://sub-5173.on.boat.dev?_token=tok5173\n",
       });
-      // The tunnel env file is in place before the launch is released, and the
+      expect(client.writeFile).not.toHaveBeenCalledWith(
+        "bx_abcdefgh",
+        expect.objectContaining({ path: BOAT_TUNNEL_ENV_FILE_PATH })
+      );
+      // The tunnel env file is staged before the launch is released, and the
       // launch is released before the first readiness read: the runtime can
       // start neither before the file nor after this side has stopped looking.
       const writes = vi.mocked(client.writeFile).mock;
       const tunnelWrite = writes.calls.findIndex(
-        ([, file]) => file.path === BOAT_TUNNEL_ENV_FILE_PATH
+        ([, file]) => file.path === BOAT_TUNNEL_ENV_STAGING_PATH
       );
       const markerWrite = writes.calls.findIndex(
         ([, file]) => file.path === BOAT_LAUNCH_MARKER_PATH
@@ -431,7 +442,15 @@ describe("BoatSandboxProvider", () => {
       });
       expect(client.resumeSandbox).toHaveBeenCalledWith("bx_abcdefgh", { ttlSeconds: 3600 });
       expect(client.updateSandbox).not.toHaveBeenCalled();
-      expect(client.writeFile).toHaveBeenCalled();
+      // The machine is up on a resume, so the file goes straight into place.
+      expect(client.writeFile).toHaveBeenCalledWith(
+        "bx_abcdefgh",
+        expect.objectContaining({ path: BOAT_TUNNEL_ENV_FILE_PATH })
+      );
+      expect(client.writeFile).not.toHaveBeenCalledWith(
+        "bx_abcdefgh",
+        expect.objectContaining({ path: BOAT_TUNNEL_ENV_STAGING_PATH })
+      );
       expect(client.startDetachedCommand).toHaveBeenCalledWith("bx_abcdefgh", BOAT_LAUNCHER_PATH);
     });
 
