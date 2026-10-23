@@ -3,6 +3,7 @@ import { MCPClientManager } from "agents/mcp/client";
 import { Lifecycle } from "agents/lifecycle";
 import { requireMcpOAuthEncryptionKey } from "../env-validation";
 import type { McpBrokerCall, McpBrokerCallResult } from "../mcp/broker-contract";
+import { collectCredentialValues, containsCredentialValue } from "../mcp/credential-values";
 import { assertMcpEgress } from "../mcp/egress-policy";
 import {
   D1McpOAuthStorage,
@@ -639,39 +640,15 @@ async function currentOAuthCredentialValues(connection: {
     const tokens = await provider.tokens();
     if (typeof tokens !== "object" || tokens === null) return new Set();
     const record = tokens as Record<string, unknown>;
-    return new Set(
-      [record.access_token, record.refresh_token, record.accessToken, record.refreshToken].filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      )
-    );
+    return collectCredentialValues({
+      access_token: record.access_token,
+      refresh_token: record.refresh_token,
+      accessToken: record.accessToken,
+      refreshToken: record.refreshToken,
+    });
   } catch {
     throw new Error("The MCP credential guard is unavailable");
   }
-}
-
-/** Whether a provider result echoes one of the broker's exact credential values at any depth. */
-function containsCredentialValue(
-  value: unknown,
-  credentialValues: ReadonlySet<string>,
-  seen = new Set<object>()
-): boolean {
-  if (typeof value === "string") {
-    for (const credential of credentialValues) {
-      if (value.includes(credential)) return true;
-    }
-    return false;
-  }
-  if (typeof value !== "object" || value === null) return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsCredentialValue(entry, credentialValues, seen));
-  }
-  return Object.entries(value).some(
-    ([key, entry]) =>
-      containsCredentialValue(key, credentialValues, seen) ||
-      containsCredentialValue(entry, credentialValues, seen)
-  );
 }
 
 /**

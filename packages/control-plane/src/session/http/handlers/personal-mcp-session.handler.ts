@@ -113,6 +113,8 @@ export interface McpSessionBridge {
 export interface McpSessionHandlerOptions {
   mcp: McpSessionBridge;
   getSessionId: () => string;
+  /** Live kill switch for only the personal-connection lane. */
+  personalConnectionsEnabled: () => boolean;
 }
 
 export class McpSessionHandler {
@@ -127,6 +129,15 @@ export class McpSessionHandler {
    * here at all.
    */
   async grantPin(request: Request): Promise<Response> {
+    if (!this.options.personalConnectionsEnabled()) {
+      return Response.json(
+        {
+          error: "Personal MCP connections are disabled",
+          code: "mcp_connections_disabled",
+        },
+        { status: 503 }
+      );
+    }
     const ownerUserId = request.headers.get("X-Mcp-Pin-Owner-ID");
     if (!ownerUserId) {
       return Response.json({ error: "The connection owner is required" }, { status: 400 });
@@ -178,9 +189,10 @@ export class McpSessionHandler {
         { status: 403 }
       );
     }
-    const grants = author.unattended
-      ? []
-      : (await bridge.grants()).filter((grant) => grant.ownerUserId === author.userId);
+    const grants =
+      author.unattended || !this.options.personalConnectionsEnabled()
+        ? []
+        : (await bridge.grants()).filter((grant) => grant.ownerUserId === author.userId);
     const shared = await bridge.sharedServers();
     return Response.json(
       {
@@ -350,6 +362,16 @@ export class McpSessionHandler {
           truncated: sharedBounded.truncated,
         } satisfies McpReadResult,
         { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    if (!this.options.personalConnectionsEnabled()) {
+      return Response.json(
+        {
+          error: "Personal MCP connections are disabled for this session",
+          code: "mcp_connections_disabled",
+        },
+        { status: 403 }
       );
     }
 

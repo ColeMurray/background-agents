@@ -8,6 +8,7 @@ import { createPiDeploymentCapabilitySnapshot } from "../pi/deployment-capabilit
 import { McpServerReviewStore } from "../db/mcp-server-reviews";
 import { McpServerStore } from "../db/mcp-servers";
 import { callSharedMcpTool } from "./mcp-shared-client";
+import { mcpConnectionsEnabled } from "../mcp/feature";
 import { McpConnectionStore } from "../db/mcp-connections";
 import { McpReadAuditStore } from "../db/mcp-read-audit";
 import {
@@ -253,6 +254,7 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
             name: server.name,
             type: server.type,
             url: server.url,
+            endpointHost: new URL(metadata.url ?? "https://mcp.invalid").host,
             headers: server.headers,
             env: server.env,
           },
@@ -261,6 +263,9 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
         );
       },
       callTool: async (request) => {
+        if (!mcpConnectionsEnabled(env)) {
+          throw new Error("MCP connections are not enabled for this deployment");
+        }
         const broker = env.MCP_CONNECTION;
         if (!broker) throw new Error("MCP connections are not enabled for this deployment");
         const pins = await new McpSessionPinStore(db).listForSession(getPublicSessionId());
@@ -302,6 +307,7 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
       authorMayAct: turnAuthorMayAct,
     },
     getSessionId: getPublicSessionId,
+    personalConnectionsEnabled: () => mcpConnectionsEnabled(env),
   });
   const crossSessionHandler = new CrossSessionHandler({
     crossSession: {

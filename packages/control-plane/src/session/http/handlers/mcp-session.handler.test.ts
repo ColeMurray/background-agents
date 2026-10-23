@@ -5,6 +5,7 @@ function harness(
   options: {
     sessionCapability?: "off" | "read_only" | "enabled";
     liveMode?: "off" | "read_only" | "enabled";
+    personalConnectionsEnabled?: boolean;
     actorId?: string | null;
     unattended?: boolean;
     authorMayAct?: boolean;
@@ -41,6 +42,13 @@ function harness(
     return options.result ?? { hits: ["one"] };
   });
   const audit = vi.fn(async () => undefined);
+  const grantPin = vi.fn(async () => ({
+    id: "pin-1",
+    sessionId: "session-1",
+    connectionId: "mcpconn_1",
+    toolNames: ["search"],
+    createdAt: 1_000,
+  }));
   const bridge: McpSessionBridge = {
     liveMode: () => options.liveMode ?? "enabled",
     sessionCapability: () => options.sessionCapability ?? "enabled",
@@ -63,19 +71,14 @@ function harness(
     ),
     authorMayAct: async () => options.authorMayAct ?? true,
     callSharedTool: vi.fn(async () => options.sharedResult ?? { shared: true }),
-    grantPin: vi.fn(async () => ({
-      id: "pin-1",
-      sessionId: "session-1",
-      connectionId: "mcpconn_1",
-      toolNames: ["search"],
-      createdAt: 1_000,
-    })),
+    grantPin,
   };
   const handler = new McpSessionHandler({
     mcp: bridge,
     getSessionId: () => "session-1",
+    personalConnectionsEnabled: () => options.personalConnectionsEnabled ?? true,
   });
-  return { handler, callTool, audit };
+  return { handler, callTool, audit, grantPin };
 }
 
 const request = {
@@ -133,6 +136,18 @@ describe("McpSessionHandler", () => {
     const response = await h.handler.read(readRequest());
 
     expect(response.status).toBe(403);
+    expect(h.callTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a personal read when personal MCP connections are disabled", async () => {
+    const h = harness({ personalConnectionsEnabled: false });
+
+    const response = await h.handler.read(readRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "mcp_connections_disabled",
+    });
     expect(h.callTool).not.toHaveBeenCalled();
   });
 
@@ -331,6 +346,24 @@ describe("McpSessionHandler", () => {
     });
   });
 
+  it("keeps shared MCP available when personal MCP connections are disabled", async () => {
+    const h = harness({
+      personalConnectionsEnabled: false,
+      sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
+    });
+
+    const response = await h.handler.read(
+      new Request("http://session/internal/pi-mcp/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "operation-1" },
+        body: JSON.stringify({ serverId: "mcp_1", toolName: "search", arguments: {} }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ content: { shared: true } });
+  });
+
   it("refuses a shared server the session may not use", async () => {
     const h = harness({
       sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
@@ -402,5 +435,50 @@ describe("McpSessionHandler", () => {
     expect(body.pins).toHaveLength(1);
     // The owner of the connection is not part of the answer.
     expect(JSON.stringify(body)).not.toMatch(/token|secret|authorization|ownerUserId/i);
+  });
+
+  it("omits personal pins but retains shared servers when personal MCP is disabled", async () => {
+    const h = harness({
+      personalConnectionsEnabled: false,
+      sharedServers: [{ serverId: "mcp_1", serverName: "Docs", toolNames: ["search"] }],
+    });
+
+    const response = await h.handler.list(
+      new Request("http://session/internal/pi-mcp/list", {
+        headers: { "X-Pi-Operation-ID": "operation-1" },
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      pins: [],
+      shared: [expect.objectContaining({ serverId: "mcp_1" })],
+    });
+  });
+
+  it("refuses a personal pin grant when personal MCP connections are disabled", async () => {
+    const h = harness({ personalConnectionsEnabled: false });
+
+    const response = await h.handler.grantPin(
+      new Request("http://session/internal/pi-mcp/grant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Mcp-Pin-Owner-ID": "user-1",
+        },
+        body: JSON.stringify({
+          connectionId: "mcpconn_1",
+          catalogSnapshotSha256: "a".repeat(64),
+          toolNames: ["search"],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Personal MCP connections are disabled",
+      code: "mcp_connections_disabled",
+    });
+    expect(h.grantPin).not.toHaveBeenCalled();
   });
 });
