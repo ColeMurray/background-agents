@@ -33,6 +33,17 @@ function createSession(
   });
 }
 
+const ACTORS_ME_URL = "https://test.local/actors/me";
+
+function enrollActor(actor: string, profile: Record<string, unknown>): Promise<Response> {
+  return serviceFetch(ACTORS_ME_URL, {
+    service: "slack-bot",
+    method: "POST",
+    actor,
+    body: JSON.stringify(profile),
+  });
+}
+
 describe("known service actor profile claims", () => {
   let users: UserStore;
 
@@ -74,6 +85,56 @@ describe("known service actor profile claims", () => {
       email: "ada@corp.test",
       emailVerified: true,
     });
+  });
+
+  it("links a Slack actor to the user owning its email when it enrolls before a claim-less read", async () => {
+    const ada = await users.createUser({
+      displayName: "Ada Lovelace",
+      email: "ada@example.com",
+      emailVerified: true,
+    });
+
+    const enrolled = await enrollActor("slack:U-X", {
+      displayName: "Ada",
+      email: "ada@example.com",
+    });
+    expect(enrolled.status).toBe(204);
+    const catalogRead = await serviceFetch("https://test.local/environments?channel=slack:C-X", {
+      service: "slack-bot",
+      actor: "slack:U-X",
+    });
+    expect(catalogRead.status).toBe(200);
+    const created = await createSession("slack-bot", "slack:U-X", {
+      actorDisplayName: "Ada",
+      actorEmail: "ada@example.com",
+    });
+
+    expect(created.status).toBe(201);
+    await expect(users.getIdentity("slack", "U-X")).resolves.toMatchObject({ userId: ada.id });
+    await expect(
+      env.DB.prepare("SELECT user_id AS userId FROM sessions").first<{ userId: string }>()
+    ).resolves.toEqual({ userId: ada.id });
+  });
+
+  it("refuses enrollment without an actor or with an unknown field and writes nothing", async () => {
+    const actorless = await serviceFetch(ACTORS_ME_URL, {
+      service: "slack-bot",
+      method: "POST",
+      body: JSON.stringify({ email: "ada@example.com" }),
+    });
+    expect(actorless.status).toBe(403);
+    await expect(actorless.json()).resolves.toMatchObject({ code: "service_actor_required" });
+
+    const unknownField = await enrollActor("slack:U-UNKNOWN-FIELD", {
+      email: "ada@example.com",
+      userId: "forged",
+    });
+    expect(unknownField.status).toBe(400);
+
+    await expect(users.getIdentity("slack", "U-UNKNOWN-FIELD")).resolves.toBeNull();
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>()
+    ).resolves.toEqual({ count: 0 });
   });
 
   it("claims an attested email over a legacy blank stored email", async () => {
