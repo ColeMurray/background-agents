@@ -1,11 +1,13 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
+  memoryInclusionSchema,
   memoryScopeSchema,
-  type MemoryInclusion,
-  type MemoryStatus,
-  type MemoryType,
+  memoryScopeTypeSchema,
+  memoryStatusSchema,
+  memoryTypeSchema,
 } from "@open-inspect/shared/types/memories";
-import { partitionFromColumns, type PartitionColumns } from "../memory/partition";
+import { z } from "zod";
+import { partitionFromColumns } from "../memory/partition";
 import { emptySelection } from "../memory/selection";
 import type {
   MemorySession,
@@ -17,30 +19,35 @@ import type { Pinned } from "../session/pinned";
 import { bulkInsertStatements } from "./bulk-insert";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
-interface ManifestRow {
-  selection_version: number;
-  manifest_sha256: string;
-  resolved_at: number;
-  personal_owner_user_id: string | null;
-  directive_chars: number;
-  catalog_chars: number;
-  estimated_tokens: number;
-  omitted_count: number;
-}
-interface PinnedItemRow extends PartitionColumns {
-  memory_id: string;
-  revision_id: string;
-  revision_number: number;
-  memory_type: MemoryType;
-  title: string;
-  description: string;
-  content: string | null;
-  scope_json: string;
-  inclusion: MemoryInclusion;
-  estimated_tokens: number;
-  current_revision_id: string;
-  status: MemoryStatus;
-}
+export const memoryManifestRowSchema = z.object({
+  selection_version: z.number(),
+  manifest_sha256: z.string(),
+  resolved_at: z.number(),
+  personal_owner_user_id: z.string().nullable(),
+  directive_chars: z.number(),
+  catalog_chars: z.number(),
+  estimated_tokens: z.number(),
+  omitted_count: z.number(),
+});
+
+export const pinnedMemoryItemRowSchema = z.object({
+  memory_id: z.string(),
+  revision_id: z.string(),
+  revision_number: z.number(),
+  memory_type: memoryTypeSchema,
+  title: z.string(),
+  description: z.string(),
+  content: z.string().nullable(),
+  scope_json: z.string(),
+  inclusion: memoryInclusionSchema,
+  estimated_tokens: z.number(),
+  current_revision_id: z.string(),
+  status: memoryStatusSchema,
+  partition_type: memoryScopeTypeSchema,
+  owner_user_id: z.string().nullable(),
+  repo_id: z.number().nullable(),
+  environment_id: z.string().nullable(),
+});
 
 /** A session's pinned selection, the live drift of its items, and its renderable revisions. */
 export interface PinnedSelection {
@@ -153,7 +160,7 @@ export class SessionMemorySelectionStore {
    * Callers must authorize the session and recheck shared-partition access before rendering.
    */
   async loadSelection(sessionId: string): Promise<PinnedSelection | null> {
-    const [headers, rows] = await this.db.batch<ManifestRow | PinnedItemRow>([
+    const [headers, rows] = await this.db.batch<unknown>([
       this.db
         .prepare("SELECT * FROM session_memory_manifests WHERE session_id = ?")
         .bind(sessionId),
@@ -169,7 +176,7 @@ export class SessionMemorySelectionStore {
         )
         .bind(sessionId),
     ]);
-    const header = headers.results[0] as ManifestRow | undefined;
+    const header = memoryManifestRowSchema.optional().parse(headers.results[0]);
     if (!header) {
       const session = await this.db
         .prepare("SELECT created_at FROM sessions WHERE id = ?")
@@ -179,7 +186,7 @@ export class SessionMemorySelectionStore {
       const manifest = await emptySelection(session.created_at);
       return { selection: manifest, drift: [], entries: [] };
     }
-    const items = rows.results as PinnedItemRow[];
+    const items = z.array(pinnedMemoryItemRowSchema).parse(rows.results);
     const manifest: SessionMemorySelection = {
       selectionVersion: header.selection_version,
       manifestSha256: header.manifest_sha256,
