@@ -118,6 +118,23 @@ describe("BoatRestClient", () => {
     });
   });
 
+  it("createSandbox forwards the setup script when given", async () => {
+    const client = new BoatRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse(sandboxBody({ state: "provisioning" }), 202));
+    await client.createSandbox({
+      type: "default",
+      ttlSeconds: 7200,
+      env: {},
+      from: "open-inspect-abc",
+      idempotencyKey: "openinspect-key",
+      monitoring: false,
+      setupScript: "#!/bin/bash\nexec /home/user/openinspect/launcher.sh\n",
+    });
+    expect(JSON.parse(String(lastRequest().init.body))).toMatchObject({
+      setupScript: "#!/bin/bash\nexec /home/user/openinspect/launcher.sh\n",
+    });
+  });
+
   it("scrubs create env values out of a provider error", async () => {
     const client = new BoatRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(

@@ -208,10 +208,9 @@ export class BoatSandboxProvider implements SandboxProvider {
           // Session output stays inside the sandbox: Boat keeps no command or
           // process output for it.
           monitoring: false,
-          // Boat starts the launcher itself the moment the machine is up, with
-          // the env above applied, so the boot never waits for this side to
-          // notice readiness. The tunnel env file follows; the runtime waits
-          // for it before `start.sh`, as it does on Modal.
+          // Boat runs this the moment the machine is up, with the env above
+          // applied, so the boot never waits for this side to notice readiness.
+          // The script execs the launcher once the launch marker below lands.
           setupScript: BOAT_SETUP_SCRIPT,
         });
       } catch (error) {
@@ -229,7 +228,8 @@ export class BoatSandboxProvider implements SandboxProvider {
       boatSandboxId = created.id;
       await this.lifecycle.ensurePrivate(created);
 
-      const ready = await this.lifecycle.waitForReady(boatSandboxId);
+      // All of this usually lands while the machine is still provisioning:
+      // Boat takes routes, names and file writes before the machine is live.
       // The dashboard name is cosmetic and never fails a launch, so it rides
       // alongside the port hosting instead of ahead of it.
       const [access] = await Promise.all([
@@ -239,8 +239,13 @@ export class BoatSandboxProvider implements SandboxProvider {
         }),
         this.nameSandbox(boatSandboxId, config.sandboxId),
       ]);
-      // About a second after the machine came up: a launcher that died at
-      // once has reported by now, and its reason is in the same record.
+      // Private, and the tunnel env file in place: the setup script Boat starts
+      // at machine-up may now exec the launcher.
+      await this.lifecycle.releaseLaunch(boatSandboxId);
+
+      const ready = await this.lifecycle.waitForReady(boatSandboxId);
+      // A launcher that died at once has reported by now, and its reason is
+      // in the same record.
       await this.lifecycle.confirmLaunch(boatSandboxId);
 
       return {

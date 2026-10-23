@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
 import {
+  BOAT_LAUNCH_MARKER_PATH,
   BOAT_LAUNCHER_PATH,
   BOAT_SANDBOX_VERSION,
   BOAT_SETUP_SCRIPT,
@@ -76,9 +77,14 @@ describe("BoatSandboxProvider", () => {
         public: true,
         title: "code-server",
       });
-      // The launch rides on the create: Boat runs the launcher the moment the
-      // machine is up, so no start command follows.
+      // The launch rides on the create: Boat runs the setup script the moment
+      // the machine is up, and it execs the launcher once the control plane has
+      // released the launch, so no start command follows.
       expect(params.setupScript).toBe(BOAT_SETUP_SCRIPT);
+      expect(client.writeFile).toHaveBeenCalledWith("bx_abcdefgh", {
+        path: BOAT_LAUNCH_MARKER_PATH,
+        content: "released\n",
+      });
       expect(client.startDetachedCommand).not.toHaveBeenCalled();
       expect(client.deleteSandbox).not.toHaveBeenCalled();
     });
@@ -157,8 +163,22 @@ describe("BoatSandboxProvider", () => {
           "TUNNEL_3000=https://sub-3000.on.boat.dev?_token=tok3000\n" +
           "TUNNEL_5173=https://sub-5173.on.boat.dev?_token=tok5173\n",
       });
-      // The runtime waits for this file before it runs start.sh, so it may land
-      // after Boat has started the launcher.
+      // The tunnel env file is in place before the launch is released, and the
+      // launch is released before the first readiness read: the runtime can
+      // start neither before the file nor after this side has stopped looking.
+      const writes = vi.mocked(client.writeFile).mock;
+      const tunnelWrite = writes.calls.findIndex(
+        ([, file]) => file.path === BOAT_TUNNEL_ENV_FILE_PATH
+      );
+      const markerWrite = writes.calls.findIndex(
+        ([, file]) => file.path === BOAT_LAUNCH_MARKER_PATH
+      );
+      expect(writes.invocationCallOrder[tunnelWrite]).toBeLessThan(
+        writes.invocationCallOrder[markerWrite]
+      );
+      expect(writes.invocationCallOrder[markerWrite]).toBeLessThan(
+        vi.mocked(client.getSandbox).mock.invocationCallOrder[0]
+      );
     });
 
     it("leaves a personal sandbox alone and makes a shared organization sandbox private first", async () => {
@@ -178,6 +198,8 @@ describe("BoatSandboxProvider", () => {
       const unshareOrder = vi.mocked(shared.unshareSandbox).mock.invocationCallOrder[0];
       expect(unshareOrder).toBeLessThan(vi.mocked(shared.getSandbox).mock.invocationCallOrder[0]);
       expect(unshareOrder).toBeLessThan(vi.mocked(shared.hostPort).mock.invocationCallOrder[0]);
+      // And the launch is released only after that.
+      expect(unshareOrder).toBeLessThan(vi.mocked(shared.writeFile).mock.invocationCallOrder[0]);
     });
 
     it("deletes a shared organization sandbox it cannot make private", async () => {
@@ -195,6 +217,23 @@ describe("BoatSandboxProvider", () => {
       expect((error as SandboxProviderError).message).toContain("stayed shared");
       expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
       expect(client.startDetachedCommand).not.toHaveBeenCalled();
+      // No launch marker: the setup script never execs the launcher.
+      expect(client.writeFile).not.toHaveBeenCalled();
+    });
+
+    it("fails the create and deletes the sandbox when the launch cannot be released", async () => {
+      const client = mockClient({
+        writeFile: vi.fn(async () => {
+          throw new BoatApiError("agent unavailable", 503);
+        }),
+      });
+      const error = await createProvider(client, providerConfig)
+        .createSandbox(baseCreateConfig)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect(client.writeFile).toHaveBeenCalledTimes(3);
+      expect(client.getSandbox).not.toHaveBeenCalled();
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
     });
 
     it("keeps a failed dashboard label from failing the create", async () => {

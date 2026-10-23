@@ -133,11 +133,14 @@ runtime the same way Open-Inspect does on every other provider:
 
 1. the sandbox is created with `noEnv` (none of the Boat account's own secrets or logins) and the
    per-sandbox env — `CONTROL_PLANE_URL`, `SESSION_CONFIG`, the sandbox auth token, user secrets —
-   which Boat applies to every process the sandbox starts, and the baked launcher as Boat's
-   create-time setup script, which Boat runs as the sandbox user the moment the machine is up
-2. the enabled service ports (code-server, terminal, noVNC) and the configured tunnel ports are
-   routed to `https://<subdomain>-<port>.on.boat.dev` URLs; tunnel URLs are written to
-   `/workspace/.tunnels.env`; the runtime waits for that file before it runs `start.sh`
+   which Boat applies to every process the sandbox starts, and a create-time setup script that Boat
+   runs as the sandbox user the moment the machine is up; the script waits for a launch marker, then
+   execs the baked launcher
+2. while the machine is still provisioning, the enabled service ports (code-server, terminal, noVNC)
+   and the configured tunnel ports are routed to `https://<subdomain>-<port>.on.boat.dev` URLs,
+   tunnel URLs are written to `/workspace/.tunnels.env`, and the control plane then writes the
+   launch marker (`/tmp/openinspect-launch`): the runtime starts neither before the sandbox is
+   private nor before its tunnel file exists
 3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
    toolchain, takes a single-instance lock, and execs the supervisor
    (`python -m sandbox_runtime.entrypoint`) with its output in
