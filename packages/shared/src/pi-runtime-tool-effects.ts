@@ -89,16 +89,6 @@ export const PI_SANDBOX_EXECUTION_TOOL_EFFECT_REGISTRATIONS = [
   },
 ] as const satisfies readonly ToolEffectRegistration[];
 
-/** The explicitly selected, isolated Computer JavaScript backend. */
-export const PI_COMPUTER_EXEC_TOOL_EFFECT_REGISTRATIONS = [
-  {
-    name: "exec",
-    effect: SANDBOX_EXECUTION_TOOL_EFFECT,
-    callers: ["model"],
-    replay: "unsafe",
-  },
-] as const satisfies readonly ToolEffectRegistration[];
-
 /**
  * Computer's isolated JavaScript backend. It is contributed only when the
  * deployment supplies a Worker Loader and the session's canonical sandbox
