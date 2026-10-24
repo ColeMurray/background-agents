@@ -28,6 +28,8 @@ export const MEMORY_AGENT_WRITE_QUOTAS = {
 /** Management list paging; the control plane fetches one extra row to compute `nextOffset`. */
 export const MEMORY_LIST_PAGE_SIZE = 50;
 export const MEMORY_LIST_MAX_PAGE_SIZE = 100;
+/** Bound candidate accumulation when merging shared management pages across partitions. */
+export const MEMORY_SHARED_LIST_MAX_OFFSET = 1_000;
 
 // ---------------------------------------------------------------------------
 // Scopes

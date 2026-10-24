@@ -78,7 +78,7 @@ export interface MemoryManagementPolicyDeps {
   /** Installed-repository resolution to stable identities. */
   repositories: Pick<InstalledRepositoryResolver, "resolve">;
   /** Environment ownership admission for the principal. */
-  environments: Pick<EnvironmentAdmissionEvaluator, "evaluate">;
+  environments: Pick<EnvironmentAdmissionEvaluator, "evaluate" | "preload">;
   repositoryGrants: RepositoryGrants & Pick<RepositoryGrantAuthorizer, "preload">;
 }
 
@@ -137,8 +137,13 @@ function grantDenial(repository: string): MemoryManagementDecision {
 export class MemoryManagementPolicy {
   constructor(private readonly deps: MemoryManagementPolicyDeps) {}
 
-  /** Preload repository metadata once before authorizing an aggregate catalog. */
+  /** Preload shared admission metadata once before authorizing an aggregate catalog. */
   async preload(partitions: readonly MemoryPartition[]): Promise<void> {
+    await this.deps.environments.preload(
+      partitions
+        .filter((partition) => partition.type === "environment")
+        .map((partition) => partition.environmentId)
+    );
     if (!this.deps.authorization || !this.can("repositories.read")) return;
     await this.deps.repositoryGrants.preload(
       this.deps.authorization,

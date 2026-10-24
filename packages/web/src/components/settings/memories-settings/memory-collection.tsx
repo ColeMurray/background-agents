@@ -116,6 +116,12 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
           {search.problem}
         </p>
       )}
+      {collection.atOffsetLimit && (
+        <p className="text-sm text-muted-foreground">
+          All-view browsing limit reached. Select a scope or narrow your search to find more
+          memories.
+        </p>
+      )}
       <nav className="flex gap-2" aria-label="Memory pages">
         <Button
           type="button"

@@ -144,16 +144,19 @@ export class MemoryRecordStore {
     return this.listPartitions([partition], options);
   }
 
-  /** Enumerate shared identities and display scopes without loading any revision content. */
-  async sharedPartitions(): Promise<Pick<MemoryRecord, "partition" | "scope">[]> {
-    const rows = await this.db
-      .prepare(
-        `SELECT partition_type, owner_user_id, repo_id, environment_id,
-          MIN(repo_owner) AS repo_owner, MIN(repo_name) AS repo_name
-        FROM memories WHERE partition_type IN ('repository', 'environment')
-        GROUP BY partition_type, owner_user_id, repo_id, environment_id`
-      )
-      .all<PartitionColumns & ScopeDisplayColumns>();
+  /** Enumerate matching shared identities without returning unauthorized revision content. */
+  async sharedPartitions(
+    options: Pick<MemoryListOptions, "status" | "terms">
+  ): Promise<Pick<MemoryRecord, "partition" | "scope">[]> {
+    const rows = await prepareSql(
+      this.db,
+      sql`SELECT m.partition_type, m.owner_user_id, m.repo_id, m.environment_id,
+          MIN(m.repo_owner) AS repo_owner, MIN(m.repo_name) AS repo_name
+        ${options.terms.length ? CURRENT_MEMORY : sql`FROM memories m`}
+        WHERE m.partition_type IN ('repository', 'environment') AND m.status = ${options.status}
+          AND ${revisionMatchesAllTerms(options.terms.map(likeContains))}
+        GROUP BY m.partition_type, m.owner_user_id, m.repo_id, m.environment_id`
+    ).all<PartitionColumns & ScopeDisplayColumns>();
     return rows.results.map((row) => ({
       partition: partitionFromColumns(row),
       scope: scopeFromColumns(row),

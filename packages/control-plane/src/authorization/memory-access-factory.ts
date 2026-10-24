@@ -21,7 +21,7 @@ export function createMemoryManagementPolicy(
     userId: ctx.principal.userId,
     authorization: ctx.authorization,
     repositories: new InstalledRepositoryResolver(env, ctx, logger),
-    environments: new EnvironmentAdmissionEvaluator(ctx),
+    environments: new EnvironmentAdmissionEvaluator(ctx, new EnvironmentStore(ctx.db)),
     repositoryGrants: new RepositoryGrantAuthorizer(
       ctx,
       new TeamRepositoryGrantStore(ctx.db),

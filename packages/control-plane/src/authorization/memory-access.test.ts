@@ -132,6 +132,7 @@ function managementPolicy(
       })),
     },
     environments: {
+      preload: vi.fn(async () => {}),
       evaluate: vi.fn<MemoryManagementPolicyDeps["environments"]["evaluate"]>(async () => ({
         kind: "allowed" as const,
         effectivePermission: null,
@@ -155,16 +156,18 @@ const outcome = (decision: MemoryManagementDecision) =>
   decision.kind === "denied" ? decision.denial.reason : decision.kind;
 
 describe("MemoryManagementPolicy", () => {
-  it("preloads only repository identities when repository reads are permitted", async () => {
+  it("preloads environments independently of repository read permission", async () => {
     const { policy, deps } = managementPolicy(["repositories.read"]);
     await policy.preload([api, dev, personal]);
     expect(deps.repositoryGrants.preload).toHaveBeenCalledWith(
       authorization(["repositories.read"]),
       [api]
     );
+    expect(deps.environments.preload).toHaveBeenCalledWith(["dev"]);
     const denied = managementPolicy([]);
-    await denied.policy.preload([api]);
+    await denied.policy.preload([api, dev, personal]);
     expect(denied.deps.repositoryGrants.preload).not.toHaveBeenCalled();
+    expect(denied.deps.environments.preload).toHaveBeenCalledWith(["dev"]);
   });
 
   it("keeps personal memory owner-only and requires the personal permission", async () => {

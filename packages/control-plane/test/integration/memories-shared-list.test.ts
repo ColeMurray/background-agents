@@ -1,6 +1,10 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { memoryListResponseSchema } from "@open-inspect/shared/types/memories";
+import {
+  MEMORY_SHARED_LIST_MAX_OFFSET,
+  memoryListResponseSchema,
+} from "@open-inspect/shared/types/memories";
+import { EnvironmentStore } from "../../src/db/environments";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import { TeamStore } from "../../src/db/teams";
@@ -209,6 +213,82 @@ describe("shared memory management list", () => {
     expect(rest.canCreate).toBe(false);
   });
 
+  it("bulk admits environment candidates narrowed by status/search without per-environment reads", async () => {
+    const owners = [null, "managed", "readable", "hidden"] as const;
+    const facts = Array.from({ length: 250 }, (_, index) => ({
+      id: `environment-${String(index).padStart(3, "0")}`,
+      partition: { type: "environment" as const, environmentId: `bulk-${index}` },
+      status:
+        index < 220
+          ? ("active" as const)
+          : index < 235
+            ? ("proposed" as const)
+            : ("archived" as const),
+      title: index % 5 === 0 ? "Other knowledge" : "Needle",
+      content: index % 5 === 0 ? "Not a search match" : "literal 100%_done",
+      updatedAt: index,
+    }));
+    await env.DB.batch(
+      facts.map((fact, index) =>
+        env.DB.prepare(
+          "INSERT INTO environments (id, name, owner_team_id, created_at, updated_at) VALUES (?, ?, ?, 1, 1)"
+        ).bind(fact.partition.environmentId, fact.partition.environmentId, owners[index % 4])
+      )
+    );
+    await seedSearchFacts(env.DB, USER, [
+      ...facts,
+      { id: "deleted", partition: { type: "environment", environmentId: "deleted" } },
+    ]);
+    const bulk = vi.spyOn(EnvironmentStore.prototype, "getByIds");
+    const single = vi.spyOn(EnvironmentStore.prototype, "getById");
+    const query = vi.spyOn(MemoryRecordStore.prototype, "listPartitions");
+    const actions = {
+      active: ["archive"],
+      proposed: ["approve", "reject", "archive"],
+      archived: ["restore"],
+    };
+    for (const status of ["active", "proposed", "archived"] as const) {
+      for (const search of ["", "NEEDLE 100%_"]) {
+        bulk.mockClear();
+        query.mockClear();
+        const matching = facts.filter(
+          (fact) => fact.status === status && (!search || fact.title === "Needle")
+        );
+        const expected = matching.filter(
+          (fact) => Number(fact.partition.environmentId.slice(5)) % 4 !== 3
+        );
+        const result = await list(
+          `scope=shared&status=${status}&search=${encodeURIComponent(search)}&limit=100`
+        );
+        expect(bulk).toHaveBeenCalledOnce();
+        expect(bulk.mock.calls[0][0]).toEqual(
+          expect.arrayContaining(matching.map((fact) => fact.partition.environmentId))
+        );
+        expect(bulk.mock.calls[0][0]).toHaveLength(
+          matching.length + (status === "active" && !search ? 1 : 0)
+        );
+        expect(single).not.toHaveBeenCalled();
+        expect(query.mock.calls[0][0]).toEqual(
+          expect.arrayContaining(expected.map((fact) => fact.partition))
+        );
+        expect(query.mock.calls[0][0]).toHaveLength(expected.length);
+        expect(result.memories.map((record) => record.id)).toEqual(
+          [...expected]
+            .reverse()
+            .slice(0, 100)
+            .map((fact) => fact.id)
+        );
+        for (const record of result.memories) {
+          if (record.scope.type !== "environment") throw new Error("Expected environment scope");
+          const index = Number(record.scope.environmentId.slice(5));
+          const canManage = index % 4 <= 1;
+          expect(record.capabilities.canEdit).toBe(canManage && status !== "archived");
+          expect(record.capabilities.actions).toEqual(canManage ? actions[status] : []);
+        }
+      }
+    }
+  });
+
   it.each([
     ["repositories.read", "env-managed"],
     ["environments.read", "repo-managed"],
@@ -221,6 +301,37 @@ describe("shared memory management list", () => {
       .bind(`role_custom_${USER}`, permission)
       .run();
     expect((await list()).memories.map((record) => record.id)).toEqual([remaining]);
+  });
+
+  it("bounds shared offsets and never advertises a page beyond the cap", async () => {
+    await seedSearchFacts(env.DB, USER, [
+      { id: "first", partition: managedRepo },
+      { id: "second", partition: managedRepo },
+    ]);
+    const store = new MemoryRecordStore(env.DB);
+    const records = [(await store.get("first"))!, (await store.get("second"))!];
+    const pages = vi
+      .spyOn(MemoryRecordStore.prototype, "listPartitions")
+      .mockResolvedValue(records);
+    const last = await list(`scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET}&limit=1`);
+    expect(last.memories).toHaveLength(1);
+    expect(last.nextOffset).toBeNull();
+    expect(pages.mock.calls[0][1]).toMatchObject({
+      offset: MEMORY_SHARED_LIST_MAX_OFFSET,
+      limit: 2,
+    });
+    expect(
+      (await list(`scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET - 1}&limit=1`)).nextOffset
+    ).toBe(MEMORY_SHARED_LIST_MAX_OFFSET);
+    pages.mockClear();
+    expect(
+      (await request(`/memories?scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET + 1}`)).status
+    ).toBe(400);
+    expect(pages).not.toHaveBeenCalled();
+    pages.mockRestore();
+    expect(
+      (await list(`scope=personal&offset=${MEMORY_SHARED_LIST_MAX_OFFSET + 1}`)).memories
+    ).toEqual([]);
   });
 
   it("returns an empty non-creatable aggregate and retains request validation", async () => {

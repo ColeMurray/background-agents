@@ -5,6 +5,7 @@ import {
   MEMORY_ACTIONS,
   MEMORY_LIST_MAX_PAGE_SIZE,
   MEMORY_LIST_PAGE_SIZE,
+  MEMORY_SHARED_LIST_MAX_OFFSET,
   memoryActionBodySchemas,
   memoryPreferencesSchema,
   memoryPreviewSchema,
@@ -91,15 +92,21 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   });
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
+  if (scope === "shared" && offset > MEMORY_SHARED_LIST_MAX_OFFSET)
+    return error("Shared memory page limit reached; select a scope or narrow your search", 400);
   const search = memoryListSearchSchema.safeParse(query.get("search") ?? "");
   if (!search.success) return error("Invalid memory search", 400);
+  const terms = memorySearchTerms(search.data);
   const store = new MemoryRecordStore(ctx.db);
   const policy = createMemoryManagementPolicy(ctx, env);
   const partitions: MemoryPartition[] = [];
   const canManage = new Map<string, boolean>();
   let canCreate = false;
   if (scope === "shared") {
-    const candidates = await store.sharedPartitions();
+    const candidates = await store.sharedPartitions({
+      status: status.data,
+      terms,
+    });
     await policy.preload(candidates.map((candidate) => candidate.partition));
     for (const candidate of candidates) {
       const access = await policy.authorizeRecord(candidate, "read");
@@ -119,7 +126,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
     status: status.data,
     offset,
     limit: limit + 1,
-    terms: memorySearchTerms(search.data),
+    terms,
   });
   const page = records.slice(0, limit);
   const supersededBy = await store.supersededByIds(page.map((record) => record.id));
@@ -131,7 +138,11 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
         supersededBy.get(record.id) ?? []
       )
     ),
-    nextOffset: records.length > limit ? offset + limit : null,
+    nextOffset:
+      records.length > limit &&
+      (scope !== "shared" || offset + limit <= MEMORY_SHARED_LIST_MAX_OFFSET)
+        ? offset + limit
+        : null,
     canCreate,
   });
 }
