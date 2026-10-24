@@ -5,7 +5,7 @@ import type { SessionEntry } from "../db/session-index";
 
 interface ExternalActionTargetAuthorityOptions {
   getSession(sessionId: string): Promise<SessionEntry | null>;
-  isRepositoryAssociated(sessionId: string, repoOwner: string, repoName: string): Promise<boolean>;
+  isRepositoryAuthorized(sessionId: string, repoOwner: string, repoName: string): Promise<boolean>;
   getChannelBinding(channelId: string): Promise<SlackPostChannelBinding | null>;
   hasLinearIssueContext(issueId: string): boolean;
 }
@@ -27,7 +27,7 @@ export async function authorizeExternalActionTarget(
     const owner = stringTarget(request.target, "owner");
     const repo = stringTarget(request.target, "repo");
     return owner !== null && repo !== null
-      ? options.isRepositoryAssociated(request.sessionId, owner, repo)
+      ? options.isRepositoryAuthorized(request.sessionId, owner, repo)
       : false;
   }
 
@@ -35,7 +35,7 @@ export async function authorizeExternalActionTarget(
     const project = stringTarget(request.target, "project");
     const repository = project === null ? null : parseRepositoryFullName(project);
     return repository !== null
-      ? options.isRepositoryAssociated(request.sessionId, repository.repoOwner, repository.repoName)
+      ? options.isRepositoryAuthorized(request.sessionId, repository.repoOwner, repository.repoName)
       : false;
   }
 

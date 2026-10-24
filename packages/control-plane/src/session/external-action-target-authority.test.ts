@@ -20,7 +20,7 @@ const session: SessionEntry = {
 function options(overrides: Record<string, unknown> = {}) {
   return {
     getSession: vi.fn(async () => session),
-    isRepositoryAssociated: vi.fn(async () => true),
+    isRepositoryAuthorized: vi.fn(async () => true),
     getChannelBinding: vi.fn(async () => ({ teamId: "team-1" })),
     hasLinearIssueContext: vi.fn(() => false),
     ...overrides,
@@ -43,7 +43,7 @@ describe("authorizeExternalActionTarget", () => {
         target: { owner: "acme", repo: "widgets", number: 7 },
       })
     ).resolves.toBe(true);
-    expect(github.isRepositoryAssociated).toHaveBeenCalledWith("session-1", "acme", "widgets");
+    expect(github.isRepositoryAuthorized).toHaveBeenCalledWith("session-1", "acme", "widgets");
 
     const gitlab = options();
     await expect(
@@ -53,7 +53,7 @@ describe("authorizeExternalActionTarget", () => {
         target: { project: "group/subgroup/widgets", number: 7 },
       })
     ).resolves.toBe(true);
-    expect(gitlab.isRepositoryAssociated).toHaveBeenCalledWith(
+    expect(gitlab.isRepositoryAuthorized).toHaveBeenCalledWith(
       "session-1",
       "group/subgroup",
       "widgets"

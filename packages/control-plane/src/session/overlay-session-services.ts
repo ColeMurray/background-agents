@@ -45,6 +45,8 @@ import { AutomationExternalActionGrantStore } from "../db/automation-external-ac
 import { ExternalActionBridgeHandler } from "./http/handlers/external-action-bridge.handler";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { authorizeExternalActionTarget } from "./external-action-target-authority";
+import { resolveRepositoryCredentialScope } from "../source-control/repository-scope";
+import { readCachedInstallationRepositories } from "../repos/cache";
 
 export function createOverlaySessionServices(context: SessionExtensionServicesContext) {
   const {
@@ -70,8 +72,24 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
   const teamChannelBindingStore = new TeamChannelBindingStore(db);
   const externalActionTargetAuthority = {
     getSession: (sessionId: string) => sessionIndexStore.get(sessionId),
-    isRepositoryAssociated: (sessionId: string, repoOwner: string, repoName: string) =>
-      sessionIndexStore.isRepositoryAssociated(sessionId, repoOwner, repoName),
+    isRepositoryAuthorized: async (sessionId: string, repoOwner: string, repoName: string) => {
+      if (!(await sessionIndexStore.isRepositoryAssociated(sessionId, repoOwner, repoName))) {
+        return false;
+      }
+      const session = await sessionIndexStore.get(sessionId);
+      if (!session) return false;
+      try {
+        await resolveRepositoryCredentialScope(
+          db,
+          [{ repoOwner, repoName, repoId: null }],
+          session.ownerTeamId,
+          () => readCachedInstallationRepositories(env)
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
     getChannelBinding: (channelId: string) => teamChannelBindingStore.get("slack", channelId),
     hasLinearIssueContext: (issueId: string) => messageRepository.hasLinearIssueContext(issueId),
   };
