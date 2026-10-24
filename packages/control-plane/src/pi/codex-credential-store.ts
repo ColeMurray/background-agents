@@ -1,0 +1,123 @@
+import type {
+  AuthOperationOptions,
+  Credential,
+  CredentialInfo,
+  CredentialStore,
+  OAuthCredential,
+} from "@earendil-works/pi-ai";
+
+const PROVIDER_ID = "openai-codex";
+const REFRESH_SENTINEL = "managed-by-open-inspect";
+
+interface BrokerCredential {
+  accessToken: string;
+  expiresIn: number;
+  credentialVersion: number;
+}
+
+type BrokerCredentialFetcher = (
+  rejectedCredentialVersion?: number,
+  signal?: AbortSignal
+) => Promise<BrokerCredential>;
+
+/**
+ * Pi credential facade over Open-Inspect's session-bound provider broker.
+ *
+ * The only durable credential remains in the control plane. This store keeps a
+ * short-lived access token in memory and deliberately discards every mutation
+ * Pi's generic OAuth refresh machinery offers it.
+ */
+export class CodexBrokerCredentialStore implements CredentialStore {
+  private credential: OAuthCredential | undefined;
+  private credentialVersion: number | undefined;
+  private inFlight: Promise<OAuthCredential> | undefined;
+  private generation = 0;
+
+  constructor(
+    private readonly fetchCredential: BrokerCredentialFetcher,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
+    if (providerId !== PROVIDER_ID) return undefined;
+    // Every model call re-enters the control plane. The access token may still
+    // be valid, but the turn author may have been suspended or removed since
+    // the previous call; token freshness is not authorization freshness.
+    return { ...(await this.loadOnce(undefined, options?.signal)) };
+  }
+
+  async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
+    options?.signal?.throwIfAborted();
+    return this.credential ? [{ providerId: PROVIDER_ID, type: "oauth" }] : [];
+  }
+
+  async modify(
+    providerId: string,
+    _fn: (current: Credential | undefined) => Promise<Credential | undefined>,
+    options?: AuthOperationOptions
+  ): Promise<Credential | undefined> {
+    if (providerId !== PROVIDER_ID) return undefined;
+    // Models calls modify when its generic OAuth path wants to refresh. The
+    // built-in Codex provider would exchange `refresh`; that value is only a
+    // sentinel here, so bypass the callback and ask Open-Inspect's authority.
+    const rejectedCredentialVersion = this.credentialVersion;
+    this.credential = undefined;
+    this.credentialVersion = undefined;
+    return { ...(await this.loadOnce(rejectedCredentialVersion, options?.signal)) };
+  }
+
+  async delete(providerId: string, options?: AuthOperationOptions): Promise<void> {
+    options?.signal?.throwIfAborted();
+    if (providerId !== PROVIDER_ID) return;
+    // A session's connected account is control-plane policy. Local logout must
+    // not erase it or enable a fallback to ambient/deployment credentials.
+  }
+
+  clear(): void {
+    this.generation += 1;
+    this.credential = undefined;
+    this.credentialVersion = undefined;
+    this.inFlight = undefined;
+  }
+
+  private loadOnce(
+    rejectedCredentialVersion?: number,
+    signal?: AbortSignal
+  ): Promise<OAuthCredential> {
+    if (this.inFlight) return this.inFlight;
+    const tracked = this.load(rejectedCredentialVersion, signal).finally(() => {
+      if (this.inFlight === tracked) this.inFlight = undefined;
+    });
+    this.inFlight = tracked;
+    return tracked;
+  }
+
+  private async load(
+    rejectedCredentialVersion?: number,
+    signal?: AbortSignal
+  ): Promise<OAuthCredential> {
+    const generation = this.generation;
+    signal?.throwIfAborted();
+    const value = await this.fetchCredential(rejectedCredentialVersion, signal);
+    if (
+      !value.accessToken.trim() ||
+      !Number.isFinite(value.expiresIn) ||
+      value.expiresIn <= 0 ||
+      !Number.isSafeInteger(value.credentialVersion) ||
+      value.credentialVersion <= 0
+    ) {
+      throw new Error("Invalid OpenAI credential broker response");
+    }
+    const credential: OAuthCredential = {
+      type: "oauth",
+      access: value.accessToken,
+      refresh: REFRESH_SENTINEL,
+      expires: this.now() + value.expiresIn * 1_000,
+    };
+    if (generation !== this.generation)
+      throw new Error("OpenAI credential request was invalidated");
+    this.credential = credential;
+    this.credentialVersion = value.credentialVersion;
+    return credential;
+  }
+}

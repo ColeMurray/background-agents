@@ -84,14 +84,14 @@ export class EventRepository {
     return (result.rowsWritten ?? 0) > 0;
   }
 
-  createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
-    this.transactionSync(() => {
+  createContextCompactionEvent(data: CreateEventData & { messageId: string }): boolean {
+    return this.transactionSync(() => {
       this.sql.exec(
         `UPDATE events SET id = ? WHERE id = ?`,
         `token:${data.messageId}:${data.id}`,
         `token:${data.messageId}`
       );
-      this.createEvent(data);
+      return this.createEventIfAbsent(data);
     });
   }
 
@@ -102,43 +102,56 @@ export class EventRepository {
     createdAt: number,
     id = `${type}:${messageId}`,
     preserveCreatedAt = false
-  ): void {
-    this.sql.exec(
+  ): boolean {
+    const result = this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
        VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
-         created_at = ${preserveCreatedAt ? "events.created_at" : "excluded.created_at"}`,
+          created_at = ${preserveCreatedAt ? "events.created_at" : "excluded.created_at"}
+        WHERE events.data != excluded.data`,
       id,
       type,
       JSON.stringify(event),
       messageId,
       createdAt
     );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
-  upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
+  upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): boolean {
     const id = event.partId
       ? `token-part:${JSON.stringify([messageId, event.partId])}`
       : `token:${messageId}`;
-    this.upsertEventByMessageId("token", messageId, event, createdAt, id, Boolean(event.partId));
+    return this.upsertEventByMessageId(
+      "token",
+      messageId,
+      event,
+      createdAt,
+      id,
+      Boolean(event.partId)
+    );
   }
 
-  upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
+  upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): boolean {
     const id = `tool_call:${toolCallIdentityKey(event)}`;
-    this.sql.exec(
+    const result = this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
        VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
-         message_id = excluded.message_id`,
+          message_id = excluded.message_id
+        WHERE events.data != excluded.data`,
       id,
       event.type,
       JSON.stringify(event),
       messageId,
       createdAt
     );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   upsertExecutionCompleteEvent(

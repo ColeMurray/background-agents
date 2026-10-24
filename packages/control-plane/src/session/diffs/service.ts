@@ -41,7 +41,8 @@ export class SessionDiffService {
     private readonly messenger: SessionMessenger,
     private readonly log: Logger,
     private readonly generateRevisionId: () => string = () => generateId(),
-    private readonly now: () => number = () => Date.now()
+    private readonly now: () => number = () => Date.now(),
+    private readonly requestPiRefresh?: () => Promise<void>
   ) {}
 
   /** Return the latest patch-free manifest and any non-destructive refresh error. */
@@ -69,6 +70,23 @@ export class SessionDiffService {
     }
 
     this.logBaselineConflicts(advertised, sessionRepositories);
+    this.repository.setSessionDiffBaselines(
+      this.toBaselineUpdates(advertised, sessionRepositories)
+    );
+  }
+
+  /** Claim Pi's immutable pins as SessionDO-owned diff baselines, failing on any conflict. */
+  claimBaselines(advertised: SessionDiffBaselineRepository[]): void {
+    const sessionRepositories = this.repository.getSessionRepositories();
+    if (!this.advertisedMatchesSession(advertised, sessionRepositories)) {
+      throw new DiffRepositoryMismatchError();
+    }
+    for (const [index, sessionRepository] of sessionRepositories.entries()) {
+      const existing = this.getBaseline(sessionRepository);
+      if (existing && !shaEquals(existing, advertised[index]!.baseSha)) {
+        throw new DiffBaselineMismatchError();
+      }
+    }
     this.repository.setSessionDiffBaselines(
       this.toBaselineUpdates(advertised, sessionRepositories)
     );
@@ -133,9 +151,9 @@ export class SessionDiffService {
 
     const revisionId = this.generateRevisionId();
     const now = this.now();
-    this.store.replaceBundle(parsed.data, revisionId, now);
-    this.broadcastState(now);
-    return revisionId;
+    const storedRevisionId = this.store.replaceBundle(parsed.data, revisionId, now) ?? revisionId;
+    if (storedRevisionId === revisionId) this.broadcastState(now);
+    return storedRevisionId;
   }
 
   /** Record a bounded refresh error without discarding the previous successful bundle. */
@@ -159,6 +177,11 @@ export class SessionDiffService {
 
   /** Request a non-blocking refresh from the connected session sandbox. */
   async requestRefresh(): Promise<void> {
+    if (this.repository.getSession()?.harness === "pi") {
+      if (!this.requestPiRefresh) throw new SandboxNotConnectedError();
+      await this.requestPiRefresh();
+      return;
+    }
     try {
       await this.messenger.sendToSandbox({ type: "refresh_diff" });
     } catch (error) {

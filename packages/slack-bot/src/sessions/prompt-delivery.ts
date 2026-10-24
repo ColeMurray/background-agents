@@ -34,6 +34,7 @@ export interface DeliverPromptOptions {
   channel: string;
   threadTs: string;
   traceId?: string;
+  clientRequestId?: string;
 }
 
 export type DeliverPromptResult =
@@ -69,6 +70,7 @@ export async function deliverPrompt(
     channel,
     threadTs,
     traceId,
+    clientRequestId,
   } = options;
   const upload = await uploadPreparedAttachments(
     env,
@@ -101,6 +103,7 @@ export async function deliverPrompt(
     callbackContext,
     attachments: upload.references,
     traceId,
+    clientRequestId,
   });
   if (!promptResult.ok) return promptResult;
   // Notify about dropped images only now that the session proved accessible.

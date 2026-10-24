@@ -1,0 +1,259 @@
+import type { Workspace } from "@cloudflare/computer";
+import type { Context } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+import type { ToolEffectRegistration } from "@open-inspect/shared/pi-runtime-tool-effects";
+import type {
+  HookApi,
+  ToolExecutionApi,
+  ToolExecutionResult,
+  ToolHookCall,
+} from "@earendil-works/pi-durable";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const computer = vi.hoisted(() => ({
+  scratchExecute: vi.fn(),
+  repositoryExecute: vi.fn(),
+  createPiTools: vi.fn(),
+}));
+
+vi.mock("@cloudflare/computer/tools/pi-ai", () => ({
+  createPiTools: computer.createPiTools,
+}));
+
+import { createRepositoryEditingWorkspaceCapability } from "./repository-editing-capability";
+import { WorkspaceMutationFifo } from "../pi/computer-workspace-quota";
+import type { PiRepositoryWorkspace } from "./repository-workspace";
+
+const parameters = { type: "object", properties: { path: { type: "string" } } };
+const context = withAbortSignal(new AbortController().signal, BACKGROUND_CONTEXT);
+
+function declaredTool(name: string) {
+  return { name, description: `${name} workspace files`, parameters };
+}
+
+function arrangeComputerTools() {
+  computer.createPiTools
+    .mockReturnValueOnce({
+      tools: ["read", "ls", "find", "grep", "write", "edit", "delete"].map(declaredTool),
+      execute: computer.scratchExecute,
+    })
+    .mockReturnValueOnce({
+      tools: ["read", "ls", "find", "grep", "write", "edit", "delete"].map(declaredTool),
+      execute: computer.repositoryExecute,
+    });
+}
+
+function capability(
+  scratchMode: "off" | "read_only" | "enabled",
+  overlay: PiRepositoryWorkspace = {
+    runMutation: vi.fn(async (_tool, _args, execute) => ({
+      value: await execute(),
+      mutation: "applied",
+      projection: "published",
+    })),
+  } as unknown as PiRepositoryWorkspace
+) {
+  return createRepositoryEditingWorkspaceCapability({
+    scratchWorkspace: {} as Workspace,
+    repositoryWorkspace: {} as Workspace,
+    initializeOverlay: async () => overlay,
+    mutations: new WorkspaceMutationFifo(),
+    scratchMode,
+    publishDiff: vi.fn(async () => undefined),
+    triggerMessageId: vi.fn(async () => null),
+  });
+}
+
+function declaration(): ToolEffectRegistration {
+  return { name: "write", effect: "local_mutation", callers: ["model"], replay: "unsafe" };
+}
+
+function call(path: string): ToolHookCall {
+  return {
+    type: "toolCall",
+    id: "write-1",
+    name: "write",
+    arguments: { path, content: "private body" },
+  } as ToolHookCall;
+}
+
+describe("repository editing workspace capability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    computer.scratchExecute.mockResolvedValue({ content: [], isError: false });
+    computer.repositoryExecute.mockResolvedValue({ content: [], isError: false });
+    arrangeComputerTools();
+  });
+
+  it("preserves true scratch-off behavior while repository reads remain available", async () => {
+    const extension = capability("off").extension;
+    const read = extension.tools?.find((tool) => tool.name === "read");
+
+    await expect(
+      read?.execute(
+        { path: "/workspace/scratch/private.txt" },
+        { callId: "scratch-read" } as ToolExecutionApi,
+        context
+      )
+    ).resolves.toMatchObject({ isError: true });
+    await expect(
+      read?.execute(
+        { path: "/workspace/repos/0/README.md" },
+        { callId: "repository-read" } as ToolExecutionApi,
+        context
+      )
+    ).resolves.toMatchObject({ isError: false });
+    expect(computer.scratchExecute).not.toHaveBeenCalled();
+    expect(computer.repositoryExecute).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks cancellation after a repository mutation enters the shared FIFO", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const overlay = {
+      runMutation: vi.fn(async (_tool, _args, execute: () => Promise<unknown>) => {
+        await blocked;
+        return { value: await execute(), mutation: "applied", projection: "published" };
+      }),
+    };
+    const write = capability(
+      "enabled",
+      overlay as unknown as PiRepositoryWorkspace
+    ).extension.tools?.find((tool) => tool.name === "write");
+    const abort = new AbortController();
+    const execution = write?.execute(
+      { path: "/workspace/repos/0/file.txt", content: "body" },
+      { callId: "repository-write" } as ToolExecutionApi,
+      { ...context, abortSignal: abort.signal }
+    );
+    abort.abort();
+    release();
+
+    await expect(execution).resolves.toMatchObject({ isError: true });
+    expect(computer.repositoryExecute).not.toHaveBeenCalled();
+  });
+
+  it("records metadata-only policy memos before and after repository mutations", async () => {
+    const delegate = capability("off").toolPolicyDelegate;
+    const memo = vi.fn(async (_name: string, value: unknown) => value);
+    const api = { memo } as unknown as HookApi;
+    const hookContext = {} as Context;
+    const toolCall = call("/workspace/repos/0/private.txt");
+    const result = { output: [], isError: false } as ToolExecutionResult;
+
+    await expect(
+      delegate.beforeTool?.(toolCall, declaration(), api, hookContext)
+    ).resolves.toBeUndefined();
+    expect(memo).not.toHaveBeenCalled();
+    await delegate.memoFinalAllow?.(toolCall, declaration(), api, hookContext);
+    await expect(
+      delegate.afterTool?.(toolCall, declaration(), result, api, hookContext)
+    ).resolves.toBe(result);
+    expect(memo).toHaveBeenNthCalledWith(
+      1,
+      "open-inspect.repository-policy.before",
+      {
+        version: 1,
+        scope: "repository",
+        decision: "allow",
+        tool: "write",
+        path: "/workspace/repos/0/private.txt",
+      },
+      hookContext
+    );
+    expect(memo).toHaveBeenNthCalledWith(
+      2,
+      "open-inspect.repository-policy.after",
+      {
+        version: 1,
+        scope: "repository",
+        tool: "write",
+        path: "/workspace/repos/0/private.txt",
+        outcome: "succeeded",
+      },
+      hookContext
+    );
+    expect(JSON.stringify(memo.mock.calls)).not.toContain("private body");
+  });
+
+  it("distinguishes an applied mutation whose diff projection is pending", async () => {
+    const overlay = {
+      runMutation: vi.fn(async (_tool, _args, execute: () => Promise<unknown>) => ({
+        value: await execute(),
+        mutation: "applied" as const,
+        projection: "pending" as const,
+      })),
+    };
+    const write = capability(
+      "enabled",
+      overlay as unknown as PiRepositoryWorkspace
+    ).extension.tools?.find((tool) => tool.name === "write");
+
+    await expect(
+      write?.execute(
+        { path: "/workspace/repos/0/file.txt", content: "body" },
+        { callId: "repository-write" } as ToolExecutionApi,
+        context
+      )
+    ).resolves.toMatchObject({
+      isError: false,
+      output: [expect.objectContaining({ text: expect.stringMatching(/applied.*pending/i) })],
+      details: { mutationApplied: true, projection: "pending" },
+    });
+  });
+
+  it("applies path limits to the repository-relative path instead of internal prefixes", async () => {
+    const relative = `${"a".repeat(4_092)}.txt`;
+    const overlay = {
+      runMutation: vi.fn(async (_tool, _args, execute: () => Promise<unknown>) => ({
+        value: await execute(),
+        mutation: "applied" as const,
+        projection: "published" as const,
+      })),
+    };
+    const write = capability(
+      "enabled",
+      overlay as unknown as PiRepositoryWorkspace
+    ).extension.tools?.find((tool) => tool.name === "write");
+
+    await expect(
+      write?.execute(
+        { path: `/workspace/repos/0/${relative}`, content: "body" },
+        { callId: "repository-max-path" } as ToolExecutionApi,
+        context
+      )
+    ).resolves.toMatchObject({ isError: false });
+    expect(overlay.runMutation).toHaveBeenCalledOnce();
+  });
+
+  it("blocks raw oversized repository paths before any durable policy memo", async () => {
+    const delegate = capability("enabled").toolPolicyDelegate;
+    const memo = vi.fn(async (_name: string, value: unknown) => value);
+    const api = { memo } as unknown as HookApi;
+    const huge = call(`/workspace/repos/0/${"😀".repeat(4_096)}`);
+
+    await expect(
+      delegate.beforeTool?.(huge, declaration(), api, {} as Context)
+    ).resolves.toMatchObject({ block: expect.stringMatching(/path.*too large/i) });
+    expect(memo).not.toHaveBeenCalled();
+  });
+
+  it("blocks oversized canonical edits before durable policy memo", async () => {
+    const delegate = capability("enabled").toolPolicyDelegate;
+    const memo = vi.fn(async (_name: string, value: unknown) => value);
+    const api = { memo } as unknown as HookApi;
+    const toolCall = {
+      ...call("/workspace/repos/0/file.txt"),
+      name: "edit",
+      arguments: {
+        path: "/workspace/repos/0/file.txt",
+        edits: Array.from({ length: 101 }, () => ({ oldText: "a", newText: "b" })),
+      },
+    } as ToolHookCall;
+
+    await expect(
+      delegate.beforeTool?.(toolCall, declaration(), api, {} as Context)
+    ).resolves.toMatchObject({ block: expect.stringMatching(/edit count/i) });
+    expect(memo).not.toHaveBeenCalled();
+  });
+});

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AutomationStore, type AutomationRow } from "./automation-store";
+import { getStoredHarnessOrRefuse } from "@open-inspect/shared/harnesses";
+import { AutomationStore, toAutomation, type AutomationRow } from "./automation-store";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -53,6 +54,22 @@ const sampleRow: AutomationRow = {
 };
 
 describe("AutomationStore", () => {
+  it("preserves an unknown stored harness so execution refuses it", () => {
+    const automation = toAutomation(
+      {
+        ...sampleRow,
+        // Simulate a row written under a newer catalog after rollback.
+        harness: "future-harness" as AutomationRow["harness"],
+      },
+      [],
+      [],
+      []
+    );
+
+    expect(automation.harness).toBe("future-harness");
+    expect(getStoredHarnessOrRefuse(automation.harness)).toBeNull();
+  });
+
   it("projects legacy canonical owners in one lookup without repairing rows", async () => {
     const { db, statements } = createFakeD1({
       allResults: [{ provider_user_id: "4242", user_id: "user-legacy" }],

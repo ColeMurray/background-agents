@@ -15,6 +15,7 @@ const migrationsPath = path.resolve(__dirname, "../../terraform/d1/migrations");
 // automation (see Scheduler.tick tests). vite 7 used the CJS build,
 // which interops correctly. Test-only — production bundles via esbuild/wrangler.
 const luxonCjsEntry = createRequire(__filename).resolve("luxon");
+const codeModeIntegration = process.env.PI_CODEMODE_INTEGRATION === "true";
 
 /** Generate a random base64-encoded 32-byte AES key for tests. */
 function generateTestEncryptionKey(): string {
@@ -49,6 +50,36 @@ export default defineConfig({
           // otherwise defaults its runner to today's compatibility date.
           compatibilityDate: "2024-09-23",
           compatibilityFlags: ["nodejs_compat"],
+          ...(codeModeIntegration
+            ? {
+                durableObjects: {
+                  CODEMODE_SANDBOX: {
+                    className: "CodemodeSandbox",
+                    scriptName: "open-inspect-pi-codemode-sandbox-test",
+                    useSQLite: true,
+                  },
+                },
+                workers: [
+                  {
+                    name: "open-inspect-pi-codemode-sandbox-test",
+                    modules: [
+                      {
+                        type: "ESModule" as const,
+                        path: path.resolve(__dirname, "../pi-codemode-sandbox/dist/index.js"),
+                      },
+                      {
+                        type: "CompiledWasm" as const,
+                        path: path.resolve(__dirname, "../pi-codemode-sandbox/dist/quickjs.wasm"),
+                      },
+                    ],
+                    modulesRoot: path.resolve(__dirname, "../pi-codemode-sandbox/dist"),
+                    additionalUnboundDurableObjects: [
+                      { className: "CodemodeSandbox", useSQLite: true },
+                    ],
+                  },
+                ],
+              }
+            : {}),
           async outboundService(request: Request) {
             const url = new URL(request.url);
             if (url.hostname.endsWith(".modal.run")) {
@@ -157,6 +188,54 @@ export default defineConfig({
               }
               throw new Error("Unexpected xAI integration-test credential");
             }
+            if (url.href === "https://mcp.example.com/mcp") {
+              // A protected MCP server: the broker has to discover the
+              // authorization server before the owner can approve it.
+              return new Response("Unauthorized", {
+                status: 401,
+                headers: {
+                  "WWW-Authenticate":
+                    'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"',
+                },
+              });
+            }
+            if (url.href === "https://mcp.example.com/.well-known/oauth-protected-resource") {
+              return Response.json({
+                resource: "https://mcp.example.com/mcp",
+                authorization_servers: ["https://auth.example.com"],
+              });
+            }
+            if (url.href === "https://auth.example.com/.well-known/oauth-authorization-server") {
+              return Response.json({
+                issuer: "https://auth.example.com",
+                authorization_endpoint: "https://auth.example.com/authorize",
+                token_endpoint: "https://auth.example.com/token",
+                registration_endpoint: "https://auth.example.com/register",
+                response_types_supported: ["code"],
+                grant_types_supported: ["authorization_code", "refresh_token"],
+                code_challenge_methods_supported: ["S256"],
+                token_endpoint_auth_methods_supported: ["none"],
+                scopes_supported: ["mcp:read", "offline_access"],
+              });
+            }
+            if (url.href === "https://auth.example.com/register") {
+              const body = (await request.json()) as { redirect_uris?: string[] };
+              return Response.json({
+                client_id: "integration-mcp-client",
+                redirect_uris: body.redirect_uris ?? [],
+              });
+            }
+            if (url.href === "https://auth.example.com/token") {
+              const body = await request.text();
+              if (!body.includes("integration-code")) {
+                throw new Error("Unexpected MCP integration-test authorization code");
+              }
+              return Response.json({
+                access_token: "integration-access-token",
+                refresh_token: "integration-refresh-token",
+                token_type: "Bearer",
+              });
+            }
             throw new Error(`Unexpected outbound request: ${request.url}`);
           },
           queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE"],
@@ -178,12 +257,23 @@ export default defineConfig({
             TOKEN_ENCRYPTION_KEY: generateTestEncryptionKey(),
             REPO_SECRETS_ENCRYPTION_KEY: generateTestEncryptionKey(),
             PROVIDER_ACCOUNTS_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            MCP_OAUTH_ENCRYPTION_KEY: generateTestEncryptionKey(),
+            MCP_CONNECTIONS_ENABLED: "true",
+            // The MCP broker's callback URL is built from the worker's own
+            // public origin, and the callback is only recognized when it
+            // matches the origin the owner is actually sent back to.
+            WORKER_URL: "https://test.local",
             DEPLOYMENT_NAME: "integration-test",
             MODAL_API_SECRET: "test-modal-api-secret",
             MODAL_WORKSPACE: "test-workspace",
             SLACK_BOT_TOKEN: "xoxb-test-integration",
             WEB_APP_URL: "https://app.test.local",
             APP_NAME: "Open-Inspect",
+            PI_WORKSPACE_MODE: codeModeIntegration ? "read_only" : "writable",
+            PI_REPOSITORY_EDITING_MODE: codeModeIntegration ? "off" : "enabled",
+            PI_SANDBOX_EXECUTION_MODE: codeModeIntegration ? "off" : "enabled",
+            PI_CODE_MODE: codeModeIntegration ? "enabled" : "off",
+            PI_EXTERNAL_ACTIONS_MODE: codeModeIntegration ? "off" : "enabled",
             TEST_MIGRATIONS: migrations,
           },
         },
@@ -191,13 +281,17 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ["test/integration/**/*.test.ts"],
+    include: [
+      codeModeIntegration
+        ? "test/codemode-integration/**/*.test.ts"
+        : "test/integration/**/*.test.ts",
+    ],
     setupFiles: ["test/integration/apply-migrations.ts"],
     onUnhandledError(error) {
       // Better Auth implements redirects and invalid-token responses as thrown
       // APIError values. Its handler catches and converts them to HTTP responses,
       // but the Workers pool reports the intermediate rejection as unhandled.
-      const betterAuthStack =
+      const errorStack =
         "errorStack" in error && typeof error.errorStack === "string"
           ? error.errorStack
           : error.stack;
@@ -209,13 +303,26 @@ export default defineConfig({
         typeof error.body.code === "string"
           ? error.body.code
           : null;
+      const computerMissingFileHandledByWrite =
+        error.name === "WorkspaceFsError" &&
+        "code" in error &&
+        error.code === "ENOENT" &&
+        "path" in error &&
+        typeof error.path === "string" &&
+        error.path.startsWith("/workspace/") &&
+        (errorStack?.includes("@cloudflare/computer/src/tools/common/fs/write.ts") ||
+          errorStack?.includes("src/pi/computer-workspace-quota.ts"));
+      // Computer catches this ENOENT and successfully creates the file,
+      // but the Workers pool also reports the intermediate rejection. Keep the
+      // exception exact; the integration assertion proves the write committed.
+      if (computerMissingFileHandledByWrite) return false;
       if (
         error.name === "APIError" &&
         "statusCode" in error &&
         typeof error.statusCode === "number" &&
         ((error.statusCode >= 300 && error.statusCode < 400) ||
           (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN")) &&
-        betterAuthStack?.includes("/better-auth/dist/api/routes/")
+        errorStack?.includes("/better-auth/dist/api/routes/")
       ) {
         return false;
       }

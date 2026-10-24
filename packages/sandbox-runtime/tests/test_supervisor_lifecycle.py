@@ -1,5 +1,6 @@
 import asyncio
 import signal
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +23,9 @@ def _supervisor(tmp_path, events):
     repository.prepare_tunnel_environment.return_value = []
     repository.boot = AsyncMock(
         side_effect=lambda mode, _ports: events.append(f"repository:{mode.value}") or result
+    )
+    repository.boot_execution = AsyncMock(
+        side_effect=lambda mode: events.append(f"repository:{mode.value}") or result
     )
 
     opencode_server = MagicMock()
@@ -126,6 +130,29 @@ async def test_boot_that_continued_past_a_failed_setup_still_records_the_marker(
 
     # A session ran here; a later fresh boot would check out over its work.
     assert marker.is_file()
+
+
+async def test_execution_only_boot_skips_agent_and_interactive_services(tmp_path, monkeypatch):
+    events = []
+    supervisor, *_ = _supervisor(tmp_path, events)
+    supervisor.config = RuntimeConfig.from_env(
+        {
+            "SANDBOX_ID": "sandbox-1",
+            "REPO_OWNER": "acme",
+            "REPO_NAME": "repo",
+            "SESSION_CONFIG": '{"session_id":"session-1","runtime_mode":"execution","harness":"pi"}',
+        },
+        workspace_path=tmp_path,
+    )
+    supervisor.config = replace(supervisor.config, docker_enabled=True)
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+
+    assert await supervisor.run() is True
+    assert events == ["repository:fresh", "bridge"]
+    supervisor.repository_boot.prepare_tunnel_environment.assert_not_called()
+    supervisor.repository_boot.boot_execution.assert_awaited_once_with(BootMode.FRESH)
 
 
 async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, monkeypatch):

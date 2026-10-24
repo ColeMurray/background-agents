@@ -25,7 +25,7 @@ import type { SandboxAttachment } from "../sandbox/lifecycle/ports";
 import type { SourceControlProviderName } from "../source-control";
 import type { BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ClientInfo } from "../types";
-import { isValidSandboxToken } from "./sandbox-access";
+import { isSandboxCredentialLive, isValidSandboxToken } from "./sandbox-access";
 import { requestLogger } from "./request-logger";
 import { resolveParticipantName } from "./participant-name";
 import { getAvatarUrl, type ParticipantService } from "./participant-service";
@@ -245,7 +245,8 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       currentSandbox.modal_sandbox_id !== expectedSandboxId ||
       currentSandbox.created_at !== sandbox.created_at ||
       currentSandbox.auth_token_hash !== sandbox.auth_token_hash ||
-      currentSandbox.auth_token !== sandbox.auth_token
+      currentSandbox.auth_token !== sandbox.auth_token ||
+      !isSandboxCredentialLive(currentSandbox, Date.now())
     ) {
       return reject("Forbidden: Sandbox credentials changed", 403);
     }

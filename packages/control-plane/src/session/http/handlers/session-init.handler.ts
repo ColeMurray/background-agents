@@ -1,7 +1,13 @@
 import { z } from "zod";
 import type { Logger } from "../../../logger";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
-import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
+import {
+  getValidHarnessOrDefault,
+  getHarnessCapabilities,
+  getStoredHarnessOrRefuse,
+  harnessIdSchema,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { isValidModel } from "@open-inspect/shared/models";
 import { HarnessAdmissionError, resolveHarnessInitialization } from "../../../harness-admission";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
@@ -11,6 +17,10 @@ import { validateReasoningEffort } from "../../reasoning-effort";
 import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxInitializer } from "../../sandbox-ports";
 import type { ParticipantRepository } from "../../participant-repository";
+import type {
+  InProcessHarnessCapabilitySnapshot,
+  InProcessHarnessRuntime,
+} from "../../../harness/in-process-runtime";
 
 const repositoryRefSchema = z.object({
   repoOwner: z.string(),
@@ -27,6 +37,8 @@ const spawnSourceSchema = z.enum([
   "linear-bot",
   "slack-bot",
 ] satisfies [SpawnSource, ...SpawnSource[]]);
+
+const IN_PROCESS_INITIALIZE_MAX_ATTEMPTS = 2;
 
 /**
  * Request body for the /internal/init endpoint.
@@ -90,7 +102,11 @@ export class SessionInitHandler {
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
     private readonly generateId: (bytes?: number) => string,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly inProcessRuntime?: Pick<InProcessHarnessRuntime, "harness" | "initialize">,
+    private readonly currentInProcessCapabilitySnapshot: () => InProcessHarnessCapabilitySnapshot = () => {
+      throw new Error("In-process capability snapshot resolver is unavailable");
+    }
   ) {}
 
   async init(request: Request, log: Logger): Promise<Response> {
@@ -129,11 +145,44 @@ export class SessionInitHandler {
     // A retried init must not rebuild sandbox/participant rows or reset live
     // budget state. If the first attempt committed but never scheduled the
     // spawn, the first prompt spawns through processMessageQueue.
-    if (this.sessionCoreRepository.getSession()) {
+    const existingSession = this.sessionCoreRepository.getSession();
+    if (existingSession) {
+      const storedHarness = getStoredHarnessOrRefuse(existingSession.harness);
+      if (storedHarness === null) {
+        return Response.json(
+          { error: `Session harness "${existingSession.harness}" is not supported` },
+          { status: 409 }
+        );
+      }
+      if (this.runtimeMatches(storedHarness)) {
+        const snapshot = this.sessionCoreRepository.getPiFeatureCapabilitySnapshot();
+        if (snapshot) {
+          const initialized = await this.initializeInProcessRuntime(
+            existingSession.session_name || sessionName,
+            snapshot,
+            log
+          );
+          if (!initialized) {
+            return Response.json(
+              { error: "In-process harness runtime is unavailable" },
+              { status: 503 }
+            );
+          }
+        }
+      }
       return Response.json({ sessionId, status: "created" });
     }
 
     const harness = getValidHarnessOrDefault(body.harness);
+    const inProcessRuntimeForSession = this.runtimeMatches(harness)
+      ? this.inProcessRuntime
+      : undefined;
+    if (this.isInProcessHarness(harness) && !inProcessRuntimeForSession) {
+      return Response.json(
+        { error: "In-process harness runtime is not available" },
+        { status: 503 }
+      );
+    }
     let selection;
     try {
       selection = resolveHarnessInitialization(harness, body);
@@ -182,6 +231,9 @@ export class SessionInitHandler {
     const normalizedSandboxSettings = body.sandboxSettings
       ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
       : null;
+    const inProcessCapabilitySnapshot = inProcessRuntimeForSession
+      ? this.currentInProcessCapabilitySnapshot()
+      : null;
 
     this.sessionCoreRepository.transaction(() => {
       this.sessionCoreRepository.upsertSession({
@@ -206,6 +258,7 @@ export class SessionInitHandler {
           : null,
         maxCostUsd: normalizedSandboxSettings?.maxSessionCostUsd ?? null,
         environmentId: body.environmentId ?? null,
+        piFeatureCapabilitySnapshot: inProcessCapabilitySnapshot,
         createdAt: now,
         updatedAt: now,
       });
@@ -227,13 +280,15 @@ export class SessionInitHandler {
           baseBranch: repo.baseBranch,
         }))
       );
-      const sandboxId = this.generateId();
-      this.sandboxRepository.createSandbox({
-        id: sandboxId,
-        status: "pending",
-        gitSyncStatus: "pending",
-        createdAt: 0,
-      });
+      if (!inProcessRuntimeForSession) {
+        const sandboxId = this.generateId();
+        this.sandboxRepository.createSandbox({
+          id: sandboxId,
+          status: "pending",
+          gitSyncStatus: "pending",
+          createdAt: 0,
+        });
+      }
 
       const participantId = this.generateId();
       this.participantRepository.createParticipant({
@@ -249,9 +304,75 @@ export class SessionInitHandler {
       });
     });
 
-    log.info("Triggering sandbox spawn for new session");
-    this.scheduleWarmSandbox();
+    if (inProcessRuntimeForSession && inProcessCapabilitySnapshot) {
+      const initializeStartedAt = this.now();
+      log.info("harness.latency", {
+        event: "harness.latency",
+        milestone: "session_do_init",
+        timestamp_ms: initializeStartedAt,
+        harness,
+        execution_backend: "in_process",
+        repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
+        sandbox_avoided: 1,
+      });
+      if (!(await this.initializeInProcessRuntime(sessionName, inProcessCapabilitySnapshot, log))) {
+        return Response.json(
+          { error: "In-process harness runtime is unavailable" },
+          { status: 503 }
+        );
+      }
+      const initializedAt = this.now();
+      log.info("harness.latency", {
+        event: "harness.latency",
+        milestone: "in_process_init",
+        timestamp_ms: initializedAt,
+        duration_ms: initializedAt - initializeStartedAt,
+        harness,
+        execution_backend: "in_process",
+        repository_count: repositories.length || (hasRepoOwner ? 1 : 0),
+        sandbox_avoided: 1,
+      });
+      log.info("Created sandbox-free in-process harness session");
+    } else {
+      log.info("Triggering sandbox spawn for new session");
+      this.scheduleWarmSandbox();
+    }
 
     return Response.json({ sessionId, status: "created" });
+  }
+
+  private async initializeInProcessRuntime(
+    sessionId: string,
+    snapshot: InProcessHarnessCapabilitySnapshot,
+    log: Logger
+  ): Promise<boolean> {
+    if (!this.inProcessRuntime) return false;
+    for (let attempt = 1; attempt <= IN_PROCESS_INITIALIZE_MAX_ATTEMPTS; attempt++) {
+      try {
+        await this.inProcessRuntime.initialize(sessionId, snapshot);
+        return true;
+      } catch (error) {
+        const fields = {
+          session_id: sessionId,
+          attempt,
+          max_attempts: IN_PROCESS_INITIALIZE_MAX_ATTEMPTS,
+          error: error instanceof Error ? error : String(error),
+        };
+        if (attempt < IN_PROCESS_INITIALIZE_MAX_ATTEMPTS) {
+          log.warn("Retrying in-process harness initialization", fields);
+        } else {
+          log.error("In-process harness initialization failed", fields);
+        }
+      }
+    }
+    return false;
+  }
+
+  private runtimeMatches(harness: HarnessId | undefined): boolean {
+    return harness !== undefined && this.inProcessRuntime?.harness === harness;
+  }
+
+  private isInProcessHarness(harness: HarnessId): boolean {
+    return getHarnessCapabilities(harness).execution === "in_process";
   }
 }

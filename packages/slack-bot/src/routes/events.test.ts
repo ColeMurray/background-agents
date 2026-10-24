@@ -3,9 +3,16 @@ import type * as SharedSlack from "@open-inspect/shared/slack";
 import { makeExecutionContext as makeCtx } from "../test-helpers";
 import type { Env } from "../types";
 
-const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
+const {
+  mockHandleSlackEvent,
+  mockVerifySlackSignature,
+  mockAdmitSlackIngress,
+  mockProcessSlackIngressJob,
+} = vi.hoisted(() => ({
   mockHandleSlackEvent: vi.fn(),
   mockVerifySlackSignature: vi.fn(),
+  mockAdmitSlackIngress: vi.fn(),
+  mockProcessSlackIngressJob: vi.fn(),
 }));
 
 // Only the signature check is stubbed; the payload schemas are the real ones so
@@ -18,6 +25,11 @@ vi.mock("@open-inspect/shared/slack", async (importOriginal) => ({
 vi.mock("../events/dispatcher", () => ({
   handleSlackEvent: mockHandleSlackEvent,
 }));
+vi.mock("../ingress-authority", async (importOriginal) => ({
+  ...(await importOriginal()),
+  admitSlackIngress: mockAdmitSlackIngress,
+}));
+vi.mock("../ingress-consumer", () => ({ processSlackIngressJob: mockProcessSlackIngressJob }));
 
 import { eventRoutes } from "./events";
 
@@ -40,8 +52,10 @@ function eventRequest(): Request {
       type: "event_callback",
       event_id: EVENT_ID,
       event: {
-        type: "app_home_opened",
-        tab: "home",
+        type: "app_mention",
+        channel: "C123",
+        ts: "123.456",
+        text: "hello",
         user: "U123",
       },
     })
@@ -67,6 +81,11 @@ describe("POST /events deduplication", () => {
     vi.clearAllMocks();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockHandleSlackEvent.mockResolvedValue(undefined);
+    mockProcessSlackIngressJob.mockResolvedValue("processed");
+    mockAdmitSlackIngress.mockResolvedValue({
+      created: true,
+      receipt: { id: "receipt-1", state: "admitted" },
+    });
   });
 
   afterEach(() => {
@@ -97,7 +116,7 @@ describe("POST /events deduplication", () => {
           service: "slack-bot",
           component: "handler",
           event_id: EVENT_ID,
-          event_type: "app_home_opened",
+          event_type: "app_mention",
           kv_operation: kvOperation,
           slack_retry_num: "2",
           slack_retry_reason: "http_error",
@@ -114,6 +133,7 @@ describe("POST /events deduplication", () => {
   );
 
   it("dispatches a valid event with file and attachment fields", async () => {
+    const consoleInfo = vi.spyOn(console, "log").mockImplementation(() => {});
     const env = makeEnv("get");
     const ctx = makeCtx();
     const response = await eventRoutes.fetch(
@@ -148,6 +168,77 @@ describe("POST /events deduplication", () => {
       expect.any(String),
       expect.any(Function)
     );
+    const telemetry = consoleInfo.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((entry) => entry.msg === "slack.ingress");
+    expect(telemetry).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          milestone: "ingress",
+          source: "slack",
+          timestamp_ms: expect.any(Number),
+        }),
+        expect.objectContaining({
+          milestone: "ack",
+          source: "slack",
+          duration_ms: expect.any(Number),
+          timestamp_ms: expect.any(Number),
+        }),
+      ])
+    );
+    expect(JSON.stringify(telemetry)).not.toContain("see attached");
+  });
+
+  it("durably admits and enqueues before acknowledging when enabled", async () => {
+    let release!: () => void;
+    const queued = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const env = {
+      ...makeEnv("get"),
+      PI_SLACK_DURABLE_INGRESS_ENABLED: "true",
+      SLACK_INGRESS_QUEUE: { send: vi.fn(() => queued) },
+    } as unknown as Env;
+    let settled = false;
+    const responsePromise = Promise.resolve(eventRoutes.fetch(eventRequest(), env, makeCtx())).then(
+      (response) => {
+        settled = true;
+        return response;
+      }
+    );
+    await vi.waitFor(() => expect(mockAdmitSlackIngress).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    release();
+    expect((await responsePromise).status).toBe(200);
+    expect(env.SLACK_INGRESS_QUEUE!.send).toHaveBeenCalledOnce();
+  });
+
+  it("returns retryable failure when durable queue admission fails", async () => {
+    const env = {
+      ...makeEnv("get"),
+      PI_SLACK_DURABLE_INGRESS_ENABLED: "true",
+      SLACK_INGRESS_QUEUE: {
+        send: vi.fn(async () => {
+          throw new Error("429");
+        }),
+      },
+    } as unknown as Env;
+    expect((await eventRoutes.fetch(eventRequest(), env, makeCtx())).status).toBe(503);
+    expect(mockHandleSlackEvent).not.toHaveBeenCalled();
+  });
+  it("acknowledges a terminal redelivery without another Queue send", async () => {
+    mockAdmitSlackIngress.mockResolvedValueOnce({
+      created: false,
+      receipt: { id: "receipt-1", state: "completed" },
+    });
+    const env = {
+      ...makeEnv("get"),
+      PI_SLACK_DURABLE_INGRESS_ENABLED: "true",
+      SLACK_INGRESS_QUEUE: { send: vi.fn() },
+    } as unknown as Env;
+    expect((await eventRoutes.fetch(eventRequest(), env, makeCtx())).status).toBe(200);
+    expect(env.SLACK_INGRESS_QUEUE!.send).not.toHaveBeenCalled();
+    expect(mockProcessSlackIngressJob).not.toHaveBeenCalled();
   });
 
   it("rejects malformed JSON", async () => {

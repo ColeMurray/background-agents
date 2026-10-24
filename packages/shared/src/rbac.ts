@@ -55,6 +55,8 @@ export const PERMISSION_IDS = [
   "environments.secrets.manage",
   "environments.settings.manage",
   "environments.use",
+  "external_actions.approve",
+  "external_actions.manage_grants",
   "global_secrets.manage",
   "image_builds.read",
   "integrations.manage",
@@ -341,6 +343,7 @@ const memberMergeAccountSchema = z
  * `db/user-merge.ts`, which cannot import runtime values; a control-plane test keeps them equal.
  */
 export const USER_MERGE_COUNT_KEYS = [
+  "slackIngressActorsRepointed",
   "memoriesOwnedRepointed",
   "memoryAuthorsRepointed",
   "memoryRevisionAuthorsRepointed",

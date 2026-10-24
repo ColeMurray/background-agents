@@ -65,6 +65,7 @@ import {
   type StopConfig,
   type StopResult,
 } from "../provider";
+import { secureExecutionSandboxConfig } from "../execution-isolation";
 
 const log = createLogger("e2b-provider");
 
@@ -197,6 +198,7 @@ export class E2BSandboxProvider implements SandboxProvider {
     // Stop is a resumable pause; the manager treats it as provider-managed state.
     supportsPersistentResume: true,
     supportsExplicitStop: true,
+    executionIsolation: "canary_blocked",
   };
 
   constructor(
@@ -205,6 +207,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    config = secureExecutionSandboxConfig(config, this.name, this.capabilities);
     try {
       // A prebuilt image id is an E2B snapshot template id — spawn from it instead
       // of the base template and mark the boot so the runtime skips setup.sh (it

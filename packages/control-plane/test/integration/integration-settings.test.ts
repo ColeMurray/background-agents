@@ -105,6 +105,28 @@ describe("Integration settings API", () => {
       expect(body.settings.enabledRepos).toEqual(["acme/widgets"]);
     });
 
+    it.each(["github", "linear"])(
+      "rejects Pi as the global default for repository-backed %s sessions",
+      async (integrationId) => {
+        const response = await serviceFetch(
+          `https://test.local/integration-settings/${integrationId}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              settings: {
+                defaults: { harness: "pi", model: "openai/gpt-5.6-sol" },
+              },
+            }),
+          }
+        );
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Pi Durable is unavailable for repository-backed integrations",
+        });
+      }
+    );
+
     it("does not grandfather invalid sandbox timing across real D1 API round-trips", async () => {
       const endpoint = "https://test.local/integration-settings/sandbox";
       await env.DB.prepare(

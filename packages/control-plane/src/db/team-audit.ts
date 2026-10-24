@@ -14,16 +14,31 @@ export interface AppliedAuditEvent {
   after: unknown;
 }
 
+export interface BoundAppliedAuditEvent {
+  readonly id: string;
+  readonly statement: SqlStatement;
+}
+
 /**
  * Build the audit insert for an applied operation. With `onlyIfPreviousChanged`, the row is
  * written only when the preceding statement in the same batch changed a row.
  */
-export function bindAppliedAuditEvent(
+function bindAppliedAuditEvent(
   db: SqlDatabase,
   event: AppliedAuditEvent,
   onlyIfPreviousChanged = false
 ): SqlStatement {
-  return db
+  return bindAppliedAuditEventWithId(db, event, onlyIfPreviousChanged).statement;
+}
+
+/** Bind an audit event and expose its generated id for same-batch dependent statements. */
+export function bindAppliedAuditEventWithId(
+  db: SqlDatabase,
+  event: AppliedAuditEvent,
+  onlyIfPreviousChanged = false
+): BoundAppliedAuditEvent {
+  const id = crypto.randomUUID();
+  const statement = db
     .prepare(
       `INSERT INTO authorization_audit_events
         (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
@@ -33,7 +48,7 @@ export function bindAppliedAuditEvent(
         ${onlyIfPreviousChanged ? "WHERE changes() = 1" : ""}`
     )
     .bind(
-      crypto.randomUUID(),
+      id,
       Date.now(),
       event.requestId,
       event.actorUserId,
@@ -45,6 +60,7 @@ export function bindAppliedAuditEvent(
       event.action,
       JSON.stringify({ before: event.before ?? {}, requested: {}, after: event.after ?? {} })
     );
+  return { id, statement };
 }
 
 export interface TeamAuditInput {
@@ -60,7 +76,11 @@ export interface TeamAuditInput {
 export type TeamAuditActor = Pick<TeamAuditInput, "requestId" | "actorUserId">;
 
 export class TeamAuditStore {
-  constructor(private readonly db: SqlDatabase) {}
+  private readonly db: SqlDatabase;
+
+  constructor(db: SqlDatabase) {
+    this.db = db;
+  }
 
   bind(input: TeamAuditInput, onlyIfPreviousChanged = false): SqlStatement {
     return bindAppliedAuditEvent(

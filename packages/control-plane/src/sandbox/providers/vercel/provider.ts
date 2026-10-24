@@ -38,6 +38,7 @@ import {
   type StopResult,
   type VncAccess,
 } from "../../provider";
+import { secureExecutionSandboxConfig } from "../../execution-isolation";
 import type {
   VercelCommandResult,
   VercelCreateSandboxResponse,
@@ -92,6 +93,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     supportsRestore: true,
     supportsPersistentResume: false,
     supportsExplicitStop: true,
+    executionIsolation: "canary_blocked",
     snapshotRequiresShutdown: true,
   };
 
@@ -101,6 +103,7 @@ export class VercelSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    config = secureExecutionSandboxConfig(config, this.name, this.capabilities);
     try {
       const timeoutMs = resolveVercelTimeoutMs(config.timeoutSeconds);
       const portPlan = resolveSandboxPortPlan(

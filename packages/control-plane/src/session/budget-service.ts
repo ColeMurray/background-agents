@@ -12,12 +12,14 @@ interface BudgetTransition {
   warningEvent: Extract<SandboxEvent, { type: "warning" }> | null;
   stopPreparation: ExecutionStopPreparation | null;
   statusChanged: boolean;
+  inProcessStopReason: string | null;
 }
 
 const NO_BUDGET_TRANSITION: BudgetTransition = {
   warningEvent: null,
   stopPreparation: null,
   statusChanged: false,
+  inProcessStopReason: null,
 };
 
 type StepFinishEvent = Extract<SandboxEvent, { type: "step_finish" }>;
@@ -41,7 +43,11 @@ export class SessionBudgetService {
     private readonly messenger: SessionMessenger,
     private readonly executionStop: Pick<ExecutionStopCoordinator, "prepare" | "deliver">,
     private readonly processMessageQueue: () => Promise<void>,
-    private readonly generateId: () => string
+    private readonly generateId: () => string,
+    private readonly inProcess?: {
+      isInProcessSession(): boolean;
+      stopInProcessExecution(reason: string): Promise<void>;
+    }
   ) {}
 
   async ingestStepFinish(
@@ -145,6 +151,14 @@ export class SessionBudgetService {
     now: number
   ): BudgetTransition {
     const reason = `Session cost limit reached: ${formatCost(totalCost)} of ${formatCost(limit)}`;
+    if (this.inProcess?.isInProcessSession()) {
+      return {
+        warningEvent: this.persistWarning(`${reason}. Execution stopping.`, messageId, now),
+        stopPreparation: null,
+        statusChanged: true,
+        inProcessStopReason: reason,
+      };
+    }
     const stopPreparation = this.executionStop.prepare(reason, now);
     return {
       warningEvent: this.persistWarning(
@@ -154,6 +168,7 @@ export class SessionBudgetService {
       ),
       stopPreparation,
       statusChanged: true,
+      inProcessStopReason: null,
     };
   }
 
@@ -166,6 +181,8 @@ export class SessionBudgetService {
     if (transition.stopPreparation) {
       await this.executionStop.deliver(transition.stopPreparation);
     }
+    if (transition.inProcessStopReason)
+      await this.inProcess?.stopInProcessExecution(transition.inProcessStopReason);
   }
 
   private persistWarning(

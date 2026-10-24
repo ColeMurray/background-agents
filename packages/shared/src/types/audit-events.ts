@@ -22,7 +22,14 @@ export const auditEventTimestampSchema = z
 export const auditOperationResultSchema = z.enum(["applied", "no_op", "denied", "rejected"]);
 
 /** Principal categories currently emitted by the control plane. */
-export const auditPrincipalKindSchema = z.enum(["user", "service", "sandbox"]);
+/**
+ * Who an audit event was written by.
+ *
+ * `harness` is a harness that acts for a session without being a sandbox:
+ * it is not a person, and it is not a service. Naming it `sandbox` would
+ * assert a containment that does not exist.
+ */
+export const auditPrincipalKindSchema = z.enum(["user", "service", "sandbox", "harness"]);
 
 /** Forward-compatible structured metadata attached to an audit event. */
 export const auditEventMetadataSchema = z.record(z.string(), z.unknown());

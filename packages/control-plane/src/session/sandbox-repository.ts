@@ -12,6 +12,7 @@ import type { Logger } from "../logger";
 import { coerceSandboxStatus } from "../sandbox/sandbox-status";
 import { encryptToken } from "../auth/crypto";
 import { decryptStoredAccessValue } from "./sandbox-access";
+import type { SandboxRuntimeMode } from "@open-inspect/shared";
 
 /** A sandbox row exactly as SQLite returns it, before the status is validated. */
 const rawSandboxRowSchema = sandboxRowSchema.extend({ status: z.unknown().optional() });
@@ -61,6 +62,7 @@ export interface CreateSandboxData {
   status: SandboxStatus;
   gitSyncStatus: GitSyncStatus;
   createdAt: number;
+  runtimeMode?: SandboxRuntimeMode;
 }
 
 /** Data for updating a sandbox during spawn. */
@@ -69,6 +71,7 @@ export interface SpawnSandboxData {
   createdAt: number;
   modalSandboxId: string;
   preserveProviderObjectId?: boolean;
+  runtimeMode?: SandboxRuntimeMode;
 }
 
 /** Data for updating a sandbox during an in-place resume. */
@@ -128,12 +131,13 @@ export class SandboxRepository {
 
   createSandbox(data: CreateSandboxData): void {
     this.sql.exec(
-      `INSERT INTO sandbox (id, status, git_sync_status, created_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO sandbox (id, status, git_sync_status, created_at, runtime_mode)
+       VALUES (?, ?, ?, ?, ?)`,
       data.id,
       data.status,
       data.gitSyncStatus,
-      data.createdAt
+      data.createdAt,
+      data.runtimeMode ?? "agent"
     );
   }
 
@@ -313,11 +317,14 @@ export class SandboxRepository {
          active_socket_id = '',
          boot_phase = NULL,
          boot_seq = NULL,
+         runtime_mode = ?,
+         execution_bridge_id = NULL,
          fenced = 0, startup_rejected = 0
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
-      data.modalSandboxId
+      data.modalSandboxId,
+      data.runtimeMode ?? "agent"
     );
   }
 
@@ -499,6 +506,23 @@ export class SandboxRepository {
        WHERE runtime_version IS NULL AND id = (SELECT id FROM sandbox LIMIT 1)`,
       runtimeVersion
     );
+  }
+
+  recordExecutionBridgeIdentity(
+    generation: { sandboxId: string | null; createdAt: number },
+    bridgeInstanceId: string
+  ): boolean {
+    const result = this.sql.exec(
+      `UPDATE sandbox SET execution_bridge_id = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)
+         AND modal_sandbox_id IS ? AND created_at = ? AND fenced = 0
+         AND status IN ('connecting', 'ready', 'failed')`,
+      bridgeInstanceId,
+      generation.sandboxId,
+      generation.createdAt
+    );
+    result.toArray();
+    return (result.rowsWritten ?? 0) > 0;
   }
 
   updateSandboxHeartbeat(timestamp: number): void {

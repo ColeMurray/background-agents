@@ -3,11 +3,19 @@
   "name": "open-inspect-control-plane-test",
   "main": "src/index.ts",
   "compatibility_date": "2024-09-23",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_weak_ref"],
   "durable_objects": {
-    "bindings": [{ "name": "SESSION", "class_name": "SessionDO" }],
+    "bindings": [
+      { "name": "SESSION", "class_name": "SessionDO" },
+      { "name": "PI_SESSION", "class_name": "PiSessionDO" },
+      { "name": "MCP_CONNECTION", "class_name": "McpConnectionDO" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SessionDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["PiSessionDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["McpConnectionDO"] },
+  ],
   "d1_databases": [
     {
       "binding": "DB",

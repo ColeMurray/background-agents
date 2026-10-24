@@ -2,6 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import type { SessionRuntime } from "../../src/session/components";
 import type { Env } from "../../src/types";
+import { ExternalActionGateway } from "../../src/session/external-action-gateway";
+import { ExternalActionDefinitionRegistry } from "../../src/session/external-action-definitions";
 
 /**
  * The DO internals integration tests are allowed to reach: the private
@@ -37,8 +39,20 @@ export function runInSessionDO<R>(
 }
 
 /** Initialize (idempotent) and expose the DO's component graph. */
-export function componentsOf(instance: SessionDO): SessionRuntime["internals"] {
-  return (instance as unknown as SessionDOInternals).runtime.internals;
+export function componentsOf(instance: SessionDO): SessionRuntime["internals"] & {
+  externalActionGateway: ExternalActionGateway;
+  externalActionDefinitions: ExternalActionDefinitionRegistry;
+} {
+  const internals = (instance as unknown as SessionDOInternals).runtime.internals;
+  const externalActionGateway = internals.extensionComponents.externalActionGateway;
+  const externalActionDefinitions = internals.extensionComponents.externalActionDefinitions;
+  if (!(externalActionGateway instanceof ExternalActionGateway)) {
+    throw new Error("External action gateway extension is not registered");
+  }
+  if (!(externalActionDefinitions instanceof ExternalActionDefinitionRegistry)) {
+    throw new Error("External action definition extension is not registered");
+  }
+  return Object.assign(internals, { externalActionGateway, externalActionDefinitions });
 }
 
 /** Set the real DO's mode before its first request initializes the runtime. */

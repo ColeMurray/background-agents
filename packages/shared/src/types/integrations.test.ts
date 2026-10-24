@@ -39,7 +39,7 @@ import {
   type SandboxProviderName,
   type SandboxResources,
   type SlackRoutingRule,
-} from "./integrations";
+} from "./overlay-integrations";
 
 describe("Slack unbound channel policy", () => {
   it("defaults to workspace ownership without changing stored optional settings", () => {

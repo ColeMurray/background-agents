@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   overlay: vi.fn(),
   composer: vi.fn(),
   timeline: vi.fn(),
+  sessionDiffs: vi.fn(),
+  changesPanel: vi.fn(),
   diffState: null as SessionDiffState | null,
   snapshot: null as SessionSnapshot | null,
   mobile: false,
@@ -62,7 +64,7 @@ vi.mock("@/hooks/use-enabled-models", () => ({
   }),
 }));
 vi.mock("@/hooks/use-session-diffs", () => ({
-  useSessionDiffs: () => ({ state: mocks.diffState, isLoading: false }),
+  useSessionDiffs: mocks.sessionDiffs,
 }));
 vi.mock("@/hooks/use-media-query", () => ({ useMediaQuery: () => mocks.mobile }));
 vi.mock("@/hooks/use-session-details-sidebar", () => ({
@@ -100,12 +102,17 @@ vi.mock("@/components/session-desktop-layout", () => ({
 }));
 // Like the real panel, it takes focus when it opens.
 vi.mock("@/components/session-changes-panel", () => ({
-  SessionChangesPanel: function ChangesPanel({ onClose }: { onClose: () => void }) {
+  SessionChangesPanel: function ChangesPanel(props: {
+    onClose: () => void;
+    resolved: { revisionId: string; status: string };
+  }) {
     const ref = useRef<HTMLElement>(null);
     useEffect(() => ref.current?.focus(), []);
+    mocks.changesPanel(props);
     return (
       <section ref={ref} tabIndex={-1} aria-label="Session changes">
-        <button type="button" onClick={onClose}>
+        <output data-testid="opened-diff-revision">{props.resolved.revisionId}</output>
+        <button type="button" onClick={props.onClose}>
           Close changes
         </button>
       </section>
@@ -118,6 +125,15 @@ beforeEach(() => {
   mocks.mobile = false;
   mocks.enabledModels = [];
   mocks.diffState = null;
+  mocks.sessionDiffs.mockImplementation((_sessionId: string) => ({
+    state: mocks.diffState,
+    isLoading: false,
+    refresh: {
+      isValidating: false,
+      error: null,
+      retry: vi.fn().mockResolvedValue(undefined),
+    },
+  }));
   mocks.snapshot = {
     session: {
       id: "session-1",
@@ -175,6 +191,40 @@ beforeEach(() => {
     component.mockReturnValue(null);
   }
 });
+
+const READY_DIFF: SessionDiffState = {
+  version: 1,
+  current: {
+    version: 1,
+    revisionId: "revision-pi-1",
+    capturedAt: 100,
+    triggerMessageId: null,
+    repositories: [
+      {
+        status: "ready",
+        position: 0,
+        repoOwner: "acme",
+        repoName: "web",
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        truncated: false,
+        omittedFileCount: 0,
+        files: [
+          {
+            id: "file-pi-1",
+            path: "src/pi.ts",
+            status: "modified",
+            additions: 1,
+            deletions: 0,
+            renderState: "renderable",
+          },
+        ],
+      },
+    ],
+  },
+  lastError: null,
+  unavailableReason: null,
+};
 
 class NotFoundBoundary extends Component<PropsWithChildren, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -274,6 +324,66 @@ it("keeps desktop actions available without collaboration and refreshes sidebar 
       onUpdated: mocks.refreshSnapshot,
     });
   }
+});
+
+it("fetches Pi repository changes and opens the selected revision-pinned file", async () => {
+  const user = userEvent.setup();
+  const repository = READY_DIFF.current!.repositories[0]!;
+  Object.assign(mocks.snapshot!.session, {
+    harness: "pi",
+    executionBackend: "durable",
+    repoOwner: repository.repoOwner,
+    repoName: repository.repoName,
+    repositories: [
+      {
+        position: repository.position,
+        repoOwner: repository.repoOwner,
+        repoName: repository.repoName,
+        baseBranch: "main",
+        branchName: null,
+      },
+    ],
+  });
+  mocks.diffState = READY_DIFF;
+  mocks.sidebar.mockImplementation((props) => (
+    <button type="button" onClick={() => props.onOpenDiff(repository, repository.files[0])}>
+      Open Pi change
+    </button>
+  ));
+
+  render(<SessionPage />);
+
+  expect(mocks.sessionDiffs).toHaveBeenLastCalledWith("session-1");
+  await user.click(screen.getByRole("button", { name: "Open Pi change" }));
+  expect(screen.getByRole("region", { name: "Session changes" })).toBeVisible();
+  expect(screen.getByTestId("opened-diff-revision")).toHaveTextContent("revision-pi-1");
+  expect(mocks.changesPanel.mock.lastCall?.[0].resolved).toMatchObject({
+    status: "ready",
+    revisionId: "revision-pi-1",
+    file: { id: "file-pi-1", path: "src/pi.ts" },
+  });
+});
+
+it("does not expose changes for a Pi session without a repository or diff", () => {
+  Object.assign(mocks.snapshot!.session, {
+    harness: "pi",
+    executionBackend: "durable",
+    repoOwner: null,
+    repoName: null,
+    repositories: [],
+  });
+  mocks.diffState = {
+    version: 1,
+    current: null,
+    lastError: null,
+    unavailableReason: null,
+  };
+
+  render(<SessionPage />);
+
+  expect(mocks.sessionDiffs).toHaveBeenLastCalledWith("session-1");
+  expect(mocks.sidebar.mock.lastCall?.[0].diffState).toEqual(mocks.diffState);
+  expect(screen.queryByRole("region", { name: "Session changes" })).not.toBeInTheDocument();
 });
 
 // Memoized like the timeline's EventItem, so page re-renders keep the rendered link.

@@ -14,6 +14,7 @@ import {
 
 async function reportReady(
   stub: DurableObjectStub,
+  sandboxId: string,
   repositories: Array<{
     position: number;
     repoOwner: string;
@@ -26,7 +27,7 @@ async function reportReady(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       type: "ready",
-      sandboxId: "sandbox-diff",
+      sandboxId,
       timestamp: 100,
       repositories,
     }),
@@ -104,7 +105,9 @@ describe("session diff routes", () => {
       sandboxId: "current-diff-sandbox",
     });
     const baseSha = "a".repeat(40);
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, "current-diff-sandbox", [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
       method: "PUT",
@@ -167,7 +170,9 @@ describe("session diff routes", () => {
     await seedSandboxAuth(stub, auth);
     const baseSha = "a".repeat(40);
     const patch = "diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n";
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, auth.sandboxId, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
 
     const upload = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
       method: "PUT",
@@ -225,7 +230,9 @@ describe("session diff routes", () => {
     const auth = { authToken: "diff-failure-token", sandboxId: "sandbox-failure" };
     await seedSandboxAuth(stub, auth);
     const baseSha = "c".repeat(40);
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, auth.sandboxId, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
     const headers = {
       Authorization: `Bearer ${auth.authToken}`,
       "Content-Type": "application/json",
@@ -260,7 +267,9 @@ describe("session diff routes", () => {
     const auth = { authToken: "diff-membership-token", sandboxId: "sandbox-membership" };
     await seedSandboxAuth(stub, auth);
     const baseSha = "d".repeat(40);
-    await reportReady(stub, [{ position: 0, repoOwner: "acme", repoName: "web-app", baseSha }]);
+    await reportReady(stub, auth.sandboxId, [
+      { position: 0, repoOwner: "acme", repoName: "web-app", baseSha },
+    ]);
     const headers = {
       Authorization: `Bearer ${auth.authToken}`,
       "Content-Type": "application/json",
@@ -291,7 +300,7 @@ describe("session diff routes", () => {
     await seedSandboxAuth(stub, auth);
     const firstSha = "1".repeat(40);
     const secondSha = "2".repeat(40);
-    await reportReady(stub, [
+    await reportReady(stub, auth.sandboxId, [
       { position: 0, repoOwner: "acme", repoName: "web-app", baseSha: firstSha },
       { position: 1, repoOwner: "group/subgroup", repoName: "api", baseSha: secondSha },
     ]);

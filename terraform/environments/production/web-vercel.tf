@@ -8,7 +8,6 @@ module "web_app" {
 
   project_name = "open-inspect-${local.name_suffix}"
   team_id      = var.vercel_team_id
-  framework    = "nextjs"
 
   # No git_repository - deploy via CLI/CI instead of auto-deploy on push.
   # The Node.js runtime comes from `engines.node` in packages/web/package.json
@@ -59,5 +58,11 @@ module "web_app" {
     },
     # Append new variables to keep count indices stable and avoid Vercel
     # ENV_CONFLICT replacement races.
+    {
+      key       = "NEXT_PUBLIC_PI_DURABLE_ENABLED"
+      value     = tostring(local.pi_durable_available)
+      targets   = ["production", "preview"]
+      sensitive = false
+    },
   ]
 }

@@ -42,7 +42,12 @@ import {
 } from "./session-inbox-store";
 import { INACTIVE_SESSION_STATUS_SQL } from "@open-inspect/shared/types/session-activity";
 import { readStateFromRow, unreadSql, type ViewerReadStateRow } from "./session-read-state";
-import { parseSessionRow, toSessionFields as toEntry, type SessionRow } from "./session-row";
+import {
+  encodeSessionStatus,
+  parseSessionRow,
+  toSessionFields as toEntry,
+  type SessionRow,
+} from "./session-row";
 import { SessionAuditStore } from "./session-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -59,6 +64,7 @@ export interface ChildAdmissionLease {
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
+const PERSISTED_INACTIVE_SESSION_STATUS_SQL = `${INACTIVE_SESSION_STATUS_SQL}, 'durable_completed', 'durable_failed', 'durable_archived', 'durable_cancelled'`;
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -247,7 +253,7 @@ export class SessionIndexStore {
         session.model,
         session.reasoningEffort,
         repository.baseBranch,
-        session.status,
+        encodeSessionStatus(session.harness ?? DEFAULT_HARNESS, session.status),
         session.parentSessionId ?? null,
         session.parentSessionId ?? null,
         session.id,
@@ -798,7 +804,7 @@ export class SessionIndexStore {
     const result = await this.db
       .prepare(
         `SELECT id FROM sessions
-         WHERE status = 'created' AND updated_at < ?
+         WHERE status IN ('created', 'durable_created') AND updated_at < ?
          ORDER BY updated_at ASC
          LIMIT ?`
       )
@@ -871,7 +877,7 @@ export class SessionIndexStore {
            WHERE descendants.depth < ${MAX_DESCENDANT_DEPTH}
          )
          SELECT id FROM descendants
-         WHERE status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
+         WHERE status NOT IN (${PERSISTED_INACTIVE_SESSION_STATUS_SQL})
          ORDER BY depth DESC`
       )
       .bind(parentSessionId)
@@ -903,7 +909,7 @@ export class SessionIndexStore {
          WHERE (
            SELECT COUNT(*) FROM (
              SELECT id AS child_session_id FROM sessions
-             WHERE parent_session_id = ? AND status NOT IN (${INACTIVE_SESSION_STATUS_SQL})
+              WHERE parent_session_id = ? AND status NOT IN (${PERSISTED_INACTIVE_SESSION_STATUS_SQL})
              UNION
              SELECT child_session_id FROM child_admission_leases
              WHERE parent_session_id = ? AND expires_at > ?

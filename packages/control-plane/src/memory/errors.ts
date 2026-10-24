@@ -1,6 +1,19 @@
 /** What kind of expected failure occurred; routes choose the transport response. */
 export type MemoryErrorKind = "validation" | "forbidden" | "not_found" | "conflict";
 
+/**
+ * The status each expected memory failure answers with.
+ *
+ * One map, in the memory layer, so every caller that speaks HTTP for a
+ * memory failure answers the same way.
+ */
+export const MEMORY_ERROR_STATUS: Record<MemoryErrorKind, number> = {
+  validation: 400,
+  forbidden: 403,
+  not_found: 404,
+  conflict: 409,
+};
+
 /** An expected memory request failure. Transport-neutral: see `routes/memory-errors.ts`. */
 export class MemoryError extends Error {
   constructor(

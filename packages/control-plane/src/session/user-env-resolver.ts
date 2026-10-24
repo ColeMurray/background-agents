@@ -28,6 +28,7 @@ import {
 } from "@open-inspect/shared/types/provider-accounts";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { SqlDatabase } from "../db/sql-database";
+import { getStoredHarnessOrRefuse } from "@open-inspect/shared/harnesses";
 import type { Logger } from "../logger";
 import { resolvePublicSessionId } from "./public-session-id";
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
@@ -218,8 +219,12 @@ export class UserEnvResolver {
           : primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
     );
     const managedSecrets = mergeSecretSources(managedSources).merged;
+    const harness = getStoredHarnessOrRefuse(session.harness);
+    if (harness === null) {
+      throw new Error(`Session harness "${session.harness}" is not supported by this deployment`);
+    }
     const sandboxEnv = prepareManagedProviderEnv({
-      harness: session.harness,
+      harness,
       exposedSecrets: merge.merged,
       brokerSecrets: managedSecrets,
       providerAuthModes,

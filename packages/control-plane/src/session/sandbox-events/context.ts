@@ -15,6 +15,8 @@ export interface SandboxEventContext {
   messageId: string | null;
   /** The processing message as of event arrival (single DO turn — stable). */
   processingMessage: { id: string } | null;
+  /** Stable Pi projection identity; absent for ordinary sandbox ingress. */
+  projectionEventId?: string;
 }
 
 /**
@@ -27,12 +29,15 @@ export function persistSandboxEvent(
   eventRepository: EventRepository,
   event: SandboxEvent,
   context: SandboxEventContext
-): void {
-  eventRepository.createEvent({
-    id: generateId(),
+): boolean {
+  const data = {
+    id: context.projectionEventId ?? generateId(),
     type: event.type,
     data: JSON.stringify(event),
     messageId: context.messageId,
     createdAt: context.now,
-  });
+  };
+  if (context.projectionEventId) return eventRepository.createEventIfAbsent(data);
+  eventRepository.createEvent(data);
+  return true;
 }

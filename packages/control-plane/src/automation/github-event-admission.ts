@@ -6,6 +6,7 @@ import {
 import {
   AutomationStore,
   allRunsUnauthorized,
+  isAutomationEnabled,
   parseAutomationTriggerFields,
   type AutomationRepositoryInsert,
   type AutomationRow,
@@ -51,7 +52,7 @@ export async function admitGitHubEvent(
       const automation = await store.getById(candidate.automation.id);
       if (
         !automation ||
-        automation.enabled !== 1 ||
+        !isAutomationEnabled(automation.enabled) ||
         automation.deleted_at !== null ||
         automation.trigger_type !== "github_event" ||
         automation.event_type !== event.eventType

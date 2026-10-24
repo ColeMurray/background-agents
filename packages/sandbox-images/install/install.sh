@@ -11,7 +11,11 @@ if [[ "$(id -u)" != 0 || "$(uname -m)" != x86_64 ]]; then
 fi
 trap 'echo "Image installation failed in phase ${OI_PHASE:-initialization}" >&2' ERR
 phases=("os/$OI_OS" languages tools runtime filesystem)
-if (( $# )); then phases=("$@"); fi
+if [[ "${1:-}" == "execution" ]]; then
+  phases=("os/$OI_OS" languages runtime execution-filesystem)
+elif (( $# )); then
+  phases=("$@")
+fi
 for OI_PHASE in "${phases[@]}"; do
   if [[ "$OI_PHASE" == os ]]; then OI_PHASE="os/$OI_OS"; fi
   echo "openinspect.image.phase=$OI_PHASE"

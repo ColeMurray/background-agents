@@ -54,6 +54,19 @@ export class SessionAttachmentRepository {
     return parseSessionAttachmentRows(result.toArray());
   }
 
+  /**
+   * The attachment a message claimed, or null when the message did not claim
+   * it. The claim is what makes an image part of one turn and one turn only.
+   */
+  getClaimedByMessage(messageId: string, attachmentId: string): SessionAttachmentRow | null {
+    const result = this.sql.exec(
+      `SELECT * FROM attachments WHERE id = ? AND message_id = ?`,
+      attachmentId,
+      messageId
+    );
+    return parseSessionAttachmentRows(result.toArray())[0] ?? null;
+  }
+
   claimForMessage(messageId: string, attachmentIds: string[]): void {
     if (attachmentIds.length === 0) return;
     const placeholders = attachmentIds.map(() => "?").join(", ");

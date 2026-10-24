@@ -133,7 +133,7 @@ ALTER TABLE automation_runs ADD COLUMN base_branch TEXT;
 -- for the rows labeled 'schedule'. Step 5 below drops that runs-side index,
 -- so this ordering is load-bearing.
 -- (IIF instead of CASE throughout this file: wrangler's migration splitter
--- treats a bare END as a compound-block terminator and would glue every
+-- treats a bare END as a multi-statement block terminator and would glue every
 -- following statement into this one.)
 INSERT INTO automation_invocations
   (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,

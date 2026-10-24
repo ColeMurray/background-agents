@@ -10,7 +10,7 @@
 
 import {
   DEFAULT_HARNESS,
-  getValidHarnessOrDefault,
+  getStoredHarnessOrRefuse,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import {
@@ -40,6 +40,7 @@ import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
   allRunsUnauthorized,
+  isAutomationEnabled,
   EXECUTION_TIMEOUT_FAILURE_REASON,
   parseAutomationTriggerFields,
   toAutomationRun,
@@ -618,7 +619,14 @@ export class Scheduler {
       { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown } = { providerAuth: [] };
     if (launchCandidates.length > 0) {
       try {
-        const harness = getValidHarnessOrDefault(automation.harness);
+        // A stored harness this binary does not know is an automation this
+        // deployment cannot run. It must not become the built-in harness.
+        const harness = getStoredHarnessOrRefuse(automation.harness);
+        if (!harness) {
+          throw new AutomationExecutionUnauthorizedError(
+            `Automation ${automation.id} names a harness this deployment does not know`
+          );
+        }
         const providerAuth = await resolveAutomationProviderAuth(this.db, automation.id, harness);
         await validateHarnessExecution(
           this.db,
@@ -1225,14 +1233,16 @@ export class Scheduler {
       case "webhook": {
         const automation = await store.getById(event.automationId);
         candidates =
-          automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
+          automation && isAutomationEnabled(automation.enabled) && !automation.deleted_at
+            ? [automation]
+            : [];
         break;
       }
       case "sentry": {
         const automation = await store.getById(event.automationId);
         candidates =
           automation &&
-          automation.enabled === 1 &&
+          isAutomationEnabled(automation.enabled) &&
           !automation.deleted_at &&
           automation.event_type === event.eventType
             ? [automation]
@@ -2012,6 +2022,12 @@ export class Scheduler {
       environmentId: target.environmentId,
     });
 
+    const harness = getStoredHarnessOrRefuse(automation.harness);
+    if (!harness) {
+      throw new AutomationExecutionUnauthorizedError(
+        `Automation ${automation.id} names a harness this deployment does not know`
+      );
+    }
     const sessionInput: SessionInitInput = {
       memory: resolvedPin(memorySelection),
       ownerTeamId: automation.owner_team_id,
@@ -2019,7 +2035,7 @@ export class Scheduler {
       sessionId,
       ...target,
       title: `[Auto] ${automation.name}`,
-      harness: getValidHarnessOrDefault(automation.harness),
+      harness,
       model: automation.model,
       reasoningEffort: automation.reasoning_effort,
       participantUserId: executionPrincipal.participantUserId,

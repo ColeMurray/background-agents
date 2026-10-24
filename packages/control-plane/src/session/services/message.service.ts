@@ -105,7 +105,26 @@ function toSessionMessage(message: MessageRow): SessionMessage {
     createdAt: message.created_at,
     startedAt: message.started_at,
     completedAt: message.completed_at,
+    originContext: parseStoredOriginContext(message.origin_context),
   };
+}
+
+/**
+ * The stored provenance, when it is a plain object.
+ *
+ * A malformed value is dropped rather than shown: the timeline falls back to
+ * the ordinary message presentation instead of rendering something it cannot
+ * read.
+ */
+function parseStoredOriginContext(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 export class MessageService {

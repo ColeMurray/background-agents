@@ -19,6 +19,12 @@ export const enqueuePromptRequestSchema = z
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
     clientRequestId: clientRequestIdSchema.optional(),
+    /**
+     * Typed provenance for a message that came from somewhere else, such as
+     * another session. It is stored with the message so the timeline can say
+     * where the message came from instead of implying it was typed here.
+     */
+    originContext: z.record(z.string(), z.unknown()).optional(),
     // Authoritative SCM snapshot resolved by the router at prompt time.
     // Explicit null fields clear stored attribution; absence leaves it unchanged.
     scmEnrichment: z

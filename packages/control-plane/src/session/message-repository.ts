@@ -11,6 +11,7 @@ import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
+import { crossSessionOriginSchema } from "@open-inspect/shared/types/cross-session";
 import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -32,6 +33,7 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
+const messageActorRowSchema = z.object({ user_id: z.string(), source: z.string() });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -40,6 +42,8 @@ export interface RecordedMessageCompletion {
   completedAt: number;
   status: "completed" | "failed";
 }
+
+export type ControlMessageAdmission = "created" | "duplicate" | "conflict";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -73,6 +77,7 @@ export interface CreateMessageData {
   autofixFeedbackKey?: string | null;
   autofixPrKey?: string | null;
   originContext?: string | null;
+  inProcessControl?: string | null;
   status: MessageStatus;
   createdAt: number;
 }
@@ -136,6 +141,92 @@ export class MessageRepository {
     const result = this.sql.exec(`SELECT id FROM messages WHERE status = 'processing' LIMIT 1`);
     const rows = parseStorageRows(result.toArray(), messageIdRowSchema);
     return rows[0] ?? null;
+  }
+
+  getMessageActor(messageId: string): { kind: "user" | "service"; id: string } | null {
+    const raw = this.sql
+      .exec(
+        `SELECT p.user_id, m.source FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+      .toArray()[0];
+    const row = messageActorRowSchema.safeParse(raw);
+    if (!row.success) return null;
+    return {
+      kind: ["web", "extension"].includes(row.data.source) ? "user" : "service",
+      id: row.data.user_id,
+    };
+  }
+
+  /**
+   * The human behind one message.
+   *
+   * A message that arrived from elsewhere was started by another session's
+   * agent on behalf of a human, so the human who initiated it is the actor.
+   * A message that started here is authored by its own participant.
+   */
+  getMessageHumanActor(messageId: string): string | null {
+    const raw = this.sql
+      .exec(
+        `SELECT COALESCE(p.canonical_user_id, p.user_id) AS actor_id, m.origin_context
+         FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+      .toArray()[0];
+    if (!raw) return null;
+    const originContext = (raw as { origin_context?: string | null }).origin_context ?? null;
+    if (originContext) {
+      try {
+        const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
+        if (parsed.success) return parsed.data.humanActorId;
+      } catch {
+        // A malformed provenance falls back to the message author.
+      }
+    }
+    const actorId = (raw as { actor_id?: string | null }).actor_id ?? null;
+    return typeof actorId === "string" && actorId.length > 0 ? actorId : null;
+  }
+
+  /**
+   * How many session-to-session hops the message behind one operation made.
+   *
+   * A message that arrived from another session carries its depth. A message
+   * that started here has none, so it has travelled no hops at all.
+   */
+  getMessageCrossSessionDepth(messageId: string): number | null {
+    const raw = this.sql
+      .exec("SELECT origin_context FROM messages WHERE id = ?", messageId)
+      .toArray()[0];
+    const originContext = (raw as { origin_context?: string | null } | undefined)?.origin_context;
+    if (!originContext) return null;
+    try {
+      const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
+      return parsed.success ? parsed.data.depth : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The workspace account behind one message.
+   *
+   * A message that arrived from Slack or GitHub is authored by a participant
+   * whose identity is namespaced (`slack:U123`). The canonical account is the
+   * workspace user that identity maps to, and that is the account whose
+   * authority may act on another session.
+   */
+  getMessageCanonicalActor(messageId: string): string | null {
+    const raw = this.sql
+      .exec(
+        `SELECT COALESCE(p.canonical_user_id, p.user_id) AS actor_id FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+      .toArray()[0];
+    const actorId = (raw as { actor_id?: string | null } | undefined)?.actor_id ?? null;
+    return typeof actorId === "string" && actorId.length > 0 ? actorId : null;
   }
 
   getMessageAwaitingStopConfirmation(): { id: string; deadline: number } | null {
@@ -356,13 +447,28 @@ export class MessageRepository {
     return rows[0] ?? null;
   }
 
+  /** Whether authenticated Linear ingress tied this session to the exact issue. */
+  hasLinearIssueContext(issueId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 AS ok FROM messages
+           WHERE source = 'linear' AND json_valid(callback_context)
+             AND json_extract(callback_context, '$.issueId') = ?
+           LIMIT 1`,
+          issueId
+        )
+        .toArray().length > 0
+    );
+  }
+
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
       `INSERT INTO messages (
          id, author_id, content, source, model, reasoning_effort, attachments,
          callback_context, client_request_id, request_fingerprint, autofix_feedback_key,
-         autofix_pr_key, origin_context, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         autofix_pr_key, origin_context, in_process_control, status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -376,9 +482,48 @@ export class MessageRepository {
       data.autofixFeedbackKey ?? null,
       data.autofixPrKey ?? null,
       data.originContext ?? null,
+      data.inProcessControl ?? null,
       data.status,
       data.createdAt
     );
+  }
+
+  /** Persist one authorized Pi control as a completed canonical user message and timeline event. */
+  recordCompletedControlMessage(
+    data: Omit<CreateMessageData, "status"> & { requestFingerprint: string },
+    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
+  ): ControlMessageAdmission {
+    return this.transactionSync(() => {
+      const existing =
+        this.getMessageById(data.id) ??
+        (data.clientRequestId ? this.getMessageByClientRequestId(data.clientRequestId) : null);
+      if (existing) {
+        return existing.id === data.id &&
+          existing.author_id === data.authorId &&
+          existing.content === data.content &&
+          existing.source === data.source &&
+          existing.status === "completed" &&
+          existing.client_request_id === (data.clientRequestId ?? null) &&
+          existing.request_fingerprint === data.requestFingerprint
+          ? "duplicate"
+          : "conflict";
+      }
+      this.createMessage({ ...data, status: "completed" });
+      this.sql.exec(
+        `UPDATE messages SET started_at = ?, completed_at = ? WHERE id = ?`,
+        data.createdAt,
+        data.createdAt,
+        data.id
+      );
+      this.eventRepository.createEvent({
+        id: `user_message:${data.id}`,
+        type: "user_message",
+        data: JSON.stringify(userMessageEvent),
+        messageId: data.id,
+        createdAt: data.createdAt,
+      });
+      return "created";
+    });
   }
 
   /** Persist a message, its attachments, and canonical timeline event atomically. */
@@ -451,7 +596,8 @@ export class MessageRepository {
 
       const status = event.success ? "completed" : "failed";
       this.sql.exec(
-        `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
+        `UPDATE messages SET status = ?, completed_at = ?, error_message = ?,
+         stop_confirmation_deadline = NULL WHERE id = ?`,
         status,
         completedAt,
         event.success ? null : (event.error ?? null),
@@ -466,6 +612,33 @@ export class MessageRepository {
         completedAt,
         status,
       };
+    });
+  }
+
+  /**
+   * Record the terminal event of a control turn.
+   *
+   * A control message is admitted already completed (the runtime, not the
+   * session queue, owns the turn), so the ordinary processing-to-complete
+   * transition never runs for it. The terminal event is still required: the
+   * timeline, the export, and every client settle on it. The upsert keeps the
+   * record exactly-once when the runtime retries its completion.
+   */
+  recordControlCompletion(
+    messageId: string,
+    event: ExecutionCompleteEvent,
+    completedAt: number
+  ): void {
+    this.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE messages SET status = ?, completed_at = ?, error_message = ?
+         WHERE id = ? AND status = 'completed'`,
+        event.success ? "completed" : "failed",
+        completedAt,
+        event.success ? null : (event.error ?? null),
+        messageId
+      );
+      this.eventRepository.upsertExecutionCompleteEvent(messageId, event, completedAt);
     });
   }
 

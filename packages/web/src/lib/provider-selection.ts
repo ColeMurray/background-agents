@@ -7,6 +7,7 @@ import {
   type ProviderAuthSelection,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import { harnessSupportsProviderAuth, type HarnessId } from "@open-inspect/shared/harnesses";
 
 export type ProviderSelectionDrafts = ModelProviderSelections;
 export const EMPTY_PROVIDER_SELECTIONS: ProviderSelectionDrafts = {};
@@ -104,4 +105,36 @@ export function setProviderSelection(
   const next = { ...selections };
   delete next[provider];
   return next;
+}
+
+/** Whether every provider-account-only harness requirement resolves to an active account. */
+export function hasUsableHarnessProviderAuth(options: {
+  harness: HarnessId;
+  selections: ModelProviderSelections;
+  defaults: ModelProviderAccountDefault[];
+  accounts: ModelProviderAccount[];
+  unattended: boolean;
+}): boolean {
+  return SUBSCRIPTION_PROVIDER_IDS.every((provider) => {
+    const requiresAccount =
+      harnessSupportsProviderAuth(options.harness, provider, "provider_account") &&
+      !harnessSupportsProviderAuth(options.harness, provider, "api_key");
+    if (!requiresAccount) return true;
+    const explicit = options.selections[provider];
+    if (explicit?.mode === "api_key") return false;
+    const providerDefault = options.defaults.find((item) => item.provider === provider);
+    const accountId =
+      explicit?.mode === "provider_account"
+        ? explicit.accountId
+        : !options.unattended || providerDefault?.unattendedMode === "provider_account"
+          ? providerDefault?.providerAccountId
+          : undefined;
+    return options.accounts.some(
+      (account) =>
+        account.id === accountId &&
+        account.provider === provider &&
+        account.status === "active" &&
+        !account.archivedAt
+    );
+  });
 }

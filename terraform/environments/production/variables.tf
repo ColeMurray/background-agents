@@ -243,6 +243,12 @@ variable "enable_slack_bot" {
   }
 }
 
+variable "pi_slack_durable_ingress_enabled" {
+  description = "Enable D1 + Queue backed Slack event ingress after its canary gate passes."
+  type        = bool
+  default     = false
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string
@@ -771,6 +777,175 @@ variable "teams_enforcement" {
   validation {
     condition     = contains(["off", "shadow", "on"], var.teams_enforcement)
     error_message = "teams_enforcement must be 'off', 'shadow', or 'on'."
+  }
+}
+
+variable "pi_durable_enabled" {
+  description = "Enable creation and execution of sandbox-free Pi Durable sessions"
+  type        = bool
+  default     = false
+}
+
+variable "pi_durable_binding_enabled" {
+  description = "Keep the migrated PiSessionDO binding available for existing sessions independently of new-session admission"
+  type        = bool
+  default     = false
+}
+
+variable "pi_scratch_workspace_mode" {
+  description = "Pi Durable Computer workspace mode: off, read_only, or writable"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "writable"], var.pi_scratch_workspace_mode)
+    error_message = "pi_scratch_workspace_mode must be 'off', 'read_only', or 'writable'."
+  }
+}
+
+variable "pi_repository_editing_mode" {
+  description = "Independent Pi repository overlay/edit/diff capability: off or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "enabled"], var.pi_repository_editing_mode)
+    error_message = "pi_repository_editing_mode must be 'off' or 'enabled'."
+  }
+}
+
+variable "pi_computer_preview_acknowledged" {
+  description = "Explicit acknowledgement that Cloudflare Computer 0.5.1 workspace and repository editing APIs are preview-only and not production-ready"
+  type        = bool
+  default     = false
+}
+
+variable "pi_mcp_mode" {
+  description = "Pi Durable read-only MCP capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_mcp_mode)
+    error_message = "pi_mcp_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
+variable "pi_cross_session_messaging_mode" {
+  description = "Optional cross-session messaging capability: off or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "enabled"], var.pi_cross_session_messaging_mode)
+    error_message = "pi_cross_session_messaging_mode must be 'off' or 'enabled'."
+  }
+}
+
+variable "pi_external_actions_mode" {
+  description = "Optional external-action approval capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_external_actions_mode)
+    error_message = "pi_external_actions_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
+variable "pi_external_action_providers" {
+  description = "Comma-separated external-action providers enabled for this deployment"
+  type        = string
+  default     = ""
+}
+
+variable "pi_browser_mode" {
+  description = "Pi Durable browser capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_browser_mode)
+    error_message = "pi_browser_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
+variable "pi_browser_allowed_domains" {
+  description = "Comma-separated hosts the Pi browser may reach; a wildcard names sub-domains"
+  type        = string
+  default     = ""
+}
+
+variable "pi_memory_mode" {
+  description = "Pi Durable memory capability: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_memory_mode)
+    error_message = "pi_memory_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
+variable "pi_sandbox_execution_mode" {
+  description = "Pi sandbox execution capability for new sessions: off, read_only, or enabled"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "read_only", "enabled"], var.pi_sandbox_execution_mode)
+    error_message = "pi_sandbox_execution_mode must be 'off', 'read_only', or 'enabled'."
+  }
+}
+
+variable "pi_sandbox_execution_attestation" {
+  description = "Generation 78+ provider execution-isolation canary evidence JSON; capability remains unavailable unless the selected adapter also enforces the profile"
+  type        = string
+  default     = ""
+}
+
+variable "pi_codemode_mode" {
+  description = "Pi Durable Code Mode admission: off, or paid after accepting Durable Object duration billing"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "paid"], var.pi_codemode_mode)
+    error_message = "pi_codemode_mode must be 'off' or 'paid'."
+  }
+}
+
+variable "pi_codemode_paid_canary_verified" {
+  description = "Explicit proof that the migration, WASM execution, and effective CPU limit passed on a disposable paid Cloudflare account"
+  type        = bool
+  default     = false
+}
+
+variable "pi_codemode_sandbox_deployment_verified" {
+  description = "Explicit proof that the deployment-scoped Pi Code Mode sandbox was deployed by its dedicated Wrangler workflow"
+  type        = bool
+  default     = false
+}
+
+variable "pi_codemode_sandbox_deployed_version" {
+  description = "Exact Worker version ID produced by the latest verified Wrangler sandbox deployment"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.pi_codemode_sandbox_deployed_version == "" || can(regex("^[A-Za-z0-9-]{1,128}$", var.pi_codemode_sandbox_deployed_version))
+    error_message = "pi_codemode_sandbox_deployed_version must be empty or a bounded Worker version ID."
+  }
+}
+
+variable "pi_codemode_paid_canary_version" {
+  description = "Exact Worker version ID for which the paid Code Mode canary evidence was recorded"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.pi_codemode_paid_canary_version == "" || can(regex("^[A-Za-z0-9-]{1,128}$", var.pi_codemode_paid_canary_version))
+    error_message = "pi_codemode_paid_canary_version must be empty or a bounded Worker version ID."
   }
 }
 

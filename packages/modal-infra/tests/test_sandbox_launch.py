@@ -3,7 +3,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from modal.exception import NotFoundError, SandboxTimeoutError
@@ -19,7 +19,14 @@ from sandbox_runtime.constants import (
     VNC_PASSWORD_ENV_VAR,
 )
 from sandbox_runtime.types import SandboxStatus, SessionConfig
-from src.sandbox.launch import ACCESS_PASSWORD_READ_TIMEOUT_SECONDS, SandboxLauncher
+from src.sandbox.launch import (
+    ACCESS_PASSWORD_READ_TIMEOUT_SECONDS,
+    MODAL_DOMAIN_ALLOWLIST_SUPPORTED,
+    BaseImageSource,
+    SandboxLauncher,
+    SandboxLaunchSpec,
+    is_execution_runtime,
+)
 from src.sandbox.launch_policy import (
     DockerImageUnavailableError,
     InvalidDockerSettingsError,
@@ -36,11 +43,83 @@ from src.sandbox.vm_recovery import VMAllocationOutcome, VMServiceLaunch
 from tests.modal_sdk_contract import sandbox_create_request, sandbox_exec_request
 
 
+def test_execution_runtime_classification_never_depends_on_harness():
+    assert is_execution_runtime({"runtime_mode": "execution", "harness": "pi"}) is True
+    assert is_execution_runtime(SessionConfig(session_id="s", runtime_mode="execution")) is True
+    assert is_execution_runtime(SessionConfig(session_id="s")) is False
+
+
+def test_pinned_modal_sdk_keeps_execution_canary_blocked_without_domain_allowlists():
+    assert MODAL_DOMAIN_ALLOWLIST_SUPPORTED is False
+
+
+@pytest.mark.asyncio
+async def test_execution_runtime_does_not_attach_modal_model_secrets(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", _fake_create(captured))
+    monkeypatch.setattr("src.sandbox.launch.MODAL_DOMAIN_ALLOWLIST_SUPPORTED", True)
+    execution_image = object()
+    monkeypatch.setattr("src.sandbox.launch.execution_image", execution_image)
+    from_name = MagicMock(side_effect=AssertionError("model secret must not be loaded"))
+    monkeypatch.setattr("src.sandbox.launch.modal.Secret.from_name", from_name)
+
+    await SandboxLauncher().launch(
+        SandboxLaunchSpec(
+            config=SandboxConfig(
+                repo_owner=None,
+                repo_name=None,
+                clone_host="github.com",
+                clone_username="x-access-token",
+                sandbox_id="sandbox-execution",
+                sandbox_auth_token="execution-token",
+                control_plane_url="https://control.example.com",
+                session_config={
+                    "session_id": "session-1",
+                    "runtime_mode": "execution",
+                    "bridge_early_connect": True,
+                },
+                execution_policy={
+                    "artifactGeneration": 78,
+                    "networkProfile": "package-install-v1",
+                    "allowedDomains": [
+                        "control.example.com",
+                        "registry.npmjs.org",
+                        "pypi.org",
+                        "files.pythonhosted.org",
+                    ],
+                },
+            ),
+            source=BaseImageSource(),
+        )
+    )
+
+    assert captured["kwargs"]["secrets"] == []
+    assert captured["kwargs"]["image"] is execution_image
+    assert captured["kwargs"]["outbound_domain_allowlist"] == [
+        "control.example.com",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org",
+    ]
+    assert captured["command"] == (
+        "python",
+        "-m",
+        "sandbox_runtime.entrypoint",
+        "--execution-auth-stdin-v1",
+    )
+    assert "SANDBOX_AUTH_TOKEN" not in captured["kwargs"]["env"]
+    assert "VCS_HOST" not in captured["kwargs"]["env"]
+    assert "execution-token" not in repr(captured["command"])
+    captured["sandbox"].stdin.write.assert_called_once_with("execution-token\n")
+    captured["sandbox"].stdin.drain.aio.assert_awaited_once()
+    from_name.assert_not_called()
+
+
 def _fake_create(captured: dict):
     async def create_aio(*args, **kwargs):
         captured["command"] = args
         captured["kwargs"] = kwargs
-        return SimpleNamespace(
+        sandbox = SimpleNamespace(
             object_id="modal-object-1",
             tunnels=Mock(
                 return_value={
@@ -51,7 +130,10 @@ def _fake_create(captured: dict):
                 }
             ),
             filesystem=SimpleNamespace(write_text=SimpleNamespace(aio=AsyncMock())),
+            stdin=SimpleNamespace(write=MagicMock(), drain=SimpleNamespace(aio=AsyncMock())),
         )
+        captured["sandbox"] = sandbox
+        return sandbox
 
     create_aio.aio = create_aio
     return create_aio

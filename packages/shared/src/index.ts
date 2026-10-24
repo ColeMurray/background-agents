@@ -3,6 +3,16 @@
  */
 
 export * from "./types";
+export * from "./types/external-actions";
+export * from "./types/cross-session";
+export {
+  mcpSessionGrantInputSchema,
+  mcpSessionPinListSchema,
+  mcpSessionPinSchema,
+  type McpSessionGrantInput,
+  type McpSessionPin,
+  type McpSessionPinList,
+} from "./types/overlay-mcp-read";
 export * from "./git";
 export * from "./regex";
 export * from "./auth";
@@ -24,3 +34,20 @@ export * from "./slack";
 export * from "./pull-request-tool";
 export * from "./rbac";
 export * from "./trace/compaction";
+export * from "./pi-overlay-tool-effects";
+export {
+  PI_FEATURE_IDS,
+  PI_FEATURE_CAPABILITY_SNAPSHOT_VERSION,
+  createPiFeatureCapabilitySnapshot,
+  piFeatureCapabilitySnapshotSchema,
+  resolvePiFeatureCapabilities,
+  type PiFeatureCapabilityInput,
+  type PiFeatureCapabilityMatrix,
+  type PiFeatureCapabilitySnapshot,
+  type PiFeatureId,
+} from "./pi-overlay-feature-capabilities";
+export * from "./migration-reservations";
+export * from "./capability-modes";
+export * from "./tool-effects";
+export * from "./deployment-capabilities";
+export * from "./slack-ingress";

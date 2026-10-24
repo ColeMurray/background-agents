@@ -123,6 +123,26 @@ describe("AutomationStore (D1 integration)", () => {
       expect(result!.consecutive_failures).toBe(0);
     });
 
+    it("persists enabled in-process automations with a rollback-safe marker", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(
+        makeAutomation({
+          id: "pi-automation",
+          harness: "pi",
+          model: "openai/gpt-5.6-sol",
+          enabled: 1,
+        })
+      );
+
+      await expect(
+        env.DB.prepare("SELECT enabled FROM automations WHERE id = 'pi-automation'").first<{
+          enabled: number;
+        }>()
+      ).resolves.toEqual({ enabled: 2 });
+      expect(toAutomation((await store.getById("pi-automation"))!, [], [], []).enabled).toBe(true);
+      await expect(store.countOverdue(Date.now() + 2 * 86_400_000)).resolves.toBe(1);
+    });
+
     it("stores and retrieves user_id", async () => {
       const store = new AutomationStore(env.DB);
       await store.create(makeAutomation({ id: "auto-uid", user_id: "canonical-user-1" }));

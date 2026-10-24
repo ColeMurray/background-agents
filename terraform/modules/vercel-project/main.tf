@@ -2,9 +2,12 @@
 # Creates and configures Vercel projects with environment variables
 
 resource "vercel_project" "this" {
-  name      = var.project_name
-  team_id   = var.team_id
-  framework = var.framework
+  name    = var.project_name
+  team_id = var.team_id
+
+  # Keep framework and function regions in each package's vercel.json. The
+  # provider validates those attributes through remote catalog APIs, which
+  # makes otherwise mocked plans depend on Vercel's network availability.
 
   git_repository = var.git_repository != null ? {
     type              = var.git_repository.type
@@ -12,13 +15,11 @@ resource "vercel_project" "this" {
     production_branch = var.git_repository.production_branch
   } : null
 
-  root_directory             = var.root_directory
-  build_command              = var.build_command
-  output_directory           = var.output_directory
-  install_command            = var.install_command
-  ignore_command             = var.ignore_command
-  serverless_function_region = var.serverless_region
-
+  root_directory   = var.root_directory
+  build_command    = var.build_command
+  output_directory = var.output_directory
+  install_command  = var.install_command
+  ignore_command   = var.ignore_command
   # Enable automatic deployments
   auto_assign_custom_domains = var.auto_assign_custom_domains
 }

@@ -55,8 +55,12 @@ describe("publishAppHome model availability", () => {
 
       await publishAppHome(env, "U123");
 
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(String(fetch.mock.calls[0][0])).toBe("https://internal/model-preferences?strict=true");
+      expect(fetch.mock.calls.map(([input]) => String(input))).toContain(
+        "https://internal/model-preferences?strict=true"
+      );
+      expect(fetch.mock.calls.map(([input]) => String(input))).toContain(
+        "https://internal/capabilities"
+      );
       const view = vi.mocked(publishView).mock.calls[0][2] as AppHomeView;
       const texts = view.blocks
         .flatMap((block) =>

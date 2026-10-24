@@ -36,18 +36,32 @@ export class SessionDiffStore {
   constructor(private readonly sql: SqlStorage) {}
 
   /** Atomically replace the current bundle and clear any prior refresh failure. */
-  replaceBundle(bundle: SessionDiffUpload, revisionId: string, now: number): void {
+  replaceBundle(bundle: SessionDiffUpload, revisionId: string, now: number): string {
     storedSessionDiffBundleSchema.parse({ ...bundle, revisionId });
+    if (bundle.publicationGeneration !== undefined) {
+      const row = this.readRow() as {
+        revision_id?: unknown;
+        pi_publication_generation?: unknown;
+      } | null;
+      const currentGeneration = row?.pi_publication_generation;
+      if (
+        typeof currentGeneration === "number" &&
+        currentGeneration >= bundle.publicationGeneration
+      ) {
+        return typeof row?.revision_id === "string" ? row.revision_id : revisionId;
+      }
+    }
     this.sql.exec(
       `INSERT INTO session_diff (
          singleton, revision_id, trigger_message_id, bundle_json, captured_at,
-         last_error, error_at, updated_at
-       ) VALUES (1, ?, ?, ?, ?, NULL, NULL, ?)
+         pi_publication_generation, last_error, error_at, updated_at
+       ) VALUES (1, ?, ?, ?, ?, ?, NULL, NULL, ?)
        ON CONFLICT(singleton) DO UPDATE SET
          revision_id = excluded.revision_id,
          trigger_message_id = excluded.trigger_message_id,
-         bundle_json = excluded.bundle_json,
-         captured_at = excluded.captured_at,
+          bundle_json = excluded.bundle_json,
+          captured_at = excluded.captured_at,
+          pi_publication_generation = excluded.pi_publication_generation,
          last_error = NULL,
          error_at = NULL,
          updated_at = excluded.updated_at`,
@@ -55,8 +69,10 @@ export class SessionDiffStore {
       bundle.triggerMessageId,
       JSON.stringify(bundle),
       bundle.capturedAt,
+      bundle.publicationGeneration ?? null,
       now
     );
+    return revisionId;
   }
 
   /** Retain the current bundle while recording the latest refresh failure. */

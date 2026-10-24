@@ -53,6 +53,7 @@ import {
   type StopResult,
   type VncAccess,
 } from "../provider";
+import { secureExecutionSandboxConfig } from "../execution-isolation";
 
 const log = createLogger("daytona-provider");
 
@@ -89,6 +90,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     supportsRestore: false,
     supportsPersistentResume: true,
     supportsExplicitStop: true,
+    executionIsolation: "canary_blocked",
   };
 
   constructor(
@@ -101,6 +103,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   // -----------------------------------------------------------------------
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    config = secureExecutionSandboxConfig(config, this.name, this.capabilities);
     try {
       // A prebuilt image id is a Daytona snapshot; spawn from it in place of
       // the base image. Selection is the control plane's (image-selection.ts);

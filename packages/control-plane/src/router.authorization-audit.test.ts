@@ -21,6 +21,7 @@ import {
   fakeSessionRuntimeDispatch,
   TEST_BACKGROUND_TASK_CONTEXT,
 } from "./router.test-support";
+import { SessionInternalPaths } from "./session/contracts";
 
 const mocks = vi.hoisted(() => ({ authenticate: vi.fn() }));
 
@@ -220,7 +221,11 @@ function createEnv(options?: {
     env: {
       DB: db,
       SCM_PROVIDER: "github",
-      SESSION: fakeSessionRuntimeDispatch(async () => new Response(null, { status: 204 })),
+      SESSION: fakeSessionRuntimeDispatch(async (request) =>
+        new URL(request.url).pathname === SessionInternalPaths.verifySandboxToken
+          ? Response.json({ sandboxId: "sandbox-1", credentialClass: "agent" })
+          : new Response(null, { status: 204 })
+      ),
     } as never,
     auditWrites,
   };

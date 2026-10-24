@@ -277,4 +277,19 @@ describe("ProviderAuthControls harness capabilities", () => {
 
     expect(screen.getByRole("combobox")).toHaveTextContent("Owner Claude");
   });
+
+  it("does not offer API-key mode when Pi requires a connected account", async () => {
+    render(
+      <ProviderAuthControls
+        provider="openai"
+        harness="pi"
+        accounts={[account]}
+        onChange={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: /Team ChatGPT/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "No account" })).not.toBeInTheDocument();
+  });
 });

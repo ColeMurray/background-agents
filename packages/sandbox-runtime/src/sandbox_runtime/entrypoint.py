@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import secrets
 import signal
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .agent_bridge_process import AgentBridgeProcess
@@ -15,8 +18,12 @@ from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
 from .codex_stager import CodexStager, resolve_codex_config_dir
+from .command_runner import CommandIdentity, CommandRunner
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .docker_service import DockerService
+from .execution_auth import read_execution_auth_token
+from .execution_bridge import ExecutionBridge, ExecutionBridgeOwner
+from .execution_isolation import prepare_execution_host, validate_execution_environment
 from .harness.base import HarnessId, HarnessProcessOwner
 from .image_build_context_start import (
     IMAGE_BUILD_CONTEXT_START_ARGUMENT,
@@ -34,14 +41,13 @@ from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
 from .repository_hooks import RepositoryHooks
 from .repository_sync import RepositorySynchronizer
-from .runtime_config import RuntimeConfig
+from .runtime_config import RuntimeConfig, RuntimeMode
 from .supervisor import SandboxSupervisor
 from .tunnel_environment import TunnelEnvironment
 from .web_terminal import WebTerminal
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
     from .repo_config import RepoEntry
 
@@ -56,6 +62,8 @@ def build_harness_process(
     claude_config_dir: Path | None,
 ) -> HarnessProcessOwner:
     """The supervisor-half registry: pick the process owner for the session's harness."""
+    if config.runtime_mode is RuntimeMode.EXECUTION:
+        return DormantHarnessProcess()
     match config.harness:
         case HarnessId.OPENCODE:
             return OpenCodeServer(
@@ -81,6 +89,22 @@ def build_harness_process(
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 
+class DormantHarnessProcess:
+    """Process-owner seam for execution sandboxes, which intentionally have no harness."""
+
+    async def start(self, _repositories: Any, _workdir: Any) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def wait(self) -> int | None:
+        return None
+
+    def exit_code(self) -> int | None:
+        return None
+
+
 def claude_config_dir_for(
     config: RuntimeConfig, repositories: Sequence[RepoEntry], log: Any
 ) -> Path | None:
@@ -89,7 +113,7 @@ def claude_config_dir_for(
     Managed skills and memory are materialized before the stager runs, so all
     take the directory from here rather than deciding separately.
     """
-    if config.harness is not HarnessId.CLAUDE:
+    if config.runtime_mode is RuntimeMode.EXECUTION or config.harness is not HarnessId.CLAUDE:
         return None
     return isolated_claude_config_dir(
         resolve_claude_config_dir(), config.workspace_path, repositories, log
@@ -119,6 +143,9 @@ def _build_memory(
     config: RuntimeConfig, claude_config_dir: Path | None, log: Any
 ) -> MemoryMaterializer | None:
     """Session memory needs the control plane; without one the harness starts with none."""
+    if config.runtime_mode is RuntimeMode.EXECUTION:
+        log.info("memory.disabled", reason="execution_runtime")
+        return None
     if not (config.control_plane_url and config.session_id):
         log.info("memory.disabled", reason="no_control_plane_session")
         return None
@@ -133,10 +160,28 @@ def _build_memory(
     )
 
 
-def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
+def build_supervisor(
+    shutdown_event: asyncio.Event, *, execution_auth_token: str | None = None
+) -> SandboxSupervisor:
     """Consume process secrets and compose the production runtime."""
     apply_image_environment()
-    config = RuntimeConfig.from_env(os.environ)
+    config = (
+        RuntimeConfig.from_env(os.environ)
+        if execution_auth_token is None
+        else RuntimeConfig.from_env(os.environ, sandbox_token_override=execution_auth_token)
+    )
+    if config.runtime_mode is RuntimeMode.EXECUTION and execution_auth_token is None:
+        raise RuntimeError("Execution runtime requires auth over its inherited descriptor")
+    if config.runtime_mode is not RuntimeMode.EXECUTION and execution_auth_token is not None:
+        raise RuntimeError("Execution auth cannot start an agent runtime")
+    if config.runtime_mode is RuntimeMode.EXECUTION:
+        validate_execution_environment(dict(os.environ))
+        if set(config.session_config) != {
+            "session_id",
+            "runtime_mode",
+            "bridge_early_connect",
+        }:
+            raise RuntimeError("Execution SESSION_CONFIG contains forbidden product state")
     vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
     if vnc_password:
         os.environ["DISPLAY"] = VNC_DISPLAY
@@ -158,7 +203,11 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     claude_config_dir = claude_config_dir_for(config, repository_boot.repositories, log)
     managed_skills_config = config.managed_skills_config()
     managed_skills = None
-    if managed_skills_config.control_plane_url and managed_skills_config.session_id:
+    if (
+        config.runtime_mode is RuntimeMode.AGENT
+        and managed_skills_config.control_plane_url
+        and managed_skills_config.session_id
+    ):
         managed_skills = ManagedSkillsMaterializer(
             ManagedSkillsClient(
                 managed_skills_config.control_plane_url,
@@ -171,7 +220,25 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     harness_process = build_harness_process(
         config, shutdown_event, log, warnings, claude_config_dir
     )
-    agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
+    if config.runtime_mode is RuntimeMode.EXECUTION:
+        uid, gid, home = prepare_execution_host(config.workspace_path)
+        execution_bridge = ExecutionBridge(
+            sandbox_id=config.sandbox_id,
+            session_id=config.session_id,
+            control_plane_url=config.control_plane_url,
+            auth_token=config.sandbox_token,
+            bridge_instance_id=secrets.token_hex(16),
+            runner=CommandRunner(
+                config.workspace_path,
+                lambda event: execution_bridge._send_event(event),
+                log,
+                identity=CommandIdentity(uid=uid, gid=gid, home=home),
+                process_group_registry_path=Path("/run/open-inspect/execution-process-groups.json"),
+            ),
+        )
+        agent_bridge = ExecutionBridgeOwner(execution_bridge)
+    else:
+        agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
     code_server = CodeServer(log)
     web_terminal = WebTerminal(log)
     browser_desktop = BrowserDesktop(log, password=vnc_password)
@@ -206,6 +273,7 @@ async def main(argv: list[str] | None = None) -> int:
         dest="await_modal_image_build_token",
         action="store_true",
     )
+    parser.add_argument("--execution-auth-stdin-v1", action="store_true")
     parser.add_argument(
         IMAGE_BUILD_CONTEXT_START_ARGUMENT,
         dest="await_image_build_context",
@@ -222,7 +290,10 @@ async def main(argv: list[str] | None = None) -> int:
     if deferred_start_requested(os.environ):
         return await run_deferred_start()
 
-    supervisor = build_supervisor(asyncio.Event())
+    execution_auth_token = (
+        read_execution_auth_token(sys.stdin.buffer) if args.execution_auth_stdin_v1 else None
+    )
+    supervisor = build_supervisor(asyncio.Event(), execution_auth_token=execution_auth_token)
     install_signal_handlers(supervisor)
     if not args.await_modal_image_build_token:
         await supervisor.run()

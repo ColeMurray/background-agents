@@ -14,3 +14,43 @@ describe("sandbox artifact ingress", () => {
     expect(sandboxEventSchema.safeParse({ ...event, artifactType: "file" }).success).toBe(true);
   });
 });
+
+describe("sandbox command execution ingress", () => {
+  it("identifies an execution-only ready event without an agent harness", () => {
+    const parsed = sandboxIngressEventSchema.safeParse({
+      type: "ready",
+      sandboxId: "sandbox-1",
+      timestamp: 1,
+      runtimeMode: "execution",
+      bridgeInstanceId: "bridge-1",
+      bridgeRestarted: true,
+      opencodeSessionId: null,
+    });
+    expect(parsed.success && parsed.data).toMatchObject({
+      runtimeMode: "execution",
+      bridgeInstanceId: "bridge-1",
+      bridgeRestarted: true,
+    });
+  });
+
+  it.each(["command_started", "command_output", "command_completed"] as const)(
+    "admits %s through the canonical sandbox event boundary",
+    (type) => {
+      const base = { type, commandId: "cmd-1", sandboxId: "sandbox-1", timestamp: 1 };
+      const executionEvent =
+        type === "command_output"
+          ? { ...base, sequence: 0, stream: "stdout", data: "ok\n" }
+          : type === "command_completed"
+            ? {
+                ...base,
+                outcome: "succeeded",
+                exitCode: 0,
+                signal: null,
+                lastSequence: 0,
+              }
+            : base;
+      expect(sandboxIngressEventSchema.safeParse(executionEvent).success).toBe(true);
+      expect(sandboxEventSchema.safeParse(executionEvent).success).toBe(true);
+    }
+  );
+});

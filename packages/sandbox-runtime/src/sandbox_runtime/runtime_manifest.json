@@ -1,9 +1,10 @@
 {
-  "runtimeVersion": "v76-child-output-discovery",
-  "generation": 76,
+  "runtimeVersion": "v78-execution-isolation-boundary",
+  "generation": 78,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 76,
+  "minimumRebuildGeneration": 78,
+  "executionMinimumGeneration": 78,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,

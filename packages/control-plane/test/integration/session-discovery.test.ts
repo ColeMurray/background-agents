@@ -483,7 +483,7 @@ describe("session discovery search (D1)", () => {
 
     const searchPlan = await explain(
       { excludeStatus: "archived", search: "plan' OR 1=1 --", viewerUserId: ALICE },
-      ["archived", "%plan%", "plan%", "%plan%", "%plan%", 51, 0, ALICE],
+      ["archived", "durable_archived", "%plan%", "plan%", "%plan%", "%plan%", 51, 0, ALICE],
       "search-only"
     );
     expect(searchPlan).toMatch(/SCAN sessions USING INDEX idx_sessions_updated_at/);
@@ -498,7 +498,7 @@ describe("session discovery search (D1)", () => {
         repository: { repoOwner: "nobody", repoName: "nothing" },
         viewerUserId: ALICE,
       },
-      ["archived", "nobody", "nothing", "nobody", "nothing", 51, 0, ALICE],
+      ["archived", "durable_archived", "nobody", "nothing", "nobody", "nothing", 51, 0, ALICE],
       "no-match repository",
       { sortsCandidates: true }
     );
@@ -519,6 +519,7 @@ describe("session discovery search (D1)", () => {
       },
       [
         "archived",
+        "durable_archived",
         ALICE,
         "env-1",
         "user",

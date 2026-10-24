@@ -26,7 +26,8 @@ export function SessionTargetPicker({
   repositoryGrantError,
   selectionError,
   disabled,
-}: SessionTargetPickerProps & { disabled: boolean }) {
+  checkoutLayout = "name",
+}: SessionTargetPickerProps & { disabled: boolean; checkoutLayout?: "name" | "position" }) {
   return (
     <>
       {/* Target selector */}
@@ -78,6 +79,7 @@ export function SessionTargetPicker({
               : sessionTarget.repoFullNames.join(", ")
           }
           triggerClassName="max-w-[16rem] border-0 bg-transparent px-0 py-0 text-sm text-muted-foreground hover:text-foreground"
+          checkoutLayout={checkoutLayout}
         />
       )}
 

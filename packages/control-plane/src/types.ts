@@ -8,6 +8,9 @@ import type { Jobs } from "./jobs";
 import type { FetchClient, QueueMetricsSource } from "./platform-ports";
 import type { SessionRuntimeDispatch } from "./session/runtime-client";
 import type { ObjectStorage } from "./storage/object-storage";
+import type { PiRuntimeDispatch } from "./pi/runtime-contract";
+import type { McpConnectionBrokerDispatch } from "./mcp/broker-contract";
+import type { PiBrowserTransport } from "./pi/browser-transport";
 
 /**
  * The deployment's configuration: variables and secrets, every one a string,
@@ -22,6 +25,7 @@ export interface EnvConfig {
   BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   PROVIDER_ACCOUNTS_ENCRYPTION_KEY: string;
+  MCP_OAUTH_ENCRYPTION_KEY?: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
   MODAL_TOKEN_SECRET?: string;
@@ -101,6 +105,23 @@ export interface EnvConfig {
   EXECUTION_TIMEOUT_MS?: string; // Max processing time for one message before auto-fail, for sessions and for the automation runs watching them; overridden per session by sandboxTimeoutMs, and falls back to DEFAULT_SANDBOX_TIMEOUT_SECONDS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
   TEAMS_ENFORCEMENT?: string; // "off" | "shadow" (default) | "on"
+  PI_DURABLE_ENABLED?: string; // "true" enables the optional PiSessionDO runtime
+  PI_SCRATCH_WORKSPACE_MODE?: string; // Session scratch VFS capability; not the Open-Inspect workspace
+  /** @deprecated The scratch VFS was renamed; use PI_SCRATCH_WORKSPACE_MODE. */
+  PI_WORKSPACE_MODE?: string; // Creation admission plus live scratch-mutation emergency deny; supports "writable" as "enabled"
+  PI_REPOSITORY_EDITING_MODE?: string; // Creation admission plus live repository-mutation emergency deny
+  PI_CODE_MODE?: string; // Creation admission plus live deny for top-level calls still in Pi's call phase
+  PI_SANDBOX_EXECUTION_MODE?: string; // Creation admission plus live deny for new execution calls
+  PI_SANDBOX_EXECUTION_ATTESTATION?: string; // Generation/artifact provider canary evidence
+  PI_EXTERNAL_ACTIONS_MODE?: string; // New-session admission only
+  PI_EXTERNAL_ACTION_PROVIDERS?: string; // Comma-separated providers this deployment may publish through
+  LINEAR_API_KEY?: string; // Optional Linear API key used for a comment-posting publication
+  PI_MCP_MODE?: string; // New-session admission only
+  PI_CROSS_SESSION_MESSAGING_MODE?: string; // New-session admission only
+  PI_BROWSER_MODE?: string; // New-session admission only
+  PI_BROWSER_ALLOWED_DOMAINS?: string; // Comma-separated hosts the browser may reach
+  PI_MEMORY_MODE?: string; // New-session admission only; "read_only" withholds the memory write
+  MCP_CONNECTIONS_ENABLED?: string; // "true" enables staging personal MCP OAuth connections
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")
@@ -117,6 +138,10 @@ export interface Platform {
   DB: SqlDatabase;
   /** Delivery to session runtimes, addressed by session id. */
   SESSION: SessionRuntimeDispatch;
+  /** Optional sandbox-free Pi Durable runtime. Absent unless explicitly deployed. */
+  PI_SESSION?: PiRuntimeDispatch;
+  /** Dormant per-connection broker identity/lifecycle port. */
+  MCP_CONNECTION?: McpConnectionBrokerDispatch;
   /** Short-lived cache for the /repos listing. */
   REPOS_CACHE: CacheStore;
   /** Media artifacts: screenshots, uploads, session media. */
@@ -130,6 +155,14 @@ export interface Platform {
   AUTOFIX_DLQ?: QueueMetricsSource;
   /** Durable background work supplied by every host. */
   JOBS: Jobs;
+  /**
+   * The session's browser, when the deployment stages one.
+   *
+   * It is a port, not a binding: the owning session holds it, the session's
+   * browser gateway authorizes every request and then drives it, and the
+   * agent never receives it.
+   */
+  BROWSER?: PiBrowserTransport;
 }
 
 /** What the application runs against: its configuration and the platform ports. */

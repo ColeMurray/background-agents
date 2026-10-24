@@ -12,6 +12,7 @@ import type { SessionTitleService } from "../../title-service";
 import { resolvePublicSessionId } from "../../public-session-id";
 import { normalizeSessionTitle, type SessionTitleUpdateResult } from "../../title";
 import { z } from "zod";
+import type { InProcessHarnessRuntime } from "../../../harness/in-process-runtime";
 import { isSessionInactive } from "@open-inspect/shared/types/session-activity";
 
 /**
@@ -68,7 +69,13 @@ export class SessionLifecycleHandler {
     private readonly titleService: SessionTitleService,
     private readonly sandboxLifecycle: SandboxCancellation,
     private readonly durableObjectId: string,
-    private readonly cancelSession: () => Promise<void>
+    private readonly cancelSession: () => Promise<void>,
+    private readonly inProcessLifecycle:
+      | Pick<
+          InProcessHarnessRuntime,
+          "harness" | "preserveForArchive" | "restoreFromArchive" | "destroy"
+        >
+      | undefined
   ) {}
 
   getState(): Response {
@@ -164,9 +171,15 @@ export class SessionLifecycleHandler {
 
     // Commit archived before starting preservation, but do not await its index
     // projection: reconnects must see draining in the same turn.
+    const ownsInProcessRuntime = this.inProcessLifecycle?.harness === session.harness;
     await Promise.all([
       this.statusService.beginTransition("archived"),
-      this.sandboxLifecycle.preserveForArchive(),
+      ...(ownsInProcessRuntime && !this.sandboxRepository.getSandbox()
+        ? []
+        : [this.sandboxLifecycle.preserveForArchive()]),
+      ...(ownsInProcessRuntime
+        ? [this.inProcessLifecycle.preserveForArchive(session.session_name || session.id)]
+        : []),
     ]);
     try {
       await this.statusService.confirmIndexStatus("archived");
@@ -247,6 +260,9 @@ export class SessionLifecycleHandler {
     // not exist, and no settle path would ever correct it — they all run off
     // execution events, so an idle session sat in the in-progress group until
     // someone prompted it again.
+    if (this.inProcessLifecycle?.harness === session.harness) {
+      await this.inProcessLifecycle.restoreFromArchive(session.session_name || session.id);
+    }
     const settled = await this.statusService.settleFromMessageState();
 
     return Response.json({ status: settled });
@@ -264,8 +280,26 @@ export class SessionLifecycleHandler {
 
     await this.cancelSession();
 
-    await this.sandboxLifecycle.cancelSandbox();
+    if (
+      this.inProcessLifecycle?.harness !== session.harness ||
+      this.sandboxRepository.getSandbox()
+    ) {
+      await this.sandboxLifecycle.cancelSandbox();
+    }
 
     return Response.json({ status: "cancelled" });
+  }
+
+  /** Destroy runtime-owned state before the global index forgets the session. */
+  async destroy(): Promise<Response> {
+    const session = this.sessionCoreRepository.getSession();
+    if (!session) return Response.json({ status: "absent" });
+    const sessionId = session.session_name || session.id;
+    if (this.inProcessLifecycle?.harness === session.harness) {
+      await this.inProcessLifecycle.destroy(sessionId);
+    } else if (this.sandboxRepository.getSandbox()) {
+      await this.sandboxLifecycle.cancelSandbox();
+    }
+    return Response.json({ status: "destroyed" });
   }
 }

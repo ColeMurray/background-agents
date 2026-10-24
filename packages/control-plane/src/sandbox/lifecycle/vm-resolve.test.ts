@@ -281,7 +281,7 @@ describe("modal-vm startup resolution", () => {
     const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
     manager.onSandboxSocketAttached(generation);
     await vi.waitFor(() => expect(f.store.read()?.phase).toBe("running"));
-    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     manager.onShutdownGenerationReady({
       type: "sandbox_generation_ready",
       generation,
@@ -394,7 +394,7 @@ describe("modal-vm startup resolution", () => {
     expect(f.backgroundTasks.submit).toHaveBeenCalledWith(expect.any(Function), {
       name: "sandbox.vm_resolve",
     });
-    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     await vi.waitFor(() => expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce());
     expect(f.sandbox.modal_object_id).not.toBe("sb-real");
     expect(f.client.resolveVmSandbox).toHaveBeenCalledOnce();
@@ -594,7 +594,7 @@ describe("modal-vm startup resolution", () => {
     await vi.waitFor(() => expect(f.sandbox.modal_object_id).toBe("sb-real"));
     expect(f.store.read()).toMatchObject({ phase: "restoring", restoreInvoked: true });
 
-    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(manager.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     f.sandbox.status = "ready";
     manager.onShutdownGenerationReady({
       type: "sandbox_generation_ready",
@@ -678,7 +678,7 @@ describe("modal-vm startup resolution", () => {
     const restarted = f.makeManager();
     const generation = { sandboxId: f.sandbox.modal_sandbox_id!, createdAt: f.sandbox.created_at };
     restarted.onSandboxSocketAttached(generation);
-    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     await vi.advanceTimersByTimeAsync(25_000);
     expect(f.client.resolveVmSandbox).toHaveBeenCalledTimes(3);
     expect(f.sandbox.modal_object_id).toBe("sb-real");
@@ -717,7 +717,7 @@ describe("modal-vm startup resolution", () => {
       sandboxId: f.sandbox.modal_sandbox_id!,
       createdAt: f.sandbox.created_at,
     });
-    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe(true);
+    expect(restarted.onRuntimeReady(Date.now(), undefined, 1)).toBe("became_ready");
     await vi.advanceTimersByTimeAsync(PENDING_VM_REFERENCE_MATERIALIZE_BOUND_MS + 20_000);
     const attempts = f.client.resolveVmSandbox.mock.calls.length;
     await vi.advanceTimersByTimeAsync(30_000);

@@ -40,6 +40,56 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
+  it("persists promptable in-process rows with a rollback-safe status marker", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: "pi-session",
+      ownerTeamId: null,
+      visibility: "workspace",
+      title: "Pi",
+      repoOwner: null,
+      repoName: null,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "created",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await expect(
+      env.DB.prepare("SELECT status FROM sessions WHERE id = 'pi-session'").first<{
+        status: string;
+      }>()
+    ).resolves.toEqual({ status: "durable_created" });
+    await expect(store.get("pi-session")).resolves.toMatchObject({ status: "created" });
+
+    expect(await store.updateStatus("pi-session", "active", now + 1)).toBe(true);
+    await expect(
+      env.DB.prepare("SELECT status FROM sessions WHERE id = 'pi-session'").first<{
+        status: string;
+      }>()
+    ).resolves.toEqual({ status: "durable_active" });
+    await expect(store.get("pi-session")).resolves.toMatchObject({ status: "active" });
+
+    expect(await store.updateStatus("pi-session", "completed", now + 2)).toBe(true);
+    await expect(
+      env.DB.prepare("SELECT status FROM sessions WHERE id = 'pi-session'").first<{
+        status: string;
+      }>()
+    ).resolves.toEqual({ status: "durable_completed" });
+    await expect(store.get("pi-session")).resolves.toMatchObject({ status: "completed" });
+
+    expect(await store.updateStatus("pi-session", "active", now + 3)).toBe(true);
+    await expect(
+      env.DB.prepare("SELECT status FROM sessions WHERE id = 'pi-session'").first<{
+        status: string;
+      }>()
+    ).resolves.toEqual({ status: "durable_active" });
+  });
+
   it("atomically snapshots provider auth with the session", async () => {
     const store = new SessionIndexStore(env.DB);
     const now = Date.now();

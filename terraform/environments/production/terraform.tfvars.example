@@ -209,6 +209,8 @@ google_client_secret = ""
 # Set enable_slack_bot = false to skip deployment.
 
 enable_slack_bot = false
+# Keep durable D1 + Queue ingress off until its personal-workspace canary passes.
+pi_slack_durable_ingress_enabled = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
@@ -323,6 +325,34 @@ nextauth_secret = ""
 # - "boat": direct Boat REST API integration with stop/resume (archived snapshot)
 # Select "modal-vm" for Docker-capable VMs (deployment-wide; see docs/MODAL_DOCKER.md).
 sandbox_provider = "modal"
+
+# Pi's credential-free durable scratch filesystem: "off", "read_only", or
+# "writable". Writable remains VFS-only: no shell, Git, network, mounts, or
+# publishing. Keep off unless you explicitly accept Cloudflare Computer's
+# preview status. Each Pi session snapshots this capability on first open.
+# pi_workspace_mode = "off"
+# Required before either workspace or repository editing is enabled.
+# pi_computer_preview_acknowledged = false
+# Native Pi Durable Code Mode is separately billed. Its dedicated Wrangler
+# workflow owns the Worker, v1 migration, WASM, and fixed 60000 ms CPU limit.
+# pi_codemode_mode = "off"
+# pi_codemode_sandbox_deployment_verified = false
+# pi_codemode_paid_canary_verified = false
+# pi_codemode_sandbox_deployed_version = ""
+# pi_codemode_paid_canary_version = ""
+
+# Independent repository overlay/edit/diff capability: "off" or "enabled".
+# It reuses the canonical workspace FIFO, policy, redaction, and scratch quota.
+# pi_repository_editing_mode = "off"
+
+# MCP capabilities are independent and off by default. PI_MCP_MODE controls the
+# deployment-reviewed shared lane. Personal OAuth connections additionally need
+# a staged McpConnectionDO class migration and a dedicated AES-256 key.
+pi_mcp_mode                       = "off"
+mcp_connection_foundation_enabled = false
+mcp_connection_binding_enabled    = false # workflow-managed after migration
+mcp_connections_enabled           = false
+mcp_oauth_encryption_key          = "" # openssl rand -base64 32 before foundation=true
 
 # Platform for the web app deployment
 # - "vercel": deploy the Next.js app to Vercel (requires vercel_api_token + vercel_team_id)

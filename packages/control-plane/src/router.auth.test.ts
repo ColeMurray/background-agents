@@ -13,10 +13,15 @@ function routeFor(method: string, path: string) {
   return matchRoute(routes, method, path)?.route;
 }
 
-function createEnv(verifyStatus: number) {
+function createEnv(verifyStatus: number, credentialClass: "agent" | "execution" = "agent") {
   const fetch = vi
     .fn()
-    .mockResolvedValueOnce(new Response(null, { status: verifyStatus }))
+    .mockResolvedValueOnce(
+      Response.json(
+        { sandboxId: "sandbox-1", credentialClass },
+        { status: verifyStatus === 204 ? 200 : verifyStatus }
+      )
+    )
     .mockResolvedValueOnce(Response.json({ ok: true }, { status: 202 }));
   const statement = {
     bind: vi.fn(() => statement),
@@ -73,6 +78,22 @@ describe("router sandbox-token fallback", () => {
     );
 
     expect(response.status).toBe(401);
+  });
+
+  it("rejects execution credentials from SCM and other ordinary sandbox routes", async () => {
+    const { env, doFetch } = createEnv(200, "execution");
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/scm-credentials", {
+        method: "POST",
+        headers: { Authorization: "Bearer execution-token" },
+      }),
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
+    );
+
+    expect(response.status).toBe(401);
+    expect(doFetch).toHaveBeenCalledOnce();
   });
 
   it("rejects unrecognized credentials on a non-sandbox route without trying sandbox auth", async () => {

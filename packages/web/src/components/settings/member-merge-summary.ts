@@ -31,6 +31,7 @@ const DETAIL: CountEffect = { kind: "detail" };
  * cannot reach administrators without someone deciding what it means.
  */
 const COUNT_EFFECTS: Record<UserMergeCountKey, CountEffect> = {
+  slackIngressActorsRepointed: REATTRIBUTED,
   identitiesRepointed: moved("linked sign-in", "linked sign-ins"),
   sessionsRepointed: moved("session", "sessions"),
   automationsOwnedRepointed: moved("automation", "automations"),

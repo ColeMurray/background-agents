@@ -16,10 +16,10 @@ it("a delayed archive projection cannot overwrite a successful equal-timestamp u
   try {
     await db
       .prepare(
-        "CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, updated_at INTEGER, status_revision INTEGER NOT NULL DEFAULT 0)"
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, updated_at INTEGER, status_revision INTEGER NOT NULL DEFAULT 0, harness TEXT)"
       )
       .run();
-    await db.prepare("INSERT INTO sessions VALUES ('one', 'completed', 5000, 0)").run();
+    await db.prepare("INSERT INTO sessions VALUES ('one', 'completed', 5000, 0, 'opencode')").run();
     const storage = createNodeSqlStorage(sqlite);
     initSchema(storage.sql);
     storage.sql.exec(

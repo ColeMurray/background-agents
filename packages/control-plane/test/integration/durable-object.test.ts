@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
-import { MIGRATIONS } from "../../src/session/schema";
+import { sessionMigrations } from "../../src/session/schema";
 
 describe("SessionDO Durable Object", () => {
   it("returns 404 for uninitialized session state", async () => {
@@ -106,7 +106,7 @@ describe("SessionDO Durable Object", () => {
         .toArray() as Array<{ id: number }>;
 
       const ids = rows.map((r) => r.id);
-      expect(ids).toEqual(MIGRATIONS.map((migration) => migration.id));
+      expect(ids).toEqual(sessionMigrations().map((migration) => migration.id));
     });
   });
 

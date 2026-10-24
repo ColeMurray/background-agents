@@ -72,6 +72,12 @@ module "control_plane_worker" {
     } : {}
   )
 
+  # The browser binding is opt-in. A deployment without it has no
+  # browser at all, and the browser capability stays unavailable.
+  browser_bindings = var.pi_browser_mode == "off" ? {} : {
+    BROWSER = {}
+  }
+
   service_bindings = merge(
     var.enable_slack_bot ? {
       SLACK_BOT = {
@@ -89,20 +95,34 @@ module "control_plane_worker" {
 
   plain_text_bindings = merge(
     {
-      WEB_APP_URL                   = { value = local.web_app_url }
-      ALLOWED_USERS                 = { value = var.allowed_users }
-      ALLOWED_EMAIL_DOMAINS         = { value = var.allowed_email_domains }
-      ALLOWED_EMAILS                = { value = var.allowed_emails }
-      ALLOWED_GITHUB_ORGS           = { value = var.allowed_github_orgs }
-      UNSAFE_ALLOW_ALL_USERS        = { value = tostring(var.unsafe_allow_all_users) }
-      WORKER_URL                    = { value = local.control_plane_url }
-      DEPLOYMENT_NAME               = { value = var.deployment_name }
-      APP_NAME                      = { value = var.app_name }
-      GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
-      SANDBOX_PROVIDER              = { value = var.sandbox_provider }
-      SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
-      SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
-      TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
+      WEB_APP_URL                      = { value = local.web_app_url }
+      ALLOWED_USERS                    = { value = var.allowed_users }
+      ALLOWED_EMAIL_DOMAINS            = { value = var.allowed_email_domains }
+      ALLOWED_EMAILS                   = { value = var.allowed_emails }
+      ALLOWED_GITHUB_ORGS              = { value = var.allowed_github_orgs }
+      UNSAFE_ALLOW_ALL_USERS           = { value = tostring(var.unsafe_allow_all_users) }
+      WORKER_URL                       = { value = local.control_plane_url }
+      DEPLOYMENT_NAME                  = { value = var.deployment_name }
+      APP_NAME                         = { value = var.app_name }
+      GITHUB_BOT_USERNAME              = { value = var.github_bot_username }
+      SANDBOX_PROVIDER                 = { value = var.sandbox_provider }
+      SANDBOX_INACTIVITY_TIMEOUT_MS    = { value = tostring(var.sandbox_inactivity_timeout_ms) }
+      SANDBOX_BOOT_TIMEOUT_MS          = { value = tostring(var.sandbox_boot_timeout_ms) }
+      TEAMS_ENFORCEMENT                = { value = var.teams_enforcement }
+      PI_DURABLE_ENABLED               = { value = tostring(local.pi_durable_available) }
+      PI_SCRATCH_WORKSPACE_MODE        = { value = var.pi_scratch_workspace_mode }
+      PI_REPOSITORY_EDITING_MODE       = { value = var.pi_repository_editing_mode }
+      PI_SANDBOX_EXECUTION_MODE        = { value = var.pi_sandbox_execution_mode }
+      PI_SANDBOX_EXECUTION_ATTESTATION = { value = var.pi_sandbox_execution_attestation }
+      PI_CODE_MODE                     = { value = var.pi_codemode_mode == "paid" ? "enabled" : "off" }
+      PI_MCP_MODE                      = { value = var.pi_mcp_mode }
+      MCP_CONNECTIONS_ENABLED          = { value = tostring(var.mcp_connections_enabled) }
+      PI_CROSS_SESSION_MESSAGING_MODE  = { value = var.pi_cross_session_messaging_mode }
+      PI_EXTERNAL_ACTIONS_MODE         = { value = var.pi_external_actions_mode }
+      PI_EXTERNAL_ACTION_PROVIDERS     = { value = var.pi_external_action_providers }
+      PI_BROWSER_MODE                  = { value = var.pi_browser_mode }
+      PI_BROWSER_ALLOWED_DOMAINS       = { value = var.pi_browser_allowed_domains }
+      PI_MEMORY_MODE                   = { value = var.pi_memory_mode }
     },
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
@@ -218,17 +238,34 @@ module "control_plane_worker" {
     # token can authorize chat.postMessage from agent tool calls.
     length(var.slack_bot_token) > 0 ? {
       SLACK_BOT_TOKEN = { value = var.slack_bot_token }
+    } : {},
+    trimspace(var.mcp_oauth_encryption_key) != "" ? {
+      MCP_OAUTH_ENCRYPTION_KEY = { value = var.mcp_oauth_encryption_key }
     } : {}
   )
 
-  durable_objects = {
-    SESSION = { class_name = "SessionDO" }
-  }
+  durable_objects = merge(
+    { SESSION = { class_name = "SessionDO" } },
+    var.pi_durable_binding_enabled ? { PI_SESSION = { class_name = "PiSessionDO" } } : {},
+    var.mcp_connection_binding_enabled ? {
+      MCP_CONNECTION = { class_name = "McpConnectionDO" }
+    } : {}
+  )
+
+  # Terraform never owns this Worker. Add only after the protected Wrangler
+  # workflow's deployment and live verification succeed; retain while admission
+  # is off so latched sessions can replay, abort, and delete during rollback.
+  external_durable_objects = var.pi_codemode_sandbox_deployment_verified ? {
+    CODEMODE_SANDBOX = {
+      class_name  = "CodemodeSandbox"
+      script_name = "open-inspect-pi-codemode-sandbox-${local.name_suffix}"
+    }
+  } : {}
 
   enable_durable_object_bindings = var.enable_durable_object_bindings
 
   compatibility_date  = "2024-09-23"
-  compatibility_flags = ["nodejs_compat"]
+  compatibility_flags = ["nodejs_compat", "enable_weak_ref"]
   migration_tag       = var.control_plane_migration_tag
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes

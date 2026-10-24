@@ -22,8 +22,16 @@ export interface AlarmHandlerDeps {
   lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
+  extensionWork?: {
+    recoverDue(): Promise<void>;
+    nextDeadline(): number | null;
+  };
   /** Wakes queued work for a live runtime that nothing else will; idempotent. */
   redriveIdleQueue?: () => Promise<void>;
+  /** Command deadlines share this Durable Object's one alarm slot. */
+  sandboxCommandDeadlines?: () => Promise<void>;
+  /** Reconcile a Pi stop fence without invoking sandbox termination. */
+  reconcilePiStop?: () => Promise<boolean>;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
   now: () => number;
@@ -61,7 +69,13 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         if (projectionFailure) throw projectionFailure.error;
         return;
       }
-      await deps.executionStop.recoverStopConfirmationTimeout();
+      if (!(await deps.reconcilePiStop?.())) {
+        await deps.executionStop.recoverStopConfirmationTimeout();
+      }
+      await deps.extensionWork?.recoverDue();
+      const extensionDeadline = deps.extensionWork?.nextDeadline() ?? null;
+      if (extensionDeadline !== null) await deps.alarmScheduler.schedule(extensionDeadline);
+      await deps.sandboxCommandDeadlines?.();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
       // already failed (by lifecycle recovery or a prior alarm),

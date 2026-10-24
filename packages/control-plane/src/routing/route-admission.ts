@@ -131,11 +131,23 @@ export function parseVerifiedSandboxId(value: unknown): string | null {
   return typeof sandboxId === "string" && sandboxId ? sandboxId : null;
 }
 
+function parseVerifiedSandboxCredential(value: unknown): {
+  sandboxId: string;
+  credentialClass: "agent" | "execution";
+} | null {
+  const sandboxId = parseVerifiedSandboxId(value);
+  if (!sandboxId || !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const credentialClass = "credentialClass" in value ? value.credentialClass : null;
+  if (credentialClass !== "agent" && credentialClass !== "execution") return null;
+  return { sandboxId, credentialClass };
+}
+
 async function verifySandboxAuth(
   request: Request,
   env: Env,
   sessionId: string,
-  ctx: RequestContext
+  ctx: RequestContext,
+  credentialClasses: readonly ("agent" | "execution")[] = ["agent"]
 ): Promise<Response | null> {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader?.startsWith("Bearer ")) {
@@ -166,13 +178,19 @@ async function verifySandboxAuth(
     return error("Unauthorized: Invalid sandbox token", 401);
   }
 
-  let sandboxId: string | null = null;
+  let credential: ReturnType<typeof parseVerifiedSandboxCredential> = null;
   try {
-    sandboxId = parseVerifiedSandboxId(await verifyResponse.json());
+    credential = parseVerifiedSandboxCredential(await verifyResponse.json());
   } catch {
-    sandboxId = null;
+    credential = null;
   }
-  ctx.principal = { kind: "sandbox", sessionId, sandboxId };
+  if (!credential) {
+    return error("Sandbox identity unavailable", 401);
+  }
+  if (!credentialClasses.includes(credential.credentialClass)) {
+    return error("Unauthorized: Sandbox credential class is not allowed", 401);
+  }
+  ctx.principal = { kind: "sandbox", sessionId, ...credential };
   return null;
 }
 
@@ -180,10 +198,11 @@ async function verifySandboxAuthSafely(
   request: Request,
   env: Env,
   sessionId: string,
-  ctx: RequestContext
+  ctx: RequestContext,
+  credentialClasses?: readonly ("agent" | "execution")[]
 ): Promise<Response | null> {
   try {
-    return await verifySandboxAuth(request, env, sessionId, ctx);
+    return await verifySandboxAuth(request, env, sessionId, ctx, credentialClasses);
   } catch (cause) {
     logger.error("Sandbox authentication unavailable", {
       event: "auth.sandbox_unavailable",
@@ -830,7 +849,13 @@ export async function admitRoute(input: {
 
     if (authentication.kind === "sandbox") {
       authError = sandboxSessionId
-        ? await verifySandboxAuthSafely(handlerRequest, env, sandboxSessionId, ctx)
+        ? await verifySandboxAuthSafely(
+            handlerRequest,
+            env,
+            sandboxSessionId,
+            ctx,
+            authentication.credentialClasses
+          )
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(handlerRequest, env, ctx, {
@@ -850,7 +875,13 @@ export async function admitRoute(input: {
           authentication.kind === "user-or-service-with-sandbox-fallback" &&
           sandboxSessionId
         ) {
-          authError = await verifySandboxAuthSafely(handlerRequest, env, sandboxSessionId, ctx);
+          authError = await verifySandboxAuthSafely(
+            handlerRequest,
+            env,
+            sandboxSessionId,
+            ctx,
+            authentication.credentialClasses
+          );
         }
       } else {
         authError = null;

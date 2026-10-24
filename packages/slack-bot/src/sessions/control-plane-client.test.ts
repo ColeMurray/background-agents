@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ControlPlaneEnv } from "../internal-auth";
-import { checkPublicationAccess, createSession, sendPrompt } from "./control-plane-client";
+import {
+  checkPublicationAccess,
+  createSession,
+  sendPiSessionControl,
+  sendPrompt,
+} from "./control-plane-client";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 
@@ -432,6 +437,39 @@ describe("service credential headers", () => {
     expect(await verifyServiceSignature({ ...signed, url: changed.toString() })).toMatchObject({
       ok: false,
     });
+  });
+
+  it("signs stable explicit Pi controls with the Slack actor and channel", async () => {
+    const fetch = vi.fn(async () => Response.json({ state: "accepted" }, { status: 202 }));
+    const result = await sendPiSessionControl(makeServiceEnv(fetch), {
+      sessionId: "session-1",
+      channel: "C123",
+      actorId: "slack:U456",
+      requestId: "slack-message-event-1",
+      action: "follow_up",
+      content: "Focus on the failing test",
+    });
+    expect(result).toEqual({ ok: true });
+    const headers = sentHeaders(fetch);
+    expect(headers["X-OpenInspect-Actor"]).toBe("slack:U456");
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new URL(url).searchParams.get("channel")).toBe("slack:C123");
+    expect(JSON.parse(String(init.body))).toEqual({
+      action: "follow_up",
+      requestId: "slack-message-event-1",
+      content: "Focus on the failing test",
+    });
+    expect(
+      await verifyServiceSignature({
+        signatureHeader: headers["X-OpenInspect-Service-Signature"],
+        service: "slack-bot",
+        secret: "slack-service-secret",
+        method: "POST",
+        url,
+        bodySha256Hex: await sha256Hex(String(init.body)),
+        actor: "slack:U456",
+      })
+    ).toMatchObject({ ok: true });
   });
 
   it("sends no request at all when SERVICE_AUTH_SECRET is unset", async () => {

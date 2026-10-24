@@ -54,6 +54,16 @@ class GatedWs:
         return [call.get("messageId") for call in self.calls]
 
 
+async def test_command_completion_has_a_stable_ack_identity():
+    forwarder = make_forwarder()
+    ws = open_ws()
+    await forwarder.bind(ws)
+
+    await forwarder.send({"type": "command_completed", "commandId": "cmd-1"})
+
+    assert sent_events(ws)[0]["ackId"] == "command_completed:cmd-1"
+
+
 class TestSendWhileConnected:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])

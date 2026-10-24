@@ -22,6 +22,7 @@ class AgentBridgeProcess:
         self.sandbox_token = config.sandbox_token
         self.session_id = config.session_id
         self.harness = config.harness
+        self.runtime_mode = config.runtime_mode
         self._process: asyncio.subprocess.Process | None = None
         self._early_connect = False
 
@@ -32,6 +33,8 @@ class AgentBridgeProcess:
         repository boots and attaches its harness when the supervisor reports
         the harness phase complete (see ``bridge.py``).
         """
+        if self.runtime_mode.value == "execution":
+            raise RuntimeError("Execution credentials require the privileged in-process bridge")
         if early_connect is not None:
             self._early_connect = early_connect
         self.log.info("bridge.start", early_connect=self._early_connect)
@@ -42,6 +45,8 @@ class AgentBridgeProcess:
             self.log.info("bridge.skip", reason="no_session_id")
             return
 
+        mode_arguments = ["--runtime-mode", self.runtime_mode.value]
+        harness_arguments = ["--harness", self.harness.value] if self.harness is not None else []
         self._process = await asyncio.create_subprocess_exec(
             "python",
             "-m",
@@ -56,8 +61,8 @@ class AgentBridgeProcess:
             self.sandbox_token,
             "--opencode-port",
             str(OPENCODE_PORT),
-            "--harness",
-            self.harness.value,
+            *mode_arguments,
+            *harness_arguments,
             *(["--early-connect"] if self._early_connect else []),
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,

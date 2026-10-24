@@ -538,6 +538,8 @@ async function handleUpdateAutomation(
 
   const storedHarness = getValidHarnessOrDefault(existing.harness);
   const nextHarness = body.harness !== undefined ? body.harness : storedHarness;
+  const selection = getRepositorySelection(body);
+  const environmentSelection = getEnvironmentSelection(body);
   const storedProviderSelections = toProviderSelections(await providerAuthStore.list(id));
   // Execution changes are judged against the stored configuration, not by which
   // fields were sent: the edit form always resubmits them unchanged.
@@ -616,8 +618,6 @@ async function handleUpdateAutomation(
   // active-invocation guard. In-flight invocations already materialized their
   // children from their firing-time snapshot, so an edit cannot corrupt them;
   // it simply applies from the next invocation.
-  const selection = getRepositorySelection(body);
-  const environmentSelection = getEnvironmentSelection(body);
   const repositoryAuthorizationError = await authorizeSessionTarget(ctx, {
     teamId: null,
     repositories:

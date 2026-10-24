@@ -47,6 +47,9 @@ const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "push_error",
   "sandbox_generation_ready",
   "preservation_prepared",
+  "command_accepted",
+  "command_completed",
+  "command_replay_gap",
 ]);
 
 /**
@@ -71,6 +74,10 @@ export class SessionSandboxEventProcessor {
         event: Extract<SandboxIngressEvent, { type: "sandbox_generation_ready" }>
       ): void;
       prepared(event: Extract<SandboxIngressEvent, { type: "preservation_prepared" }>): void;
+    },
+    private readonly commands?: {
+      handle(event: Extract<SandboxIngressEvent, { type: `command_${string}` }>): void;
+      onSandboxReady?(): Promise<void> | void;
     }
   ) {}
 
@@ -87,6 +94,9 @@ export class SessionSandboxEventProcessor {
         now,
         messageId: eventMessageId ?? processingMessage?.id ?? null,
         processingMessage,
+        ...(event.ackId?.startsWith("pi-projection:")
+          ? { projectionEventId: event.ackId.slice("pi-projection:".length) }
+          : {}),
       };
       fields = eventLogContext(event, context.messageId);
       await this.dispatch(event, context);
@@ -130,7 +140,9 @@ export class SessionSandboxEventProcessor {
         this.runtime.handleSessionTitle(event);
         return;
       case "ready":
-        await this.runtime.handleReady(event, context);
+        if ((await this.runtime.handleReady(event, context)) !== "rejected") {
+          await this.commands?.onSandboxReady?.();
+        }
         return;
       case "boot_progress":
         this.runtime.handleBootProgress(event, context);
@@ -146,6 +158,14 @@ export class SessionSandboxEventProcessor {
         return;
       case "context_compacted":
         this.streaming.handleContextCompacted(event, context);
+        return;
+      case "browser_activity":
+        // The session recorded its own browser activity; there is nothing to
+        // stream from the sandbox for it.
+        return;
+      case "cross_session_message":
+        // The source session recorded its own cross-session send; there is
+        // nothing to stream from the sandbox for it.
         return;
       case "step_start":
       case "step_finish":
@@ -176,6 +196,14 @@ export class SessionSandboxEventProcessor {
         // The bridge's answer to the snapshot command. The lifecycle manager
         // drives the snapshot itself through the provider; all this needs is
         // the delivery ack below, which stops the bridge re-sending it.
+        return;
+      case "command_started":
+      case "command_accepted":
+      case "command_output":
+      case "command_replay_gap":
+      case "command_completed":
+        if (!this.commands) throw new Error("Sandbox command handlers are not configured");
+        this.commands.handle(event);
         return;
       default:
         // Exhaustive: a new SandboxEvent variant must pick a family here.

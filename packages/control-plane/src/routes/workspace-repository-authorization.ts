@@ -1,7 +1,9 @@
 import { isWorkspaceAdmin, type EffectiveAuthorization } from "@open-inspect/shared/rbac";
+import type { TeamRole } from "@open-inspect/shared/types/teams";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
+import type { SqlDatabase } from "../db/sql-database";
 import { json, type RequestContext } from "./shared";
 import { missingTeamRepository } from "./session-team-grants";
 
@@ -9,6 +11,23 @@ export interface RepositoryAuthorizationTarget {
   owner: string;
   name: string;
   repoId: number | null;
+}
+
+/**
+ * What the repository-grant check reads from its caller.
+ *
+ * The check needs the global store, the caller's own authorization (to tell
+ * the caller apart from a principal it checks on behalf of), and a place to
+ * cache that principal's team memberships. It reads nothing else, so a
+ * caller that is not an HTTP request — the session runtime's own memory
+ * policy, which has the store and no caller — supplies exactly this.
+ */
+export interface RepositoryGrantContext {
+  db: SqlDatabase;
+  /** The admitted caller's own authorization, when the check runs for the caller. */
+  authorization?: EffectiveAuthorization;
+  /** The caller's team memberships, cached for the request. */
+  sessionMemberships?: ReadonlyMap<string, TeamRole>;
 }
 
 export const REPOSITORY_GRANT_REQUIRED = {
@@ -63,7 +82,7 @@ export async function authorizeTeamRepositories(
  * are cached on `ctx` for the rest of the request.
  */
 async function findUngrantedRepository<T extends { repoId: number | null }>(
-  ctx: RequestContext,
+  ctx: RepositoryGrantContext,
   authorization: EffectiveAuthorization,
   target: { repositories: readonly T[]; requireLead?: boolean }
 ): Promise<T | null> {
@@ -115,7 +134,7 @@ export async function authorizeWorkspaceRepositories(
  * reused only when the principal is the caller.
  */
 export class RepositoryGrantAuthorizer {
-  constructor(private readonly ctx: RequestContext) {}
+  constructor(private readonly ctx: RepositoryGrantContext) {}
 
   /**
    * The first repository `authorization` lacks a grant for, or null when all are allowed. Only

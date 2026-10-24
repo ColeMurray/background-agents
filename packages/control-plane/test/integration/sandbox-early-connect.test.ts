@@ -1,7 +1,7 @@
-import { beforeEach, describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
-import { runInSessionDO } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
   collectMessages,
   initNamedSession,
@@ -83,6 +83,38 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     await closeWebSocket(ws!);
   });
 
+  it("keeps a pending prompt queued when readiness finds an unknown persisted harness", async () => {
+    const name = `ws-unknown-harness-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const messageId = await enqueuePrompt(stub, "Never dispatch through a fallback harness");
+    const { ws } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await queryDO(stub, "UPDATE session SET harness = 'newer-harness'");
+    const delivery = collectMessages(ws!, {
+      until: (message) => message.type === "prompt",
+      timeoutMs: 500,
+    });
+
+    ws!.send(sandboxEvent({ type: "ready", harness: "opencode" }));
+
+    await waitForSandboxStatus(stub, "ready");
+    expect(await delivery).toEqual([]);
+    expect(
+      await queryDO<{ status: string }>(stub, "SELECT status FROM messages WHERE id = ?", messageId)
+    ).toEqual([{ status: "pending" }]);
+
+    await closeWebSocket(ws!);
+  });
+
   it("cancels an attached booting sandbox and does not revive it on late readiness", async () => {
     const name = `ws-early-connect-cancel-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -106,20 +138,26 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     expect(await shutdown).toContainEqual({ type: "shutdown" });
     await waitForSandboxStatus(stub, "stopped");
 
-    // The legacy cancellation contract leaves socket authority intact. Wait
-    // for the late event's broadcast to prove it was processed, rather than
-    // relying on a sleep before asserting that its readiness CAS was rejected.
-    const lateReady = collectMessages(clientWs, {
-      until: (message) =>
-        message.type === "sandbox_event" && (message.event as { type: string }).type === "ready",
+    // The legacy cancellation contract leaves socket authority intact, but a
+    // late ready event is now rejected before it can be projected to clients.
+    await runInSessionDO(stub, (instance) => {
+      const manager = componentsOf(instance).lifecycleManager;
+      const onRuntimeReady = manager.onRuntimeReady.bind(manager);
+      vi.spyOn(manager, "onRuntimeReady").mockImplementation((...args) => {
+        const outcome = onRuntimeReady(...args);
+        Object.assign(instance, { lateReadyOutcome: outcome });
+        return outcome;
+      });
     });
     ws!.send(sandboxEvent({ type: "ready", harness: "opencode" }));
-    expect(await lateReady).toContainEqual(
-      expect.objectContaining({
-        type: "sandbox_event",
-        event: expect.objectContaining({ type: "ready" }),
-      })
-    );
+    await vi.waitFor(async () => {
+      const outcome = await runInSessionDO(
+        stub,
+        (instance) =>
+          (instance as unknown as { lateReadyOutcome?: string }).lateReadyOutcome ?? null
+      );
+      expect(outcome).toBe("rejected");
+    });
     expect(await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox")).toEqual([
       { status: "stopped" },
     ]);
