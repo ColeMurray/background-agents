@@ -200,6 +200,7 @@ function NewAutomationFallback() {
   const { isOpen } = useSidebarContext();
   return (
     <AutomationFormSkeleton
+      mode="create"
       header={
         !isOpen && (
           <header className="border-b border-border-muted flex-shrink-0">

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { AutomationFormMode } from "./automation-form-policy";
 
 function FieldSkeleton({
   labelWidth,
@@ -18,8 +19,31 @@ function FieldSkeleton({
   );
 }
 
+/** Create offers a grid of trigger cards; edit shows the fixed trigger type. */
+function TriggerTypeSkeleton({ mode }: { mode: AutomationFormMode }) {
+  if (mode === "edit") return <FieldSkeleton labelWidth="w-24" description />;
+  return (
+    <div>
+      <div className="h-4 w-24 bg-muted rounded mb-2.5" />
+      <div className="h-3 w-full bg-muted rounded mt-2" />
+      <div className="h-3 w-1/3 bg-muted rounded mt-2 mb-3" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {Array.from({ length: 6 }, (_, card) => (
+          <div key={card} className="h-20 bg-muted rounded-md" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Mirrors the create/edit automation pages while their data loads. */
-export function AutomationFormSkeleton({ header }: { header?: ReactNode }) {
+export function AutomationFormSkeleton({
+  mode,
+  header,
+}: {
+  mode: AutomationFormMode;
+  header?: ReactNode;
+}) {
   return (
     <div className="h-full flex flex-col">
       {header}
@@ -33,7 +57,7 @@ export function AutomationFormSkeleton({ header }: { header?: ReactNode }) {
 
           <div className="space-y-6">
             <FieldSkeleton labelWidth="w-12" />
-            <FieldSkeleton labelWidth="w-24" description />
+            <TriggerTypeSkeleton mode={mode} />
             <FieldSkeleton labelWidth="w-14" />
             <FieldSkeleton labelWidth="w-40" description />
             <FieldSkeleton labelWidth="w-14" description />

@@ -88,7 +88,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
   );
 
   if (loading) {
-    return <AutomationFormSkeleton header={collapsedHeader} />;
+    return <AutomationFormSkeleton mode="edit" header={collapsedHeader} />;
   }
 
   if (!automation) {
