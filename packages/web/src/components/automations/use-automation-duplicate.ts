@@ -31,11 +31,14 @@ export function useAutomationDuplicate(
   const environments = useEnvironments({ ownerTeamId: sourceTeamId }, Boolean(source));
   const [settled, setSettled] = useState<{
     sourceId: string;
+    fallbackTeamId: string | null;
     state: AutomationDuplicateState;
   } | null>(null);
 
   if (!sourceId) return null;
-  if (settled?.sourceId === sourceId) return settled.state;
+  if (settled?.sourceId === sourceId && settled.fallbackTeamId === fallbackTeamId) {
+    return settled.state;
+  }
   if (sourceLoading || (source && (scope.loading || repos.loading || environments.loading))) {
     return { status: "loading" };
   }
@@ -60,6 +63,6 @@ export function useAutomationDuplicate(
         }),
       }
     : { status: "failed" };
-  setSettled({ sourceId, state });
+  setSettled({ sourceId, fallbackTeamId, state });
   return state;
 }

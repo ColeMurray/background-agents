@@ -413,6 +413,17 @@ describe("NewAutomationPage duplicate", () => {
     expect(screen.getByText("No repository")).toBeInTheDocument();
   });
 
+  it("follows an in-place change of the entry scope for a reset team", () => {
+    sourceAutomation = { ...source, ownerTeamId: "team-archived" };
+    search = "from=auto-1&teamId=team-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+
+    search = "from=auto-1&teamId=team-2";
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Design");
+  });
+
   it("copies only the repositories the viewer can pick", async () => {
     sourceAutomation = {
       ...source,
