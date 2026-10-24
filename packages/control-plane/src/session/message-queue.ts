@@ -372,6 +372,9 @@ export class SessionMessageQueue {
     });
 
     await this.processMessageQueue();
+    if (data.steer && !enqueued.deduplicated && !data.attachments?.length) {
+      this.offerToRunningTurn(enqueued.messageId, data.content);
+    }
   }
 
   async cancelQueuedPrompt(
@@ -791,8 +794,38 @@ export class SessionMessageQueue {
     // record the activity here: session continuity measures its window from it.
     this.touchSessionActivity();
     await this.processMessageQueue();
+    if (data.steer && !enqueued.deduplicated && !data.attachments?.length) {
+      this.offerToRunningTurn(enqueued.messageId, data.content);
+    }
 
     return { messageId: enqueued.messageId, status: "queued", deduplicated: enqueued.deduplicated };
+  }
+
+  // The prompt stays queued until the sandbox's steer_result says the running turn took it.
+  private offerToRunningTurn(messageId: string, content: string): void {
+    const harness = getValidHarnessOrDefault(this.repository.getSession()?.harness);
+    if (!getHarnessCapabilities(harness).steer) return;
+    const processing = this.messageRepository.getProcessingMessage();
+    const socket = this.wsManager.getSandboxSocket();
+    if (!processing || processing.id === messageId || !socket) return;
+    this.wsManager.send(socket, { type: "steer", messageId, content });
+  }
+
+  settleSteer(messageId: string, now: number): void {
+    const message = this.messageRepository.getMessageById(messageId);
+    const author = message && this.participantRepository.getParticipantById(message.author_id);
+    if (!message || !author) return;
+    const userMessageEvent = this.createUserMessageEvent(
+      author,
+      message.content,
+      message.id,
+      now,
+      undefined,
+      message.origin_context
+    );
+    if (!this.messageRepository.recordMessageSteered(messageId, now, userMessageEvent)) return;
+    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+    this.broadcastPromptQueue();
   }
 
   /** The original message for a retried clientRequestId, or a conflict if the request differs. */

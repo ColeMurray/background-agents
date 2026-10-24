@@ -42,6 +42,7 @@ export const webPromptPayloadSchema = z
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
+    steer: z.boolean().optional(),
   })
   .refine((prompt) => !isBlankPrompt(prompt), {
     message: BLANK_PROMPT_MESSAGE,

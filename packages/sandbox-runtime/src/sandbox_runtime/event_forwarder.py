@@ -35,6 +35,7 @@ CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "push_error",
         "preservation_prepared",
         "sandbox_generation_ready",
+        "steer_result",
     }
 )
 MAX_EVENT_BUFFER_SIZE: Final = 1000

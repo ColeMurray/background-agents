@@ -73,6 +73,7 @@ function ComposerHarness({
   blockedReason,
   canManageLifecycle = true,
   harness = "opencode",
+  onSteer = vi.fn(),
 }: {
   initialValue?: string;
   isProcessing?: boolean;
@@ -84,6 +85,7 @@ function ComposerHarness({
   blockedReason?: string;
   canManageLifecycle?: boolean;
   harness?: "opencode" | "claude";
+  onSteer?: (e: React.FormEvent) => void;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -108,6 +110,7 @@ function ComposerHarness({
         submitError,
         inputRef,
         onSubmit: vi.fn(),
+        onSteer,
         onValueChange: setValue,
         onKeyDown: vi.fn(),
         onStopExecution: vi.fn(),
@@ -211,6 +214,35 @@ describe("SessionPromptComposer", () => {
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();
+  });
+
+  it("offers to steer the running prompt only on a harness that can steer", async () => {
+    const onSteer = vi.fn();
+    const { rerender } = render(
+      <ComposerHarness
+        initialValue="Use the other icon"
+        isProcessing
+        harness="claude"
+        onSteer={onSteer}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Steer the current prompt/ }));
+    expect(onSteer).toHaveBeenCalledOnce();
+
+    rerender(
+      <ComposerHarness
+        initialValue="Use the other icon"
+        isProcessing
+        harness="opencode"
+        onSteer={onSteer}
+      />
+    );
+    expect(screen.queryByText("Steer")).not.toBeInTheDocument();
+    rerender(
+      <ComposerHarness initialValue="Use the other icon" harness="claude" onSteer={onSteer} />
+    );
+    expect(screen.queryByText("Steer")).not.toBeInTheDocument();
   });
 
   it("hides stop controls without lifecycle permission", () => {

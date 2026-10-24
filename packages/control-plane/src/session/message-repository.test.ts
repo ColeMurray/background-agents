@@ -611,6 +611,38 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
+  it("settles a pending message the running turn took and creates its user event", () => {
+    mock.setMatchingData(/UPDATE messages SET status = 'completed'[\s\S]*RETURNING id/, [
+      { id: "msg-2" },
+    ]);
+    const event = {
+      type: "user_message" as const,
+      content: "use the other icon",
+      messageId: "msg-2",
+      timestamp: 3,
+      author: { participantId: "p-1", userId: "u-1", name: "User" },
+    };
+
+    expect(repository.recordMessageSteered("msg-2", 3000, event)).toBe(true);
+    expect(transactionSyncCalls).toBe(1);
+    expect(mock.calls[0].query).toContain("status = 'pending'");
+    expect(mock.calls[0].params).toEqual([3000, 3000, "msg-2"]);
+    expect(mock.calls[1].params[0]).toBe("user_message:msg-2");
+  });
+
+  it("leaves a message that is no longer pending alone when a steer settles", () => {
+    expect(
+      repository.recordMessageSteered("msg-2", 3000, {
+        type: "user_message",
+        content: "use the other icon",
+        messageId: "msg-2",
+        timestamp: 3,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      })
+    ).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
   it("returns an undispatched processing message to pending and removes its user event", () => {
     mock.setMatchingData(/UPDATE messages SET status = 'pending'[\s\S]*RETURNING id/, [
       { id: "msg-1" },

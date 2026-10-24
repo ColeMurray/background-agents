@@ -76,7 +76,8 @@ interface UseSessionSocketReturn {
     model?: string,
     reasoningEffort?: string,
     attachments?: SessionAttachmentReference[],
-    clientRequestId?: string
+    clientRequestId?: string,
+    options?: { steer?: boolean }
   ) => Promise<QueuePromptResult>;
   cancelPrompt: (messageId: string) => Promise<CancelPromptResult>;
   stopExecution: () => void;
@@ -319,7 +320,8 @@ export function useSessionSocket(
       model?: string,
       reasoningEffort?: string,
       attachments?: SessionAttachmentReference[],
-      requestedClientRequestId?: string
+      requestedClientRequestId?: string,
+      options?: { steer?: boolean }
     ): Promise<QueuePromptResult> => {
       if (!isOpen()) {
         console.error("WebSocket not connected");
@@ -381,6 +383,7 @@ export function useSessionSocket(
           model, // Include model for per-message model switching
           reasoningEffort,
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
+          ...(options?.steer ? { steer: true } : {}),
         });
       });
     },

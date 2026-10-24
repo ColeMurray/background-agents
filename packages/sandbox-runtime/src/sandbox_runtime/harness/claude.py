@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, UserMessage
 
 from ..attachment_processor import (
     MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
@@ -219,6 +219,9 @@ class ClaudeHarness:
         self._needs_reconnect = False
         self._reconnects = 0
         self._interrupted = False
+        self._turn_deadline: float | None = None
+        self._steered = 0
+        self._echoed = 0
         self._tool_client: ControlPlaneToolClient | None = None
         self._tool_server: Any = None
 
@@ -340,6 +343,7 @@ class ClaudeHarness:
             "include_partial_messages": True,
             "forward_subagent_text": False,
             "max_buffer_size": MAX_STDOUT_MESSAGE_BYTES,
+            "extra_args": {"replay-user-messages": None},
             "stderr": self._trajectory.stderr,
             **reasoning_options(model, reasoning_effort),
         }
@@ -465,12 +469,15 @@ class ClaudeHarness:
             return TurnOutcome.failed(f"Claude agent failed to start: {error}")
 
         self._interrupted = False
+        self._steered = 0
+        self._echoed = 0
         state = ClaudeTurnState(
             message_id=prompt.message_id, cost_baseline=self._translator.cost_baseline
         )
         try:
             async with asyncio.timeout_at(deadline):
                 await client.query(self._user_messages(prompt))
+                self._turn_deadline = deadline
                 stream = aiter(client.receive_messages())
                 while True:
                     try:
@@ -480,13 +487,18 @@ class ClaudeHarness:
                         break
                     except TimeoutError as error:
                         raise _InactivityTimeout from error
+                    if isinstance(message, UserMessage) and _is_human(message):
+                        self._echoed += 1
                     translation = self._translator.translate(
                         state, message, interrupted=self._interrupted
                     )
                     self._trajectory.emit(translation)
                     for event in translation.events:
                         await emit(event)
-                    if translation.outcome is not None:
+                    # A steered message the agent has not echoed yet starts its own turn next.
+                    if translation.outcome is not None and (
+                        self._interrupted or self._echoed > self._steered or self._steered == 0
+                    ):
                         return translation.outcome
             self._needs_reconnect = True
             return TurnOutcome.failed(
@@ -516,6 +528,27 @@ class ClaudeHarness:
             self._trajectory.diagnostic("claude.turn_error", level="error", exc=error)
             self._needs_reconnect = True
             return TurnOutcome.failed(f"Claude agent transport failed: {error}")
+        finally:
+            self._turn_deadline = None
+
+    async def steer(self, prompt: HarnessPrompt) -> bool:
+        client = self._client
+        deadline = self._turn_deadline
+        if deadline is None or self._interrupted or self._echoed == 0 or client is None:
+            return False
+        # Counted before the await, so a result arriving meanwhile keeps the turn open for it.
+        self._steered += 1
+        try:
+            async with asyncio.timeout_at(deadline):
+                await client.query(self._user_messages(prompt))
+        except TimeoutError:
+            self._steered -= 1
+            return False
+        except BaseException:
+            self._steered -= 1
+            raise
+        # A turn that closed meanwhile also dropped its client, so the agent never answers it.
+        return self._turn_deadline == deadline and not self._interrupted
 
     async def _interrupt_within_budget(self) -> bool:
         """Interrupt within the cleanup budget; drop the child if that hangs too.
@@ -625,6 +658,11 @@ class ClaudeHarness:
             # Lets the result of this prompt be told apart from injected turns.
             "origin": {"kind": "human"},
         }
+
+
+def _is_human(message: UserMessage) -> bool:
+    origin = getattr(message, "origin", None)
+    return isinstance(origin, Mapping) and origin.get("kind") == "human"
 
 
 class _InactivityTimeout(Exception):

@@ -421,6 +421,33 @@ export class MessageRepository {
     });
   }
 
+  recordMessageSteered(
+    messageId: string,
+    steeredAt: number,
+    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
+  ): boolean {
+    return this.transactionSync(() => {
+      const steered = this.sql.exec(
+        `UPDATE messages SET status = 'completed', started_at = ?, completed_at = ?
+         WHERE id = ? AND status = 'pending'
+         RETURNING id`,
+        steeredAt,
+        steeredAt,
+        messageId
+      );
+      if (steered.toArray().length !== 1) return false;
+
+      this.eventRepository.createEvent({
+        id: `user_message:${messageId}`,
+        type: "user_message",
+        data: JSON.stringify(userMessageEvent),
+        messageId,
+        createdAt: steeredAt,
+      });
+      return true;
+    });
+  }
+
   updateMessageToPending(messageId: string): void {
     this.transactionSync(() => {
       const updated = this.sql.exec(

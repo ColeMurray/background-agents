@@ -133,6 +133,7 @@ export async function handleSessionPrompt(
     reasoningEffort: body.reasoningEffort,
     attachments,
     callbackContext,
+    ...(body.steer ? { steer: true } : {}),
     scmEnrichment: enrichment
       ? {
           userId: enrichment.scmUserId,

@@ -180,6 +180,7 @@ function buildQueue(
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
     getMessageById: vi.fn(() => null as MessageRow | null),
     startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
+    recordMessageSteered: vi.fn<MessageRepository["recordMessageSteered"]>(() => true),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
     getParticipantById: vi.fn((_id: string) => createParticipant()),
@@ -448,6 +449,7 @@ describe("SessionMessageQueue", () => {
       () => h.queue.broadcastPromptQueue(),
       budget,
       (closure) => closure(),
+      () => {},
       () => {}
     );
     const finishing = handler.handleExecutionComplete(
@@ -2368,6 +2370,133 @@ describe("SessionMessageQueue", () => {
 
     expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
+  describe("steering", () => {
+    const steerSends = (h: ReturnType<typeof buildQueue>) =>
+      h.wsManager.send.mock.calls.filter(
+        ([, message]) => (message as { type: string }).type === "steer"
+      );
+
+    it("offers a steered prompt to the running turn and keeps it queued", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ harness: "claude" }));
+      const socket = { readyState: 1 } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(socket);
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
+
+      const queued = await h.queue.enqueuePromptFromApi({
+        content: "use the other icon",
+        authorId: "user-1",
+        source: "automation",
+        steer: true,
+      });
+
+      expect(queued.status).toBe("queued");
+      expect(steerSends(h)).toEqual([
+        [socket, { type: "steer", messageId: queued.messageId, content: "use the other icon" }],
+      ]);
+    });
+
+    it("offers a prompt steered from the composer to the running turn", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ harness: "claude" }));
+      const socket = { readyState: 1 } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(socket);
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
+
+      await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+        clientRequestId: "req-1",
+        content: "check the other file too",
+        steer: true,
+      });
+
+      expect(steerSends(h)).toEqual([
+        [socket, expect.objectContaining({ type: "steer", content: "check the other file too" })],
+      ]);
+    });
+
+    it("offers nothing on a harness that cannot steer", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ harness: "opencode" }));
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
+
+      await h.queue.enqueuePromptFromApi({
+        content: "use the other icon",
+        authorId: "user-1",
+        source: "automation",
+        steer: true,
+      });
+
+      expect(steerSends(h)).toEqual([]);
+    });
+
+    it("offers nothing without steer, without a running turn, or for a retried request", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ harness: "claude" }));
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      await h.queue.enqueuePromptFromApi({
+        content: "nothing running",
+        authorId: "user-1",
+        source: "automation",
+        steer: true,
+      });
+
+      h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
+      await h.queue.enqueuePromptFromApi({
+        content: "plain",
+        authorId: "user-1",
+        source: "automation",
+      });
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({
+          id: "msg-existing",
+          client_request_id: "webhook:abc",
+          request_fingerprint: await fingerprintWebPrompt("part-1", { content: "again" }),
+        })
+      );
+      await h.queue.enqueuePromptFromApi({
+        content: "again",
+        authorId: "user-1",
+        source: "automation",
+        clientRequestId: "webhook:abc",
+        steer: true,
+      });
+
+      expect(steerSends(h)).toEqual([]);
+    });
+
+    it("puts a prompt the running turn took into the timeline", () => {
+      const h = buildQueue();
+      h.repository.getMessageById.mockReturnValue(
+        createMessage({ id: "msg-steer", content: "use the other icon" })
+      );
+
+      h.queue.settleSteer("msg-steer", 5000);
+
+      const userMessage = expect.objectContaining({
+        type: "user_message",
+        messageId: "msg-steer",
+        content: "use the other icon",
+      });
+      expect(h.repository.recordMessageSteered).toHaveBeenCalledWith(
+        "msg-steer",
+        5000,
+        userMessage
+      );
+      expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event: userMessage });
+    });
+
+    it("leaves a prompt that already left the queue alone", () => {
+      const h = buildQueue();
+      h.repository.getMessageById.mockReturnValue(createMessage({ id: "msg-steer" }));
+      h.repository.recordMessageSteered.mockReturnValue(false);
+
+      h.queue.settleSteer("msg-steer", 5000);
+
+      expect(h.broadcast).not.toHaveBeenCalled();
+    });
   });
 
   describe("enqueuePromptFromApi", () => {

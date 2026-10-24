@@ -154,6 +154,7 @@ export const sendPromptRequestSchema = z
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
     callbackContext: z.unknown().optional(),
+    steer: z.boolean().optional(),
   })
   .refine(
     (prompt) =>
