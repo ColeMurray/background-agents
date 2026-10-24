@@ -3,7 +3,7 @@
   "generation": 77,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 76,
+  "minimumRebuildGeneration": 77,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,

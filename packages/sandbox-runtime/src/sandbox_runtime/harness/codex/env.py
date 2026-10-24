@@ -40,9 +40,12 @@ async def verify_codex_binary(binary: str = CODEX_BINARY) -> None:
             process.communicate(), timeout=CODEX_VERSION_TIMEOUT_SECONDS
         )
     except TimeoutError:
-        process.kill()
-        await process.wait()
         raise HarnessStartError("The Codex CLI did not report its version") from None
+    finally:
+        # Timed out or cancelled: no client owns this process for stop to contain.
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
     observed = re.fullmatch(r"codex-cli (\S+)", output.decode(errors="replace").strip())
     if process.returncode != 0 or observed is None or observed.group(1) != CODEX_VERSION:
         raise HarnessStartError(

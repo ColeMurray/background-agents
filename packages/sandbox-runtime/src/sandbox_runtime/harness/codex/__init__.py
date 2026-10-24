@@ -144,13 +144,17 @@ class CodexHarness:
             if not await self._client.close(timeout_seconds=STOP_TIMEOUT_SECONDS):
                 raise HarnessStartError("Codex process containment could not be confirmed")
             self._client = None
-        if self._verify_binary is not None:
-            await self._verify_binary()
-            self._verify_binary = None
         env = clean_codex_env(self._environ, self.config.state_dir)
         self._mcp = mcp_configuration(self.config.mcp_servers)
         self._epoch = uuid.uuid4().hex
         epoch = self._epoch
+        if self._verify_binary is not None:
+            await self._verify_binary()
+            self._verify_binary = None
+            # stop_execution does not wait for the open lock; a stop that saw no
+            # client during verification must not be followed by a launch.
+            if epoch != self._epoch:
+                raise HarnessStartError("Codex was stopped while starting")
 
         async def callback(method: str, params: dict[str, Any]) -> dict[str, Any]:
             if epoch != self._epoch:
