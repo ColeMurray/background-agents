@@ -148,5 +148,6 @@ try {
     });
   }
   await new Promise((resolve) => server.close(resolve));
-  await rm(profile, { recursive: true, force: true });
+  // Chromium helpers can still flush profile files just after the browser exits.
+  await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
