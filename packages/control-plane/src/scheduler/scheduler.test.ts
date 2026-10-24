@@ -3860,6 +3860,99 @@ describe("Scheduler", () => {
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       });
 
+      describe("with a sessionTitle", () => {
+        const allowed = { kind: "allowed", legacyPermission: null };
+
+        async function titlesSent(sessionTitle?: string) {
+          const stub = createMockSessionStub();
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            normalizeWebhookEvent(
+              "auto-hook",
+              { mode: "iterate" },
+              { sessionKey: "card-42", sessionTitle }
+            )
+          );
+          const titles = await Promise.all(
+            vi
+              .mocked(stub.fetch)
+              .mock.calls.filter(([input]) => new URL(input.url).pathname === "/internal/prompt")
+              .map(async ([input]) => (await promptRequestBody(input)).title)
+          );
+          return { steered: result.steered, titles };
+        }
+
+        beforeEach(() => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({
+              invocation_id: "inv-card",
+              status: "completed",
+              session_id: "sess-card",
+            })
+          );
+        });
+
+        it("names the session in the follow-up's own prompt, so the session applies it as it queues the prompt", async () => {
+          expect(await titlesSent("#8161 Mentions in Comments")).toEqual({
+            steered: 1,
+            titles: ["[Auto] #8161 Mentions in Comments"],
+          });
+          expect(await titlesSent()).toEqual({ steered: 1, titles: [undefined] });
+          expect(
+            mockEvaluateSessionAdmission.mock.calls.filter(
+              ([, , , action]) => action === "lifecycle"
+            )
+          ).toHaveLength(1);
+        });
+
+        it("keeps the title for an actor who may collaborate on the session but not rename it", async () => {
+          mockEvaluateSessionAdmission.mockImplementation(async (_ctx, _env, _id, action) =>
+            action === "lifecycle"
+              ? { kind: "action_denied", reason: "missing_permission" }
+              : allowed
+          );
+          expect(await titlesSent("Renamed")).toEqual({ steered: 1, titles: [undefined] });
+
+          mockEvaluateSessionAdmission.mockImplementation(async (_ctx, _env, _id, action) => ({
+            kind: "allowed",
+            legacyPermission: action === "lifecycle" ? "sessions.lifecycle" : null,
+          }));
+          expect(await titlesSent("Renamed")).toEqual({ steered: 1, titles: [undefined] });
+
+          mockGetEffectiveAuthorization.mockResolvedValue(
+            steeringAuthorization({
+              permissions: ["sessions.read", "sessions.collaborate", "sessions.lifecycle"],
+            })
+          );
+          expect(await titlesSent("Renamed")).toEqual({ steered: 1, titles: ["[Auto] Renamed"] });
+        });
+
+        it("refuses the delivery when it cannot tell whether the actor may rename the session", async () => {
+          mockEvaluateSessionAdmission.mockImplementation(async (_ctx, _env, _id, action) => {
+            if (action === "lifecycle") throw new Error("D1 unavailable");
+            return allowed;
+          });
+          const stub = createMockSessionStub();
+
+          const refusal = await createScheduler(createEnv(undefined, stub))
+            .event(
+              normalizeWebhookEvent(
+                "auto-hook",
+                { mode: "iterate" },
+                { sessionKey: "card-42", sessionTitle: "Renamed", idempotencyKey: "review-1" }
+              )
+            )
+            .then(
+              () => null,
+              (error: unknown) => error
+            );
+
+          expect(refusal).toBeInstanceOf(SessionFollowUpRefusedError);
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+          expect(mockStore.releaseFollowUpReceipt).toHaveBeenCalled();
+          expect(mockStore.acceptFollowUpReceipt).not.toHaveBeenCalled();
+        });
+      });
+
       it("resolves a retry of the delivery that started the session to its invocation", async () => {
         mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
         mockStore.getLatestContinuableRun.mockResolvedValue(
@@ -3956,6 +4049,26 @@ describe("Scheduler", () => {
         expect(mockStore.acceptFollowUpReceipt.mock.invocationCallOrder[0]).toBeLessThan(
           mockStore.claimRunSession.mock.invocationCallOrder[0]!
         );
+      });
+
+      it("titles a session it starts with the delivery's sessionTitle", async () => {
+        const titled = createMockSessionStub();
+        await createScheduler(createEnv(undefined, titled)).event(
+          normalizeWebhookEvent(
+            "auto-hook",
+            { mode: "build" },
+            { sessionKey: "card-8161", sessionTitle: "#8161 Mentions in Comments" }
+          )
+        );
+        expect((await getInitBody(vi.mocked(titled.fetch))).title).toBe(
+          "[Auto] #8161 Mentions in Comments"
+        );
+
+        const untitled = createMockSessionStub();
+        await createScheduler(createEnv(undefined, untitled)).event(
+          webhookEvent({ mode: "build" })
+        );
+        expect((await getInitBody(vi.mocked(untitled.fetch))).title).toBe("[Auto] Card agent");
       });
 
       it("starts a fresh run when the session has been idle past the window", async () => {
@@ -4058,6 +4171,67 @@ describe("Scheduler", () => {
           expect(result).toMatchObject({ steered: 1, invocationIds: ["inv-card"] });
           expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
         });
+
+        it("holds a follow-up's title with it, for its release to authorize", async () => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 1 })
+          );
+
+          await createScheduler(createEnv(undefined, createMockSessionStub())).event(
+            normalizeWebhookEvent(
+              "auto-hook",
+              { mode: "iterate" },
+              { sessionKey: "card-42", sessionTitle: "Renamed" }
+            )
+          );
+
+          const held = mockStore.holdPromptForLaunchingRun.mock.calls[0]?.[0] as { prompt: string };
+          expect(JSON.parse(held.prompt).title).toBe("[Auto] Renamed");
+          expect(mockEvaluateSessionAdmission).not.toHaveBeenCalled();
+        });
+
+        it.each([
+          { actor: "may rename the session", lifecycle: "allowed", title: "[Auto] Renamed" },
+          { actor: "may only collaborate", lifecycle: "action_denied", title: undefined },
+        ])(
+          "releases a held follow-up's title only when its actor $actor",
+          async ({ lifecycle, title }) => {
+            mockEvaluateSessionAdmission.mockImplementation(async (_ctx, _env, _id, action) =>
+              action === "lifecycle" && lifecycle === "action_denied"
+                ? { kind: "action_denied", reason: "missing_permission" }
+                : { kind: "allowed", legacyPermission: null }
+            );
+            mockStore.getHeldPrompts.mockResolvedValueOnce([
+              heldRow({
+                content: "HELD",
+                authorId: "user-1",
+                source: "automation",
+                title: "[Auto] Renamed",
+              }),
+            ]);
+            const stub = createMockSessionStub();
+
+            await createScheduler(createEnv(undefined, stub)).event(
+              webhookEvent({ mode: "build" })
+            );
+
+            const released = [];
+            for (const [input, init] of vi.mocked(stub.fetch).mock.calls as [
+              RequestInfo,
+              RequestInit?,
+            ][]) {
+              if (
+                new URL(typeof input === "string" ? input : input.url).pathname !==
+                "/internal/prompt"
+              )
+                continue;
+              released.push(await promptRequestBody(input, init));
+            }
+            expect(released.at(-1)).toMatchObject({ content: "HELD" });
+            expect(released.at(-1)?.title).toBe(title);
+            expect(mockStore.deleteHeldPrompt.mock.calls).toEqual([["held-1"]]);
+          }
+        );
 
         it("skips a retry of a follow-up already held for the run", async () => {
           mockStore.getLatestContinuableRun.mockResolvedValue(

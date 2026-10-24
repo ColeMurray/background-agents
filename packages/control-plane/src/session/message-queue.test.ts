@@ -1081,15 +1081,16 @@ describe("SessionMessageQueue", () => {
 
   it("touches the session index when an API prompt is queued", async () => {
     const h = buildQueue();
+    const onQueued = vi.fn();
 
-    await h.queue.enqueuePromptFromApi({
-      content: "follow-up",
-      authorId: "user-1",
-      source: "automation",
-    });
+    await h.queue.enqueuePromptFromApi(
+      { content: "follow-up", authorId: "user-1", source: "automation" },
+      onQueued
+    );
     await h.backgroundTasks.settle();
 
     expect(h.sessionIndex.touchUpdatedAt).toHaveBeenCalledWith("s1");
+    expect(onQueued).toHaveBeenCalledOnce();
   });
 
   it("returns a null position when retrying a completed correlated prompt", async () => {
@@ -2381,15 +2382,20 @@ describe("SessionMessageQueue", () => {
         })
       );
 
-      const queued = await h.queue.enqueuePromptFromApi({
-        content: "same",
-        authorId: "user-1",
-        source: "automation",
-        clientRequestId: "webhook:abc",
-      });
+      const onQueued = vi.fn();
+      const queued = await h.queue.enqueuePromptFromApi(
+        {
+          content: "same",
+          authorId: "user-1",
+          source: "automation",
+          clientRequestId: "webhook:abc",
+        },
+        onQueued
+      );
 
       expect(queued).toMatchObject({ messageId: "msg-existing", deduplicated: true });
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      expect(onQueued).not.toHaveBeenCalled();
     });
 
     it.each([

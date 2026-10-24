@@ -154,6 +154,13 @@ To send several deliveries to one session, include a top-level `sessionKey` stri
 - If the session will not take the follow-up, for example because it was archived or ran out of budget, the request fails with an [error response](#error-responses) instead of starting over in a new session.
 - After 7 days without activity in the session, the next delivery starts a new run, and later deliveries continue that one.
 
+## Naming the session
+
+A session an automation starts is titled `[Auto]` and the automation's name. To tell sessions apart, include a top-level `sessionTitle` string, and the session is titled `[Auto]` and that instead, for example `[Auto] #8161 Mentions in Comments`.
+
+- A follow-up into an existing session that carries a `sessionTitle` renames the session, so the sender can rename it as the work changes, when the automation's executor may rename sessions the way the session's own title route requires. The title is saved with the follow-up's prompt, so a retried delivery never renames the session again. A follow-up without one leaves the title as it is.
+- `sessionTitle` stays in the stored body but is removed from the context block. It is trimmed and must then be a non-empty string of at most 120 characters; anything else is rejected with `400`.
+
 ## Responses
 
 A successful request returns:
@@ -175,17 +182,17 @@ Runtime authorization denial returns `ok: true` with `triggered: 0` and `skipped
 
 ### Error responses
 
-| Status | Meaning                                                                                                                                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid JSON body, or a `sessionKey` that is not a non-empty string of at most 256 characters                                                          |
-| `401`  | Missing or invalid API key                                                                                                                             |
-| `404`  | Automation not found, or not an Inbound Webhook automation                                                                                             |
-| `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED` |
-| `413`  | Body larger than 64 KB                                                                                                                                 |
-| `415`  | `Content-Type` was not `application/json`                                                                                                              |
-| `422`  | A `sessionKey` follow-up the session rejected for another reason; a retry is rejected the same way                                                     |
-| `429`  | A `sessionKey` follow-up whose session queue is full (`PROMPT_QUEUE_FULL`)                                                                             |
-| `503`  | A `sessionKey` follow-up whose session could not be reached (`SESSION_UNAVAILABLE`). Retrying with the same `idempotencyKey` is safe                   |
+| Status | Meaning                                                                                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid JSON body, a `sessionKey` that is not a non-empty string of at most 256 characters, or a `sessionTitle` that is empty or longer than 120 characters after trimming |
+| `401`  | Missing or invalid API key                                                                                                                                                 |
+| `404`  | Automation not found, or not an Inbound Webhook automation                                                                                                                 |
+| `409`  | A `sessionKey` follow-up the session cannot take: `SESSION_NOT_PROMPTABLE` (archived or cancelled), `BUDGET_EXHAUSTED`, or `SANDBOX_RECOVERY_REQUIRED`                     |
+| `413`  | Body larger than 64 KB                                                                                                                                                     |
+| `415`  | `Content-Type` was not `application/json`                                                                                                                                  |
+| `422`  | A `sessionKey` follow-up the session rejected for another reason; a retry is rejected the same way                                                                         |
+| `429`  | A `sessionKey` follow-up whose session queue is full (`PROMPT_QUEUE_FULL`)                                                                                                 |
+| `503`  | A `sessionKey` follow-up whose session could not be reached (`SESSION_UNAVAILABLE`). Retrying with the same `idempotencyKey` is safe                                       |
 
 A refused follow-up returns `{ "error": "…", "code": "…", "invocationId": "…" }`, where `invocationId` is the run whose session refused it. Nothing new starts. To start over in a new session, send a different `sessionKey`.
 

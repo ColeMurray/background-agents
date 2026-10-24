@@ -46,6 +46,18 @@ describe("normalizeWebhookEvent", () => {
     expect(event.contextBlock).toContain("value");
   });
 
+  it("carries the sessionTitle and strips it from the context but not the body", () => {
+    const event = normalizeWebhookEvent(
+      "auto-1",
+      { sessionTitle: "#8161 Mentions in Comments", data: "value" },
+      { sessionTitle: "#8161 Mentions in Comments" }
+    );
+    expect(event.sessionTitle).toBe("#8161 Mentions in Comments");
+    expect(event.body).toEqual({ sessionTitle: "#8161 Mentions in Comments", data: "value" });
+    expect(event.contextBlock).not.toContain("sessionTitle");
+    expect(event.contextBlock).toContain("value");
+  });
+
   it("strips idempotencyKey from body in context but keeps it in body", () => {
     const event = normalizeWebhookEvent(
       "auto-1",

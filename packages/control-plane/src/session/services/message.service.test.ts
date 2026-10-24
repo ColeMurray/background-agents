@@ -28,6 +28,7 @@ function createService() {
 
   const stopExecution = vi.fn();
   const parseArtifactMetadata = vi.fn();
+  const applyTitle = vi.fn();
 
   return {
     service: new MessageService({
@@ -36,10 +37,12 @@ function createService() {
       artifactRepository,
       usageRepository,
       messageQueue,
+      applyTitle,
       stopExecution,
       parseArtifactMetadata,
       transaction: (closure) => closure(),
     }),
+    applyTitle,
     repository,
     eventRepository,
     artifactRepository,
@@ -66,11 +69,32 @@ describe("MessageService", () => {
     });
 
     expect(result).toEqual({ messageId: "msg-1", status: "queued", deduplicated: false });
-    expect(messageQueue.enqueuePromptFromApi).toHaveBeenCalledWith({
+    expect(messageQueue.enqueuePromptFromApi).toHaveBeenCalledWith(
+      { content: "hello", authorId: "user-1", source: "web" },
+      undefined
+    );
+  });
+
+  it("applies a prompt's title only once the queue says it took the prompt", async () => {
+    const { service, messageQueue, applyTitle } = createService();
+    vi.mocked(messageQueue.enqueuePromptFromApi).mockResolvedValue({
+      messageId: "msg-1",
+      status: "queued",
+      deduplicated: false,
+    });
+
+    await service.enqueuePrompt({ content: "hello", authorId: "user-1", source: "automation" });
+    expect(vi.mocked(messageQueue.enqueuePromptFromApi).mock.calls[0]?.[1]).toBeUndefined();
+
+    await service.enqueuePrompt({
       content: "hello",
       authorId: "user-1",
-      source: "web",
+      source: "automation",
+      title: "[Auto] Renamed",
     });
+    expect(applyTitle).not.toHaveBeenCalled();
+    vi.mocked(messageQueue.enqueuePromptFromApi).mock.calls[1]?.[1]?.();
+    expect(applyTitle).toHaveBeenCalledWith("[Auto] Renamed");
   });
 
   it("stops execution and returns stopping status", async () => {
