@@ -7,6 +7,8 @@ import {
   PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
   PI_DO_OUTBOX_MIGRATION_ID,
   PI_DO_REPOSITORY_DIFF_OUTBOX_MIGRATION_ID,
+  PI_DO_TRUSTED_USAGE_MIGRATION_ID,
+  PI_DO_TURN_AUTHORITY_MIGRATION_ID,
   MIGRATION_RESERVATIONS,
   PI_SESSION_DO_CORE_AUTHORITY_MIGRATION_ID,
   PI_SESSION_DO_CONTROLS_MIGRATION_ID,
@@ -36,6 +38,8 @@ describe("Pi migration reservations", () => {
     expect([
       PI_DO_OUTBOX_MIGRATION_ID,
       PI_DO_REPOSITORY_DIFF_OUTBOX_MIGRATION_ID,
+      PI_DO_TRUSTED_USAGE_MIGRATION_ID,
+      PI_DO_TURN_AUTHORITY_MIGRATION_ID,
       PI_SESSION_DO_RESULT_RECEIPTS_MIGRATION_ID,
       PI_SESSION_DO_SANDBOX_EXECUTION_REQUESTS_MIGRATION_ID,
       PI_SESSION_DO_SANDBOX_EXECUTION_LIFECYCLE_MIGRATION_ID,
@@ -49,7 +53,7 @@ describe("Pi migration reservations", () => {
       PI_D1_SLACK_INGRESS_MIGRATION_VERSION,
       PI_D1_SLACK_MAPPING_MIGRATION_VERSION,
       IN_PROCESS_CONTROL_MESSAGE_MIGRATION_ID,
-    ]).toEqual([1, 2, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 67]);
+    ]).toEqual([1, 2, 3, 4, 57, 58, 59, 61, 62, 63, 64, 65, 90, 91, 92, 93, 67]);
     expect(MIGRATION_RESERVATIONS).toEqual([
       {
         store: "pi_do",
@@ -62,6 +66,18 @@ describe("Pi migration reservations", () => {
         version: PI_DO_REPOSITORY_DIFF_OUTBOX_MIGRATION_ID,
         feature: "repositoryEditing",
         purpose: "Pi repository diff publication outbox",
+      },
+      {
+        store: "pi_do",
+        version: PI_DO_TRUSTED_USAGE_MIGRATION_ID,
+        feature: "coreAuthority",
+        purpose: "Pi trusted usage accounting",
+      },
+      {
+        store: "pi_do",
+        version: PI_DO_TURN_AUTHORITY_MIGRATION_ID,
+        feature: "coreAuthority",
+        purpose: "Pi turn deadlines and action ceilings",
       },
       {
         store: "session_do",
