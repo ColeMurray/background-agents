@@ -107,10 +107,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
       status: status.data,
       terms,
     });
-    await policy.preload(candidates.map((candidate) => candidate.partition));
-    for (const candidate of candidates) {
-      const access = await policy.authorizeRecord(candidate, "read");
-      if (access.kind === "denied") continue;
+    for (const access of await policy.authorizeSharedCatalog(candidates)) {
       partitions.push(access.partition);
       canManage.set(partitionId(access.partition), access.canManage);
     }

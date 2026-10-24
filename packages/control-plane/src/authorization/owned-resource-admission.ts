@@ -223,6 +223,7 @@ export function admittedEnvironment(ctx: RequestContext): EnvironmentAdmission {
 /** Environment admission bound to one request, for policies that receive it as a dependency. */
 export class EnvironmentAdmissionEvaluator {
   private readonly environments = new Map<string, Promise<EnvironmentRow | null>>();
+  private viewer: Promise<SessionViewer> | undefined;
 
   constructor(
     private readonly ctx: RequestContext,
@@ -256,7 +257,7 @@ export class EnvironmentAdmissionEvaluator {
     }
     return evaluateLoadedEnvironmentAdmission(
       await environment,
-      await resourceViewer(this.ctx),
+      await (this.viewer ??= resourceViewer(this.ctx)),
       need
     );
   }

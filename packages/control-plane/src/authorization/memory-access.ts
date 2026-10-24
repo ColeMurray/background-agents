@@ -98,6 +98,7 @@ const denied = (denial: MemoryAccessDenial): MemoryManagementDecision => ({
   denial,
 });
 type DeniedDecision = Extract<MemoryManagementDecision, { kind: "denied" }>;
+type GrantedDecision = Extract<MemoryManagementDecision, { kind: "granted" }>;
 const NOT_FOUND: DeniedDecision = {
   kind: "denied",
   denial: { reason: "not_found", message: MEMORY_NOT_FOUND },
@@ -137,18 +138,28 @@ function grantDenial(repository: string): MemoryManagementDecision {
 export class MemoryManagementPolicy {
   constructor(private readonly deps: MemoryManagementPolicyDeps) {}
 
-  /** Preload shared admission metadata once before authorizing an aggregate catalog. */
-  async preload(partitions: readonly MemoryPartition[]): Promise<void> {
+  /** Admit shared catalog identities in bulk using one request-local admission snapshot. */
+  async authorizeSharedCatalog(
+    candidates: readonly Pick<MemoryRecord, "partition" | "scope">[]
+  ): Promise<GrantedDecision[]> {
+    const shared = candidates.filter((candidate) => candidate.partition.type !== "personal");
+    const partitions = shared.map((candidate) => candidate.partition);
     await this.deps.environments.preload(
       partitions
         .filter((partition) => partition.type === "environment")
         .map((partition) => partition.environmentId)
     );
-    if (!this.deps.authorization || !this.can("repositories.read")) return;
-    await this.deps.repositoryGrants.preload(
-      this.deps.authorization,
-      partitions.filter((partition) => partition.type === "repository")
-    );
+    if (this.deps.authorization && this.can("repositories.read"))
+      await this.deps.repositoryGrants.preload(
+        this.deps.authorization,
+        partitions.filter((partition) => partition.type === "repository")
+      );
+    const admitted: GrantedDecision[] = [];
+    for (const candidate of shared) {
+      const decision = await this.authorizeRecord(candidate, "read");
+      if (decision.kind === "granted") admitted.push(decision);
+    }
+    return admitted;
   }
 
   /** Authorize a request about a scope a person named: listing, creating, or previewing. */

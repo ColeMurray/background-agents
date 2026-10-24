@@ -16,6 +16,7 @@ import {
   evaluateEnvironmentAdmission,
   evaluateOwnedResourceAdmission,
 } from "./owned-resource-admission";
+import * as resourceViewers from "./resource-viewer";
 
 // Full row validation is covered by D1 tests; admission consumes only ownership fields.
 const environment = { id: "environment", owner_team_id: "team" } as EnvironmentRow;
@@ -277,6 +278,7 @@ describe("owned-resource admission outcomes", () => {
 
   it("caches individual environment lookups across read/manage and keeps service ceilings", async () => {
     const ctx = context();
+    const viewers = vi.spyOn(resourceViewers, "resourceViewer");
     const store = {
       getById: vi.fn(async () => environment),
       getByIds: vi.fn(async () => [environment]),
@@ -293,6 +295,7 @@ describe("owned-resource admission outcomes", () => {
       reasonCode: "service_capability_required",
     });
     expect(store.getById).toHaveBeenCalledOnce();
+    expect(viewers).toHaveBeenCalledExactlyOnceWith(ctx);
   });
 });
 

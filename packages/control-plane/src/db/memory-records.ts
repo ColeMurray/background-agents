@@ -183,37 +183,39 @@ export class MemoryRecordStore {
       return result.results.map(memoryFromRow);
     }
     const limit = options.offset + options.limit;
-    // Deep offsets may retain many candidates; never materialize their revision bodies.
-    let rows: Pick<MemoryRow, "id" | "updated_at">[] = [];
+    // Capture metadata with the revision identity; lifecycle changes must not drop the sentinel
+    // or combine new content with the selected ordering. Bodies stay out of the candidate merge.
+    let rows: Omit<MemoryRow, "content">[] = [];
     for (let start = 0; start < partitions.length; start += chunkSize) {
       const result = await prepareSql(
         this.db,
-        sql`SELECT m.id, m.updated_at ${CURRENT_MEMORY}
+        sql`SELECT m.*, r.title, r.description, r.revision_number ${CURRENT_MEMORY}
           WHERE ${inPartitions(partitions.slice(start, start + chunkSize))} AND m.status = ${options.status}
             AND ${search}
           ORDER BY m.updated_at DESC, m.id LIMIT ${limit}`
-      ).all<Pick<MemoryRow, "id" | "updated_at">>();
+      ).all<Omit<MemoryRow, "content">>();
       rows = rows.concat(result.results);
       rows.sort((a, b) => b.updated_at - a.updated_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       rows = rows.slice(0, limit);
     }
     const page = rows.slice(options.offset);
-    const records = new Map<string, MemoryRecord>();
-    const idChunkSize = MAX_D1_QUERY_PARAMETERS - search.values.length - 1;
-    for (let start = 0; start < page.length; start += idChunkSize) {
+    const bodies = new Map<string, string>();
+    for (let start = 0; start < page.length; start += MAX_D1_QUERY_PARAMETERS) {
       const result = await prepareSql(
         this.db,
-        sql`${CURRENT_MEMORY_SELECT}
-          WHERE m.id IN (${sql.join(
-            page.slice(start, start + idChunkSize).map((row) => sql`${row.id}`),
-            ", "
-          )}) AND m.status = ${options.status} AND ${search}`
-      ).all<MemoryRow>();
-      for (const row of result.results) records.set(row.id, memoryFromRow(row));
+        sql`SELECT id, content FROM memory_revisions WHERE id IN (${sql.join(
+          page
+            .slice(start, start + MAX_D1_QUERY_PARAMETERS)
+            .map((row) => sql`${row.current_revision_id}`),
+          ", "
+        )})`
+      ).all<{ id: string; content: string }>();
+      for (const row of result.results) bodies.set(row.id, row.content);
     }
-    return page.flatMap((row) => {
-      const record = records.get(row.id);
-      return record ? [record] : [];
+    return page.map((row) => {
+      const content = bodies.get(row.current_revision_id);
+      if (content === undefined) throw new Error("Selected memory revision is missing");
+      return memoryFromRow({ ...row, content });
     });
   }
 
