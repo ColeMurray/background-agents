@@ -3145,6 +3145,11 @@
       "need": ["DEV:personal-mcp"],
       "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
     },
+    "packages/web/src/components/settings/member-merge-summary.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Keeps the exhaustive member-merge summary aligned with the core Slack-ingress actor ownership transfer."
+    },
     "packages/web/src/components/settings/settings-registry.ts": {
       "layer": "overlay-hook",
       "need": ["DEV:overlay-integration"],
