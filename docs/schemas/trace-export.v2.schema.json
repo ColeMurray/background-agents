@@ -14,11 +14,27 @@
         },
         "source": {
           "type": "string",
-          "enum": ["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]
+          "enum": [
+            "user",
+            "agent",
+            "automation",
+            "github-bot",
+            "linear-bot",
+            "slack-bot",
+            "discord-bot"
+          ]
         },
         "spawnSource": {
           "type": "string",
-          "enum": ["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]
+          "enum": [
+            "user",
+            "agent",
+            "automation",
+            "github-bot",
+            "linear-bot",
+            "slack-bot",
+            "discord-bot"
+          ]
         },
         "parentSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
         "rootSessionId": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
@@ -103,7 +119,16 @@
               "content": { "type": "string" },
               "source": {
                 "type": "string",
-                "enum": ["web", "slack", "linear", "extension", "github", "automation", "agent"]
+                "enum": [
+                  "web",
+                  "slack",
+                  "linear",
+                  "discord",
+                  "extension",
+                  "github",
+                  "automation",
+                  "agent"
+                ]
               },
               "attachments": {
                 "anyOf": [
@@ -175,14 +200,14 @@
                   "error",
                   "execution_complete",
                   "context_compacted",
-                  "artifact",
                   "push_complete",
                   "push_error",
                   "warning",
                   "boot_progress",
                   "session_title",
                   "snapshot_ready",
-                  "user_message"
+                  "user_message",
+                  "artifact"
                 ]
               },
               "data": {

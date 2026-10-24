@@ -9,7 +9,6 @@ import {
   type ProviderAccountSelection,
   type ProviderAccountClient,
 } from "../source-control/github-credential-authority";
-import { parseActor, type ActorNamespace } from "../auth/principal";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
 
@@ -156,16 +155,6 @@ export async function resolveCurrentGitHubAccessToken(
     enrichment.scmUserId
   );
   return token.accessToken;
-}
-
-/**
- * Parse a bot-format authorId into provider + providerUserId.
- * Returns null for web client authorIds (plain user IDs without a prefix).
- */
-export function parseAuthorId(
-  authorId: string
-): { provider: ActorNamespace; providerUserId: string } | null {
-  return parseActor(authorId);
 }
 
 /**

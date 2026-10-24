@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isEnvironmentId } from "./environments";
 import { repositoryPairInputSchema, sessionListRepositorySchema } from "./repositories";
+import { spawnSourceSchema } from "./session-sources";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
@@ -137,15 +138,7 @@ const teamInboxSessionSchema = z.object({
   baseBranch: z.string().nullable(),
   status: z.enum(["created", "active", "completed", "failed", "archived", "cancelled"]),
   parentSessionId: z.string().nullable(),
-  spawnSource: z.enum([
-    "user",
-    "agent",
-    "automation",
-    "github-bot",
-    "linear-bot",
-    "slack-bot",
-    "discord-bot",
-  ]),
+  spawnSource: spawnSourceSchema,
   environmentId: z.string().nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),

@@ -5,6 +5,7 @@
 
 import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type { Team } from "@open-inspect/shared/types/teams";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { parseChannelScope } from "../authorization/channel-scope";
 import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
@@ -16,6 +17,15 @@ import { error, json } from "../http/responses";
 import type { RequestContext } from "../http/request-context";
 
 export type TeamRepositoryGrants = Awaited<ReturnType<TeamRepositoryGrantStore["listForTeam"]>>;
+
+/** Chat bots must use an admitted channel scope, never a caller-selected team. */
+const SERVICE_TEAM_CATALOG_POLICY: Record<ServiceName, "actor" | "deny"> = {
+  web: "actor",
+  "github-bot": "actor",
+  "slack-bot": "deny",
+  "linear-bot": "deny",
+  "discord-bot": "deny",
+};
 
 /** Null is unscoped; an explicit workspace scope must not include other teams' resources. */
 export async function resolveCatalogScope(
@@ -63,7 +73,7 @@ export async function resolveCatalogScope(
   if (
     query.has("teamId") &&
     ctx.principal?.kind === "service" &&
-    (ctx.principal.service === "slack-bot" || ctx.principal.service === "linear-bot")
+    SERVICE_TEAM_CATALOG_POLICY[ctx.principal.service] === "deny"
   ) {
     return denyTeamCatalog(request, ctx, catalogTeamId, path);
   }

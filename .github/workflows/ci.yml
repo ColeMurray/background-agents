@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "docs/schemas/trace-export.v2.schema.json"
       - ".env.example"
       - ".github/workflows/ci.yml"
       - ".github/workflows/terraform.yml"
@@ -44,6 +45,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "docs/schemas/trace-export.v2.schema.json"
       - ".env.example"
       - ".github/workflows/ci.yml"
       - ".github/workflows/terraform.yml"
@@ -147,6 +149,11 @@ jobs:
 
       - name: Check README translations
         run: npm run test:readme-translations
+
+      - name: Check trace export schema drift
+        run: >-
+          node packages/control-plane/scripts/generate-trace-export-schema.mjs
+          --check
 
       - name: Check Prettier formatting
         run: npm run format:check

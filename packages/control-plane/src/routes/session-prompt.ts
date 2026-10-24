@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { admit } from "../routing/admit";
+import { parseActor } from "../auth/principal";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   callbackContextSchema,
@@ -22,11 +23,7 @@ import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
-import {
-  parseAuthorId,
-  resolveGitHubEnrichmentForRequest,
-  type GitHubEnrichment,
-} from "../session/identity";
+import { resolveGitHubEnrichmentForRequest, type GitHubEnrichment } from "../session/identity";
 import type { Env } from "../types";
 import { error, json, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
@@ -96,7 +93,7 @@ export async function handleSessionPrompt(
   }
 
   let enrichment: GitHubEnrichment | undefined;
-  const parsed = parseAuthorId(authorId);
+  const parsed = parseActor(authorId);
   if (authorId !== "anonymous") {
     const userStore = new UserStore(ctx.db);
     let userId: string | undefined;

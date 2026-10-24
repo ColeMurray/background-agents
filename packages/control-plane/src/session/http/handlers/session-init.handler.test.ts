@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import type { Logger } from "../../../logger";
 import { SessionInitHandler } from "./session-init.handler";
 import type { ParticipantRepository } from "../../participant-repository";
@@ -68,6 +69,23 @@ describe("Codex durable initialization", () => {
         ...overrides,
       }),
     });
+  it.each(spawnSourceSchema.options)(
+    "initializes the registered spawn source %s",
+    async (source) => {
+      const { handler, repository } = createHandler();
+      expect((await handler.init(init({ spawnSource: source }))).status).toBe(200);
+      expect(repository.upsertSession).toHaveBeenCalledWith(
+        expect.objectContaining({ spawnSource: source })
+      );
+    }
+  );
+
+  it("rejects an unregistered spawn source before writing", async () => {
+    const { handler, repository } = createHandler();
+    expect((await handler.init(init({ spawnSource: "unknown-bot" }))).status).toBe(400);
+    expect(repository.transaction).not.toHaveBeenCalled();
+  });
+
   it("stores native max unchanged rather than applying OpenCode effort rules", async () => {
     const { handler, repository } = createHandler();
     const response = await handler.init(init({ reasoningEffort: "max" }));

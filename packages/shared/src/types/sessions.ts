@@ -5,6 +5,8 @@ import { eventResponseSchema } from "./sandbox-events";
 import { sessionListRepositorySchema, type SessionListRepository } from "./repositories";
 import type { PullRequestLifecycleState } from "./artifacts";
 import type { SessionCapabilities } from "./session-access";
+import { spawnSourceSchema, type SpawnSource } from "./session-sources";
+export { spawnSourceSchema, type SpawnSource } from "./session-sources";
 
 /**
  * A session's conversation lifecycle: durable, user-visible, and independent
@@ -65,17 +67,6 @@ export const messageSourceSchema = z.enum([
 export type MessageSource = z.infer<typeof messageSourceSchema>;
 
 export type ParticipantRole = "owner" | "member";
-
-export const spawnSourceSchema = z.enum([
-  "user",
-  "agent",
-  "automation",
-  "github-bot",
-  "linear-bot",
-  "slack-bot",
-  "discord-bot",
-]);
-export type SpawnSource = z.infer<typeof spawnSourceSchema>;
 
 /**
  * Aggregate PR counts for a session, grouped by display status. Computed from

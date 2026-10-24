@@ -107,5 +107,6 @@ within a major schema version; consumers **must ignore unknown fields**. A break
 a new major version and a new JSON Schema file. Schema 2 publishes the fields introduced since
 schema 1, changes the message array to oldest-first, and renames the budget error to
 `trace_budget_exceeded`. Regenerate the schema after changing shared Zod types with
-`node packages/control-plane/scripts/generate-trace-export-schema.mjs`; the route test detects
-drift.
+`node packages/control-plane/scripts/generate-trace-export-schema.mjs`. Add `--check` to verify the
+committed schema without changing it; TypeScript CI runs this drift check, including on schema-only
+changes.

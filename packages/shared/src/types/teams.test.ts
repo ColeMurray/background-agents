@@ -1,13 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { createSessionRequestSchema } from "./session-api";
+import { spawnSourceSchema } from "./session-sources";
+import { spawnSourceSchema as sessionSpawnSourceSchema } from "./sessions";
 import {
   createTeamRequestSchema,
   sessionVisibilitySchema,
   teamDefaultVisibilitySchema,
   teamResponseSchema,
   teamRowSchema,
+  teamSessionsResponseSchema,
   updateTeamRequestSchema,
 } from "./teams";
+
+describe("canonical spawn sources", () => {
+  const inboxSourceSchema =
+    teamSessionsResponseSchema.options[0].options[0].shape.items.element.shape.rootSession.shape
+      .spawnSource;
+
+  it("shares the dependency-leaf schema with session and team projections", () => {
+    expect(sessionSpawnSourceSchema).toBe(spawnSourceSchema);
+    expect(inboxSourceSchema).toBe(spawnSourceSchema);
+  });
+
+  it.each(spawnSourceSchema.options)("accepts %s in the team inbox", (source) => {
+    expect(inboxSourceSchema.parse(source)).toBe(source);
+  });
+});
 
 describe("team default visibility", () => {
   it.each(["team", "workspace"])(
