@@ -143,6 +143,31 @@ export function automationToFormValues(automation: Automation): InitialAutomatio
   };
 }
 
+/**
+ * Slack channel conditions are bound to the owning team (create rejects channels bound to another
+ * owner), so an ownership change drops them, leaving required-channel validation to ask again.
+ */
+export function withoutOwnerBoundConditions(conditions: TriggerCondition[]): TriggerCondition[] {
+  return conditions.filter((condition) => condition.type !== "slack_channel");
+}
+
+/** `values` moved to `teamId`: owner-bound targets and Slack channels don't carry over. */
+export function changeAutomationFormOwner(
+  values: InitialAutomationFormValues,
+  teamId: string | null
+): InitialAutomationFormValues {
+  return {
+    ...values,
+    teamId,
+    repositories: [],
+    environmentIds: [],
+    triggerConfig: values.triggerConfig && {
+      ...values.triggerConfig,
+      conditions: withoutOwnerBoundConditions(values.triggerConfig.conditions),
+    },
+  };
+}
+
 const COPY_NAME_SUFFIX = " (copy)";
 
 /** The source name plus a copy suffix, trimmed to fit MAX_AUTOMATION_NAME_LENGTH. */
@@ -158,7 +183,7 @@ export function automationCopyName(name: string): string {
 export interface AutomationDuplicate {
   sourceName: string;
   initialValues: InitialAutomationFormValues;
-  /** The viewer can't create in the source's team, so the copy starts elsewhere without targets. */
+  /** The viewer can't create in the source's team, so the copy changed owner. */
   teamReset: boolean;
   /** Repositories or environments the viewer can't use were left out of the copy. */
   targetsDropped: boolean;
@@ -166,9 +191,9 @@ export interface AutomationDuplicate {
 
 /**
  * Create-form values for a copy of `source`. The copy keeps the source's team and targets when
- * the viewer can create there; otherwise it starts in `fallbackTeamId` with no targets, as a team
- * change in the form would. Targets missing from the viewer's pickers would block or fail
- * creation, so they are left out. Per-automation credentials aren't part of an automation: the server issues new
+ * the viewer can create there; otherwise it moves to `fallbackTeamId` as a team change in the
+ * form would. Targets missing from the viewer's pickers would block or fail creation, so they are
+ * left out. Per-automation credentials aren't part of an automation: the server issues new
  * webhook keys and the form asks for the Sentry client secret again.
  */
 export function createAutomationDuplicate(
@@ -190,7 +215,7 @@ export function createAutomationDuplicate(
   if (!teamSelectable) {
     return {
       sourceName: source.name,
-      initialValues: { ...values, teamId: fallbackTeamId, repositories: [], environmentIds: [] },
+      initialValues: changeAutomationFormOwner(values, fallbackTeamId),
       teamReset: true,
       targetsDropped: false,
     };

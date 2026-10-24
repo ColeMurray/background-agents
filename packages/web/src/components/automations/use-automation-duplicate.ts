@@ -27,8 +27,19 @@ export function useAutomationDuplicate(
   const { automation: source, loading: sourceLoading } = useAutomation(sourceId);
   const scope = useResourceTeams("automation");
   const sourceTeamId = source?.ownerTeamId ?? null;
-  const repos = useRepos(Boolean(source), sourceTeamId);
-  const environments = useEnvironments({ ownerTeamId: sourceTeamId }, Boolean(source));
+  const teamSelectable =
+    !scope.loading &&
+    !scope.error &&
+    (sourceTeamId
+      ? scope.teams.some((team) => team.id === sourceTeamId)
+      : scope.allowWorkspace && !requireTeam);
+  // Only targets kept with the source's team need their catalog, so a copy never depends on a
+  // catalog (and its permission) that can't change the result.
+  const repos = useRepos(teamSelectable && Boolean(source?.repositories.length), sourceTeamId);
+  const environments = useEnvironments(
+    { ownerTeamId: sourceTeamId },
+    teamSelectable && Boolean(source?.environmentIds.length)
+  );
   const [settled, setSettled] = useState<{
     sourceId: string;
     fallbackTeamId: string | null;
@@ -47,9 +58,6 @@ export function useAutomationDuplicate(
     return { status: "unavailable" };
   }
 
-  const teamSelectable = sourceTeamId
-    ? scope.teams.some((team) => team.id === sourceTeamId)
-    : scope.allowWorkspace && !requireTeam;
   const state: AutomationDuplicateState = source
     ? {
         status: "ready",

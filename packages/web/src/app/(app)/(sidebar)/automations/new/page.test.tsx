@@ -73,20 +73,21 @@ vi.mock("@/components/sidebar-layout", () => ({
 }));
 
 vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({
-    repos: reposError
-      ? []
-      : [{ id: 1, owner: "acme", name: "api", fullName: "acme/api", defaultBranch: "main" }],
+  useRepos: (enabled = true) => ({
+    repos:
+      !enabled || reposError
+        ? []
+        : [{ id: 1, owner: "acme", name: "api", fullName: "acme/api", defaultBranch: "main" }],
     loading: false,
-    error: reposError,
+    error: enabled ? reposError : undefined,
   }),
 }));
 
 vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: () => ({
-    environments: environmentsError ? [] : environmentsValue,
+  useEnvironments: (_scope: unknown, enabled = true) => ({
+    environments: !enabled || environmentsError ? [] : environmentsValue,
     loading: false,
-    error: environmentsError,
+    error: enabled ? environmentsError : undefined,
   }),
 }));
 vi.mock("@/hooks/use-resource-teams", () => ({
@@ -422,6 +423,34 @@ describe("NewAutomationPage duplicate", () => {
     search = "from=auto-1&teamId=team-2";
     view.rerender(<NewAutomationPage />);
     expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Design");
+  });
+
+  it("doesn't need the repository catalog to copy a repo-less source", () => {
+    reposError = new Error("403");
+    sourceAutomation = source;
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+    expect(screen.queryByText(/retrying/i)).not.toBeInTheDocument();
+  });
+
+  it("drops the source team's Slack channels when the copy changes owner", async () => {
+    sourceAutomation = {
+      ...source,
+      ownerTeamId: "team-archived",
+      triggerType: "slack_event",
+      scheduleCron: null,
+      triggerConfig: {
+        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C-team-a"] }],
+      },
+    };
+    search = "from=auto-1&teamId=team-1";
+    const { container } = render(<NewAutomationPage />);
+
+    fireEvent.submit(container.querySelector("form")!);
+    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+    expect(browserApiFetch).not.toHaveBeenCalled();
   });
 
   it("copies only the repositories the viewer can pick", async () => {

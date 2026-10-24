@@ -29,6 +29,7 @@ import {
   createAutomationFormDraft,
   evaluateAutomationForm,
   requiresRepositoryContext,
+  withoutOwnerBoundConditions,
   type AutomationAgentDraft,
   type AutomationFormValues,
 } from "./automation-form-policy";
@@ -178,6 +179,10 @@ export function AutomationForm({
           if (submitting || mode === "edit") return;
           setTeamId(nextTeamId);
           targets.resetTargets();
+          setTrigger((current) => ({
+            ...current,
+            conditions: withoutOwnerBoundConditions(current.conditions),
+          }));
         }}
       />
       <AutomationTriggerTypeField mode={mode} value={trigger} onChange={setTrigger} />
