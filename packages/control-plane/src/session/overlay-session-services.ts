@@ -43,6 +43,8 @@ import {
 } from "../db/external-action-audit";
 import { AutomationExternalActionGrantStore } from "../db/automation-external-action-grants";
 import { ExternalActionBridgeHandler } from "./http/handlers/external-action-bridge.handler";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { authorizeExternalActionTarget } from "./external-action-target-authority";
 
 export function createOverlaySessionServices(context: SessionExtensionServicesContext) {
   const {
@@ -65,6 +67,14 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
     turnAuthorMayAct,
   } = context;
   const externalActionGateway = new ExternalActionGateway(sql, transaction);
+  const teamChannelBindingStore = new TeamChannelBindingStore(db);
+  const externalActionTargetAuthority = {
+    getSession: (sessionId: string) => sessionIndexStore.get(sessionId),
+    isRepositoryAssociated: (sessionId: string, repoOwner: string, repoName: string) =>
+      sessionIndexStore.isRepositoryAssociated(sessionId, repoOwner, repoName),
+    getChannelBinding: (channelId: string) => teamChannelBindingStore.get("slack", channelId),
+    hasLinearIssueContext: (issueId: string) => messageRepository.hasLinearIssueContext(issueId),
+  };
   const externalActionAuditOutbox = new ExternalActionAuditOutbox(sql, transaction);
   // A provider is registered only when the deployment named it. Every
   // definition in the registry has passed the generic fault-injection
@@ -360,6 +370,8 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
       liveMode: () => createPiDeploymentCapabilitySnapshot(env).capabilities.externalActions,
       definitions: externalActionDefinitions,
       credentialAvailable: async (provider) => externalActionCredentialResolver.available(provider),
+      authorizeTarget: (request) =>
+        authorizeExternalActionTarget(externalActionTargetAuthority, request),
       scheduleReconciliation: (deadline) => alarmScheduler.schedule(deadline),
       flushAudit: () => externalActionAuditOutbox.flush(projectExternalActionAudit),
       nextDeadline: nextExternalActionDeadline,
@@ -391,8 +403,16 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
       Promise.resolve()
         .then(() => externalActionGateway.expireDue(getPublicSessionId()))
         .then(() =>
-          externalActionGateway.reconcileDue((action) =>
-            externalActionDefinitions.executorFor(action.provider, action.action)
+          externalActionGateway.reconcileDue(async (action) =>
+            (await authorizeExternalActionTarget(externalActionTargetAuthority, {
+              sessionId: action.sessionId,
+              operationId: action.operationId,
+              provider: action.provider,
+              action: action.action,
+              target: action.target,
+            }))
+              ? externalActionDefinitions.executorFor(action.provider, action.action)
+              : undefined
           )
         )
         .then(() => externalActionAuditOutbox.flush(projectExternalActionAudit)),

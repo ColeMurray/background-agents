@@ -447,6 +447,21 @@ export class MessageRepository {
     return rows[0] ?? null;
   }
 
+  /** Whether authenticated Linear ingress tied this session to the exact issue. */
+  hasLinearIssueContext(issueId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 AS ok FROM messages
+           WHERE source = 'linear' AND json_valid(callback_context)
+             AND json_extract(callback_context, '$.issueId') = ?
+           LIMIT 1`,
+          issueId
+        )
+        .toArray().length > 0
+    );
+  }
+
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
       `INSERT INTO messages (

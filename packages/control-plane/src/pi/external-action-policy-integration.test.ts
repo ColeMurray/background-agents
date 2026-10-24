@@ -53,6 +53,7 @@ describe("Pi external action approval integration", () => {
       publicResult: { publicationId: "comment-7" },
     }));
     let activeOperationId = "message-1";
+    const authorizeTarget = vi.fn(async () => true);
     const handler = new ExternalActionBridgeHandler(
       {
         enabled: true,
@@ -62,6 +63,7 @@ describe("Pi external action approval integration", () => {
           status: vi.fn(async () => ({ kind: "unknown" as const })),
         }),
         operationIsUnattended: () => false,
+        authorizeTarget,
       },
       () => "session-1",
       (request) => request.headers.get("X-Pi-Operation-ID") === activeOperationId
@@ -164,11 +166,64 @@ describe("Pi external action approval integration", () => {
     expect((await continuation.wait(BACKGROUND_CONTEXT)).status).toBe("done");
 
     expect(providerExecute).toHaveBeenCalledOnce();
+    expect(authorizeTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        operationId: "message-1",
+        target: { repository: "acme/widgets", issue: 42 },
+      })
+    );
+    // Initial prepare, continuation prepare, and credential-bearing execute.
+    expect(authorizeTarget).toHaveBeenCalledTimes(3);
     expect(gateway.isBoundToOperation("action-1", "message-2")).toBe(true);
     expect(gateway.status("action-1").action).toMatchObject({
       state: "succeeded",
       publicResult: { publicationId: "comment-7" },
     });
+  });
+
+  it("refuses an unauthorized provider target before creating an approval", async () => {
+    const database = new DatabaseSync(":memory:");
+    databases.push(database);
+    const storage = createNodeSqlStorage(database);
+    initSchema(storage.sql);
+    const gateway = new ExternalActionGateway(storage.sql, storage.transactionSync);
+    const handler = new ExternalActionBridgeHandler(
+      {
+        enabled: true,
+        gateway,
+        definitions: fakeDefinitions({
+          execute: vi.fn(),
+          status: vi.fn(),
+        }),
+        operationIsUnattended: () => false,
+        authorizeTarget: async () => false,
+      },
+      () => "session-1",
+      () => true
+    );
+
+    const response = await handler.externalActionPrepare(
+      new Request("http://session/internal/pi-external-action/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Pi-Operation-ID": "message-1" },
+        body: JSON.stringify({
+          toolCallId: "call-1",
+          idempotencyKey: "pi:call-1",
+          provider: "fake",
+          action: "publish_comment",
+          summary: "Publish review comment",
+          target: { repository: "other/private", issue: 42 },
+          arguments: { body: "Looks good" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "external_action_target_denied",
+    });
+    expect(gateway.listPending("session-1").actions).toEqual([]);
   });
 });
 

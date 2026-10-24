@@ -387,6 +387,7 @@ describe("CrossSessionHandler", () => {
           kind: "cross_session",
           sourceSessionId: "session-1",
           humanActorId: "user-1",
+          depth: 0,
         }),
       })
     );

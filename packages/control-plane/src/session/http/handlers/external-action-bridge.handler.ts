@@ -2,6 +2,7 @@ import { externalActionPrepareRequestSchema } from "@open-inspect/shared";
 import type { FeatureCapabilityMode } from "@open-inspect/shared/capability-modes";
 import { externalActionToolName } from "@open-inspect/shared/types/external-actions";
 import { z } from "zod";
+import type { JsonValue } from "@earendil-works/chord";
 import type { ExternalActionDefinitionRegistry } from "../../external-action-definitions";
 import {
   DEFAULT_EXTERNAL_ACTION_APPROVAL_TTL_MS,
@@ -99,6 +100,14 @@ export interface ExternalActionBridge {
    * card, so the credential is checked before the action is prepared.
    */
   credentialAvailable?(provider: string): Promise<boolean>;
+  /** Fresh authority for the exact repository, channel, or issue target. */
+  authorizeTarget(input: {
+    sessionId: string;
+    operationId: string;
+    provider: string;
+    action: string;
+    target: Record<string, JsonValue>;
+  }): Promise<boolean>;
   /**
    * Live deployment mode for new external effects.
    *
@@ -175,6 +184,21 @@ export class ExternalActionBridgeHandler {
       });
       if (!providerRequest.success) {
         return Response.json({ error: "Invalid provider action request" }, { status: 400 });
+      }
+      if (
+        !(await this.options.authorizeTarget({
+          sessionId: this.getSessionId(),
+          operationId,
+          provider: parsed.data.provider,
+          action: parsed.data.action,
+          target: providerRequest.data.target,
+        }))
+      ) {
+        return externalActionError(
+          403,
+          "external_action_target_denied",
+          "This external action target is not authorized for the session"
+        );
       }
       const approval = await this.options.resolveAutomationApproval?.(
         parsed.data.provider,
@@ -281,6 +305,21 @@ export class ExternalActionBridgeHandler {
       : undefined;
     if (!executor) {
       return Response.json({ error: "External action provider is unavailable" }, { status: 503 });
+    }
+    if (
+      !(await this.options.authorizeTarget({
+        sessionId: this.getSessionId(),
+        operationId,
+        provider: status.action.provider,
+        action: status.action.action,
+        target: status.action.target,
+      }))
+    ) {
+      return externalActionError(
+        403,
+        "external_action_target_denied",
+        "This external action target is no longer authorized for the session"
+      );
     }
     if (status.action.approval?.source === "automation_grant") {
       const liveApproval = await this.options.resolveAutomationApproval?.(

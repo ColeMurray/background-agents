@@ -671,7 +671,9 @@ export class ExternalActionGateway {
   }
 
   async reconcileDue(
-    resolveExecutor: (action: ExternalAction) => ExternalActionExecutor | undefined
+    resolveExecutor: (
+      action: ExternalAction
+    ) => ExternalActionExecutor | undefined | Promise<ExternalActionExecutor | undefined>
   ): Promise<void> {
     const now = this.now();
     const rows = this.sql
@@ -690,7 +692,7 @@ export class ExternalActionGateway {
       .toArray() as unknown as Array<{ id: string; provider: string }>;
     for (const row of rows) {
       const action = this.requireAction(row.id);
-      const executor = resolveExecutor(action);
+      const executor = await resolveExecutor(action);
       if (executor) {
         await this.reconcile(row.id, executor);
       } else {

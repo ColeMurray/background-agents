@@ -192,7 +192,7 @@ export function publishedEntries(body: unknown): unknown[] {
   if (Array.isArray(body)) return body;
   if (typeof body !== "object" || body === null) return [];
   const record = body as Record<string, unknown>;
-  for (const key of ["items", "comments", "replies", "results", "data"]) {
+  for (const key of ["items", "comments", "messages", "replies", "results", "data"]) {
     const value = record[key];
     if (Array.isArray(value)) return value;
   }

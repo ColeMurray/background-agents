@@ -455,8 +455,8 @@ export class CrossSessionHandler {
           humanActorId: receipt.humanActorId,
           agentConversationId: receipt.agentConversationId,
           sourceTaskId: receipt.sourceTaskId,
-          // The stored message has travelled one hop further than the receipt.
-          depth: receipt.depth + 1,
+          // Outbound assigned the hop depth atomically with the receipt.
+          depth: receipt.depth,
         },
       });
     } catch (error) {
