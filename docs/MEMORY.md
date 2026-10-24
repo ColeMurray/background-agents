@@ -4,6 +4,12 @@ Memory carries useful knowledge between sessions without changing repository fil
 embedding store or semantic search: the agent sees a compact fact catalog, discovers additional
 facts with lexical `memory_search`, and reads relevant bodies with `memory_read`.
 
+Every session receives memory workflow guidance, even with an empty catalog. Before finishing a
+task, agents are prompted to consider saving verified discoveries such as build/test/setup gotchas,
+corrected assumptions, or difficult failure diagnoses, checking for duplicates first. Routine
+progress and guesses should not become memories. A `memory_write` result of `proposed` awaits human
+review in Settings → Memories or Settings → Shared memories; it is not yet active memory.
+
 ## User experience
 
 | Surface                    | Behavior                                                                                                                                                                                  |

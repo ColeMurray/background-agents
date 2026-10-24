@@ -217,6 +217,7 @@ export interface SessionComponents {
    */
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
+  access: SandboxAccess;
   lifecycleManager: SandboxLifecycleManager;
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
@@ -463,11 +464,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sockets: lifecycleSockets,
     canResumeAfterStop: () => providerResumesAfterStop(sandboxProvider),
     getLogger: () => accessLog,
-    sandboxDashboardUrlBuilder:
-      sandboxBackend === "modal" || sandboxBackend === "modal-vm"
-        ? (providerObjectId) =>
-            resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
-        : undefined,
+    sandboxDashboardUrlBuilder: (providerObjectId) =>
+      resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId),
   });
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
@@ -1059,6 +1057,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       scmProvider = next;
     },
     userEnvResolver,
+    access,
     lifecycleManager,
     messageQueue,
     presenceService,

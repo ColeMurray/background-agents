@@ -46,14 +46,14 @@ Terraform creates the infrastructure. The operator creates the accounts, gathers
 
 A deployment runs on exactly one sandbox provider, chosen at setup:
 
-| Provider         | Session resume model                                   |
-| ---------------- | ------------------------------------------------------ |
-| Modal (default)  | Filesystem snapshot restore                            |
-| Modal VM         | Filesystem snapshot restore                            |
-| Daytona          | Persistent sandbox stopped and started again           |
-| Vercel Sandboxes | Filesystem snapshot restore                            |
-| OpenComputer     | Persistent sandbox resume or checkpoint-backed restore |
-| E2B              | Persistent sandbox paused and resumed                  |
+| Provider         | Session resume model                         |
+| ---------------- | -------------------------------------------- |
+| Modal (default)  | Filesystem snapshot restore                  |
+| Modal VM         | Filesystem snapshot restore                  |
+| Daytona          | Persistent sandbox stopped and started again |
+| Vercel Sandboxes | Filesystem snapshot restore                  |
+| E2B              | Persistent sandbox paused and resumed        |
+| Boat             | Persistent sandbox archived and resumed      |
 
 Provider differences that users notice (which resource and timeout settings apply, how prebuilt images are stored, and the Daytona prebuild admission switch) are covered in [Sandbox providers](/configure/sandbox-providers).
 

@@ -9,7 +9,9 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import {
+  MAX_AUTOMATION_NAME_LENGTH,
   validateAutomationTargetCounts,
+  type Automation,
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
 import { isValidHarnessReasoningEffort } from "@open-inspect/shared/harnesses";
@@ -20,6 +22,7 @@ import {
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import type { HarnessModelAvailability } from "@/lib/session-harness";
+import { repositoryKey } from "./automation-target-selection";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
@@ -117,6 +120,139 @@ export function createAutomationFormDraft(
       model: initialValues.model ?? DEFAULT_MODEL,
       reasoningEffort: initialValues.reasoningEffort ?? "",
     },
+  };
+}
+
+/** Form values for an existing automation, used to edit or duplicate it. */
+export function automationToFormValues(automation: Automation): InitialAutomationFormValues {
+  return {
+    teamId: automation.ownerTeamId ?? null,
+    name: automation.name,
+    repositories: automation.repositories,
+    environmentIds: automation.environmentIds,
+    harness: automation.harness,
+    model: automation.model,
+    reasoningEffort: automation.reasoningEffort,
+    scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
+    scheduleTz: automation.scheduleTz,
+    instructions: automation.instructions,
+    triggerType: automation.triggerType,
+    eventType: automation.eventType ?? undefined,
+    triggerConfig: automation.triggerConfig ?? undefined,
+    providerSelections: automation.providerSelections,
+  };
+}
+
+/**
+ * Slack channel conditions are bound to the owning team (create rejects channels bound to another
+ * owner), so an ownership change drops them, leaving required-channel validation to ask again.
+ */
+export function withoutOwnerBoundConditions(conditions: TriggerCondition[]): TriggerCondition[] {
+  return conditions.filter((condition) => condition.type !== "slack_channel");
+}
+
+/** `values` moved to `teamId`: owner-bound targets and Slack channels don't carry over. */
+export function changeAutomationFormOwner(
+  values: InitialAutomationFormValues,
+  teamId: string | null
+): InitialAutomationFormValues {
+  return {
+    ...values,
+    teamId,
+    repositories: [],
+    environmentIds: [],
+    triggerConfig: values.triggerConfig && {
+      ...values.triggerConfig,
+      conditions: withoutOwnerBoundConditions(values.triggerConfig.conditions),
+    },
+  };
+}
+
+/**
+ * Whether a new automation may be owned by `teamId` (null for the workspace), once the viewer's
+ * team choices have loaded.
+ */
+export function automationOwnerSelectable(
+  teamId: string | null,
+  scope: { teams: { id: string }[]; loading: boolean; error: unknown; allowWorkspace: boolean },
+  requireTeam: boolean
+): boolean {
+  if (scope.loading || scope.error) return false;
+  return teamId
+    ? scope.teams.some((team) => team.id === teamId)
+    : scope.allowWorkspace && !requireTeam;
+}
+
+const COPY_NAME_SUFFIX = " (copy)";
+
+/**
+ * The source name plus a copy suffix, trimmed to fit MAX_AUTOMATION_NAME_LENGTH. A copy of a copy
+ * keeps one suffix, and the trim cuts between graphemes so it can't split an emoji or accent.
+ */
+export function automationCopyName(name: string): string {
+  const original = name.endsWith(COPY_NAME_SUFFIX) ? name.slice(0, -COPY_NAME_SUFFIX.length) : name;
+  const limit = MAX_AUTOMATION_NAME_LENGTH - COPY_NAME_SUFFIX.length;
+  let base = "";
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+    original
+  )) {
+    if (base.length + segment.length > limit) break;
+    base += segment;
+  }
+  return `${base.trimEnd()}${COPY_NAME_SUFFIX}`;
+}
+
+export interface AutomationDuplicate {
+  sourceName: string;
+  initialValues: InitialAutomationFormValues;
+  /** The viewer can't create in the source's team, so the copy changed owner. */
+  teamReset: boolean;
+  /** Repositories or environments the viewer can't use were left out of the copy. */
+  targetsDropped: boolean;
+}
+
+/**
+ * Create-form values for a copy of `source`. The copy keeps the source's team and targets when
+ * the viewer can create there; otherwise it moves to `fallbackTeamId` as a team change in the
+ * form would. Targets missing from the viewer's pickers would block or fail creation, so they are
+ * left out. Per-automation credentials aren't part of an automation: the server issues new
+ * webhook keys and the form asks for the Sentry client secret again.
+ */
+export function createAutomationDuplicate(
+  source: Automation,
+  {
+    teamSelectable,
+    fallbackTeamId,
+    usableRepositoryKeys,
+    usableEnvironmentIds,
+  }: {
+    teamSelectable: boolean;
+    fallbackTeamId: string | null;
+    /** Lowercase full names, as `repositoryKey` formats them. */
+    usableRepositoryKeys: readonly string[];
+    usableEnvironmentIds: readonly string[];
+  }
+): AutomationDuplicate {
+  const values = { ...automationToFormValues(source), name: automationCopyName(source.name) };
+  if (!teamSelectable) {
+    return {
+      sourceName: source.name,
+      initialValues: changeAutomationFormOwner(values, fallbackTeamId),
+      teamReset: true,
+      targetsDropped: false,
+    };
+  }
+  const repositories = source.repositories.filter((repository) =>
+    usableRepositoryKeys.includes(repositoryKey(repository.repoOwner, repository.repoName))
+  );
+  const environmentIds = source.environmentIds.filter((id) => usableEnvironmentIds.includes(id));
+  return {
+    sourceName: source.name,
+    initialValues: { ...values, repositories, environmentIds },
+    teamReset: false,
+    targetsDropped:
+      repositories.length < source.repositories.length ||
+      environmentIds.length < source.environmentIds.length,
   };
 }
 

@@ -92,7 +92,7 @@ The reserved names are listed in full in [Secrets](/configure/secrets). Build-ti
 
 ## What is deliberately absent
 
-- User-supplied provider API keys in account mode. When a session is bound to a connected OpenAI, xAI, or Claude account, the matching user key is removed from the general sandbox environment and the `*_OAUTH_MANAGED` marker remains. A deployment-wide Anthropic key may still be present on Modal or OpenComputer. The Claude harness receives its setup token only in the `claude` process.
+- User-supplied provider API keys in account mode. When a session is bound to a connected OpenAI, xAI, or Claude account, the matching user key is removed from the general sandbox environment and the `*_OAUTH_MANAGED` marker remains. A deployment-wide Anthropic key may still be present on Modal. The Claude harness receives its setup token only in the `claude` process.
 - Refresh tokens. OpenAI and xAI sessions fetch short-lived access tokens; refresh tokens stay in the encrypted credential store. Claude accounts instead use a static setup token with an expiry, not a rotating refresh token.
 - The commit signing private key. Sandboxes receive only the public key; each commit is signed by the control plane. The key is never delivered to a sandbox file, environment, process, or snapshot.
 - A system clone token injected by the normal session launch path. Session git credentials are requested on demand, then cached on disk; this does not exclude tokens from snapshots (next section).

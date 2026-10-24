@@ -1224,6 +1224,24 @@ describe("slack_event automation", () => {
     ).toBeInTheDocument();
   });
 
+  it("drops the previous team's Slack channels when the team changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, teamId: "team-1", triggerConfig: validConditions }}
+      />
+    );
+
+    await chooseTeam(user, "Design");
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+  });
+
   it("submits a valid slack_event", () => {
     const onSubmit = vi.fn();
     const { container } = render(

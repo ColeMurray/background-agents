@@ -1730,6 +1730,32 @@ describe("SessionMessageQueue", () => {
       return h.queue.processMessageQueue();
     }
 
+    it("preserves the execution deadline and start callback when circuit-breaker reset throws", async () => {
+      const h = buildQueue();
+      h.sandboxLifecycle.onPromptDispatched.mockImplementation(() => {
+        throw new Error("Circuit-breaker storage unavailable");
+      });
+
+      const result = await dispatchPrompt(h).catch((error: unknown) => error);
+
+      expect(h.repository.startMessageProcessing).toHaveBeenCalledOnce();
+      expect(h.wsManager.send).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({ type: "prompt", messageId: "msg-1" })
+      );
+      const startedAt = h.repository.startMessageProcessing.mock.calls[0][1];
+      expect(h.setAlarm).toHaveBeenCalledExactlyOnceWith(startedAt + EXECUTION_TIMEOUT_MS);
+      expect(result).toBeUndefined();
+      expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+      expect(h.callbackService.notifyStarted).toHaveBeenCalledExactlyOnceWith("msg-1");
+      expect(h.log.warn).toHaveBeenCalledWith("prompt.circuit_breaker_reset_failed", {
+        event: "prompt.circuit_breaker_reset_failed",
+        message_id: "msg-1",
+        error: "Circuit-breaker storage unavailable",
+      });
+    });
+
     it("schedules the execution deadline when no alarm is set", async () => {
       const h = buildQueue();
       const before = Date.now();

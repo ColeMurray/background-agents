@@ -38,4 +38,14 @@ describe("memory tool specs", () => {
     expect(harnessMemoryToolName("opencode", "memory_read")).toBe("memory_read");
     expect(harnessMemoryToolName("claude", "memory_read")).toBe("mcp__oi__memory_read");
   });
+
+  it("guides agents to capture durable discoveries and report proposals for review", () => {
+    const write = buildMemorySandboxContract().tools.find((tool) => tool.name === "memory_write")!;
+    expect(write.description).toMatch(/build, test or setup/);
+    expect(write.description).toMatch(/corrected assumption/);
+    expect(write.description).toMatch(/proposed.*review/);
+    expect(write.description).toContain("only when the user asks");
+    expect(write.description).toContain("Never store credentials");
+    expect(write.description).toContain("personal-memory opt-out");
+  });
 });

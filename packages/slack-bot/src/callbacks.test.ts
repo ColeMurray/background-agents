@@ -351,6 +351,49 @@ describe("POST /callbacks/activity", () => {
     });
   });
 
+  it("waits for the Slack status write before acknowledging activity", async () => {
+    const started = createDeferred<void>();
+    const pending = createDeferred<Response>();
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    const payload = await signPayload(activityData());
+    let acknowledged = false;
+    const request = postCallback("/callbacks/activity", payload).then((result) => {
+      acknowledged = true;
+      return result;
+    });
+    await started.promise;
+    // Give an early HTTP acknowledgement a full turn to settle while Slack is blocked.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      expect(acknowledged).toBe(false);
+    } finally {
+      pending.resolve(Response.json({ ok: true }));
+      await request;
+    }
+    const { response, ctx } = await request;
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it.each(["network", "rate_limit"])(
+    "acknowledges a settled best-effort Slack failure: %s",
+    async (failure) => {
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      if (failure === "network") fetchMock.mockRejectedValue(new Error("network down"));
+      else fetchMock.mockResolvedValue(new Response(null, { status: 429 }));
+      const { response, ctx } = await postCallback(
+        "/callbacks/activity",
+        await signPayload(activityData())
+      );
+      expect(response.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(ctx.waitUntil).not.toHaveBeenCalled();
+    }
+  );
+
   it("rejects a payload signed with the wrong secret", async () => {
     const fetchMock = okFetchMock();
     const payload = await signPayload(activityData(), "wrong-secret");

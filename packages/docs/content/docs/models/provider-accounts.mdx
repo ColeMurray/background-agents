@@ -141,7 +141,7 @@ Pins are retained when the configured model changes and apply only to future ses
 
 ## What account mode does to the sandbox
 
-- The provider's API key (`OPENAI_API_KEY`, `XAI_API_KEY`, or `ANTHROPIC_API_KEY`) from user-configured global, repository, or environment secrets, and legacy OAuth fields for that provider, are removed from the exposed secret environment. A non-secret managed marker is injected. This does **not** guarantee the key is absent from the sandbox: a deployment-level Anthropic key can still be supplied separately by the sandbox provider (for example on Modal or OpenComputer).
+- The provider's API key (`OPENAI_API_KEY`, `XAI_API_KEY`, or `ANTHROPIC_API_KEY`) from user-configured global, repository, or environment secrets, and legacy OAuth fields for that provider, are removed from the exposed secret environment. A non-secret managed marker is injected. This does **not** guarantee the key is absent from the sandbox: a deployment-level Anthropic key can still be supplied separately by the sandbox provider (on Modal).
 - The sandbox requests credentials from the control plane using its own sandbox credential. For OpenAI and xAI the control plane refreshes the stored credential and returns only a short-lived access token; for Claude it returns the setup token, which is static and valid for about a year, and the harness keeps it in process memory.
 - Refresh tokens never enter the sandbox and are never returned to the browser. Broker responses are marked `no-store`.
 - API-key mode is unchanged: the sandbox receives ordinary global, repository, or environment secrets.

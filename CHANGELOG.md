@@ -2,6 +2,128 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 23, 2026
+
+**Faster sandbox boots.** The runtime now fetches managed skills and session memory side by side
+instead of one after the other. On Boat, the control plane re-reads a starting sandbox as soon as
+the previous read has answered rather than every two seconds, watches the launcher for one second
+instead of five after starting it, and names the sandbox while it hosts its ports rather than
+before. Together these take a few seconds off every boot. Boat also now starts the runtime from the
+create request itself, as Modal and Daytona do, instead of through a start command issued once the
+control plane notices the machine is up; a resume still uses the start command.
+
+**Boat tunnel URLs reach the runtime again.** With the create-request launch, the tunnel env file
+was written into the workspace before the machine was up, where Boat's snapshot mount hid it, and
+every boot waited 30 seconds for a file it could not see before running `start.sh` without tunnel
+URLs. The create now stages the file under `/tmp` and the setup script copies it into the workspace
+before the launcher starts.
+
+**One runtime per Boat sandbox after a quick resume.** A resume soon after a stop can get the parked
+machine back with its runtime still running. The launcher's single-instance lock lived under the
+home directory, which Boat remounts when a lazy restore finishes, so the resumed launcher did not
+see the lock the first boot held and started a second runtime. The two then took turns on the
+session's connection every few seconds, and a turn could be reported complete twice. The lock now
+lives in `/tmp`, so the resumed launcher finds the runtime running and leaves it be.
+
+**Fewer steps to start a Boat sandbox.** Boat's create request now takes the sandbox's name, its
+visibility and the ports to route, so the control plane sends them with the create instead of
+renaming, unsharing and hosting each port afterwards. A sandbox billed to an organization is private
+before it has a machine, so it is never shared, not even for a moment. Boat also holds a file write
+to a starting sandbox until the sandbox is ready, so the tunnel env file now goes straight into the
+workspace instead of being staged under `/tmp` for the setup script to copy.
+
+## October 22, 2026
+
+**Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A
+build runs `setup.sh` once in a sandbox deployed from the base snapshot and its disk is saved as a
+Boat named snapshot; sessions deploy from that image and skip setup. The build sandbox receives the
+scope's secrets only after it is private, through a file no snapshot keeps, so an image never
+carries them. Images count toward the account's named-snapshot allowance. See
+[Pre-Built Images](docs/IMAGE_PREBUILD.md#boat-prebuilds).
+
+## October 20, 2026
+
+**Boat sandbox provider.** [Boat](https://boat.dev) joins Modal, Daytona, Vercel, and E2B as a
+selectable sandbox provider (`sandbox_provider = "boat"`). Sessions run in full Ubuntu VMs deployed
+from a Terraform-built named snapshot; idle sessions are stopped (disk snapshotted, machine
+released) and resume on a new machine with their files intact. Sessions pick the smallest Boat
+machine size that fits their CPU and memory settings. See
+[Boat Sandbox Provider](docs/BOAT_SANDBOX_PROVIDER.md).
+
+## October 19, 2026
+
+**Autofix acts on approvals with inline comments.** An approved pull request review that starts at
+least one inline comment thread now resumes the PR's owning session, so suggestions attached to an
+approval get addressed. Approvals with only a summary or only thread replies are still skipped. If
+you allowlist third-party review bots, expect more Autofix runs.
+
+**Exclude labels in PR automations.** The automation form's **Label** condition can now match **none
+of** the chosen labels, so a review automation can skip pull requests carrying a given label.
+
+## October 15, 2026
+
+**Rich child session status.** When an agent checks on its child sessions, the timeline shows each
+child's linked metadata, status, and final response rendered as Markdown instead of raw text. The
+full tool output stays available behind a disclosure.
+
+## October 14, 2026
+
+**Codex harness.** Sessions can run on OpenAI's Codex as a third harness beside OpenCode and Claude
+Agent. Choose it in the composer, in automations, and in the Slack, GitHub, and Linear harness
+settings. Codex runs OpenAI models only and authenticates with an OpenAI API key or a ChatGPT
+account connected under **Settings > Provider Accounts**; the legacy `OPENAI_OAUTH_*` secrets are
+not used. A model, reasoning effort, or credential Codex can't use is rejected instead of being
+replaced with a default. Some efforts, such as `max` on GPT-5.6 Sol, are available only on Codex.
+Requires D1 migration 0087 and a sandbox image rebuild.
+
+**Mark all as read.** Hover the **Needs attention** heading in the sidebar or on a team overview
+page to mark every unread session in it as read, including pages not yet loaded. Only sessions
+matching the current filters are marked.
+
+**Skip draft pull requests in automations.** PR opened and PR updated automations can set **Draft**
+to **Not draft** to skip drafts before a session starts. The new **PR ready for review** event runs
+them when a draft is marked ready without a new push. See
+[GitHub event triggers](docs/AUTOMATIONS.md#github-event-triggers).
+
+**Classify on Amazon Bedrock.** The Slack and Linear target classifiers can call Claude through
+Amazon Bedrock. Set `classification_model` to `bedrock/<aws-region>/<inference-profile-id>` and
+`classification_bedrock_api_key`; no Anthropic key is needed. Coding sessions are unchanged. See
+[Classify on Amazon Bedrock](docs/GETTING_STARTED.md#classify-on-amazon-bedrock-optional).
+
+**Slack model and target safeguards.** A new Slack request whose model has been disabled is refused
+with recovery steps in the thread instead of running on a different model, and App Home marks a
+disabled personal model for replacement. When the classifier guesses a target, that guess is now the
+first quick-pick button, and a guess of **No repository** always asks first, since a thread started
+without a repository can't be retargeted.
+
+## October 13, 2026
+
+**Continue a session from webhooks.** Inbound webhook payloads can include a `sessionKey`. Later
+deliveries with the same key become follow-ups in the session the first one started, the way Slack
+thread replies do. Follow-ups that arrive while that run is still starting are held and delivered in
+order. If the session can't take a follow-up, the webhook returns an error instead of starting a new
+session. The 7-day continuation window now counts from the session's last activity, for Slack
+automations too. Requires D1 migration 0086. See
+[Continuing a session](docs/AUTOMATIONS.md#continuing-a-session).
+
+**Markdown preview in the Changes panel.** Changed Markdown files get a **Preview** view beside
+Unified and Split that renders the whole resulting document.
+
+**GitHub and Linear refuse incompatible launches.** When the configured harness can't run the
+resolved model, the GitHub and Linear bots now reply with an explanation and create no session, as
+Slack does, instead of falling back to OpenCode. A settings level that explicitly selects a
+restricted harness needs a compatible default model at that same level. Existing settings without
+one must be fixed before any other edits can be saved. See
+[Choosing a harness](docs/CLAUDE_AGENT.md#choosing-a-harness).
+
+## October 12, 2026
+
+**Slack replies render Markdown.** Agent replies in Slack now render headings, bold text, lists, and
+links instead of showing raw Markdown. `@here` and `@channel` broadcasts are stripped from replies.
+
+**Search shared memories.** **Settings > Shared memories** has a search box covering titles,
+descriptions, and content, and a searchable repository and environment picker.
+
 ## October 8, 2026
 
 **Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
@@ -12,12 +134,40 @@ Claude Agent, Slack sessions follow the Claude **Automated authentication** sett
 a connected Claude subscription. Existing threads keep their harness. See
 [Claude Agent](docs/CLAUDE_AGENT.md#slack-sessions).
 
+## October 7, 2026
+
+**Claude Agent for GitHub sessions.** Choose OpenCode or Claude Agent for GitHub-triggered sessions
+under **Settings > Integrations > GitHub**, globally or per repository. OpenCode stays the default.
+See [GitHub settings](docs/integrations/GITHUB.md#models-and-instructions).
+
+## October 5, 2026
+
+**Burstable Modal VM resources.** `modal-vm` sandboxes reserve less CPU and memory by default and
+can burst up to new `cpuLimitCores` and `memoryLimitMib` caps, set globally, per repository, or per
+environment. Modal bills the larger of the request and actual usage, so lightly used VMs cost less.
+Bursting depends on spare host capacity. Existing explicit requests are unchanged. See
+[Modal VM setup](docs/MODAL_DOCKER.md#runtime-and-resources).
+
 ## October 4, 2026
 
 **GitHub model overrides.** Start a GitHub `@mention` with `!model` or `!reasoning`, the same flags
 Slack uses, to pick the model and reasoning effort for that session. Upgrade the GitHub bot and
 control plane together. See
 [GitHub integration](docs/integrations/GITHUB.md#model-and-reasoning-overrides).
+
+**Claude Agent for Linear sessions.** Choose OpenCode or Claude Agent for Linear-triggered sessions
+under **Settings > Integrations > Linear**, globally or per repository. Linear activities now name
+the harness. On Claude Agent, Linear sessions follow the Claude **Automated authentication**
+setting. See [Linear sessions](docs/CLAUDE_AGENT.md#linear-sessions).
+
+**Webhook invocation status.** Inbound webhook responses now include an `invocationId`. Check its
+status and runs with the same webhook key at
+`GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`. A retry with the same
+`idempotencyKey` returns the original ID. See [Inbound webhooks](docs/AUTOMATIONS.md#responses).
+
+**Autofix replies in review threads.** Autofix now replies to each inline review comment in its own
+thread and resolves the thread once the comment is addressed, instead of posting one summary
+comment.
 
 ## October 3, 2026
 

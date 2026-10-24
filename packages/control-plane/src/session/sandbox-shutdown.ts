@@ -1,4 +1,7 @@
-import { DEFAULT_FINAL_SNAPSHOT_BUFFER_MS } from "@open-inspect/shared/types/integrations";
+import {
+  DEFAULT_FINAL_SNAPSHOT_BUFFER_MS,
+  isSandboxProviderName,
+} from "@open-inspect/shared/types/integrations";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
@@ -20,6 +23,7 @@ import type {
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { DEFAULT_HEARTBEAT_CONFIG, isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
+import { interruptionMessage } from "./interruption-messages";
 import { legacyShutdownRecord } from "./legacy-shutdown-record";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -48,18 +52,6 @@ const UNCONFIRMED_CHECKPOINT_ERROR =
   "Checkpoint provider outcome is unknown; destructive follow-up remains held.";
 const RELEASED_CHECKPOINT_WARNING =
   "An automatic save of this sandbox could not be confirmed. The sandbox is still running with your work and the session has resumed; the next save will include it.";
-
-/** User-facing text for a prompt interrupted by a shutdown; reasons are internal codes. */
-const INTERRUPTION_MESSAGES: Record<string, string> = {
-  heartbeat_timeout: "The sandbox stopped responding.",
-  prompt_dispatch_send_failed: "The sandbox stopped responding.",
-  stop_send_failed: "The sandbox stopped responding.",
-  stop_alarm_failed: "The sandbox stopped responding.",
-  stop_confirmation_timeout: "The sandbox stopped responding.",
-  fatal_runtime_error: "The sandbox runtime failed.",
-  inactivity_timeout: "The sandbox was stopped after a period of inactivity.",
-  sandbox_lifetime_expiring: "The sandbox reached its maximum lifetime.",
-};
 
 class ShutdownDeadlineError extends Error {}
 
@@ -418,11 +410,10 @@ export class SandboxShutdownCoordinator {
   startupDecision(): SandboxStartupDecision {
     const state = this.normalizeInterruptedRestore();
     if (!state) return { kind: "normal" };
-    if (
-      (state.provider !== undefined && state.provider !== this.deps.provider.name) ||
-      (state.receipt && state.receipt.provider !== this.deps.provider.name)
-    ) {
-      const reason = "The configured sandbox provider changed";
+    if (this.recordedOnOtherProvider(state)) {
+      const reason = this.recordedOnRetiredProvider(state)
+        ? "The sandbox provider that saved this session is no longer supported"
+        : "The configured sandbox provider changed";
       if (state.phase !== "unknown") this.fail(state, "unknown", reason);
       return { kind: "hold", reason };
     }
@@ -540,12 +531,14 @@ export class SandboxShutdownCoordinator {
   }
 
   private availableRecoveryActions(state: ShutdownRecord): ShutdownRecoveryAction[] {
-    if (
-      !this.current(state) ||
-      (state.provider !== undefined && state.provider !== this.deps.provider.name) ||
-      (state.receipt && state.receipt.provider !== this.deps.provider.name)
-    )
-      return [];
+    if (!this.current(state)) return [];
+    if (this.recordedOnOtherProvider(state)) {
+      // A supported provider can be configured again to recover the record. A
+      // removed one never can, so holding protects nothing: its unreachable
+      // state may only be abandoned, and only by an explicit choice.
+      if (!this.recordedOnRetiredProvider(state) || this.checkpointOperationId !== null) return [];
+      return state.discarding && this.discardingOperation !== null ? [] : ["discard"];
+    }
     if (state.phase === "failed" || state.phase === "unknown") {
       // A claimed discard can only be completed, and is resubmittable only
       // when no call in this instance is still stopping its source.
@@ -559,6 +552,22 @@ export class SandboxShutdownCoordinator {
     if (state.phase === "saved" && this.continuationPaused(state))
       return this.canRestoreSaved(state) ? ["restore_saved"] : [];
     return [];
+  }
+
+  /** The record names a provider other than the configured one. */
+  private recordedOnOtherProvider(state: ShutdownRecord): boolean {
+    return (
+      (state.provider !== undefined && state.provider !== this.deps.provider.name) ||
+      (!!state.receipt && state.receipt.provider !== this.deps.provider.name)
+    );
+  }
+
+  /** Every other provider the record names has been removed from this build. */
+  private recordedOnRetiredProvider(state: ShutdownRecord): boolean {
+    return [state.provider, state.receipt?.provider].every(
+      (name) =>
+        name === undefined || name === this.deps.provider.name || !isSandboxProviderName(name)
+    );
   }
 
   private canRestoreSaved(state: ShutdownRecord): boolean {
@@ -707,7 +716,9 @@ export class SandboxShutdownCoordinator {
     this.discardingOperation = claim.discarding!;
     try {
       this.publish(claim);
-      if (claim.providerObjectId && this.canStopSource()) {
+      // Another provider's handle is never this provider's to stop. Discard
+      // reaches here with one only for a removed provider, whose sources are gone.
+      if (claim.providerObjectId && this.canStopSource() && !this.recordedOnOtherProvider(claim)) {
         try {
           await this.stopSource(
             claim,
@@ -976,12 +987,7 @@ export class SandboxShutdownCoordinator {
       this.deps.store.write(next);
       if (emergency) this.deps.sandbox.updateSandboxStatus("stale");
       return message
-        ? this.deps.failures.record(
-            message.id,
-            INTERRUPTION_MESSAGES[reason] ?? "The sandbox was stopped.",
-            now,
-            "processing"
-          )
+        ? this.deps.failures.record(message.id, interruptionMessage(reason), now, "processing")
         : null;
     });
     this.announce(next);
