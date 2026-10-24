@@ -119,7 +119,7 @@ describe("handleTask", () => {
     });
   });
 
-  it("rejects a harness Terraform would not have set", async () => {
+  it("reports actionable launch configuration errors without silently defaulting", async () => {
     await handleTask(createEnv({ HARNESS: "cursor" }), {
       interaction: createGuildCommand(),
       prompt: "Do something",
@@ -127,7 +127,7 @@ describe("handleTask", () => {
     });
 
     expect(cpCalls().map((call) => call.url)).toEqual(["https://internal/repos"]);
-    expect(discordCalls()[0].body.content).toContain("Couldn't start the task");
+    expect(discordCalls()[0].body.content).toContain("Set HARNESS to claude or opencode");
   });
 
   it("closes the status message when the prompt cannot be sent", async () => {
@@ -237,6 +237,72 @@ describe("handleTask", () => {
     const content = discordCalls()[0].body.content;
     expect(content).toMatch(/^⚠️ Couldn't start the task\. Trace ID: `[0-9a-f-]{36}`$/);
     expect(content).not.toContain("assignment_required");
+  });
+
+  it("maps team_required to an actionable static message without exposing API text", async () => {
+    const base = cpFetch.getMockImplementation()!;
+    const rejected = json({ code: "team_required", error: "private database detail" }, 400);
+    const parse = vi.spyOn(rejected, "json");
+    cpFetch.mockImplementation(async (env, request, init) =>
+      request.url === "https://internal/sessions" ? rejected : base(env, request, init)
+    );
+    await handleTask(createEnv(), {
+      interaction: createGuildCommand(),
+      prompt: "Fix it",
+      repo: "octo/website",
+    });
+    expect(parse).toHaveBeenCalledOnce();
+    const content = discordCalls()[0].body.content;
+    expect(content).toContain("requires a team");
+    expect(content).toContain("web app");
+    expect(content).not.toContain("private database detail");
+    expect(cpCalls().some((call) => call.url.endsWith("/prompt"))).toBe(false);
+  });
+
+  it.each([
+    "not JSON",
+    JSON.stringify({ code: "other", error: "private detail" }),
+    JSON.stringify(["team_required"]),
+  ])("keeps unexpected or malformed 400 refusals private: %s", async (body) => {
+    const base = cpFetch.getMockImplementation()!;
+    cpFetch.mockImplementation(async (env, request, init) =>
+      request.url === "https://internal/sessions"
+        ? new Response(body, { status: 400 })
+        : base(env, request, init)
+    );
+    await handleTask(createEnv(), {
+      interaction: createGuildCommand(),
+      prompt: "Fix it",
+      repo: "octo/website",
+    });
+    expect(discordCalls()[0].body.content).toMatch(/^⚠️ Couldn't start the task\. Trace ID:/);
+    expect(discordCalls()[0].body.content).not.toContain(body);
+  });
+
+  it("does not create another session when thread lookup fails", async () => {
+    const kv = createKv();
+    kv.get.mockRejectedValueOnce(new Error("KV unavailable"));
+    await handleTask(createEnv({ DISCORD_KV: kv as unknown as KVNamespace }), {
+      interaction: createGuildCommand({ channel_id: "thread-1" }),
+      prompt: "Follow up",
+      repo: "octo/website",
+    });
+    expect(cpFetch).not.toHaveBeenCalled();
+    expect(discordCalls()[0].body.content).toContain("Couldn't start the task");
+  });
+
+  it("still sends to the created thread when storing its mapping fails", async () => {
+    const kv = createKv();
+    kv.put.mockImplementation(async (key, value) => {
+      if (key.startsWith("thread:")) throw new Error("KV write failed");
+      kv.store.set(key, value);
+    });
+    await handleTask(createEnv({ DISCORD_KV: kv as unknown as KVNamespace }), {
+      interaction: createGuildCommand(),
+      prompt: "Fix it",
+      repo: "octo/website",
+    });
+    expect(JSON.parse(cpCalls().at(-1)!.body as string).callbackContext.threadId).toBe("thread-1");
   });
 
   it("still sends the prompt when the thread cannot be created", async () => {

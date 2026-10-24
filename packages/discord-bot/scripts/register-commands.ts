@@ -10,6 +10,7 @@
  */
 
 import { TASK_COMMAND } from "../src/commands.ts";
+import { DISCORD_API } from "../src/discord-constants.ts";
 
 const { DISCORD_APPLICATION_ID, DISCORD_BOT_TOKEN, DISCORD_GUILD_ID } = process.env;
 for (const [name, value] of Object.entries({
@@ -24,7 +25,7 @@ for (const [name, value] of Object.entries({
 }
 
 const response = await fetch(
-  `https://discord.com/api/v10/applications/${DISCORD_APPLICATION_ID}/guilds/${DISCORD_GUILD_ID}/commands`,
+  `${DISCORD_API}/applications/${DISCORD_APPLICATION_ID}/guilds/${DISCORD_GUILD_ID}/commands`,
   {
     method: "PUT",
     headers: {

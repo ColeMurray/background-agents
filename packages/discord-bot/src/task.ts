@@ -7,28 +7,48 @@
  * the thread's session instead.
  */
 
-import { harnessIdSchema } from "@open-inspect/shared/harnesses";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import {
   createSessionResponseSchema,
   type DiscordCallbackContext,
 } from "@open-inspect/shared/types/session-api";
 import { editOriginalResponse, startThreadFromMessage } from "./discord-api";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { getLaunchConfig, LaunchConfigError } from "./launch-config";
 import { sessionUrl } from "./links";
 import { createLogger } from "./logger";
 import { finishProgress, startProgress } from "./progress";
 import { findRepo, listRepos, type TaskRepo } from "./repos";
-import { threadSessionSchema, type Env, type GuildCommand, type ThreadSession } from "./types";
+import { lookupThreadSession, storeThreadSession } from "./thread-session-store";
+import type { Env, GuildCommand } from "./types";
 
 const log = createLogger("task");
 
-/** Thread mappings outlive Discord's longest auto-archive window (7 days). */
-const THREAD_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const MAX_TASK_TITLE_LENGTH = 80;
+const MAX_PROMPT_QUOTE_LENGTH = 300;
+const MAX_ERROR_LOG_LENGTH = 300;
+const ELLIPSIS = "...";
+const TEAM_REQUIRED_MESSAGE =
+  "This workspace requires a team for new sessions. Discord tasks do not support team selection yet. Start the task in the web app and select a team.";
 
 export interface TaskRequest {
   interaction: GuildCommand;
   prompt: string;
   repo: string | undefined;
+}
+
+interface TaskRun {
+  env: Env;
+  request: TaskRequest;
+  identity: { userId: string; actor: string; displayName: string };
+  reply: (content: string) => Promise<string>;
+  traceId: string;
+}
+
+function callbackContext(
+  coordinates: Omit<DiscordCallbackContext, "source" | "statusMessage">
+): Omit<DiscordCallbackContext, "statusMessage"> {
+  return { source: "discord", ...coordinates };
 }
 
 /** Where a prompt goes: an existing session or one created for it. */
@@ -42,27 +62,16 @@ interface PromptTarget {
 /** The user declined or mistyped something; the reply says what to change. */
 class TaskRejected extends Error {}
 
-function threadKey(threadId: string): string {
-  return `thread:${threadId}`;
-}
-
-export async function lookupThreadSession(
-  env: Env,
-  threadId: string
-): Promise<ThreadSession | null> {
-  const raw = await env.DISCORD_KV.get(threadKey(threadId), "json");
-  const parsed = threadSessionSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
-}
-
 /** First line of the prompt, trimmed to fit a session title and a thread name. */
 export function taskTitle(prompt: string): string {
   const firstLine = prompt.trim().split("\n")[0] ?? "";
-  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
+  return firstLine.length > MAX_TASK_TITLE_LENGTH
+    ? `${firstLine.slice(0, MAX_TASK_TITLE_LENGTH - ELLIPSIS.length)}${ELLIPSIS}`
+    : firstLine;
 }
 
-function quote(text: string, max = 300): string {
-  const clipped = text.length > max ? `${text.slice(0, max - 3)}...` : text;
+function quote(text: string, max = MAX_PROMPT_QUOTE_LENGTH): string {
+  const clipped = text.length > max ? `${text.slice(0, max - ELLIPSIS.length)}${ELLIPSIS}` : text;
   return clipped
     .split("\n")
     .map((line) => `> ${line}`)
@@ -70,12 +79,19 @@ function quote(text: string, max = 300): string {
 }
 
 async function responseText(response: Response): Promise<string> {
-  return (await response.text().catch(() => "")).slice(0, 300);
+  return (await response.text().catch(() => "")).slice(0, MAX_ERROR_LOG_LENGTH);
 }
 
 async function createSession(
   env: Env,
-  params: { repo: TaskRepo; title: string; model: string; actor: string; displayName: string },
+  params: {
+    repo: TaskRepo;
+    title: string;
+    model: string;
+    harness: HarnessId;
+    actor: string;
+    displayName: string;
+  },
   traceId: string
 ): Promise<string> {
   const response = await signedControlPlaneFetch(env, {
@@ -86,13 +102,26 @@ async function createSession(
       repoName: params.repo.name,
       title: params.title,
       model: params.model,
-      harness: harnessIdSchema.parse(env.HARNESS),
+      harness: params.harness,
       actorDisplayName: params.displayName,
     }),
     actor: params.actor,
     traceId,
   });
   if (!response.ok) {
+    // Read once. Only this expected refusal has a public explanation; never echo API text.
+    if (response.status === 400) {
+      const payload: unknown = await response.json().catch(() => null);
+      if (
+        payload &&
+        typeof payload === "object" &&
+        "code" in payload &&
+        payload.code === "team_required"
+      ) {
+        throw new TaskRejected(TEAM_REQUIRED_MESSAGE);
+      }
+      throw new Error(`Could not create a session (${response.status})`);
+    }
     throw new Error(
       `Could not create a session (${response.status}): ${await responseText(response)}`
     );
@@ -130,13 +159,8 @@ async function sendPrompt(
  * effort: without it the reply still lands in the channel, only follow-ups
  * are lost.
  */
-async function createTarget(
-  env: Env,
-  request: TaskRequest,
-  identity: { userId: string; actor: string; displayName: string },
-  reply: (content: string) => Promise<string>,
-  traceId: string
-): Promise<PromptTarget> {
+async function createTarget(run: TaskRun): Promise<PromptTarget> {
+  const { env, request, identity, reply, traceId } = run;
   const { interaction, prompt } = request;
   const channelId = interaction.channel_id;
   if (!request.repo) {
@@ -150,8 +174,8 @@ async function createTarget(
   }
 
   const title = taskTitle(prompt);
-  const model = env.DEFAULT_MODEL;
-  const sessionId = await createSession(env, { repo, title, model, ...identity }, traceId);
+  const { model, harness } = getLaunchConfig(env);
+  const sessionId = await createSession(env, { repo, title, model, harness, ...identity }, traceId);
 
   const messageId = await reply(
     `🛠️ **Task started** by <@${identity.userId}> on \`${repo.fullName}\`\n${quote(prompt)}\n` +
@@ -161,14 +185,11 @@ async function createTarget(
   let threadId: string | undefined;
   try {
     threadId = await startThreadFromMessage(env.DISCORD_BOT_TOKEN, channelId, messageId, title);
-    const record: ThreadSession = {
+    await storeThreadSession(env, threadId, {
       sessionId,
       repoFullName: repo.fullName,
       model,
       createdAt: Date.now(),
-    };
-    await env.DISCORD_KV.put(threadKey(threadId), JSON.stringify(record), {
-      expirationTtl: THREAD_SESSION_TTL_SECONDS,
     });
   } catch (error) {
     log.warn("task.thread_failed", { trace_id: traceId, session_id: sessionId, error });
@@ -183,28 +204,22 @@ async function createTarget(
   return {
     sessionId,
     replyChannelId: threadId ?? channelId,
-    context: {
-      source: "discord",
+    context: callbackContext({
       channelId,
       threadId,
       userId: identity.userId,
       repoFullName: repo.fullName,
       model,
-    },
+    }),
   };
 }
 
 /** The thread's session for a follow-up, else a new session and thread. */
-async function resolveTarget(
-  env: Env,
-  request: TaskRequest,
-  identity: { userId: string; actor: string; displayName: string },
-  reply: (content: string) => Promise<string>,
-  traceId: string
-): Promise<PromptTarget> {
+async function resolveTarget(run: TaskRun): Promise<PromptTarget> {
+  const { env, request, identity, reply, traceId } = run;
   const channelId = request.interaction.channel_id;
   const existing = await lookupThreadSession(env, channelId);
-  if (!existing) return createTarget(env, request, identity, reply, traceId);
+  if (!existing) return createTarget(run);
   if (request.repo && request.repo.trim().toLowerCase() !== existing.repoFullName.toLowerCase()) {
     throw new TaskRejected(
       `This thread works on \`${existing.repoFullName}\`. Start a new task from the channel to use another repository.`
@@ -218,14 +233,13 @@ async function resolveTarget(
   return {
     sessionId: existing.sessionId,
     replyChannelId: channelId,
-    context: {
-      source: "discord",
+    context: callbackContext({
       channelId,
       threadId: channelId,
       userId: identity.userId,
       repoFullName: existing.repoFullName,
       model: existing.model,
-    },
+    }),
   };
 }
 
@@ -245,8 +259,9 @@ export async function handleTask(env: Env, request: TaskRequest): Promise<void> 
       mentionUserIds: [userId],
     });
 
+  const run: TaskRun = { env, request, identity, reply, traceId };
   try {
-    const target = await resolveTarget(env, request, identity, reply, traceId);
+    const target = await resolveTarget(run);
     // Posted before the prompt so the first tool call finds its status message.
     const statusMessage = await startProgress(env, target.replyChannelId);
     try {
@@ -271,7 +286,7 @@ export async function handleTask(env: Env, request: TaskRequest): Promise<void> 
       throw error;
     }
   } catch (error) {
-    if (error instanceof TaskRejected) {
+    if (error instanceof TaskRejected || error instanceof LaunchConfigError) {
       await reply(error.message).catch(() => undefined);
       return;
     }

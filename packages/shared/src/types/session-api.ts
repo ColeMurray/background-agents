@@ -197,6 +197,30 @@ export const discordToolCallCallbackSchema = discordToolCallCallbackPayloadSchem
 
 export type DiscordToolCallCallback = z.infer<typeof discordToolCallCallbackSchema>;
 
+/** Separate signed domain: stopping publication must never carry session content. */
+export const DISCORD_PUBLICATION_STOPPED_KIND = "discord.publication_stopped";
+export const DISCORD_PUBLICATION_STOPPED_MAX_AGE_MS = 5 * 60_000;
+
+export const discordPublicationStoppedCallbackPayloadSchema = z.strictObject({
+  kind: z.literal(DISCORD_PUBLICATION_STOPPED_KIND),
+  sessionId: nonEmptyStringSchema,
+  timestamp: z.number().refine(Number.isFinite),
+  // Retains strictness at every level. Only existing message coordinates and
+  // the progress start time are needed to finish the stopped status line.
+  context: discordCallbackContextSchema.pick({
+    channelId: true,
+    threadId: true,
+    statusMessage: true,
+  }),
+});
+
+export const discordPublicationStoppedCallbackSchema =
+  discordPublicationStoppedCallbackPayloadSchema.extend({ signature: nonEmptyStringSchema });
+
+export type DiscordPublicationStoppedCallback = z.infer<
+  typeof discordPublicationStoppedCallbackSchema
+>;
+
 export const automationCallbackContextSchema = z.object({
   source: z.literal("automation"),
   automationId: z.string(),

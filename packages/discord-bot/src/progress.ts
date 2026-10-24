@@ -8,11 +8,12 @@
  * confused with it.
  *
  * Tool-call and completion edits run in separate requests with no ordering, so
- * finishing records the final text in KV first. A step that sees it skips its
- * edit, and one already in flight puts the final text back afterwards.
+ * finishing records the final text in KV first. A step that sees it restores
+ * that text, and one already in flight puts the final text back afterwards.
  */
 
-import { summarizeToolCall } from "@open-inspect/shared/completion/extractor";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { formatToolStatus } from "@open-inspect/shared/completion/tool-status";
 import type { DiscordStatusMessage } from "@open-inspect/shared/types/session-api";
 import { editChannelMessage, postChannelMessage, sendTypingIndicator } from "./discord-api";
 import { createLogger } from "./logger";
@@ -21,7 +22,9 @@ import type { Env } from "./types";
 const log = createLogger("progress");
 
 /** Outlives the control plane's last tool-call callback for a prompt. */
-const FINISHED_MARKER_TTL_SECONDS = 60 * 60;
+const FINISHED_MARKER_TTL_MS = 60 * 60 * 1000;
+const MAX_STEP_LENGTH = 120;
+export const PUBLICATION_STOPPED_TEXT = "**Updates stopped**";
 
 function finishedKey(statusMessage: DiscordStatusMessage): string {
   return `status-finished:${statusMessage.id}`;
@@ -33,15 +36,16 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
-/** Shorten sandbox paths to their last segments so steps fit on one line. */
-function shortenPaths(text: string): string {
-  return text.replace(/(?:\/[\w.@-]+){3,}/g, (path) => `…/${path.split("/").slice(-2).join("/")}`);
-}
-
-/** One readable line per tool call. */
+/** One readable line per tool call; Discord markup and limits remain local. */
 export function describeStep(tool: string, args: Record<string, unknown>): string {
-  const { summary } = summarizeToolCall({ tool, args });
-  return shortenPaths(summary).replace(/`/g, "'").slice(0, 120);
+  return formatToolStatus(tool, args, {
+    argumentMaxLength: MAX_STEP_LENGTH,
+    fileStatusMaxLength: MAX_STEP_LENGTH,
+  })
+    .replace(/`/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_STEP_LENGTH);
 }
 
 /**
@@ -90,7 +94,15 @@ export async function recordStep(
 ): Promise<void> {
   const { channelId, statusMessage } = params;
   try {
-    if ((await env.DISCORD_KV.get(finishedKey(statusMessage))) !== null) return;
+    const store = createKvCacheStore(env.DISCORD_KV);
+    const previous = await store.get(finishedKey(statusMessage));
+    if (previous !== null) {
+      // Repair a failed finish edit (or a late in-flight tool edit), not just skip this step.
+      await editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, {
+        content: previous,
+      });
+      return;
+    }
     await Promise.all([
       editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, {
         content: formatStatus(
@@ -101,7 +113,7 @@ export async function recordStep(
       }),
       sendTypingIndicator(env.DISCORD_BOT_TOKEN, channelId),
     ]);
-    const finished = await env.DISCORD_KV.get(finishedKey(statusMessage));
+    const finished = await store.get(finishedKey(statusMessage));
     if (finished !== null) {
       await editChannelMessage(env.DISCORD_BOT_TOKEN, channelId, statusMessage.id, {
         content: finished,
@@ -112,6 +124,23 @@ export async function recordStep(
   }
 }
 
+/** Persist before editing; failures propagate so the callback can be retried. */
+export async function stopPublication(
+  env: Env,
+  params: { channelId: string; statusMessage: DiscordStatusMessage }
+): Promise<void> {
+  await createKvCacheStore(env.DISCORD_KV).put(
+    finishedKey(params.statusMessage),
+    PUBLICATION_STOPPED_TEXT,
+    {
+      ttlMs: FINISHED_MARKER_TTL_MS,
+    }
+  );
+  await editChannelMessage(env.DISCORD_BOT_TOKEN, params.channelId, params.statusMessage.id, {
+    content: PUBLICATION_STOPPED_TEXT,
+  });
+}
+
 /** Mark the status message finished. Never throws. */
 export async function finishProgress(
   env: Env,
@@ -120,8 +149,8 @@ export async function finishProgress(
   const { channelId, statusMessage } = params;
   const content = formatFinished(statusMessage.startedAt, params.success, Date.now());
   try {
-    await env.DISCORD_KV.put(finishedKey(statusMessage), content, {
-      expirationTtl: FINISHED_MARKER_TTL_SECONDS,
+    await createKvCacheStore(env.DISCORD_KV).put(finishedKey(statusMessage), content, {
+      ttlMs: FINISHED_MARKER_TTL_MS,
     });
   } catch (error) {
     // Without the marker a late step may still win; the finish edit must go out regardless.

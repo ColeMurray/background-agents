@@ -6,8 +6,10 @@ import {
   formatStatus,
   recordStep,
   startProgress,
+  stopPublication,
+  PUBLICATION_STOPPED_TEXT,
 } from "./progress";
-import { createEnv } from "./test-helpers";
+import { createEnv, createKv } from "./test-helpers";
 
 const discordFetch = vi.fn();
 
@@ -37,15 +39,36 @@ describe("formatting", () => {
     expect(formatElapsed(125_000)).toBe("2m 05s");
   });
 
-  it("describes steps for both harness spellings and shortens sandbox paths", () => {
+  it("uses shared aliases and compacts only file arguments", () => {
     expect(describeStep("Edit", { file_path: "/workspace/repo/src/components/Button.tsx" })).toBe(
-      "Edited …/components/Button.tsx"
+      "Editing src/components/Button.tsx"
     );
     expect(describeStep("read", { filePath: "/workspace/repo/README.md" })).toBe(
-      "Read …/repo/README.md"
+      "Reading README.md"
     );
-    expect(describeStep("Bash", { command: "npm run build" })).toBe("Ran: npm run build");
-    expect(describeStep("TodoWrite", {})).toBe("Used TodoWrite");
+    expect(describeStep("Bash", { command: "npm run build" })).toBe("Running npm run build");
+    expect(describeStep("TodoWrite", {})).toBe("Using tool: TodoWrite");
+  });
+
+  it("preserves URLs and slash-separated shell arguments", () => {
+    expect(describeStep("Bash", { command: "curl https://x.test/v1/users/me" })).toBe(
+      "Running curl https://x.test/v1/users/me"
+    );
+    expect(describeStep("Bash", { command: "echo /a/b/c/d" })).toBe("Running echo /a/b/c/d");
+  });
+
+  it("handles aliases, listing, Windows paths, and Discord markup without mangling URLs", () => {
+    expect(describeStep("READ_FILE", { filepath: "C:\\repo\\src\\file.ts" })).toBe(
+      "Reading C:/repo/src/file.ts"
+    );
+    expect(describeStep("list", { path: "/workspace/repo/src" })).toBe("Listing src");
+    expect(describeStep("glob", { query: "**/*.ts" })).toBe("Finding **/*.ts");
+    const command = "curl https://api.example.com/v1/users/me";
+    expect(describeStep("execute_command", { cmd: command })).toBe(`Running ${command}`);
+    expect(
+      describeStep("bash", { command: "echo `[link](https://api.example.com/v1/users/me)`" })
+    ).toBe("Running echo '[link](https://api.example.com/v1/users/me)'");
+    expect(describeStep("bash", { command: "x".repeat(200) }).length).toBeLessThanOrEqual(120);
   });
 
   it("shows the starting line before the first step", () => {
@@ -71,7 +94,7 @@ describe("progress lifecycle", () => {
     });
     const edit = calls().find((call) => call.method === "PATCH")!;
     expect(edit.url).toContain("/channels/thread-1/messages/status-1");
-    expect(edit.body.content).toMatch(/^⏳ \*\*Working…\*\* \d+s\n-# Ran: npm test$/);
+    expect(edit.body.content).toMatch(/^⏳ \*\*Working…\*\* \d+s\n-# Running npm test$/);
     expect(calls().some((call) => call.url.endsWith("/channels/thread-1/typing"))).toBe(true);
 
     await finishProgress(env, {
@@ -82,14 +105,15 @@ describe("progress lifecycle", () => {
     expect(calls().at(-1)!.body.content).toMatch(/^✅ \*\*Finished\*\* in \d+s$/);
   });
 
-  it("skips a step that arrives after the prompt finished", async () => {
+  it("repairs the final text rather than publishing a step after the prompt finished", async () => {
     const env = createEnv();
     const statusMessage = { id: "status-1", startedAt: Date.now() };
     await finishProgress(env, { channelId: "thread-1", statusMessage, success: true });
     discordFetch.mockClear();
 
     await recordStep(env, { channelId: "thread-1", statusMessage, tool: "Bash", args: {} });
-    expect(discordFetch).not.toHaveBeenCalled();
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0].body.content).toMatch(/^✅ \*\*Finished\*\*/);
   });
 
   it("restores the finished text when a step edit lands after finishing", async () => {
@@ -106,6 +130,27 @@ describe("progress lifecycle", () => {
     await recordStep(env, { channelId: "thread-1", statusMessage, tool: "Bash", args: {} });
     const edits = calls().filter((call) => call.method === "PATCH");
     expect(edits.at(-1)!.body.content).toMatch(/^✅ \*\*Finished\*\*/);
+  });
+
+  it("repairs a tool edit already in flight when publication is stopped", async () => {
+    const kv = createKv();
+    const env = createEnv({ DISCORD_KV: kv as unknown as KVNamespace });
+    const statusMessage = { id: "status-1", startedAt: Date.now() };
+    discordFetch.mockImplementation(async (_url: string, init: RequestInit) => {
+      if (init.method === "PATCH" && String(init.body).includes("Working")) {
+        await stopPublication(env, { channelId: "thread-1", statusMessage });
+      }
+      return new Response(JSON.stringify({ id: "status-1" }));
+    });
+    await recordStep(env, { channelId: "thread-1", statusMessage, tool: "Bash", args: {} });
+    expect(kv.put).toHaveBeenCalledWith("status-finished:status-1", PUBLICATION_STOPPED_TEXT, {
+      expirationTtl: 60 * 60,
+    });
+    expect(
+      calls()
+        .filter((call) => call.method === "PATCH")
+        .at(-1)!.body.content
+    ).toBe(PUBLICATION_STOPPED_TEXT);
   });
 
   it("returns nothing and never throws when Discord fails", async () => {

@@ -8,6 +8,7 @@
  */
 
 import { Hono } from "hono";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { checkAccess, denialMessage, parseIdList, type AccessDecision } from "./access";
 import { callbacksRouter } from "./callbacks";
 import { PROMPT_OPTION_NAME, REPO_OPTION_NAME, TASK_COMMAND_NAME } from "./commands";
@@ -26,6 +27,7 @@ import {
 import { MAX_SIGNATURE_SKEW_MS, verifyDiscordSignature } from "./verify";
 
 const log = createLogger("interactions");
+const INTERACTION_REPLAY_TTL_MS = 2 * MAX_SIGNATURE_SKEW_MS;
 
 function optionValue(options: CommandOption[] | undefined, name: string): string | undefined {
   const value = options?.find((option) => option.name === name)?.value;
@@ -146,10 +148,9 @@ app.post("/interactions", async (c) => {
 async function isReplay(env: Env, interactionId: string): Promise<boolean> {
   const key = `interaction:${interactionId}`;
   try {
-    if ((await env.DISCORD_KV.get(key)) !== null) return true;
-    await env.DISCORD_KV.put(key, "1", {
-      expirationTtl: Math.ceil((2 * MAX_SIGNATURE_SKEW_MS) / 1000),
-    });
+    const store = createKvCacheStore(env.DISCORD_KV);
+    if ((await store.get(key)) !== null) return true;
+    await store.put(key, "1", { ttlMs: INTERACTION_REPLAY_TTL_MS });
   } catch (error) {
     log.warn("interactions.replay_check_failed", { interaction_id: interactionId, error });
   }

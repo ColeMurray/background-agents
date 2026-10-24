@@ -19,7 +19,7 @@ export interface Env {
   DEPLOYMENT_NAME: string;
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
-  /** Harness id for sessions started from Discord; Terraform sets and validates it. */
+  /** Bounded v1 deployment setting; launch-config validates it once per bindings object. */
   HARNESS: string;
   APP_NAME?: string;
 
@@ -114,15 +114,3 @@ export type GuildCommand = Interaction & {
   channel_id: string;
   member: NonNullable<Interaction["member"]>;
 };
-
-// ─── KV records ──────────────────────────────────────────────────────────────
-
-/** The session a task thread belongs to, so `/task` inside it sends a follow-up. */
-export const threadSessionSchema = z.object({
-  sessionId: z.string(),
-  repoFullName: z.string(),
-  model: z.string(),
-  createdAt: z.number(),
-});
-
-export type ThreadSession = z.infer<typeof threadSessionSchema>;

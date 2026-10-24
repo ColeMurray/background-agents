@@ -5,13 +5,14 @@
  * cached in KV and refreshed from the control plane when it expires.
  */
 
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { controlPlaneReposResponseSchema } from "@open-inspect/shared/types/repository-catalog";
 import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";
 
 const REPOS_CACHE_KEY = "cache:repos";
-const REPOS_CACHE_TTL_SECONDS = 300;
+const REPOS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /** Discord shows at most this many autocomplete choices. */
 const MAX_CHOICES = 25;
@@ -34,7 +35,8 @@ const cachedReposSchema = z.array(taskRepoSchema);
 export type TaskRepo = z.infer<typeof taskRepoSchema>;
 
 export async function listRepos(env: Env, traceId?: string): Promise<TaskRepo[]> {
-  const cached = cachedReposSchema.safeParse(await env.DISCORD_KV.get(REPOS_CACHE_KEY, "json"));
+  const store = createKvCacheStore(env.DISCORD_KV);
+  const cached = cachedReposSchema.safeParse(await store.get(REPOS_CACHE_KEY, "json"));
   if (cached.success) return cached.data;
 
   const response = await signedControlPlaneFetch(
@@ -51,9 +53,7 @@ export async function listRepos(env: Env, traceId?: string): Promise<TaskRepo[]>
     .map((repo) => ({ owner: repo.owner, name: repo.name, fullName: repo.fullName }))
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
 
-  await env.DISCORD_KV.put(REPOS_CACHE_KEY, JSON.stringify(repos), {
-    expirationTtl: REPOS_CACHE_TTL_SECONDS,
-  });
+  await store.put(REPOS_CACHE_KEY, JSON.stringify(repos), { ttlMs: REPOS_CACHE_TTL_MS });
   return repos;
 }
 

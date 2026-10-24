@@ -6,6 +6,7 @@
 
 /** Discord application command option type for a string option. */
 const STRING_OPTION = 3;
+const MAX_PROMPT_LENGTH = 4000;
 
 export const TASK_COMMAND_NAME = "task";
 export const PROMPT_OPTION_NAME = "prompt";
@@ -21,7 +22,7 @@ export const TASK_COMMAND = {
       name: PROMPT_OPTION_NAME,
       description: "What should the agent do?",
       required: true,
-      max_length: 4000,
+      max_length: MAX_PROMPT_LENGTH,
     },
     {
       type: STRING_OPTION,

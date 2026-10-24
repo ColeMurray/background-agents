@@ -7,6 +7,8 @@ import { MAX_MESSAGE_LENGTH } from "./discord-api";
 
 /** Longest error shown inline; anything more belongs on the session page. */
 const MAX_ERROR_LENGTH = 500;
+/** Smaller fragments add noise instead of a useful completion summary. */
+const MIN_SUMMARY_BUDGET = 50;
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
@@ -32,7 +34,7 @@ export function formatCompletion(params: {
   const summary = response?.textContent.trim() ?? "";
   // Room left for the summary between the details and the footer.
   const budget = MAX_MESSAGE_LENGTH - fixed.length - 2;
-  if (!summary || budget < 50) return fixed;
+  if (!summary || budget < MIN_SUMMARY_BUDGET) return fixed;
 
   return [header, ...details, "", clip(summary, budget), footer].join("\n");
 }

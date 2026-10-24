@@ -8,7 +8,12 @@
 
 import { z } from "zod";
 
-const DISCORD_API = "https://discord.com/api/v10";
+import { DISCORD_API } from "./discord-constants";
+export { DISCORD_API } from "./discord-constants";
+
+const MAX_THREAD_NAME_LENGTH = 100;
+const THREAD_AUTO_ARCHIVE_DURATION_MS = 24 * 60 * 60 * 1000;
+const MS_PER_MINUTE = 60 * 1000;
 
 /** Discord rejects message content longer than this. */
 export const MAX_MESSAGE_LENGTH = 2000;
@@ -90,8 +95,11 @@ export async function startThreadFromMessage(
   const result = await discordFetch(`/channels/${channelId}/messages/${messageId}/threads`, {
     method: "POST",
     botToken,
-    // One day of inactivity before Discord archives the thread.
-    body: JSON.stringify({ name: name.slice(0, 100), auto_archive_duration: 1440 }),
+    // Discord's API takes this duration in minutes.
+    body: JSON.stringify({
+      name: name.slice(0, MAX_THREAD_NAME_LENGTH),
+      auto_archive_duration: THREAD_AUTO_ARCHIVE_DURATION_MS / MS_PER_MINUTE,
+    }),
   });
   return idSchema.parse(result).id;
 }
