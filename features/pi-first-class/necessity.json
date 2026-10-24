@@ -140,6 +140,11 @@
       "need": ["A2", "F-3"],
       "why": "Persists enabled in-process automations with a marker older binaries do not execute and current code decodes."
     },
+    "packages/control-plane/src/db/cross-session-receipts.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "Proves the overlay claims each cross-session fan-out slot atomically in D1."
+    },
     "packages/control-plane/src/db/cross-session-receipts.ts": {
       "layer": "overlay",
       "need": ["DEV:cross-session"],
@@ -940,6 +945,26 @@
       "need": ["PI:§9"],
       "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
     },
+    "packages/control-plane/src/pi/trusted-usage-storage.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "H-2"],
+      "why": "Proves Pi usage migration and writes remain on the shared SQLite queue."
+    },
+    "packages/control-plane/src/pi/trusted-usage-storage.ts": {
+      "layer": "core-adapter",
+      "need": ["OI:usage-authority", "PI:§9"],
+      "why": "Adapts neutral trusted usage accounting to Pi’s shared SQLite operation queue and migrates the legacy durable value."
+    },
+    "packages/control-plane/src/pi/turn-authority.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "B-7", "D-3"],
+      "why": "Proves deadlines and consumed action counts survive recovery and parallel calls cannot exceed the ceiling."
+    },
+    "packages/control-plane/src/pi/turn-authority.ts": {
+      "layer": "core-adapter",
+      "need": ["OI:action-ceiling", "OI:turn-deadline", "PI:§9"],
+      "why": "Persists and atomically consumes each Pi turn’s deadline and action ceiling across wake and eviction."
+    },
     "packages/control-plane/src/pi/workspace-input-compatibility.test.ts": {
       "layer": "core-support",
       "need": ["SUPPORT:test"],
@@ -1660,6 +1685,11 @@
       "need": ["OI:harness-seam"],
       "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
     },
+    "packages/control-plane/src/session/mcp-grant-scope.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp", "E-7"],
+      "why": "Proves a personal MCP grant is revoked when its reviewed server revision or endpoint changes."
+    },
     "packages/control-plane/src/session/mcp-grant-scope.ts": {
       "layer": "overlay",
       "need": ["DEV:personal-mcp"],
@@ -1744,6 +1774,11 @@
       "layer": "overlay-hook",
       "need": ["DEV:overlay-integration"],
       "why": "This existing core file carries only the additive wiring hook required by the flagged Compound overlay capability."
+    },
+    "packages/control-plane/src/session/provider-account-resolution.ts": {
+      "layer": "core-seam",
+      "need": ["OI:provider-auth", "E-2"],
+      "why": "Applies unattended provider policy before explicit account routing so background work cannot silently use a person’s subscription."
     },
     "packages/control-plane/src/session/provider-credential-service.ts": {
       "layer": "core-seam",
