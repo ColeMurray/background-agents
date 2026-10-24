@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@open-inspect/shared": "file:../shared",
-    "@pierre/diffs": "1.2.12",
+    "@pierre/diffs": "1.5.2",
     "@radix-ui/react-alert-dialog": "^1.2.1",
     "@radix-ui/react-checkbox": "^1.4.1",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -31,7 +31,7 @@
     "@radix-ui/react-toggle-group": "^1.2.1",
     "@radix-ui/react-tooltip": "^1.4.1",
     "@tailwindcss/typography": "^0.5.19",
-    "@tanstack/react-virtual": "3.14.17",
+    "@tanstack/react-virtual": "3.14.21",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
