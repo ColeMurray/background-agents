@@ -46,11 +46,15 @@ Pull requests from Discord tasks are opened by the GitHub App.
 
 Discord channels cannot be bound to a team yet, so Discord works with workspace-owned sessions only:
 
-- Tasks are created without a team. If the workspace requires a team on create, `/task` fails.
+- Tasks are created without a team. If the workspace requires a team on create, `/task` is refused
+  with an explanation that Discord cannot set a team yet.
 - The repository autocomplete lists every repository the deployment can access, not a team's grants.
   A repository the user cannot use fails when the task starts.
 - Progress and results are posted only while the session is workspace-visible and owns no team. If
-  someone makes the session private or moves it to a team, the bot stops posting to the thread.
+  someone makes the session private or moves it to a team, the bot stops publishing session content
+  and marks the status message **Updates stopped** without revealing results. This stops Discord
+  publication, not the sandbox: the agent may still be running, and authorized users can continue
+  following it in the web session.
 
 ## Billing: Claude subscription or API key
 
@@ -60,6 +64,14 @@ default**, and under **Automated sessions** set **Claude** to that account. With
 account the session falls back to an Anthropic API key.
 
 Set `discord_bot_harness = "opencode"` to use OpenCode instead; it always uses the API key.
+
+This is an explicit **v1 deployment-level shortcut**, not a Discord entry in **Settings →
+Integrations** or `/integration-settings`. Discord supports only the `claude` and `opencode` subset
+of the platform's harness catalog; Codex is a known platform harness but is not supported by
+Discord. The Claude harness requires an Anthropic model. Runtime launch configuration is validated
+against the shared catalog and cached lazily per worker configuration, before accepting work;
+invalid settings do not wait until session creation to fail. Change these Terraform variables and
+redeploy to change Discord's model or harness.
 
 ## Setup
 
@@ -102,7 +114,9 @@ Optional settings:
 **Deploying with GitHub Actions**: set the repository variables `ENABLE_DISCORD_BOT=true`,
 `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_ALLOWED_ROLE_IDS`, and optionally
 `DISCORD_ALLOWED_CHANNEL_IDS`, `DISCORD_BOT_DEFAULT_MODEL`, and `DISCORD_BOT_HARNESS`. Set
-`DISCORD_BOT_TOKEN` as a secret.
+`DISCORD_BOT_TOKEN` as a secret. When model or harness overrides are absent, Actions leaves their
+Terraform variables unset so the defaults in `variables.tf` apply; explicit nonempty overrides are
+preserved.
 
 ### 3. Point Discord at the worker
 
@@ -132,4 +146,8 @@ Optional settings:
   expired (30 days). Start a new task from the channel.
 - **"Couldn't start the task. Trace ID: …"**: search the worker logs for that `trace_id`. The
   details are kept out of the channel on purpose.
-- **Updates stop after changing a session's visibility or team**: expected, see Teams.
+- **Status changes to "Updates stopped" after changing a session's visibility or team**: expected,
+  see Teams. Only Discord publication stops; the agent may still run, and authorized users can
+  follow the web session.
+- **Workspace requires a team**: Discord cannot launch team-owned sessions yet. Use the web app or a
+  team-aware integration rather than weakening the workspace policy.

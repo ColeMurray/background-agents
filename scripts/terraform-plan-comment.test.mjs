@@ -161,6 +161,7 @@ for (const exitCode of [0, 1, 42]) {
       env: {
         ...process.env,
         PATH: `${directory}:${process.env.PATH}`,
+        GITHUB_WORKSPACE: fileURLToPath(new URL("../", import.meta.url)),
         GITHUB_OUTPUT: githubOutput,
         STUB_PLAN_TEXT: planText,
         STUB_PLAN_ERROR: "\nTerraform stderr without a final newline",

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const workflow = await readFile(
@@ -58,6 +60,47 @@ for (const [label, assignment] of [
     assertInPlanAndApply(assignment, label);
   });
 }
+
+for (const [variable, input] of [
+  ["discord_bot_default_model", "DISCORD_BOT_DEFAULT_MODEL"],
+  ["discord_bot_harness", "DISCORD_BOT_HARNESS"],
+]) {
+  test(`${variable} leaves the default to Terraform and preserves Actions overrides`, () => {
+    assertInPlanAndApply(
+      `TF_VAR_${variable}: "\u0024{{ vars.${input} || secrets.${input} }}"`,
+      variable
+    );
+  });
+}
+
+test("plan and apply unset missing Discord overrides before invoking Terraform", () => {
+  assertInPlanAndApply(
+    'source "$GITHUB_WORKSPACE/scripts/terraform-discord-defaults.sh"',
+    "Discord Terraform defaults cleanup"
+  );
+  const script = fileURLToPath(new URL("./terraform-discord-defaults.sh", import.meta.url));
+  const names = ["TF_VAR_discord_bot_default_model", "TF_VAR_discord_bot_harness"];
+  for (const values of [undefined, ["", ""], ["openai/gpt-5.5", "opencode"], ["  ", "codex"]]) {
+    const env = { ...process.env };
+    for (const [i, name] of names.entries()) {
+      delete env[name];
+      if (values) env[name] = values[i];
+    }
+    const result = spawnSync(
+      "bash",
+      [
+        "-eu",
+        "-c",
+        'source "$1"; printf "%s\\n" "${TF_VAR_discord_bot_default_model-unset}" "${TF_VAR_discord_bot_harness-unset}"',
+        "test",
+        script,
+      ],
+      { env, encoding: "utf8" }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, (values?.[0] ? values : ["unset", "unset"]).join("\n") + "\n");
+  }
+});
 
 // Inputs the workflow deliberately does not take from the environment:
 // control_plane_* values are staged per migration (the "Stage SchedulerDO

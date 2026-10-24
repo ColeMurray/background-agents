@@ -1,0 +1,81 @@
+---
+title: Discord
+description: Submit coding tasks with /task in Discord, follow live status, and continue the same session in its thread.
+audience: user
+owner: integrations
+status: published
+lastReviewed: "2026-10-24"
+relatedCode:
+  - docs/integrations/DISCORD.md
+  - packages/discord-bot/src/index.ts
+  - packages/discord-bot/src/access.ts
+  - packages/discord-bot/src/task.ts
+  - packages/control-plane/src/routes/team-ownership.ts
+  - terraform/environments/production/workers-discord.tf
+  - terraform/environments/production/variables.tf
+---
+
+Use `/task` in an allowed Discord server channel to start coding work, then follow progress and send follow-ups in the task thread.
+
+Installing the Discord application, registering the command, and deploying the worker are operator tasks. See the [Discord setup guide](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/DISCORD.md).
+
+## Quick start
+
+1. In an allowed channel, run:
+
+   ```text
+   /task prompt: fix the mobile navigation and open a pull request  repo: acme/website
+   ```
+
+2. Choose the repository from autocomplete. Archived repositories are hidden; newly installed repositories may take up to five minutes to appear.
+3. The bot acknowledges the task, links to the web session, and opens a thread on its reply.
+4. Watch the thread's live status message for elapsed time and sampled tool progress. Open the web session for the full log, file changes, and artifacts.
+5. When the prompt finishes, the bot updates the status and posts a summary and any pull request link.
+6. Run `/task` inside that thread to continue the same session. The repository option is unnecessary for follow-ups; each prompt gets its own status message.
+
+Ordinary Discord messages do not submit prompts. If the bot cannot create a thread, it posts in the channel instead; follow-ups need a task thread. Thread mappings expire after 30 days.
+
+## Who can use it
+
+The operator configures allowed Discord role IDs and, optionally, channel IDs. A member must have an allowed role, and the command must be in an allowed channel or a thread under it. An empty channel list allows any server channel, but an allowed role is still required. Denials are private and reveal no repository autocomplete choices. Direct messages are not supported.
+
+<Callout type="warn" title="The Discord role is an admission gate">
+  A Discord user who submits work becomes an OpenInspect workspace Member, independently of the web
+  sign-in allowlists. Grant the role only to people trusted to use the deployment's repositories.
+  Discord does not supply an email address, so this identity is not automatically linked to the
+  user's web account. Pull requests are opened by the GitHub App.
+</Callout>
+
+## Teams and publication
+
+Discord does not support team bindings or team-owned launches yet. It creates workspace-owned sessions without a team. A workspace that requires a team on creation refuses Discord tasks with an explanation; use the web app or a team-aware integration instead.
+
+Autocomplete lists the deployment's accessible repositories, not a team's repository grants. Session creation still checks whether the user can use the selected repository.
+
+Progress and results can be posted only while the session is workspace-visible and has no owning team. Making it private or moving it to a team stops publication of session content. The status is marked **Updates stopped** without exposing results. This stops Discord publication, not the sandbox: the agent may still be running, and authorized users can continue following it in the web session.
+
+## Model and harness
+
+Discord deliberately uses a **v1 deployment-level shortcut**, not a Discord entry in Settings › Integrations or `/integration-settings`. The operator sets `discord_bot_default_model` and `discord_bot_harness` in Terraform and redeploys. Missing GitHub Actions overrides leave Terraform's defaults in effect.
+
+The default harness is **Claude Agent**, with `anthropic/claude-opus-5` as the default model. It can use a connected Claude subscription: in **Settings › Accounts**, connect an account, make it the default, and choose it under **Automated sessions › Claude**. Without a default account, the session falls back to an Anthropic API key.
+
+Only `claude` and `opencode` are supported for Discord. Claude requires an Anthropic model; OpenCode uses an API key. Codex is known to the platform but is outside Discord's supported subset. Launch configuration is validated and cached before accepting work, rather than first failing during session creation.
+
+## Troubleshooting
+
+| Symptom                                               | What to check                                                                                           |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `/task` is missing                                    | Ask the operator to register the command for this server.                                               |
+| Private access denial or empty autocomplete           | Check your allowed role and the configured channel list.                                                |
+| No thread                                             | Check the bot's Create Public Threads permission.                                                       |
+| Thread asks for a repository                          | It may not be a task thread, or the mapping has expired; start a new task in the channel.               |
+| Workspace requires a team                             | Launch from the web app or a team-aware integration.                                                    |
+| **Updates stopped** after a visibility or team change | Discord publication has stopped, not the agent. Authorized users can follow the web session.            |
+| Generic failure with a trace ID                       | Give the trace ID to the operator to check worker logs; internal error details are not posted publicly. |
+
+## Next steps
+
+- [Follow the full session in the web app](/sessions/session-page)
+- [Compare integration entry points](/integrations)
+- [Operator setup and troubleshooting](https://github.com/ColeMurray/background-agents/blob/main/docs/integrations/DISCORD.md)

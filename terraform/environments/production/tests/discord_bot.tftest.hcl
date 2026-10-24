@@ -135,7 +135,8 @@ run "rejects_a_whitespace_bot_token" {
   expect_failures = [var.discord_bot_token]
 }
 
-run "rejects_an_unknown_harness" {
+# Codex is a known platform harness, but is outside Discord's v1 supported subset.
+run "rejects_an_unsupported_discord_harness" {
   command = plan
 
   variables {

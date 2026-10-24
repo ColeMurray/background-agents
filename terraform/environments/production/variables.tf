@@ -422,9 +422,9 @@ variable "discord_bot_default_model" {
     error_message = "discord_bot_default_model must be a canonical \"provider/model\" id such as \"anthropic/claude-opus-5\"."
   }
 
-  # Mirrors HARNESS_CATALOG.claude.modelFamilies in packages/shared/src/harnesses.ts:
-  # the Claude Agent harness runs Anthropic models only, and the control plane
-  # would reject the session after the user has already run /task.
+  # Discord's deployment-level v1 shortcut supports Claude and OpenCode only.
+  # Keep this pairing rule aligned with HARNESS_CATALOG.claude.modelFamilies;
+  # runtime launch validation also checks the shared catalog before /task.
   validation {
     condition = var.discord_bot_harness != "claude" || can(regex(
       "^(?:anthropic/|claude-)",
@@ -435,7 +435,7 @@ variable "discord_bot_default_model" {
 }
 
 variable "discord_bot_harness" {
-  description = "Harness for sessions started from Discord. \"claude\" can use a connected Claude subscription (the Automated sessions default account); \"opencode\" needs an API key."
+  description = "Deployment-level v1 harness for Discord (not integration-settings). Only claude and opencode are supported. Claude can use a connected subscription (the Automated sessions default account); OpenCode needs an API key."
   type        = string
   default     = "claude"
 
