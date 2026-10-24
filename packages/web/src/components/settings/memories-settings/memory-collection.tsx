@@ -6,7 +6,7 @@ import {
   MEMORY_STATUSES,
   type MemoryContent,
   type MemoryDto,
-  type MemoryScope,
+  type MemoryListScope,
 } from "@open-inspect/shared/types/memories";
 import { applyMemoryAction, createMemory, reviseMemory } from "@/hooks/use-memories";
 import { errorMessage, MEMORY_STATUS_LABELS } from "@/lib/memories";
@@ -37,7 +37,7 @@ const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
 }));
 
 /** Manage a paginated scope using server capabilities and revision-fenced mutations. */
-export function MemoryCollection({ scope }: { scope: MemoryScope }) {
+export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
   const search = useMemorySearch();
   const collection = useMemoryCollection(scope, search.search);
   const [panel, setPanel] = useState<MemoryPanel>(() =>
@@ -63,7 +63,7 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
 
   function save(content: MemoryContent) {
     if (panel.kind === "edit") void run(() => reviseMemory(panel.record, content));
-    if (panel.kind === "create") {
+    if (panel.kind === "create" && scope !== "shared") {
       void run(() =>
         createMemory({ ...content, scope, supersedesMemoryId: panel.supersedesMemoryId })
       );
@@ -88,7 +88,7 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
             changePanel(NO_PANEL);
           }}
         />
-        {collection.canCreate && (
+        {scope !== "shared" && collection.canCreate && (
           <Button type="button" size="sm" onClick={() => changePanel({ kind: "create" })}>
             New memory
           </Button>
@@ -114,6 +114,12 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
       {search.problem && (
         <p id="memory-search-problem" role="alert" className="text-sm text-destructive">
           {search.problem}
+        </p>
+      )}
+      {collection.atOffsetLimit && (
+        <p className="text-sm text-muted-foreground">
+          All-view browsing limit reached. Select a scope or narrow your search to find more
+          memories.
         </p>
       )}
       <nav className="flex gap-2" aria-label="Memory pages">
@@ -158,7 +164,11 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
       {!collection.loading && !collection.error && collection.records.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No {MEMORY_STATUS_LABELS[collection.status].toLowerCase()} memories{" "}
-          {search.search ? `match “${search.search}”.` : "for this scope."}
+          {search.search
+            ? `match “${search.search}”.`
+            : scope === "shared"
+              ? "across your accessible repositories and environments."
+              : "for this scope."}
         </p>
       )}
       {collection.records.map((record) => (
@@ -167,7 +177,8 @@ export function MemoryCollection({ scope }: { scope: MemoryScope }) {
           record={record}
           panel={panel}
           busy={busy}
-          canCreate={collection.canCreate}
+          canCreate={scope !== "shared" && collection.canCreate}
+          showScope={scope === "shared"}
           onPanelChange={changePanel}
           onAction={(action, archiveNote) =>
             void run(() => applyMemoryAction(record, action, archiveNote))

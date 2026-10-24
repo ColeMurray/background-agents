@@ -8,7 +8,10 @@ import { MEMORY_NOT_FOUND, unhandled } from "../memory/errors";
 import { repositoryPartition } from "../memory/sources";
 import type { MemoryRecord, SessionPrincipal } from "../memory/types";
 import type { InstalledRepositoryResolver } from "../routes/shared";
-import { REPOSITORY_GRANT_REQUIRED } from "../routes/workspace-repository-authorization";
+import {
+  REPOSITORY_GRANT_REQUIRED,
+  type RepositoryGrantAuthorizer,
+} from "../routes/workspace-repository-authorization";
 import type {
   EnvironmentAdmissionEvaluator,
   OwnedResourceAdmissionOutcome,
@@ -75,8 +78,8 @@ export interface MemoryManagementPolicyDeps {
   /** Installed-repository resolution to stable identities. */
   repositories: Pick<InstalledRepositoryResolver, "resolve">;
   /** Environment ownership admission for the principal. */
-  environments: Pick<EnvironmentAdmissionEvaluator, "evaluate">;
-  repositoryGrants: RepositoryGrants;
+  environments: Pick<EnvironmentAdmissionEvaluator, "evaluate" | "preload">;
+  repositoryGrants: RepositoryGrants & Pick<RepositoryGrantAuthorizer, "preload">;
 }
 
 const SCOPE_LABELS: Record<MemoryScopeType, string> = {
@@ -95,6 +98,7 @@ const denied = (denial: MemoryAccessDenial): MemoryManagementDecision => ({
   denial,
 });
 type DeniedDecision = Extract<MemoryManagementDecision, { kind: "denied" }>;
+type GrantedDecision = Extract<MemoryManagementDecision, { kind: "granted" }>;
 const NOT_FOUND: DeniedDecision = {
   kind: "denied",
   denial: { reason: "not_found", message: MEMORY_NOT_FOUND },
@@ -134,6 +138,30 @@ function grantDenial(repository: string): MemoryManagementDecision {
 export class MemoryManagementPolicy {
   constructor(private readonly deps: MemoryManagementPolicyDeps) {}
 
+  /** Admit shared catalog identities in bulk using one request-local admission snapshot. */
+  async authorizeSharedCatalog(
+    candidates: readonly Pick<MemoryRecord, "partition" | "scope">[]
+  ): Promise<GrantedDecision[]> {
+    const shared = candidates.filter((candidate) => candidate.partition.type !== "personal");
+    const partitions = shared.map((candidate) => candidate.partition);
+    await this.deps.environments.preload(
+      partitions
+        .filter((partition) => partition.type === "environment")
+        .map((partition) => partition.environmentId)
+    );
+    if (this.deps.authorization && this.can("repositories.read"))
+      await this.deps.repositoryGrants.preload(
+        this.deps.authorization,
+        partitions.filter((partition) => partition.type === "repository")
+      );
+    const admitted: GrantedDecision[] = [];
+    for (const candidate of shared) {
+      const decision = await this.authorizeRecord(candidate, "read");
+      if (decision.kind === "granted") admitted.push(decision);
+    }
+    return admitted;
+  }
+
   /** Authorize a request about a scope a person named: listing, creating, or previewing. */
   async authorizeScope(
     scope: MemoryScope,
@@ -150,7 +178,10 @@ export class MemoryManagementPolicy {
    * display names: a renamed repository's memories stay manageable, and a repository that reuses
    * a name gains nothing. Another owner's personal record is indistinguishable from none.
    */
-  authorizeRecord(record: MemoryRecord, mode: "read" | "write"): Promise<MemoryManagementDecision> {
+  authorizeRecord(
+    record: Pick<MemoryRecord, "partition" | "scope">,
+    mode: "read" | "write"
+  ): Promise<MemoryManagementDecision> {
     return this.authorizePartition(record.partition, record.scope, mode);
   }
 

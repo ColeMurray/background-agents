@@ -65,9 +65,12 @@ function memorySettingsCategory(scope: MemoryScope): SettingsCategory {
   }
 }
 
-/** Link to the appropriate personal/shared management view and selected record. */
+/** Repository display names may be stale; focus those records by ID in the All view. */
 export function memorySettingsLink(scope: MemoryScope, id: string): string {
-  const query = memoryScopeToSearchParams(scope);
+  const query =
+    scope.type === "repository"
+      ? new URLSearchParams({ scope: "shared" })
+      : memoryScopeToSearchParams(scope);
   query.set("tab", memorySettingsCategory(scope));
   query.set("memoryId", id);
   return `/settings?${query}`;

@@ -132,6 +132,7 @@ function managementPolicy(
       })),
     },
     environments: {
+      preload: vi.fn(async () => {}),
       evaluate: vi.fn<MemoryManagementPolicyDeps["environments"]["evaluate"]>(async () => ({
         kind: "allowed" as const,
         effectivePermission: null,
@@ -139,6 +140,7 @@ function managementPolicy(
       })),
     },
     repositoryGrants: {
+      preload: vi.fn(async () => {}),
       ungrantedRepository: vi.fn<
         MemoryManagementPolicyDeps["repositoryGrants"]["ungrantedRepository"]
       >(async () => null),
@@ -154,6 +156,64 @@ const outcome = (decision: MemoryManagementDecision) =>
   decision.kind === "denied" ? decision.denial.reason : decision.kind;
 
 describe("MemoryManagementPolicy", () => {
+  it("preloads environments independently of repository read permission", async () => {
+    const { policy, deps } = managementPolicy(["repositories.read"]);
+    const candidates = [recordIn(api), recordIn(dev), recordIn(personal)];
+    await policy.authorizeSharedCatalog(candidates);
+    expect(deps.repositoryGrants.preload).toHaveBeenCalledWith(
+      authorization(["repositories.read"]),
+      [api]
+    );
+    expect(deps.environments.preload).toHaveBeenCalledWith(["dev"]);
+    const denied = managementPolicy([]);
+    await denied.policy.authorizeSharedCatalog(candidates);
+    expect(denied.deps.repositoryGrants.preload).not.toHaveBeenCalled();
+    expect(denied.deps.environments.preload).toHaveBeenCalledWith(["dev"]);
+  });
+
+  it("returns only readable shared partitions with their management capabilities", async () => {
+    const { policy, deps } = managementPolicy([
+      "repositories.read",
+      "repositories.settings.manage",
+      "environments.settings.manage",
+      "memories.manage_own",
+    ]);
+    deps.repositoryGrants.ungrantedRepository.mockImplementation(async (_auth, _repos, options) =>
+      options?.requireLead ? ungranted : null
+    );
+    deps.environments.evaluate.mockImplementation(async (id) =>
+      id === "hidden"
+        ? {
+            kind: "denied",
+            response: { error: "Environment not found" },
+            status: 404,
+            reasonCode: "environment_not_visible",
+            reason: "Environment not found",
+          }
+        : { kind: "allowed", effectivePermission: null, admission: {} as never }
+    );
+    const result = await policy.authorizeSharedCatalog([
+      recordIn(api, apiScope),
+      recordIn(dev, { type: "environment", environmentId: "dev" }),
+      recordIn({ type: "environment", environmentId: "hidden" }),
+      recordIn(personal),
+    ]);
+    expect(result).toEqual([
+      { kind: "granted", partition: api, scope: apiScope, canManage: false },
+      {
+        kind: "granted",
+        partition: dev,
+        scope: { type: "environment", environmentId: "dev" },
+        canManage: true,
+      },
+    ]);
+    expect(deps.environments.preload).toHaveBeenCalledExactlyOnceWith(["dev", "hidden"]);
+    expect(deps.repositories.resolve).not.toHaveBeenCalled();
+    expect(deps.environments.preload.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.environments.evaluate.mock.invocationCallOrder[0]
+    );
+  });
+
   it("keeps personal memory owner-only and requires the personal permission", async () => {
     const { policy } = managementPolicy(["memories.manage_own"]);
     expect(await policy.authorizeScope({ type: "personal" }, "write")).toEqual({

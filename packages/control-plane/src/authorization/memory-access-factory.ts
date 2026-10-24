@@ -21,8 +21,12 @@ export function createMemoryManagementPolicy(
     userId: ctx.principal.userId,
     authorization: ctx.authorization,
     repositories: new InstalledRepositoryResolver(env, ctx, logger),
-    environments: new EnvironmentAdmissionEvaluator(ctx),
-    repositoryGrants: new RepositoryGrantAuthorizer(ctx),
+    environments: new EnvironmentAdmissionEvaluator(ctx, new EnvironmentStore(ctx.db)),
+    repositoryGrants: new RepositoryGrantAuthorizer(
+      ctx,
+      new TeamRepositoryGrantStore(ctx.db),
+      new TeamStore(ctx.db)
+    ),
   });
 }
 
@@ -33,6 +37,10 @@ export function createSessionMemoryAccessPolicy(ctx: RequestContext): SessionMem
     grants: new TeamRepositoryGrantStore(ctx.db),
     environments: new EnvironmentStore(ctx.db),
     authorization: new AuthorizationService(ctx.db),
-    repositoryGrants: new RepositoryGrantAuthorizer(ctx),
+    repositoryGrants: new RepositoryGrantAuthorizer(
+      ctx,
+      new TeamRepositoryGrantStore(ctx.db),
+      new TeamStore(ctx.db)
+    ),
   });
 }

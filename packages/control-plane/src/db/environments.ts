@@ -11,6 +11,7 @@
 import type { Environment, EnvironmentRepository } from "@open-inspect/shared/types/environments";
 import { z } from "zod";
 import { parseJsonStringArray } from "./json-columns";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export interface EnvironmentRow {
@@ -123,6 +124,21 @@ export class EnvironmentStore {
       .bind(id)
       .first<EnvironmentRow>();
     return row ? withValidatedOwnerTeam(row) : null;
+  }
+
+  /** Load an admission snapshot within D1's bound-parameter limit. */
+  async getByIds(ids: readonly string[]): Promise<EnvironmentRow[]> {
+    const uniqueIds = [...new Set(ids)];
+    const rows: EnvironmentRow[] = [];
+    for (let start = 0; start < uniqueIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = uniqueIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      const result = await this.db
+        .prepare(`SELECT * FROM environments WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+        .bind(...chunk)
+        .all<EnvironmentRow>();
+      rows.push(...result.results.map(withValidatedOwnerTeam));
+    }
+    return rows;
   }
 
   /**
