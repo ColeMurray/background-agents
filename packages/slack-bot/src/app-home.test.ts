@@ -115,6 +115,7 @@ describe("buildAppHomeView", () => {
       workspaceHarness: HarnessId;
       currentModel: string;
       availableModels?: typeof models | null;
+      availableHarnesses?: readonly HarnessId[];
     }) {
       const view = buildAppHomeView({
         appName: "Open-Inspect",
@@ -162,6 +163,17 @@ describe("buildAppHomeView", () => {
         "Codex",
       ]);
       expect(harness?.initial_option?.value).toBe("__workspace__");
+    });
+
+    it("offers Pi Durable only when the deployment advertises it", () => {
+      const { harness } = render({
+        userHarness: undefined,
+        workspaceHarness: "opencode",
+        currentModel: "openai/gpt-5.4",
+        availableHarnesses: ["opencode", "claude", "codex", "pi"],
+      });
+
+      expect(harness?.options.map((option) => option.text.text)).toContain("Pi Durable");
     });
 
     it("lists only the models the user's harness can run", () => {

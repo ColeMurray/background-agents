@@ -1,3 +1,7 @@
+import "./cloudflare/pi-overlay-runtime";
+import "./session/overlay-session-services";
+import "./session/overlay-schema-migrations";
+
 /**
  * Open-Inspect Control Plane
  *
@@ -23,6 +27,8 @@ const logger = createLogger("worker");
 
 // Re-export Durable Objects for Cloudflare to discover
 export { SessionDO } from "./cloudflare/durable-object";
+export { PiSessionDO } from "./cloudflare/pi-durable-object";
+export { McpConnectionDO } from "./cloudflare/mcp-connection-durable-object";
 
 export default {
   async fetch(

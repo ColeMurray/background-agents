@@ -12,13 +12,19 @@ import {
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
-import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError, unhandled } from "./errors";
+import {
+  MemoryAccessError,
+  MemoryError,
+  MemoryNotFoundError,
+  MemoryValidationError,
+  unhandled,
+} from "./errors";
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
 import { canWritePersonal, personalReadAccess } from "./session-rules";
 import { repositoryPartition, sourcePartitions } from "./sources";
-import type { MemorySession } from "./types";
+import type { MemorySession, MemoryWriteAuthorization } from "./types";
 
 const SCOPE_UNAVAILABLE = "Memory scope is no longer available";
 const OUTSIDE_SESSION = "Memory scope is outside this session";
@@ -162,6 +168,32 @@ export class SessionMemoryService {
     );
     if (memory.status === "archived") throw new Error("A newly created memory cannot be archived");
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
+  }
+
+  /**
+   * Whether this session may write this memory right now, and why not.
+   *
+   * The pre-flight for a caller that must answer before the write happens.
+   * It resolves the same target and applies the same access policy the write
+   * applies, so the two can never disagree about what the session may write;
+   * the write itself re-checks at commit. A refusal carries the reason the
+   * agent is told, never an internal string.
+   */
+  async authorizeWrite(
+    sessionId: string,
+    input: SandboxMemoryWriteInput
+  ): Promise<MemoryWriteAuthorization> {
+    const session = await this.loadSession(sessionId);
+    let partition: MemoryPartition;
+    try {
+      partition = this.writeTarget(session, input).partition;
+    } catch (cause) {
+      if (cause instanceof MemoryError) return { allowed: false, reason: cause.message };
+      throw cause;
+    }
+    if (!(await this.mayAccessShared(session, [partition])))
+      return { allowed: false, reason: SCOPE_UNAVAILABLE };
+    return { allowed: true };
   }
 
   /** Search current facts in the session's partitions, checking access before and after SQL. */

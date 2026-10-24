@@ -423,6 +423,16 @@ describe("E2BSandboxProvider", () => {
     });
     expect(client.setSandboxTimeout).toHaveBeenCalledWith("e2b-id", 7200);
   });
+
+  it("rejects execution before contacting E2B", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({ ...baseCreateConfig, runtimeMode: "execution" })
+    ).rejects.toThrow("e2b execution isolation is canary-blocked");
+    expect(client.createSandbox).not.toHaveBeenCalled();
+  });
 });
 
 describe("E2BSandboxProvider prebuilt images / snapshots", () => {
@@ -436,6 +446,7 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(provider.capabilities.supportsPersistentResume).toBe(true);
     expect(provider.capabilities.supportsSnapshots).toBe(false);
     expect(provider.capabilities.supportsRestore).toBe(false);
+    expect(provider.capabilities.executionIsolation).toBe("canary_blocked");
     expect("takeSnapshot" in provider).toBe(false);
     expect("restoreFromSnapshot" in provider).toBe(false);
   });

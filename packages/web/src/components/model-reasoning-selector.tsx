@@ -8,12 +8,12 @@ import {
 } from "@open-inspect/shared/models";
 import {
   DEFAULT_HARNESS,
-  HARNESS_IDS,
   getHarnessReasoningConfig,
   getHarnessLabel,
   isValidHarness,
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
+import { useAvailableHarnessIds } from "@/lib/available-harnesses";
 import { formatModelNameLower } from "@/lib/format";
 import { BackIcon, ChevronDownIcon } from "@/components/ui/icons";
 import { HarnessIcon, HarnessName } from "@/components/harness-icon";
@@ -235,6 +235,7 @@ function HarnessOptions({
   value: HarnessId;
   onChange: (harness: HarnessId) => void;
 }) {
+  const availableHarnesses = useAvailableHarnessIds();
   return (
     <DropdownMenuRadioGroup
       value={value}
@@ -242,7 +243,7 @@ function HarnessOptions({
         if (isValidHarness(next)) onChange(next);
       }}
     >
-      {HARNESS_IDS.map((candidate) => (
+      {availableHarnesses.map((candidate) => (
         <DropdownMenuRadioItem key={candidate} value={candidate}>
           <HarnessName harness={candidate} />
         </DropdownMenuRadioItem>

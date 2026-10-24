@@ -1,0 +1,3569 @@
+{
+  "files": {
+    ".env.example": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    ".github/workflows/ci.yml": {
+      "layer": "core-support",
+      "need": ["SUPPORT:ci"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    ".github/workflows/deploy-pi-codemode-sandbox.yml": {
+      "layer": "core-support",
+      "need": ["SUPPORT:ci"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    ".github/workflows/terraform.yml": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration", "SUPPORT:ci"],
+      "why": "Carries off-by-default overlay inputs and invokes the shared staged Durable Object migration in both plan and apply."
+    },
+    "docs/schemas/trace-export.v2.schema.json": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "package-lock.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "package.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/control-plane/package.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/control-plane/src/auth/identity-enforcement.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/auth/principal.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/authorization/memory-access-factory.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/authorization/owned-resource-admission.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/automation/github-event-admission.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Recognizes rollback-safe enabled markers while reauthorizing GitHub automation events."
+    },
+    "packages/control-plane/src/cloudflare/binding-scope.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/cloudflare/binding-scope.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/cloudflare/browser-rendering-transport.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/cloudflare/mcp-connection-dispatch.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/cloudflare/pi-durable-object.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "Hosts Pi as one internal session-scoped Durable Object; Open-Inspect remains the authority and terminal owner."
+    },
+    "packages/control-plane/src/cloudflare/pi-overlay-runtime.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/cloudflare/pi-runtime-dispatch.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/cloudflare/platform.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/analytics-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/automation-executor-reassignment.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/automation-external-action-grants.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/db/automation-external-action-grants.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/automation-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves unknown persisted automation harnesses remain raw so execution admission fails closed instead of falling back."
+    },
+    "packages/control-plane/src/db/automation-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Persists enabled in-process automations with a marker older binaries do not execute and current code decodes."
+    },
+    "packages/control-plane/src/db/cross-session-receipts.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "Proves the overlay claims each cross-session fan-out slot atomically in D1."
+    },
+    "packages/control-plane/src/db/cross-session-receipts.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/errors.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/external-action-audit.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/db/external-action-audit.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/github-automation-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Includes rollback-safe enabled markers in current GitHub automation candidate queries."
+    },
+    "packages/control-plane/src/db/mcp-connections.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/db/mcp-connections.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/mcp-read-audit.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/mcp-server-reviews.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/db/mcp-server-reviews.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/mcp-servers.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/mcp-session-pins.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/db/mcp-session-pins.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/db/memory-records.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/session-inbox-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-index.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-list-predicates.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-memory-write-guard.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-row.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves persisted in-process session rows fail closed across binary rollback while current code decodes them."
+    },
+    "packages/control-plane/src/db/session-row.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/session-status-projection-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2"],
+      "why": "Carries rollback-safe in-process session status markers through D1 reads, writes, filters, projections, and active-session guards."
+    },
+    "packages/control-plane/src/db/slack-channel-store.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Includes rollback-safe enabled markers in current Slack automation candidate queries."
+    },
+    "packages/control-plane/src/db/slack-ingress.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/team-audit.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/db/user-merge.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/env-validation.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/control-plane/src/harness-admission.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness-admission.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Follows origin/main:packages/control-plane/src/harness-admission.ts:30-41,70-155: deployment admission plus create/fire-time compatibility revalidation."
+    },
+    "packages/control-plane/src/harness/accounting.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness/accounting.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/action-ceiling.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/budget-gate.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness/budget-gate.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Complements origin/main:packages/control-plane/src/session/budget-service.ts:26-34,63-168 by checking the same session-owned cap before every in-process provider call."
+    },
+    "packages/control-plane/src/harness/emergency-policy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness/emergency-policy.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/execution-principal.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness/execution-principal.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/extension-assembler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness/extension-assembler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/in-process-runtime.ts": {
+      "layer": "core-seam",
+      "need": ["C5", "F-2", "G-3"],
+      "why": "Implements the sandbox-free analogue of origin/main:packages/sandbox-runtime/src/sandbox_runtime/harness/base.py:1-13,58-80,147-165 with platform-owned terminal settlement, deadlines, and containment."
+    },
+    "packages/control-plane/src/harness/pricing.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/provider-factory.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/tool-policy.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/harness/trusted-usage-meter.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "H-2"],
+      "why": "Proves durable usage is priced by the server table and restored across runtime activation."
+    },
+    "packages/control-plane/src/harness/trusted-usage-meter.ts": {
+      "layer": "core-seam",
+      "need": ["H-2"],
+      "why": "Replaces the runtime-cost weakness while preserving origin/main:packages/control-plane/src/session/budget-service.ts:26-34,63-118 cumulative idempotent ingest."
+    },
+    "packages/control-plane/src/harness/turn-authority.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Calls the current-author pattern from origin/main:packages/control-plane/src/routes/session-children.ts:47-113: resolve the active author, current role/membership/collaborators, then check session access."
+    },
+    "packages/control-plane/src/harness/turn-deadline.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/harness/turn-deadline.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/image-builds/model.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/index.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/mcp/broker-contract.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/mcp/connection-saga.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/mcp/connection-saga.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/mcp/credential-values.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "E-5"],
+      "why": "Proves shared and personal MCP credential values, including stripped authorization tokens, cannot reach model output."
+    },
+    "packages/control-plane/src/mcp/credential-values.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Rejects configured deployment credentials echoed by the shared MCP transport; the personal overlay reuses the same core guard."
+    },
+    "packages/control-plane/src/mcp/egress-policy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves the enforceable exact-host, HTTPS and private-address checks used by the core shared MCP transport."
+    },
+    "packages/control-plane/src/mcp/egress-policy.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Enforces the reviewed endpoint boundary for deployment-owned shared MCP; the personal overlay reuses rather than weakens it."
+    },
+    "packages/control-plane/src/mcp/encrypted-oauth-provider.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/mcp/feature.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/mcp/feature.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/mcp/oauth-keyring.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/mcp/oauth-keyring.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/mcp/remote-url-policy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves URL validation for the core shared MCP transport before any deployment credential reaches a client."
+    },
+    "packages/control-plane/src/mcp/remote-url-policy.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Validates reviewed shared MCP endpoints for the harness-neutral transport; the personal overlay consumes the same policy."
+    },
+    "packages/control-plane/src/memory/errors.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/memory/session-memory-service.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/memory/types.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/node/codex-migration.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/node/config.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/node/migrate.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/accounting-provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "H-2"],
+      "why": "Proves Pi terminal model events cannot pass until trusted server accounting succeeds."
+    },
+    "packages/control-plane/src/pi/accounting-provider.ts": {
+      "layer": "core-adapter",
+      "need": ["H-2"],
+      "why": "Adapts Pi provider streams to the neutral trusted meter before terminal model events reach the harness."
+    },
+    "packages/control-plane/src/pi/browser-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/browser-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/browser-policy-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/browser-policy-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/browser-transport.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/browser-transport.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/capability-authority-client.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/pi/capability-authority.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/pi/capability-snapshot.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/capability-snapshot.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/codemode-durable.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/codemode-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/codemode-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/codex-credential-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/codex-credential-store.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/computer-workspace-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/computer-workspace-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/computer-workspace-policy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/computer-workspace-policy.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/computer-workspace-quota.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/computer-workspace-quota.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/cross-session-extension.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/pi/cross-session-extension.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/pi/deployment-capabilities.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/emergency-policy-vocabulary.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/emergency-policy-vocabulary.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/event-translator.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/event-translator.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/external-action-policy-extension.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/pi/external-action-policy-extension.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/pi/external-action-policy-integration.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/pi/in-process-runtime-adapter.ts": {
+      "layer": "core-adapter",
+      "need": ["C5", "F-2"],
+      "why": "Maps the Pi runtime contract onto the harness-neutral in-process lifecycle and dispatch port."
+    },
+    "packages/control-plane/src/pi/inspection-sanitizer.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/inspection-sanitizer.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/managed-skills-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/managed-skills-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/mcp-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/mcp-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/memory-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/memory-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/memory-policy-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/memory-policy-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/model-compatibility.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves the Pi adapter admits exactly the models exposed by the pinned pi-ai OpenAI Codex runtime."
+    },
+    "packages/control-plane/src/pi/model-image-support.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/model-image-support.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/open-inspect-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/open-inspect-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "Adapts Pi foreground owned tasks from pi-durable README:82-101,237-253,534-575 to the containment shape in ColeMurray/background-agents PR #2467 (https://github.com/ColeMurray/background-agents/pull/2467): one level, four total threads, parent waits, no direct messaging."
+    },
+    "packages/control-plane/src/pi/personal-mcp-extension.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/pi/pi-telemetry.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/pi-telemetry.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/pi-trace.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/pi-trace.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/price-table.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/price-table.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/pricing.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/pricing.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/projection-capability.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/projection-identity.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/projection-identity.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/projection-outbox.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/projection-outbox.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/projection-retry-policy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/projection-retry-policy.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/provider-factories.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/repository-diff-outbox.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/repository-diff-outbox.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/repository-diff-publication.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/repository-editing-capability.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/repository-editing-capability.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/repository-materialization-contract.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/repository-tools.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/repository-tools.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/repository-workspace.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/repository-workspace.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/runtime-contract.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/runtime-contract.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/runtime-extension-registry.ts": {
+      "layer": "core-adapter",
+      "need": ["B-4", "D-2"],
+      "why": "Pi adapter hook required by the first-class harness boundary; core installs no optional extension and the deployment composition root opts in."
+    },
+    "packages/control-plane/src/pi/sandbox-execution-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/sandbox-execution-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/schema.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/schema.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/session-context-contract.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/session-context-contract.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/skill-source.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/skill-source.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/tool-policy-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/tool-policy-extension.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/tool-policy-types.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/pi/trusted-usage-storage.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "H-2"],
+      "why": "Proves Pi usage migration and writes remain on the shared SQLite queue."
+    },
+    "packages/control-plane/src/pi/trusted-usage-storage.ts": {
+      "layer": "core-adapter",
+      "need": ["OI:usage-authority", "PI:§9"],
+      "why": "Adapts neutral trusted usage accounting to Pi’s shared SQLite operation queue and migrates the legacy durable value."
+    },
+    "packages/control-plane/src/pi/turn-authority.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "B-7", "D-3"],
+      "why": "Proves deadlines and consumed action counts survive recovery and parallel calls cannot exceed the ceiling."
+    },
+    "packages/control-plane/src/pi/turn-authority.ts": {
+      "layer": "core-adapter",
+      "need": ["OI:action-ceiling", "OI:turn-deadline", "PI:§9"],
+      "why": "Persists and atomically consumes each Pi turn’s deadline and action ceiling across wake and eviction."
+    },
+    "packages/control-plane/src/pi/workspace-input-compatibility.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/workspace-input-limits.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/pi/workspace-input-limits.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/repos/resolve.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/repos/resolve.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/router.auth.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/router.authorization-audit.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/router.policy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/router.scm-credentials.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/router.spawn-child-grants.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/automation-create.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/automation-crud.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/automation-executor.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/automation-external-action-grants.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/routes/automation-external-action-grants.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/routes/automations.test-support.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/automations.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/control-plane/src/routes/catalog.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/health.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/health.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/integration-settings.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/mcp-connections.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/routes/mcp-servers.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/mcp-session-pins.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/routes/memory-errors.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/pi-controls.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/routes/session-children.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/session-create.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/session-external-actions.authority.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/routes/session-external-actions.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/routes/session-external-actions.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/routes/session-index.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/session-index.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/session-prompt.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/session-runtime-proxy.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/session-runtime-proxy.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/session-target-authorization.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/sessions.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/control-plane/src/routes/shared.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/skills.repository-grants.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/routes/slack-ingress.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routes/workspace-repository-authorization.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/routing/route-admission.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/client.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/execution-capability.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/execution-capability.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/execution-isolation.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/execution-isolation.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/launch-context.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/manager.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/manager.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/ports.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/test-helpers.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/vm-resolve-alarm.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/lifecycle/vm-resolve.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/providers/daytona-provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/providers/daytona-provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/providers/e2b-provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/providers/e2b-provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/providers/modal-backends.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/providers/modal-provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/providers/vercel/provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/providers/vercel/provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/runtime-manifest.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/runtime-manifest.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/sandbox/sandbox-env.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/sandbox/sandbox-env.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/scheduler/scheduler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "F-3"],
+      "why": "Proves fan-out resolves one unattended provider-auth snapshot and reuses it for every child launch."
+    },
+    "packages/control-plane/src/scheduler/scheduler.ts": {
+      "layer": "core-seam",
+      "need": ["A2", "F-3"],
+      "why": "Preserves origin/main:packages/control-plane/src/scheduler/scheduler.ts:595-632 immutable launch authorization and strict harness execution validation."
+    },
+    "packages/control-plane/src/session/alarm/external-action-reconciliation.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/alarm/handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/budget-service.pi.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/budget-service.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/components.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/connection-authenticator.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/connection-authenticator.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/contracts.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/cross-session-authority.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/diffs/assembler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/diffs/assembler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/diffs/service.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/diffs/service.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/diffs/store.generation.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/diffs/store.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/enqueue-prompt-contract.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/event-repository.idempotency.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/event-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/extension-services.ts": {
+      "layer": "core-seam",
+      "need": ["B-4", "D-6", "E-7", "F-6"],
+      "why": "Neutral default-empty replacement for sandbox composition; follows origin/main:docs/adr/0002-shared-session-contracts-and-correlation-boundary.md:18-35 by keeping one shared contract and explicit adapter normalization."
+    },
+    "packages/control-plane/src/session/external-action-audit-outbox.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-audit-outbox.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-credentials.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-credentials.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-definitions.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-definitions.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-gateway.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-gateway.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-lifecycle.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-pending.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-providers/conformance.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-providers/conformance.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-providers/definition.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-providers/definitions.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-providers/executor.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions", "D-6"],
+      "why": "Proves reconciliation reads Slack conversations.replies messages and cannot re-arm an applied reply."
+    },
+    "packages/control-plane/src/session/external-action-providers/executor.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-providers/registry.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/external-action-providers/registry.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-target-authority.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions", "D-6"],
+      "why": "Proves external-action targets remain inside current session repository, team-channel, and issue authority."
+    },
+    "packages/control-plane/src/session/external-action-target-authority.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions", "D-6"],
+      "why": "Reauthorizes the exact repository, Slack channel, or originating Linear issue before provider credential use."
+    },
+    "packages/control-plane/src/session/harness-result-receipt-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/harness-result-receipt-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/harness-sandbox-execution.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/harness-sandbox-execution.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/browser-gateway.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/browser-gateway.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/child-sessions.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/child-summary.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/cross-session.handler.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/src/session/http/handlers/cross-session.handler.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-event.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-event.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-executions.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-operation-fence.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/mcp-session.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/mcp-session.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/personal-mcp-session.handler.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-bridge.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-bridge.handler.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-control.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-control.handler.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "Calls the existing service in origin/main:packages/control-plane/src/memory/session-memory-service.ts:29-52,81-179, adding only the live-turn author fence required without a sandbox."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-result.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/pi-result.handler.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/session/http/handlers/sandbox.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/sandbox.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/session-init.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/session-init.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/handlers/session-lifecycle.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/handlers/session-lifecycle.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/http/overlay-routes.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/http/routes.combined.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/http/routes.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/initialize.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/mcp-grant-scope.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp", "E-7"],
+      "why": "Proves a personal MCP grant is revoked when its reviewed server revision or endpoint changes."
+    },
+    "packages/control-plane/src/session/mcp-grant-scope.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/mcp-shared-client.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves the core shared MCP transport refuses unsafe egress and credential echoes before returning provider content."
+    },
+    "packages/control-plane/src/session/mcp-shared-client.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Lets an in-process harness consume Open-Inspect's deployment-owned shared MCP servers without adding personal credentials or overlay policy."
+    },
+    "packages/control-plane/src/session/message-queue-types.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/message-queue.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/message-queue.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Extends origin/main:packages/control-plane/src/session/message-queue.ts:405-520: one claimed FIFO message, budget/auth rechecks after awaits, and no dispatch outside the canonical queue."
+    },
+    "packages/control-plane/src/session/message-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/message-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/openai-token-refresh-service.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/overlay-schema-migrations.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/overlay-session-services.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/pi-control-message-id.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/session/pi-control-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/pi-control-repository.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/session/pi-operation-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/pi-operation-repository.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/control-plane/src/session/provider-account-resolution.test.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/control-plane/src/session/provider-account-resolution.ts": {
+      "layer": "core-seam",
+      "need": ["OI:provider-auth", "E-2"],
+      "why": "Applies unattended provider policy before explicit account routing so background work cannot silently use a person’s subscription."
+    },
+    "packages/control-plane/src/session/provider-credential-service.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/pull-request-refresh.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/pull-request-service.per-branch.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/pull-request-service.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/reference-harness.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/repo-id-resolution.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-access.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-access.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-command-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-command-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-events/command.handler.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-events/command.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-events/context.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-events/execution.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-events/processor.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-events/processor.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Reuses origin/main:packages/control-plane/src/session/sandbox-events/processor.ts:77-184 as the only canonical event dispatcher."
+    },
+    "packages/control-plane/src/session/sandbox-events/runtime.handler.ready.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-events/runtime.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-events/streaming.handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/sandbox-repository.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/sandbox-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/schema-extension-registry.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "G-2"],
+      "why": "Proves duplicate extension migration ids fail fatally while an exactly identical owned registration remains idempotent."
+    },
+    "packages/control-plane/src/session/schema-extension-registry.ts": {
+      "layer": "core-seam",
+      "need": ["G-2"],
+      "why": "Keeps overlay storage outside core while preserving origin/main:scripts/d1-migrate.sh:10-43,64-101 collision checks and atomic migration-ledger writes."
+    },
+    "packages/control-plane/src/session/schema.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/schema.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/services/message.service.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/session-attachment-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/session-attachment-resolver.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/session-core-repository.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/session-status-ordering.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Keeps canonical status ordering coverage valid after the core session row gains a harness identity."
+    },
+    "packages/control-plane/src/session/snapshot-reader.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/types.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/session/user-env-resolver.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/session/user-env-resolver.ts": {
+      "layer": "overlay-hook",
+      "need": ["A2", "OI:harness-seam"],
+      "why": "Refuses unknown persisted harness ids before selecting any sandbox provider environment behavior."
+    },
+    "packages/control-plane/src/session/xai-token-refresh-service.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/skills/git-import.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/source-control/errors.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/source-control/errors.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/source-control/git-object-id.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/source-control/github-credential-authority.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/source-control/index.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/source-control/providers/github-provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/source-control/providers/github-provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/source-control/providers/gitlab-provider.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/src/source-control/providers/gitlab-provider.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/source-control/types.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/types.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/control-plane/src/worker-build.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/codemode-integration/pi-codemode-remote.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/codemode-integration/pi-codemode-session.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/codex-migration-fixture.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/__snapshots__/hono-route-catalog-conformance.test.ts.snap": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/__snapshots__/route-admission-matrix.test.ts.snap": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/automation-executor-permissions.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/automation-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves an older binary cannot fire an enabled in-process automation through the OpenCode fallback."
+    },
+    "packages/control-plane/test/integration/automation-team-ownership.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/cleanup.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/d1-session-index.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves promptable in-process rows persist a rollback-safe marker while current readers expose the canonical status."
+    },
+    "packages/control-plane/test/integration/durable-object.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "G-2"],
+      "why": "Proves the Durable Object applies the complete dynamically composed session migration registry."
+    },
+    "packages/control-plane/test/integration/external-action-reconciliation.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/test/integration/faux-codex-provider.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/helpers.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/hono-route-catalog-conformance.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/integration-settings.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/mcp-connections.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/test/integration/mcp-grant-scope.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/control-plane/test/integration/memories-access.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves memory commit-time fencing follows the canonical promptable statuses shared by sandbox and in-process harnesses."
+    },
+    "packages/control-plane/test/integration/pi-end-to-end.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/pi-export-projection.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/pi-memory.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/pi-session-creation.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/pi-session-do.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/pi-skills-extension.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/route-admission-matrix.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/sandbox-early-connect.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/sandbox-vm-reconciliation.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/session-budget.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/session-diffs.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/session-discovery.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves session discovery treats rollback-safe durable archive markers as the canonical archived state."
+    },
+    "packages/control-plane/test/integration/session-do-access.ts": {
+      "layer": "overlay-hook",
+      "need": ["SUPPORT:test", "DEV:external-actions"],
+      "why": "Test-only accessor exposes registered overlay internals without adding overlay fields to the production core component type."
+    },
+    "packages/control-plane/test/integration/session-do-collaborator-wiring.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/session-export.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves the bounded no-partial contract from origin/main:packages/control-plane/src/routes/session-export.ts:1-16,155-180 and origin/main:docs/TRACE_EXPORT.md:48-64."
+    },
+    "packages/control-plane/test/integration/session-snapshot.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "A2"],
+      "why": "Proves snapshots refuse unknown persisted harness ids rather than exposing an OpenCode fallback."
+    },
+    "packages/control-plane/test/integration/slack-ingress-session.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/slack-ingress-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/tsconfig.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/turn-authority.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/test/integration/websocket-sandbox.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/control-plane/tsconfig.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/control-plane/vitest.integration.config.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/control-plane/wrangler.jsonc": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/docs/content/docs/models/agent-harnesses.mdx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/docs/vercel.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Keeps the docs project's framework and deployment region local while Terraform plans remain network-independent."
+    },
+    "packages/modal-infra/deploy.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/modal-infra/pyproject.toml": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/modal-infra/src/images/base.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/modal-infra/src/sandbox/launch.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/modal-infra/src/sandbox/models.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/modal-infra/src/web_api.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/modal-infra/tests/test_deploy.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/modal-infra/tests/test_runtime_manifest.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/modal-infra/tests/test_sandbox_launch.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/modal-infra/tests/test_web_api_create_sandbox.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/modal-infra/uv.lock": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "packages/pi-codemode-sandbox/package.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/pi-codemode-sandbox/scripts/artifact-manifest.mjs": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/pi-codemode-sandbox/scripts/normalize-build.mjs": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/pi-codemode-sandbox/src/index.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/pi-codemode-sandbox/tsconfig.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/pi-codemode-sandbox/wrangler.jsonc": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/sandbox-images/install/execution-filesystem.sh": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-images/install/install.sh": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-images/tests/test_bundle.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-images/verify/execution_smoke.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/agent_bridge_process.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/bridge.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/command_runner.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/entrypoint.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/event_forwarder.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/execution_artifact_manifest.json": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/execution_auth.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/execution_bridge.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/execution_isolation.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/repository_boot.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/runtime_config.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/runtime_manifest.json": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/runtime_manifest.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/supervisor.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/src/sandbox_runtime/types.py": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/sandbox-runtime/tests/test_command_runner.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_docker_service.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_entrypoint_build_mode.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_event_forwarder.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_execution_bridge.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_execution_isolation.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_runtime_config.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_supervisor_early_connect.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/sandbox-runtime/tests/test_supervisor_lifecycle.py": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/package.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "packages/shared/src/capability-modes.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/deployment-capabilities.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/harnesses.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/harnesses.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Follows origin/main:packages/shared/src/harnesses.ts:29-75,213-251: one deployable catalog, strict compatibility, and refusal rather than silent substitution."
+    },
+    "packages/shared/src/index.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/memory-tools.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/migration-reservations.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/migration-reservations.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/models.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Keeps runtime-catalog capability metadata in the existing authoritative model catalog so every harness uses one admission source."
+    },
+    "packages/shared/src/overlay-migration-reservations.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/pi-overlay-feature-capabilities.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/pi-overlay-tool-effects.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/pi-runtime-feature-capabilities.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/pi-runtime-feature-capabilities.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/shared/src/pi-runtime-tool-effects.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/pi-runtime-tool-effects.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/shared/src/rbac.test.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/shared/src/rbac.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/shared/src/slack-ingress.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/slack-ingress.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/stored-harness.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/tool-effects.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/audit-events.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/boundary-schemas.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/types/credential-shaped.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/cross-session.ts": {
+      "layer": "overlay",
+      "need": ["DEV:cross-session"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/types/external-actions.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/shared/src/types/external-actions.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/types/index.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/integrations.test.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/shared/src/types/mcp-read.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/types/mcp-read.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/overlay-integrations.ts": {
+      "layer": "overlay",
+      "need": ["DEV:overlay-integration"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/types/overlay-mcp-read.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/shared/src/types/repositories.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/repository-contracts.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/types/sandbox-events.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/sandbox-execution.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/types/sandbox-execution.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/sandbox-ingress.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/shared/src/types/server-messages.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/session-api.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/session-attachments.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/session-diffs.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/sessions.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/shared/src/types/trace-export.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/app-home.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/app-home/publisher.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/app-home/publisher.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/app-home/view.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/callbacks.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/events/dispatcher.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/events/message-handler.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/index.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/ingress-authority.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/ingress-consumer.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/ingress-consumer.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/pi-explicit-control.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/pi-explicit-control.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/slack-bot/src/routes/events.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/routes/events.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/sessions/control-plane-client.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/sessions/control-plane-client.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/sessions/prompt-delivery.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/sessions/session-launcher.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/sessions/session-launcher.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Follows origin/main:docs/CLAUDE_AGENT.md:19-27,74-118 and origin/main:packages/docs/content/docs/models/agent-harnesses.mdx:20-35: preserve the selected harness and refuse rather than fall back."
+    },
+    "packages/slack-bot/src/sessions/thread-session-store.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/slack-bot/src/sessions/thread-session-store.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/slack-bot/src/types.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/.env.example": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/(app)/(sidebar)/automations/new/page.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/(app)/(sidebar)/page.test-fixture.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/(app)/(sidebar)/page.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/(app)/(sidebar)/page.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/(app)/(sidebar)/session/[id]/page.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/(app)/(sidebar)/session/[id]/page.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/(app)/settings/page.test.tsx": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/web/src/app/api/automations/[id]/external-action-grants/[grantId]/route.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/app/api/automations/[id]/external-action-grants/[grantId]/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/automations/[id]/external-action-grants/route.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/app/api/automations/[id]/external-action-grants/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/capabilities/route.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/api/mcp-connections/[id]/authorize/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/mcp-connections/[id]/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/mcp-connections/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/sessions/[id]/executions/[commandId]/cancel/route.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/api/sessions/[id]/executions/[commandId]/cancel/route.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/api/sessions/[id]/executions/[commandId]/output/route.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/api/sessions/[id]/executions/route.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/api/sessions/[id]/executions/route.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/app/api/sessions/[id]/external-actions/[actionId]/decision/route.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/app/api/sessions/[id]/external-actions/[actionId]/decision/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/sessions/[id]/external-actions/route.test.ts": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/app/api/sessions/[id]/external-actions/route.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/app/api/sessions/[id]/pi/agents/route.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/api/sessions/[id]/pi/agents/route.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/web/src/app/api/sessions/[id]/pi/control/route.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/app/api/sessions/[id]/pi/control/route.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/web/src/app/api/sessions/[id]/pi/lifecycle-control/route.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/web/src/components/automations/automation-agent-fields.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/automations/automation-external-action-grants.test.tsx": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/components/automations/automation-external-action-grants.tsx": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/components/automations/automation-form.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/automations/automation-form.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/diff-refresh-notice.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/harness-icon.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/model-reasoning-selector.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/provider-auth-controls.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/provider-auth-controls.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/repository-multi-select.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/repository-multi-select.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-changes-panel.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/session-changes-panel.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-details-overlay.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-header.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-prompt-composer.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/session-prompt-composer.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-right-sidebar.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/session-right-sidebar.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-target-picker.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/session-timeline.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/session-timeline.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/settings/integrations/github-global-settings-section.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/settings/integrations/github-integration-settings.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/settings/integrations/github-repo-overrides-section.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/settings/integrations/harness-select.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/settings/integrations/linear-integration-settings.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/settings/integrations/linear-integration-settings.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/settings/integrations/slack-integration-settings.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/settings/mcp-overlay-settings.tsx": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/components/settings/mcp-servers-settings.test.tsx": {
+      "layer": "overlay-hook",
+      "need": ["DEV:personal-mcp"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/web/src/components/settings/member-merge-summary.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "Keeps the exhaustive member-merge summary aligned with the core Slack-ingress actor ownership transfer."
+    },
+    "packages/web/src/components/settings/settings-registry.ts": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "packages/web/src/components/sidebar/budget-section.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/sidebar/executions-section.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/sidebar/executions-section.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/components/sidebar/external-actions-section.test.tsx": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/components/sidebar/external-actions-section.tsx": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/components/sidebar/pi-agents-section.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/components/sidebar/pi-agents-section.tsx": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/web/src/components/ui/alert-dialog.tsx": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/hooks/use-automation-external-action-grants.test.tsx": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/hooks/use-automation-external-action-grants.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/hooks/use-deployment-capabilities.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/hooks/use-launch-preferences.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/hooks/use-launch-preferences.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/hooks/use-mcp-connections.ts": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/hooks/use-pi-agents.test.tsx": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/hooks/use-pi-agents.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/web/src/hooks/use-session-diffs.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/hooks/use-session-executions.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/hooks/use-session-external-actions.test.tsx": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "packages/web/src/hooks/use-session-external-actions.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "packages/web/src/lib/available-harnesses.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/lib/available-harnesses.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/lib/deployment-capabilities-api.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/lib/diff-file-links.test.ts": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "packages/web/src/lib/diff-file-links.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/lib/pi-agents.ts": {
+      "layer": "core-adapter",
+      "need": ["PI:§9"],
+      "why": "This file adapts the harness-neutral core contracts to the Pi Durable runtime without widening core authority."
+    },
+    "packages/web/src/lib/provider-selection.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/lib/session-executions.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/src/lib/timeline-items.ts": {
+      "layer": "core-seam",
+      "need": ["OI:harness-seam"],
+      "why": "This harness-neutral seam lets an in-process runtime participate in existing Open-Inspect lifecycle and authority paths."
+    },
+    "packages/web/vercel.json": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Keeps the web project's framework and deployment region local while Terraform plans remain network-independent."
+    },
+    "scripts/attest-execution-isolation.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "scripts/attest-pi-codemode-sandbox.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "Build and continuous-integration wiring compiles and verifies the core runtime in every supported package."
+    },
+    "scripts/canary-pi-external-actions.sh": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "scripts/deploy-pi-codemode-sandbox.sh": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "scripts/execution-isolation-contract.test.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "scripts/migration-block-guard.test.mjs": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "scripts/pi-codemode-sandbox-contract.test.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "scripts/sql-portability-baseline.json": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration"],
+      "why": "This existing core file carries only the additive wiring hook required by the flagged optional extension layer capability."
+    },
+    "scripts/stage-mcp-connection-do.sh": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp"],
+      "why": "This file implements an off-by-default optional extension layer capability that is not part of the upstream-compatible core."
+    },
+    "scripts/stage-mcp-connection-do.test.mjs": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test", "DEV:personal-mcp"],
+      "why": "Exercises every staged McpConnectionDO migration state and rejects unsafe one-phase registration."
+    },
+    "scripts/terraform-plan-comment.test.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "scripts/terraform-workflow-contract.test.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Proves every declared production variable reaches plan and apply while staged binding variables remain workflow-owned."
+    },
+    "scripts/trace-export-schema-drift.test.mjs": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/d1/migrations/0090_durable_object_harness.sql": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/d1/migrations/0091_mcp_reviewed_tools.sql": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/d1/migrations/0092_slack_ingress_receipts.sql": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/d1/migrations/0093_slack_ingress_thread_mapping.sql": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/d1/migrations/9001_external_actions.sql": {
+      "layer": "overlay",
+      "need": ["SUPPORT:deploy"],
+      "why": "This deployment file provisions an off-by-default optional extension layer capability and its isolated storage or bindings."
+    },
+    "terraform/d1/migrations/9002_mcp_oauth_foundation.sql": {
+      "layer": "overlay",
+      "need": ["SUPPORT:deploy"],
+      "why": "This deployment file provisions an off-by-default optional extension layer capability and its isolated storage or bindings."
+    },
+    "terraform/d1/migrations/9003_cross_session_receipts.sql": {
+      "layer": "overlay",
+      "need": ["SUPPORT:deploy"],
+      "why": "This deployment file provisions an off-by-default optional extension layer capability and its isolated storage or bindings."
+    },
+    "terraform/d1/migrations/9004_mcp_session_pins.sql": {
+      "layer": "overlay",
+      "need": ["SUPPORT:deploy"],
+      "why": "This deployment file provisions an off-by-default optional extension layer capability and its isolated storage or bindings."
+    },
+    "terraform/environments/production/checks.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/environments/production/docs-vercel.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Leaves framework and region authority in the docs package so mocked Terraform plans require no Vercel catalog lookup."
+    },
+    "terraform/environments/production/locals.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/environments/production/mcp-overlay.tf": {
+      "layer": "overlay",
+      "need": ["DEV:personal-mcp", "SUPPORT:deploy"],
+      "why": "Declares the off-by-default feature, binding-retention, and encryption inputs owned by personal MCP."
+    },
+    "terraform/environments/production/moved.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/environments/production/terraform.tfvars.example": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration", "SUPPORT:deploy"],
+      "why": "Documents the explicit off-by-default personal-MCP production inputs without enabling the overlay."
+    },
+    "terraform/environments/production/tests/docs_site.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test", "SUPPORT:deploy"],
+      "why": "Verifies both Vercel packages retain their Next.js framework and deployment region after Terraform stops owning them."
+    },
+    "terraform/environments/production/tests/personal_mcp_foundation.tftest.hcl": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test", "DEV:personal-mcp"],
+      "why": "Proves the personal MCP foundation is absent by default and fully registered only with explicit staged inputs."
+    },
+    "terraform/environments/production/tests/pi_browser.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/environments/production/tests/pi_codemode_connection.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/environments/production/tests/pi_cross_session.tftest.hcl": {
+      "layer": "overlay",
+      "need": ["SUPPORT:test"],
+      "why": "This test proves the optional extension layer behavior and its compensating controls without changing the core contract."
+    },
+    "terraform/environments/production/tests/pi_mcp.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the shared reviewed MCP capability modes and their default-off deployment contract."
+    },
+    "terraform/environments/production/tests/pi_slack_ingress.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/environments/production/tests/pi_workspace.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/environments/production/variables.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/environments/production/web-cloudflare.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/environments/production/web-vercel.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/environments/production/workers-control-plane.tf": {
+      "layer": "overlay-hook",
+      "need": ["DEV:overlay-integration", "SUPPORT:deploy"],
+      "why": "Adds only the conditional personal-MCP flag, secret, and Durable Object binding at the production composition root."
+    },
+    "terraform/environments/production/workers-slack.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/cloudflare-worker/.terraform.lock.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/cloudflare-worker/main.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/cloudflare-worker/outputs.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/cloudflare-worker/tests/fixtures/index.js": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/modules/cloudflare-worker/tests/fixtures/runtime.wasm": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/modules/cloudflare-worker/tests/worker_contract.tftest.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:test"],
+      "why": "Tests preserve the core harness contract and catch regressions at its authority boundaries."
+    },
+    "terraform/modules/cloudflare-worker/variables.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/cloudflare-worker/versions.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/modal-app/.terraform.lock.hcl": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Deployment wiring is required to provision and gate the core runtime without enabling it by default."
+    },
+    "terraform/modules/vercel-project/main.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Avoids provider catalog validation during mocked plans by leaving framework and region settings in each package."
+    },
+    "terraform/modules/vercel-project/variables.tf": {
+      "layer": "core-support",
+      "need": ["SUPPORT:deploy"],
+      "why": "Removes obsolete module inputs after framework and region settings move to package-local Vercel configuration."
+    },
+    "wrangler.d1.local.jsonc": {
+      "layer": "core-support",
+      "need": ["SUPPORT:build"],
+      "why": "This build support file is required to compile or verify the added packages and generated contracts."
+    }
+  }
+}

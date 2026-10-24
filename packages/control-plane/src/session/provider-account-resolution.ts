@@ -77,6 +77,18 @@ async function resolveProvider(
   }
   const explicit = input.explicit?.[provider];
   if (explicit?.mode === "api_key") return apiKey(provider, "explicit");
+  // Unattended work follows the installation's unattended policy even when
+  // the stored session or automation carries an explicit account selection.
+  // Without an installation policy, fail closed to the API-key lane rather
+  // than silently routing a person's subscription into background work.
+  const providerDefault = await stores.defaults.get(provider);
+  if (
+    input.unattended &&
+    explicit?.mode === "provider_account" &&
+    providerDefault?.unattendedMode !== "provider_account"
+  ) {
+    return apiKey(provider, "unattended_policy");
+  }
   if (explicit?.mode === "provider_account") {
     const account = await policy.validateSelection(provider, explicit.accountId);
     return {
@@ -87,7 +99,6 @@ async function resolveProvider(
     };
   }
 
-  const providerDefault = await stores.defaults.get(provider);
   if (!providerDefault) {
     // A strict harness has no legacy scoped-OAuth path; with nothing selected it
     // runs on the API key (platform key or user secret), as Anthropic does.

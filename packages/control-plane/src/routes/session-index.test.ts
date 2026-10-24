@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleListSessionInbox, handleListSessions, handlePatchReadState } from "./session-index";
+import {
+  handleDeleteSession,
+  handleListSessionInbox,
+  handleListSessions,
+  handlePatchReadState,
+} from "./session-index";
 import { MAX_SESSION_LIST_FILTER_IDS } from "@open-inspect/shared/session-list-query";
 import type { RequestContext, UserRouteContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
@@ -13,6 +18,7 @@ const mockSessionIndexStore = {
   list: vi.fn(),
   listInbox: vi.fn(),
   listInboxSnapshot: vi.fn(),
+  get: vi.fn(),
   delete: vi.fn(),
   updateReadState: vi.fn(),
 };
@@ -74,6 +80,32 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
 }
 
 const USER_PRINCIPAL: Principal = { kind: "user", userId: "user-1" };
+
+describe("handleDeleteSession", () => {
+  it.each(["opencode", "pi"] as const)(
+    "destroys %s runtime state through the neutral SessionDO lifecycle",
+    async (harness) => {
+      mockSessionIndexStore.delete.mockClear();
+      mockSessionIndexStore.get.mockResolvedValueOnce({ id: "session-1", harness });
+      const dispatch = vi.fn(async (_sessionId: string, request: Request) => {
+        expect(new URL(request.url).pathname).toBe("/internal/destroy");
+        return Response.json({ status: "destroyed" });
+      });
+      const env = { ...createEnv(), SESSION: dispatch } as Env;
+
+      const response = await handleDeleteSession(
+        new Request("https://test.local/sessions/session-1", { method: "DELETE" }),
+        env,
+        { id: "session-1" },
+        createCtx(USER_PRINCIPAL)
+      );
+
+      expect(response.status).toBe(200);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(mockSessionIndexStore.delete).toHaveBeenCalledWith("session-1");
+    }
+  );
+});
 
 const listSession = {
   id: "session-1",
@@ -161,6 +193,7 @@ describe("session index routes", () => {
       in_progress: emptyInboxResult,
       finished: emptyInboxResult,
     });
+    mockSessionIndexStore.get.mockResolvedValue(null);
     mockSessionIndexStore.updateReadState.mockResolvedValue({
       sessionId: "session-1",
       outcome: "marked_read",
@@ -168,6 +201,34 @@ describe("session index routes", () => {
       latestMessageId: "message-1",
       version: 1_000,
     });
+  });
+
+  it("destroys the session runtime before deleting its D1 index row", async () => {
+    const order: string[] = [];
+    mockSessionIndexStore.get.mockResolvedValue({ harness: "pi" });
+    mockSessionIndexStore.delete.mockImplementation(async () => {
+      order.push("d1");
+    });
+    const destroy = vi.fn(async (_sessionId: string, request: Request) => {
+      expect(new URL(request.url).pathname).toBe("/internal/destroy");
+      order.push("runtime");
+      return new Response(null, { status: 204 });
+    });
+    const env = createTestEnv({
+      SESSION: destroy as Env["SESSION"],
+    });
+
+    const response = await handleDeleteSession(
+      new Request("https://test.local/sessions/session-1", { method: "DELETE" }),
+      env,
+      { id: "session-1" },
+      createCtx(USER_PRINCIPAL)
+    );
+
+    expect(response.status).toBe(200);
+    expect(order).toEqual(["runtime", "d1"]);
+    expect(destroy).toHaveBeenCalledWith("session-1", expect.any(Request));
+    expect(mockSessionIndexStore.delete).toHaveBeenCalledWith("session-1");
   });
 
   it("defaults invalid pagination values before querying the store", async () => {
@@ -515,7 +576,7 @@ describe("session index routes", () => {
 
   it.each<Principal>([
     { kind: "service", service: "linear-bot", actor: null },
-    { kind: "sandbox", sessionId: "session-1" },
+    { kind: "sandbox", sessionId: "session-1", credentialClass: "agent" },
   ])("rejects createdBy=me for a $kind principal", async (principal) => {
     const response = await listSessions("?createdBy=me", principal);
 

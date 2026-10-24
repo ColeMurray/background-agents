@@ -314,8 +314,14 @@ export type RouteAuthentication =
   | { kind: "service" }
   | { kind: "user" }
   | { kind: "user-or-service" }
-  | ({ kind: "sandbox" } & SandboxSessionBinding)
-  | ({ kind: "user-or-service-with-sandbox-fallback" } & SandboxSessionBinding);
+  | ({
+      kind: "sandbox";
+      credentialClasses?: readonly ("agent" | "execution")[];
+    } & SandboxSessionBinding)
+  | ({
+      kind: "user-or-service-with-sandbox-fallback";
+      credentialClasses?: readonly ("agent" | "execution")[];
+    } & SandboxSessionBinding);
 
 export type RouteContext<Authentication extends RouteAuthentication> = RequestContext & {
   principal: Authentication extends { kind: "user" }
@@ -390,22 +396,30 @@ export const SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE = {
 } as const satisfies RoutePolicy;
 
 export const GITHUB_SANDBOX_FALLBACK_ROUTE = {
-  authentication: { kind: "user-or-service-with-sandbox-fallback", ...SESSION_ID_BINDING },
+  authentication: {
+    kind: "user-or-service-with-sandbox-fallback",
+    credentialClasses: ["agent"],
+    ...SESSION_ID_BINDING,
+  },
   supportedScmProviders: ["github"],
 } as const satisfies RoutePolicy;
 
 export const SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE = {
-  authentication: { kind: "user-or-service-with-sandbox-fallback", ...SESSION_ID_BINDING },
+  authentication: {
+    kind: "user-or-service-with-sandbox-fallback",
+    credentialClasses: ["agent"],
+    ...SESSION_ID_BINDING,
+  },
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 
 export const SCM_CREDENTIALS_ROUTE = {
-  authentication: { kind: "sandbox", ...SESSION_ID_BINDING },
+  authentication: { kind: "sandbox", credentialClasses: ["agent"], ...SESSION_ID_BINDING },
   supportedScmProviders: ["github", "gitlab"],
 } as const satisfies RoutePolicy;
 
 export const SCM_AGNOSTIC_SANDBOX_ROUTE = {
-  authentication: { kind: "sandbox", ...SESSION_ID_BINDING },
+  authentication: { kind: "sandbox", credentialClasses: ["agent"], ...SESSION_ID_BINDING },
   supportedScmProviders: "all",
 } as const satisfies RoutePolicy;
 

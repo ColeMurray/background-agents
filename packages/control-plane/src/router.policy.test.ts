@@ -39,11 +39,99 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(235);
+    expect(routes).toHaveLength(269);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(179);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(235);
+    expect(new Set(paths).size).toBe(208);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(269);
+    expect(routeFor("GET", "/capabilities")).toMatchObject({
+      authentication: { kind: "public" },
+      authorization: { kind: "none" },
+    });
+    for (const [method, path] of [
+      ["POST", "/internal/slack-ingress"],
+      ["POST", "/internal/slack-ingress/receipt-1/claim"],
+      ["POST", "/internal/slack-ingress/receipt-1/transition"],
+      ["GET", "/internal/slack-ingress/receipt-1"],
+      ["POST", "/internal/slack-ingress/reconcile"],
+      ["GET", "/internal/slack-ingress-thread"],
+    ] as const) {
+      expect(routeFor(method, path)).toMatchObject({
+        authentication: { kind: "service" },
+        authorization: { kind: "service", services: ["slack-bot"] },
+      });
+    }
+    expect(routeFor("POST", "/sessions/session-1/pi/control")).toMatchObject({
+      authentication: { kind: "user-or-service" },
+      authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
+    });
+    expect(routeFor("POST", "/sessions/session-1/pi/lifecycle-control")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "lifecycle" }] },
+    });
+    expect(routeFor("GET", "/sessions/session-1/pi/inspect")?.authorization).toMatchObject({
+      allOf: [{ kind: "session", action: "read" }],
+    });
+    expect(routeFor("GET", "/sessions/session-1/pi/agents")?.authorization).toMatchObject({
+      allOf: [{ kind: "session", action: "read" }],
+    });
+    expect(routeFor("GET", "/sessions/session-1/executions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "read" }] },
+    });
+    expect(routeFor("POST", "/sessions/session-1/executions/cmd-1/cancel")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
+    });
+    expect(routeFor("POST", "/mcp-connections")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-user" },
+      cacheControl: "private, no-store",
+    });
+    // The owner's own authorization of a connection is the owner's act on
+    // their own account, so the same self authority decides.
+    expect(routeFor("POST", "/mcp-connections/mcpconn_1/authorize")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-user" },
+      cacheControl: "private, no-store",
+    });
+    // The server's OAuth callback goes to the broker that owns the
+    // connection, and only the connection's owner may reach it.
+    expect(routeFor("GET", "/mcp/oauth/callback/mcpconn_1")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-user" },
+      cacheControl: "private, no-store",
+    });
+    // Attaching a personal MCP connection to a session is an action in that
+    // session, so the session's own authority decides.
+    expect(routeFor("POST", "/sessions/session-1/mcp-pins")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { allOf: [{ kind: "session", action: "collaborate" }] },
+    });
+    expect(routeFor("GET", "/sessions/session-1/external-actions/action-1")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
+      },
+    });
+    expect(routeFor("GET", "/sessions/session-1/external-actions")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [{ kind: "session", action: "read", sessionIdParam: "id" }],
+      },
+    });
+    expect(
+      routeFor("POST", "/sessions/session-1/external-actions/action-1/decision")
+    ).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        allOf: [
+          // Deciding an external effect is an action, not a read.
+          { kind: "session", action: "collaborate", sessionIdParam: "id" },
+          { kind: "permission", permission: "external_actions.approve" },
+        ],
+      },
+    });
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -554,6 +642,7 @@ describe("route policy table", () => {
     expect(route.authentication.kind).toBe("user-or-service-with-sandbox-fallback");
     if (route.authentication.kind === "user-or-service-with-sandbox-fallback") {
       expect(route.authentication.getSessionId(params)).toBe("session-1");
+      expect(route.authentication.credentialClasses).toEqual(["agent"]);
     }
     expect(route.authorization.kind).toBe("active-user");
   });
@@ -572,6 +661,7 @@ describe("route policy table", () => {
     const { route, params } = matchRoute(routes, method, path)!;
     expect(route.authentication.kind).toBe("sandbox");
     if (route.authentication.kind === "sandbox") {
+      expect(route.authentication.credentialClasses).toEqual(["agent"]);
       expect(route.authentication.getSessionId(params)).toBe(
         path.includes("/children/") ? "parent-1" : "session-1"
       );
@@ -761,7 +851,16 @@ describe("route policy dispatch ordering", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it.each(["null", '"sandbox-1"', "[]", "{}", '{"sandboxId":""}', '{"sandboxId":123}', "not-json"])(
+  it.each([
+    "null",
+    '"sandbox-1"',
+    "[]",
+    "{}",
+    '{"sandboxId":"sandbox-1"}',
+    '{"sandboxId":""}',
+    '{"sandboxId":123}',
+    "not-json",
+  ])(
     "does not issue provider credentials for a verified response without an identity: %s",
     async (body) => {
       const testEnv = {
@@ -780,7 +879,7 @@ describe("route policy dispatch ordering", () => {
         TEST_BACKGROUND_TASK_CONTEXT
       );
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(401);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       await expect(response.json()).resolves.toEqual({ error: "Sandbox identity unavailable" });
       expect(testEnv.DB.prepare).not.toHaveBeenCalled();
@@ -789,6 +888,25 @@ describe("route policy dispatch ordering", () => {
 });
 
 describe("route principal policy", () => {
+  it("keeps every HTTP sandbox credential route agent-only", () => {
+    const sandboxRoutes = routes.filter(
+      (route) =>
+        route.authentication.kind === "sandbox" ||
+        route.authentication.kind === "user-or-service-with-sandbox-fallback"
+    );
+    expect(sandboxRoutes.length).toBeGreaterThan(0);
+    for (const route of sandboxRoutes) {
+      if (
+        route.authentication.kind === "sandbox" ||
+        route.authentication.kind === "user-or-service-with-sandbox-fallback"
+      ) {
+        expect(route.authentication.credentialClasses, `${route.method} ${route.path}`).toEqual([
+          "agent",
+        ]);
+      }
+    }
+  });
+
   it.each([
     [{ kind: "web-service" } as const, { kind: "service", service: "web", actor: null } as const],
     [{ kind: "user" } as const, { kind: "user", userId: "user-1" } as const],

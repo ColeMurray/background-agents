@@ -55,7 +55,7 @@ function sandboxRouteContext(
 ): SessionRouteContext {
   return {
     ...routeContext(fetch, promptAuthor),
-    principal: { kind: "sandbox", sessionId: "parent" },
+    principal: { kind: "sandbox", sessionId: "parent", credentialClass: "agent" },
   };
 }
 
@@ -67,7 +67,7 @@ describe("handleListChildren", () => {
       .spyOn(SessionIndexStore.prototype, "listByParent")
       .mockResolvedValue([]);
     const ctx = routeContext(vi.fn());
-    ctx.principal = { kind: "sandbox", sessionId: "parent" };
+    ctx.principal = { kind: "sandbox", sessionId: "parent", credentialClass: "agent" };
     ctx.teamsEnforcementMode = "on";
     const response = await handleListChildren(
       new Request("https://test.local/sessions/parent/children"),
@@ -183,7 +183,7 @@ describe("handleListChildren", () => {
       {} as Env,
       { id: "parent" },
       Object.assign(routeContext(vi.fn()), {
-        principal: { kind: "sandbox", sessionId: "parent" },
+        principal: { kind: "sandbox", sessionId: "parent", credentialClass: "agent" },
         teamsEnforcementMode: "on",
       })
     );
@@ -524,7 +524,7 @@ describe("handleCancelChild", () => {
     );
 
     const ctx = routeContext(fetch);
-    ctx.principal = { kind: "sandbox", sessionId: "parent" };
+    ctx.principal = { kind: "sandbox", sessionId: "parent", credentialClass: "agent" };
     const response = await handleCancelChild(
       new Request("https://test.local/sessions/parent/children/child/cancel", { method: "POST" }),
       {} as Env,

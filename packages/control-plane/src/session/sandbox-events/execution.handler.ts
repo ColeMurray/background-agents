@@ -42,7 +42,8 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly offerFallbackTitle: (title: string) => void
+    private readonly offerFallbackTitle: (title: string) => void,
+    private readonly callbackBeforeProjection: () => boolean = () => false
   ) {}
 
   /**
@@ -75,6 +76,25 @@ export class SandboxExecutionEventHandler {
         budgetTransition: this.budget.observeExecutionCost(event, context.now),
       };
     });
+    if (completion && this.callbackBeforeProjection()) {
+      // Schedule the canonical callback immediately after the terminal commit.
+      // Pi result retries recover projections/status only and never enqueue it again.
+      this.backgroundTasks.submit(
+        () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+        {
+          name: "callback.notify_complete",
+          context: { message_id: event.messageId },
+        }
+      );
+      this.log.info("pi.latency", {
+        event: "pi.latency",
+        milestone: "callback_scheduled",
+        timestamp_ms: context.now,
+        operation_id: event.messageId,
+        harness: "pi",
+        execution_backend: "durable_object",
+      });
+    }
     await this.budget.deliverTransition(budgetTransition);
     if (completion) {
       await this.projectTerminalMessage(
@@ -98,6 +118,20 @@ export class SandboxExecutionEventHandler {
         processing_duration_ms: processingDurationMs,
         queue_duration_ms: queueDurationMs,
       });
+      if (event.sandboxId.startsWith("pi:")) {
+        this.log.info("pi.latency", {
+          event: "pi.latency",
+          milestone: "terminal",
+          timestamp_ms: context.now,
+          operation_id: event.messageId,
+          harness: "pi",
+          execution_backend: "durable_object",
+          outcome: event.success ? "success" : "failure",
+          total_duration_ms: totalDurationMs,
+          processing_duration_ms: processingDurationMs,
+          queue_duration_ms: queueDurationMs,
+        });
+      }
       this.applyFallbackTitle(completion.messageId);
       this.messenger.broadcast({ type: "sandbox_event", event });
       this.messenger.broadcast({
@@ -105,13 +139,15 @@ export class SandboxExecutionEventHandler {
         isProcessing: this.messageRepository.getProcessingMessage() !== null,
       });
       this.broadcastPromptQueue();
-      this.backgroundTasks.submit(
-        () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
-        {
-          name: "callback.notify_complete",
-          context: { message_id: event.messageId },
-        }
-      );
+      if (!this.callbackBeforeProjection()) {
+        this.backgroundTasks.submit(
+          () => this.callbackService.notifyComplete(event.messageId, event.success, event.error),
+          {
+            name: "callback.notify_complete",
+            context: { message_id: event.messageId },
+          }
+        );
+      }
       await this.statusService.reconcileAfterExecution(event.success);
     } else {
       this.log.info("prompt.complete", {

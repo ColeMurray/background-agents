@@ -1,10 +1,12 @@
 import { EnvironmentStore } from "../db/environments";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
-import type { RequestContext } from "../http/request-context";
 import { createLogger } from "../logger";
 import { InstalledRepositoryResolver, type UserRouteContext } from "../routes/shared";
-import { RepositoryGrantAuthorizer } from "../routes/workspace-repository-authorization";
+import {
+  RepositoryGrantAuthorizer,
+  type RepositoryGrantContext,
+} from "../routes/workspace-repository-authorization";
 import type { Env } from "../types";
 import { MemoryManagementPolicy, SessionMemoryAccessPolicy } from "./memory-access";
 import { EnvironmentAdmissionEvaluator } from "./owned-resource-admission";
@@ -26,8 +28,17 @@ export function createMemoryManagementPolicy(
   });
 }
 
-/** Wire session-principal access checks to D1 for one request. */
-export function createSessionMemoryAccessPolicy(ctx: RequestContext): SessionMemoryAccessPolicy {
+/**
+ * Wire session-principal access checks to D1 for one request.
+ *
+ * The policy reads the global store and nothing else, so the session runtime
+ * wires the same policy over its own D1 binding without an HTTP request
+ * context. The repository-grant check inside it resolves the session's
+ * principal from the store, exactly as it does for a sandbox request.
+ */
+export function createSessionMemoryAccessPolicy(
+  ctx: RepositoryGrantContext
+): SessionMemoryAccessPolicy {
   return new SessionMemoryAccessPolicy({
     teams: new TeamStore(ctx.db),
     grants: new TeamRepositoryGrantStore(ctx.db),

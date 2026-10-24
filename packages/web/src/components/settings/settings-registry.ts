@@ -267,7 +267,7 @@ export const SETTINGS_GROUPS = [
         icon: TerminalIcon,
         visibility: anyOf("mcp_servers.read"),
         panel: lazyPanel(() =>
-          import("./mcp-servers-settings").then(({ McpServersSettings }) => McpServersSettings)
+          import("./mcp-overlay-settings").then(({ McpServersSettings }) => McpServersSettings)
         ),
       },
       {

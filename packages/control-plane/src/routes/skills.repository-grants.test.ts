@@ -159,6 +159,7 @@ beforeEach(() => {
         path: "SKILL.md",
         type: "file",
         blobId: "blob",
+        mode: "100644",
         sizeBytes: 50,
         executable: false,
       },

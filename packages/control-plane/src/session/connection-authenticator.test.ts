@@ -206,6 +206,20 @@ describe("SessionConnectionAuthenticator.authorize", () => {
     });
   });
 
+  it("rejects an expired execution credential before WebSocket attach", async () => {
+    const h = createHarness({
+      sandbox: await sandboxRow({ runtime_mode: "execution", created_at: 1, fenced: 0 }),
+    });
+
+    const decision = await h.authenticator.authorize(
+      upgradeRequest({ sandbox: true, token: TOKEN, sandboxId: SANDBOX_ID })
+    );
+
+    expect(decision.kind).toBe("reject");
+    if (decision.kind === "reject") expect(decision.response.status).toBe(401);
+    expect(h.wsManager.acceptAndSetSandboxSocket).not.toHaveBeenCalled();
+  });
+
   it("rejects a stopped sandbox with 401, not 410, when the token is invalid", async () => {
     const h = createHarness({ sandbox: await sandboxRow({ status: "stopped" }) });
 

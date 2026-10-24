@@ -20,7 +20,7 @@ from .constants import (
 from .docker_control import DockerControl
 from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
 from .repo_image_callback import RepoImageBuildCallback
-from .runtime_config import BootMode, RuntimeConfig
+from .runtime_config import BootMode, RuntimeConfig, RuntimeMode
 
 if TYPE_CHECKING:
     import signal
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .browser_desktop import BrowserDesktop
     from .code_server import CodeServer
     from .docker_service import DockerService
+    from .execution_bridge import ExecutionBridgeOwner
     from .harness.base import HarnessProcessOwner
     from .managed_skills import ManagedSkillsMaterializer
     from .memories import MemoryMaterializer
@@ -108,7 +109,7 @@ class SandboxSupervisor:
         config: RuntimeConfig,
         repository_boot: RepositoryBoot,
         harness_process: HarnessProcessOwner,
-        agent_bridge: AgentBridgeProcess,
+        agent_bridge: AgentBridgeProcess | ExecutionBridgeOwner,
         code_server: CodeServer,
         web_terminal: WebTerminal,
         browser_desktop: BrowserDesktop,
@@ -726,10 +727,19 @@ class SandboxSupervisor:
         if self.boot_mode is BootMode.BUILD and repo_image_callback is None:
             repo_image_callback = RepoImageBuildCallback.from_env(self.log)
 
-        expected_tunnel_ports = self.repository_boot.prepare_tunnel_environment(self.boot_mode)
+        execution_only = self.config.runtime_mode is RuntimeMode.EXECUTION
+        expected_tunnel_ports = (
+            []
+            if execution_only
+            else self.repository_boot.prepare_tunnel_environment(self.boot_mode)
+        )
         # Early connect is the control plane's call (SESSION_CONFIG); an image
         # build has no session to connect to and starts no bridge at all.
-        early_connect = self.config.bridge_early_connect and self.boot_mode is not BootMode.BUILD
+        early_connect = (
+            not execution_only
+            and self.config.bridge_early_connect
+            and self.boot_mode is not BootMode.BUILD
+        )
 
         harness_ready = False
         try:
@@ -770,29 +780,37 @@ class SandboxSupervisor:
                 await self.agent_bridge.start(early_connect=True)
                 self._bridge_watch_task = asyncio.create_task(self._watch_bridge_during_boot())
 
-            if self.config.docker_enabled:
+            if self.config.docker_enabled and not execution_only:
                 # Docker before the desktop and the repository boot: setup and
                 # start hooks may run containers.
                 await self._run_until_shutdown(self._start_docker)
 
-            try:
-                await self.browser_desktop.start()
-            except Exception as error:
-                self.log.warn("vnc.start_failed", exc=error)
-                await self.browser_desktop.stop()
+            if not execution_only:
+                try:
+                    await self.browser_desktop.start()
+                except Exception as error:
+                    self.log.warn("vnc.start_failed", exc=error)
+                    await self.browser_desktop.stop()
 
             boot_result = await self._run_until_shutdown(
-                lambda: self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+                lambda: (
+                    self.repository_boot.boot_execution(self.boot_mode)
+                    if execution_only
+                    else self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
+                )
             )
             self._repository_boot_result = boot_result
 
             # Everything up to the harness is boot work: a bridge that exits
             # gracefully part way through must end the boot rather than leave
             # it starting a harness nobody is connected to.
-            await self._run_until_shutdown(lambda: self._start_session_services(boot_result))
-            harness_ready = True
-            if not early_connect:
+            if execution_only:
                 await self.agent_bridge.start()
+            else:
+                await self._run_until_shutdown(lambda: self._start_session_services(boot_result))
+                harness_ready = True
+                if not early_connect:
+                    await self.agent_bridge.start()
             self.log.info(
                 "sandbox.startup",
                 repo_owner=self.config.repo_owner,
@@ -803,7 +821,8 @@ class SandboxSupervisor:
                 git_sync_success=boot_result.git_sync_success,
                 setup_success=boot_result.setup_success,
                 start_success=boot_result.start_success,
-                harness=self.config.harness.value,
+                harness=None if execution_only else self.config.harness.value,
+                runtime_mode=self.config.runtime_mode.value,
                 opencode_ready=harness_ready,
                 duration_ms=int((time.time() - startup_start) * 1000),
                 outcome="success",

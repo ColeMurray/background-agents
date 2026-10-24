@@ -15,7 +15,11 @@ import { authorizeSessionTarget, type SessionTarget } from "./session-target-aut
 const repository = { owner: "acme/group", name: "app", repoId: 7 };
 const target: SessionTarget = { teamId: "team_alpha", repositories: [repository] };
 const user: Principal = { kind: "user", userId: "user-1" };
-const sandbox: Principal = { kind: "sandbox", sessionId: "parent-1" };
+const sandbox: Principal = {
+  kind: "sandbox",
+  sessionId: "parent-1",
+  credentialClass: "agent",
+};
 
 function context(
   principal: Principal = user,

@@ -958,6 +958,7 @@ describe("GitHubIntegrationSettings", () => {
     await user.click(screen.getByRole("combobox", { name: "Default model" }));
     await user.click(await screen.findByRole("option", { name: "Use system default" }));
     await user.click(screen.getAllByRole("button", { name: /^save$/i })[0]);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/integration-settings/github",
       expect.objectContaining({
@@ -971,6 +972,7 @@ describe("GitHubIntegrationSettings", () => {
     await user.click(await screen.findByRole("option", { name: "Use global model" }));
     await selectAutoReviewMode(row, /override for this repo/i);
     await user.click(within(row).getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/integration-settings/github/repos/acme/web",
       expect.objectContaining({

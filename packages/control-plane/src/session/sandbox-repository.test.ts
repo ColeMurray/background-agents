@@ -138,3 +138,47 @@ describe("SandboxRepository completeProviderResume (SQLite)", () => {
     }
   );
 });
+
+describe("SandboxRepository runtime mode", () => {
+  it("stores execution mode on a lazy reservation and resets ordinary reservations to agent", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const { sql } = createNodeSqlStorage(db);
+      initSchema(sql);
+      const repository = new SandboxRepository(sql, log, TEST_ENCRYPTION_KEY);
+      repository.createSandbox({
+        id: "row-1",
+        status: "pending",
+        gitSyncStatus: "pending",
+        createdAt: 1,
+        runtimeMode: "execution",
+      });
+      expect(repository.getSandbox()?.runtime_mode).toBe("execution");
+
+      repository.updateSandboxForSpawn({
+        status: "spawning",
+        createdAt: 2,
+        modalSandboxId: "sandbox-2",
+        runtimeMode: "agent",
+      });
+      expect(repository.getSandbox()?.runtime_mode).toBe("agent");
+      repository.updateSandboxStatus("connecting");
+      expect(
+        repository.recordExecutionBridgeIdentity(
+          { sandboxId: "sandbox-2", createdAt: 2 },
+          "bridge-1"
+        )
+      ).toBe(true);
+      expect(repository.getSandbox()?.execution_bridge_id).toBe("bridge-1");
+      expect(
+        repository.recordExecutionBridgeIdentity(
+          { sandboxId: "sandbox-old", createdAt: 1 },
+          "bridge-old"
+        )
+      ).toBe(false);
+      expect(repository.getSandbox()?.execution_bridge_id).toBe("bridge-1");
+    } finally {
+      db.close();
+    }
+  });
+});

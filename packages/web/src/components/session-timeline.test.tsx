@@ -61,6 +61,20 @@ function toolCall(callId: string, tool: string, filePath: string): SandboxEvent 
 }
 
 describe("user message authors", () => {
+  it("labels explicit Pi controls inside the canonical session timeline", () => {
+    render(
+      <EventItem
+        event={{ ...event("user-2"), piControl: { action: "follow_up", conversationId: 2 } }}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+    expect(screen.getByText("Pi follow-up")).toBeInTheDocument();
+    expect(screen.getByText("hello")).toBeInTheDocument();
+  });
+
   it("uses the canonical profile name and avatar when available", () => {
     render(
       <EventItem
@@ -917,5 +931,34 @@ describe("timeline virtualization", () => {
       "aria-expanded",
       "true"
     );
+  });
+});
+
+describe("cross-session message provenance", () => {
+  it("says which session the agent message came from and who initiated it", () => {
+    const events: SandboxEvent[] = [
+      {
+        ...event(),
+        provenance: {
+          kind: "cross_session",
+          receiptId: "xsr_1",
+          sourceSessionId: "session-a",
+          humanActorId: "user-1",
+          depth: 1,
+        },
+      },
+    ];
+
+    render(<SessionTimeline {...baseTimelineProps} events={events} />);
+
+    expect(screen.getByText("Agent message")).toBeInTheDocument();
+    expect(screen.getByText(/from session session-a/)).toBeInTheDocument();
+    expect(screen.getByText(/initiated by user-1/)).toBeInTheDocument();
+  });
+
+  it("shows an ordinary message without any provenance line", () => {
+    render(<SessionTimeline {...baseTimelineProps} events={[event()]} />);
+
+    expect(screen.queryByText("Agent message")).not.toBeInTheDocument();
   });
 });

@@ -308,7 +308,7 @@ describe("authenticate — service credentials", () => {
   });
 });
 
-describe("authenticate — compound browser credentials", () => {
+describe("authenticate — browser session credentials", () => {
   function createUserAuthContext(
     session: {
       session: { id: string; userId: string };

@@ -1,9 +1,22 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import {
+  MIGRATION_RESERVATIONS,
+  type MigrationOwner,
+  validateMigrationArtifacts,
+} from "@open-inspect/shared/migration-reservations";
 import { buildSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyMigrations, containsTransactionControl, listMigrations } from "./migrate";
@@ -36,6 +49,16 @@ describe("applyMigrations", () => {
 
   it("applies every repository migration from zero and records each in the ledger", () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql"));
+    expect(() =>
+      validateMigrationArtifacts(
+        listMigrations(MIGRATIONS_DIR).map((file) => ({
+          store: "d1",
+          version: Number(file.version),
+          name: file.name,
+          feature: readMigrationFeature(file.path),
+        }))
+      )
+    ).not.toThrow();
 
     const applied = applyMigrations(db, MIGRATIONS_DIR);
 
@@ -420,6 +443,16 @@ describe("applyMigrations", () => {
     }
   });
 });
+
+function readMigrationFeature(path: string): MigrationOwner | undefined {
+  const declared = /^-- feature: ([^\r\n]+)\r?\n/.exec(readFileSync(path, "utf8"))?.[1];
+  if (declared === undefined) return undefined;
+  const feature = MIGRATION_RESERVATIONS.find(
+    (reservation) => reservation.feature === declared
+  )?.feature;
+  if (!feature) throw new Error(`Migration ${path} declares unknown feature ${declared}`);
+  return feature;
+}
 
 function mkdirMigrations(directory: string, files: Record<string, string>): void {
   mkdirSync(directory);

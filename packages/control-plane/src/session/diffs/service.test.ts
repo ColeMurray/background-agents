@@ -89,6 +89,7 @@ const upload = {
 function harness() {
   const sql = new MemoryDiffSql();
   const repository = {
+    getSession: () => ({ harness: "opencode" }),
     getSessionRepositories: () => [
       {
         position: 0,
@@ -119,10 +120,58 @@ function harness() {
     () => "revision-1",
     () => 200
   );
-  return { service, repository, messenger };
+  const refreshPi = vi.fn(async () => {});
+  const piService = new SessionDiffService(
+    new SessionDiffStore(new MemoryDiffSql()),
+    repository,
+    messenger,
+    log,
+    () => "revision-1",
+    () => 200,
+    refreshPi
+  );
+  return { service, piService, refreshPi, repository, messenger };
 }
 
 describe("SessionDiffService", () => {
+  it("claims immutable Pi baselines through the existing SessionDiff authority", () => {
+    const { service, repository } = harness();
+
+    service.claimBaselines([
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "web",
+        baseSha: "a".repeat(40),
+      },
+    ]);
+
+    expect(repository.setSessionDiffBaselines).toHaveBeenCalledWith([
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "web",
+        baseSha: "a".repeat(40),
+        isPrimary: true,
+      },
+    ]);
+  });
+
+  it("rejects a Pi baseline that conflicts with an existing SessionDO claim", () => {
+    const { service } = harness();
+
+    expect(() =>
+      service.claimBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "b".repeat(40),
+        },
+      ])
+    ).toThrow(DiffBaselineMismatchError);
+  });
+
   it("publishes one matching bundle and serves a revision-pinned patch", () => {
     const { service, messenger } = harness();
 
@@ -212,5 +261,23 @@ describe("SessionDiffService", () => {
 
     vi.mocked(messenger.sendToSandbox).mockRejectedValue(new TypeError("adapter bug"));
     await expect(service.requestRefresh()).rejects.toThrow(TypeError);
+  });
+
+  it("routes refreshes for Pi sessions to PiSessionDO instead of a sandbox socket", async () => {
+    const { piService, refreshPi, repository, messenger } = harness();
+    repository.getSession = vi.fn(() => ({ harness: "pi" }) as unknown as SessionRow);
+
+    await piService.requestRefresh();
+
+    expect(refreshPi).toHaveBeenCalledOnce();
+    expect(messenger.sendToSandbox).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a Pi diff refresher is unavailable", async () => {
+    const { service, repository, messenger } = harness();
+    repository.getSession = vi.fn(() => ({ harness: "pi" }) as unknown as SessionRow);
+
+    await expect(service.requestRefresh()).rejects.toThrow(SandboxNotConnectedError);
+    expect(messenger.sendToSandbox).not.toHaveBeenCalled();
   });
 });

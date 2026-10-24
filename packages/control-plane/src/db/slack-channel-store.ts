@@ -14,7 +14,11 @@
  * so the two can't drift apart on a partial failure.
  */
 
-import { withValidatedOwnerTeam, type AutomationRow } from "./automation-store";
+import {
+  ENABLED_AUTOMATION_SQL,
+  withValidatedOwnerTeam,
+  type AutomationRow,
+} from "./automation-store";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 import { TeamChannelBindingStore } from "./team-channel-bindings";
 
@@ -28,7 +32,7 @@ export class SlackChannelStore {
         `SELECT a.* FROM automations a
          JOIN automation_slack_channels c ON c.automation_id = a.id
          LEFT JOIN team_channel_bindings b ON b.provider = 'slack' AND b.external_id = c.channel_id
-         WHERE c.channel_id = ? AND a.enabled = 1 AND a.deleted_at IS NULL
+         WHERE c.channel_id = ? AND a.enabled IN (${ENABLED_AUTOMATION_SQL}) AND a.deleted_at IS NULL
             AND a.trigger_type = 'slack_event'
             AND (a.owner_team_id = b.team_id OR (a.owner_team_id IS NULL AND b.team_id IS NULL))`
       )
@@ -52,7 +56,7 @@ export class SlackChannelStore {
       .prepare(
         `SELECT DISTINCT c.channel_id FROM automation_slack_channels c
          JOIN automations a ON a.id = c.automation_id
-         WHERE a.enabled = 1 AND a.deleted_at IS NULL AND a.trigger_type = 'slack_event'`
+         WHERE a.enabled IN (${ENABLED_AUTOMATION_SQL}) AND a.deleted_at IS NULL AND a.trigger_type = 'slack_event'`
       )
       .all<{ channel_id: string }>();
     return (result.results || []).map((r) => r.channel_id);

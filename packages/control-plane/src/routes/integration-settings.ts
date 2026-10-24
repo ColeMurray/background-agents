@@ -14,7 +14,7 @@ import {
   type SandboxSettings,
   type VncSettings,
 } from "@open-inspect/shared/types/integrations";
-import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
+import { DEFAULT_HARNESS, getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -45,6 +45,17 @@ const logger = createLogger("router:integration-settings");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function repositoryIntegrationHarnessError(
+  id: IntegrationId,
+  settings: Record<string, unknown>
+): Response | null {
+  const defaults = isRecord(settings.defaults) ? settings.defaults : null;
+  return (id === "github" || id === "linear") &&
+    (settings.harness === "pi" || defaults?.harness === "pi")
+    ? error("Pi Durable is unavailable for repository-backed integrations", 400)
+    : null;
 }
 
 function extractSettings(body: unknown): Record<string, unknown> | Response {
@@ -118,6 +129,8 @@ async function handleSetIntegrationSettings(
   if (body instanceof Response) return body;
   const settings = extractSettings(body);
   if (settings instanceof Response) return settings;
+  const harnessError = repositoryIntegrationHarnessError(id, settings);
+  if (harnessError) return harnessError;
 
   const store = new IntegrationSettingsStore(ctx.db);
 
@@ -228,6 +241,8 @@ async function handleSetRepoSettings(
   if (body instanceof Response) return body;
   const settings = extractSettings(body);
   if (settings instanceof Response) return settings;
+  const harnessError = repositoryIntegrationHarnessError(id, settings);
+  if (harnessError) return harnessError;
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
@@ -323,6 +338,8 @@ async function handleSetEnvironmentSettings(
   if (body instanceof Response) return body;
   const settings = extractSettings(body);
   if (settings instanceof Response) return settings;
+  const harnessError = repositoryIntegrationHarnessError(integrationId, settings);
+  if (harnessError) return harnessError;
 
   try {
     await store.setEnvironmentSettings(integrationId, environmentId, settings);
@@ -400,7 +417,8 @@ async function handleGetResolvedConfig(
 
   if (id === "github") {
     const githubSettings = settings as GitHubBotSettings;
-    const harness = getValidHarnessOrDefault(githubSettings.harness);
+    const configuredHarness = getValidHarnessOrDefault(githubSettings.harness);
+    const harness = configuredHarness === "pi" ? DEFAULT_HARNESS : configuredHarness;
 
     return json({
       integrationId: id,
@@ -420,7 +438,8 @@ async function handleGetResolvedConfig(
 
   if (id === "linear") {
     const linearSettings = linearBotGlobalSettingsSchema.parse(settings);
-    const harness = getValidHarnessOrDefault(linearSettings.harness);
+    const configuredHarness = getValidHarnessOrDefault(linearSettings.harness);
+    const harness = configuredHarness === "pi" ? DEFAULT_HARNESS : configuredHarness;
 
     return json({
       integrationId: id,

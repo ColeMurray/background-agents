@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env, ThreadSession } from "../types";
+const authority = vi.hoisted(() => ({ lookup: vi.fn() }));
+vi.mock("../ingress-authority", () => ({ lookupSlackIngressThread: authority.lookup }));
 import {
   advanceLastPromptTs,
   buildThreadSession,
@@ -32,6 +34,7 @@ function makeEnv() {
 }
 
 describe("thread session store", () => {
+  beforeEach(() => authority.lookup.mockReset());
   let mocks: ReturnType<typeof makeEnv>;
   const baseSession: ThreadSession = {
     sessionId: "session-1",
@@ -40,6 +43,13 @@ describe("thread session store", () => {
     model: "openai/gpt-5.4",
     createdAt: 123,
   };
+
+  it("repairs a missing KV mapping from completed D1 ingress authority", async () => {
+    mocks.env.PI_SLACK_DURABLE_INGRESS_ENABLED = "true";
+    authority.lookup.mockResolvedValue({ thread_mapping_json: JSON.stringify(baseSession) });
+    await expect(lookupThreadSession(mocks.env, "C123", "111.222")).resolves.toEqual(baseSession);
+    expect(JSON.parse(mocks.values.get("thread:C123:111.222")!)).toEqual(baseSession);
+  });
 
   beforeEach(() => {
     mocks = makeEnv();

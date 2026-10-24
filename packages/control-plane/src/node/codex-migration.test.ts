@@ -54,7 +54,11 @@ it("upgrades a full populated pre-Codex database without rebuilding FK parent ta
     expect(
       CODEX_MIGRATION_TABLES.map((table) => db.prepare(`SELECT * FROM ${table}`).all())
     ).toEqual(before);
-    expect(db.prepare(CODEX_MIGRATION_SCHEMA_OBJECTS).all()).toEqual(schema);
+    // Later additive migrations may contribute new indexes or triggers. Every
+    // pre-Codex object must survive byte-for-byte; additions are allowed.
+    expect(db.prepare(CODEX_MIGRATION_SCHEMA_OBJECTS).all()).toEqual(
+      expect.arrayContaining(schema)
+    );
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     db.exec(
       "UPDATE sessions SET harness='codex' WHERE id='child'; UPDATE automations SET harness='codex'"

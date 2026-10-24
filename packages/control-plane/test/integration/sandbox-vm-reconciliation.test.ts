@@ -174,7 +174,7 @@ async function refuseEncryptedLookup(change: "reference" | "timestamp") {
     try {
       manager.onSandboxConnected();
       manager.onSandboxSocketAttached(f.generation);
-      expect(manager.onRuntimeReady(Date.now(), "opencode", 1)).toBe(true);
+      expect(manager.onRuntimeReady(Date.now(), "opencode", 1)).toBe("became_ready");
       const resolution = f.vmResolution();
       f.finishLookup(f.result);
       await encrypted;
@@ -267,7 +267,7 @@ describe("production-wired VM startup reconciliation", () => {
           lifecyclePolicy: "confirmed",
         });
 
-        expect(manager.onRuntimeReady(Date.now(), "opencode", 1)).toBe(true);
+        expect(manager.onRuntimeReady(Date.now(), "opencode", 1)).toBe("became_ready");
         expect(sandbox.getSandbox()).toMatchObject({
           status: "ready",
           modal_object_id: f.reference,

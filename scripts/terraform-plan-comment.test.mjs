@@ -237,6 +237,7 @@ const successfulSteps = {
   VALIDATE_OUTCOME: "success",
   TEST_OUTCOME: "success",
   MODAL_TEST_OUTCOME: "success",
+  CLOUDFLARE_WORKER_TEST_OUTCOME: "success",
 };
 
 for (const { name, env, expected, absent } of [

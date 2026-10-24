@@ -96,6 +96,17 @@ export class SourceControlProviderError extends Error {
   }
 }
 
+/** Redacted public projection for provider failures crossing capability boundaries. */
+export function publicSourceControlError(
+  error: unknown,
+  fallbackMessage: string
+): { message: string; retryable: boolean } {
+  return {
+    message: fallbackMessage,
+    retryable: error instanceof SourceControlProviderError && error.errorType === "transient",
+  };
+}
+
 function blobLimitError(
   blobId: string,
   actualBytes: number,

@@ -1,9 +1,11 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { compareSlackTimestamps } from "@open-inspect/shared/slack";
 import { z } from "zod";
+import { harnessIdSchema, type HarnessId } from "@open-inspect/shared/harnesses";
 import { createLogger } from "../logger";
 import { targetId, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env, ThreadSession } from "../types";
+import { lookupSlackIngressThread } from "../ingress-authority";
 
 const log = createLogger("handler");
 export const THREAD_CLOSED_MESSAGE = "this session is no longer available from this channel";
@@ -16,6 +18,7 @@ const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   repoFullName: z.string().min(1),
   model: z.string().min(1),
   reasoningEffort: z.string().min(1).optional(),
+  harness: harnessIdSchema.optional(),
   createdAt: z.number().finite().nonnegative(),
   lastPromptTs: z.string().min(1).optional(),
 });
@@ -59,7 +62,13 @@ export async function lookupThreadSession(
       getThreadSessionKey(channel, threadTs),
       "json"
     );
-    const result = threadSessionSchema.safeParse(data);
+    let result = threadSessionSchema.safeParse(data);
+    if (!result.success && env.PI_SLACK_DURABLE_INGRESS_ENABLED?.trim().toLowerCase() === "true") {
+      const receipt = await lookupSlackIngressThread(env, channel, threadTs).catch(() => null);
+      const raw = receipt?.thread_mapping_json;
+      result = threadSessionSchema.safeParse(typeof raw === "string" ? JSON.parse(raw) : null);
+      if (result.success) await storeThreadSession(env, channel, threadTs, result.data);
+    }
     if (!result.success) return null;
     const session = result.data;
     if (!session.closed && (await hasThreadClosure(env, channel, threadTs, session.sessionId))) {
@@ -227,7 +236,8 @@ export function buildThreadSession(
   model: string,
   reasoningEffort?: string,
   lastPromptTs?: string,
-  teamId?: string | null
+  teamId?: string | null,
+  harness?: HarnessId
 ): ThreadSession {
   return {
     sessionId,
@@ -235,6 +245,7 @@ export function buildThreadSession(
     repoFullName: targetLabel(target),
     model,
     reasoningEffort,
+    ...(harness ? { harness } : {}),
     createdAt: Date.now(),
     lastPromptTs,
     ...(teamId !== undefined ? { teamId } : {}),

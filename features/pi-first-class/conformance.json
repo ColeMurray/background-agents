@@ -1,0 +1,1130 @@
+{
+  "rows": {
+    "A1": {
+      "status": "PASS",
+      "code": [
+        "packages/shared/src/harnesses.ts:29",
+        "packages/shared/src/harnesses.ts:75",
+        "terraform/d1/migrations/0090_durable_object_harness.sql:1"
+      ],
+      "tests": [
+        {
+          "file": "packages/shared/src/harnesses.test.ts",
+          "name": "lists only harnesses the runtime can boot, built-in first"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/harnesses.ts",
+        "find": "export const HARNESS_IDS = [\"opencode\", \"claude\", \"codex\", \"pi\"] as const;",
+        "replace": "export const HARNESS_IDS = [\"opencode\", \"claude\", \"codex\"] as const;",
+        "cmd": "npm test -w @open-inspect/shared -- src/harnesses.test.ts"
+      }
+    },
+    "A2": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/message-queue.ts:533",
+        "packages/control-plane/src/session/snapshot-reader.ts:63",
+        "packages/shared/src/harnesses.ts:105"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/sandbox-early-connect.test.ts",
+          "name": "keeps a pending prompt queued when readiness finds an unknown persisted harness"
+        },
+        {
+          "file": "packages/control-plane/test/integration/session-snapshot.test.ts",
+          "name": "refuses to project an unknown persisted harness as OpenCode"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/harnesses.ts",
+        "find": "  return isValidHarness(value) ? value : null;",
+        "replace": "  return isValidHarness(value) ? value : DEFAULT_HARNESS;",
+        "cmd": "npm run build -w @open-inspect/shared && npm run test:integration -w @open-inspect/control-plane -- session-snapshot -t \"unknown persisted harness\""
+      }
+    },
+    "A3": {
+      "status": "PASS",
+      "code": ["packages/shared/src/harnesses.ts:135"],
+      "tests": [
+        {
+          "file": "packages/shared/src/harnesses.test.ts",
+          "name": "rejects a model the harness cannot run"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/harnesses.ts",
+        "find": "  if (!harnessSupportsModel(harness, model)) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/shared -- src/harnesses.test.ts -t \"rejects a model the harness cannot run\""
+      }
+    },
+    "A4": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/harness-admission.ts:40",
+        "packages/shared/src/harnesses.ts:88"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/harness-admission.test.ts",
+          "name": "checks current native model availability and resolved auth again at dispatch"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/harness-admission.ts",
+        "find": "  if (harness === \"pi\" && (!enabled(env.PI_DURABLE_ENABLED) || !env.PI_SESSION)) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/harness-admission.test.ts"
+      }
+    },
+    "A5": {
+      "status": "PASS",
+      "code": ["packages/shared/src/harnesses.ts:78"],
+      "tests": [
+        {
+          "file": "packages/shared/src/harnesses.test.ts",
+          "name": "lists only harnesses the runtime can boot, built-in first"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/harnesses.ts",
+        "find": "  pi: {\n    label: \"Pi Durable\",\n    selectionPolicy: \"strict\",",
+        "replace": "  pi: {\n    label: \"Pi Durable\",\n    selectionPolicy: \"legacy_fallback\",",
+        "cmd": "npm test -w @open-inspect/shared -- src/harnesses.test.ts"
+      }
+    },
+    "A6": {
+      "status": "N/A",
+      "reason": "The stored-harness resolution never reads a resume field for this harness: the catalogue entry carries it only because upstream's HarnessCapabilities type requires the field, so no invented semantics reach the runtime."
+    },
+    "B-1": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/routing/route-admission.ts:1",
+        "packages/control-plane/src/session/contracts.ts:110"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/route-admission-matrix.test.ts",
+          "name": "admits exactly the credential classes each route's policy accepts"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/routing/route-admission.ts",
+        "find": "  const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);",
+        "replace": "  const principalFailure = null;",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- route-admission-matrix -t \"admits exactly the credential classes\""
+      }
+    },
+    "B-2": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/routing/identity-enforcement.ts:1",
+        "packages/control-plane/src/session/message-queue.ts:843"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/auth/identity-enforcement.test.ts",
+          "name": "fails closed for %s"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/routing/identity-enforcement.ts",
+        "find": "  if (userId && ctx.authorization?.userId === userId) return userId;",
+        "replace": "  if (userId) return userId;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/auth/identity-enforcement.test.ts -t \"fails closed for\""
+      }
+    },
+    "B-3": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/authorization/service-permissions.ts:1",
+        "packages/control-plane/src/session/message-queue.ts:843"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/authorization/service-permissions.test.ts",
+          "name": "allows launch capabilities but denies management capabilities"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/authorization/service-permissions.ts",
+        "find": "  return SERVICE_PERMISSION_CEILINGS[service].includes(permission);",
+        "replace": "  return true;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/authorization/service-permissions.test.ts -t \"allows launch capabilities but denies management capabilities\""
+      }
+    },
+    "B-4": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/harness/execution-principal.ts:44",
+        "packages/control-plane/src/harness/execution-principal.ts:16"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/harness/execution-principal.test.ts",
+          "name": "parses the SessionDO creation snapshot and current emergency policy"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/harness/execution-principal.ts",
+        "find": "  const signal = request.signal\n    ? AbortSignal.any([request.signal, timeout.signal])\n    : timeout.signal;",
+        "replace": "  const signal = timeout.signal;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/harness/execution-principal.test.ts"
+      }
+    },
+    "B-5": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/http/handlers/browser-gateway.handler.ts:1",
+        "packages/control-plane/src/harness/turn-authority.ts:1"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/http/handlers/browser-gateway.handler.test.ts",
+          "name": "refuses a request after the turn author loses current authority"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/http/handlers/browser-gateway.handler.ts",
+        "find": "    if (!(await bridge.authorMayAct(operationId))) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- browser-gateway.handler"
+      }
+    },
+    "B-6": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts:1",
+        "packages/control-plane/src/harness/turn-authority.ts:1",
+        "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts:87",
+        "packages/control-plane/src/session/components.ts:1425"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.test.ts",
+          "name": "refuses a command after the turn author loses current authority"
+        },
+        {
+          "file": "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts",
+          "name": "refuses memory after the turn author loses current authority"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/http/handlers/harness-sandbox-execution.handler.ts",
+        "find": "    if (!(await this.deps.authorMayAct(operationId))) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- harness-sandbox-execution.handler"
+      }
+    },
+    "B-7": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/harness/action-ceiling.ts:1",
+        "packages/control-plane/src/pi/turn-authority.ts:1"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/tool-policy-extension.test.ts",
+          "name": "refuses the turn when the action ceiling is reached"
+        },
+        {
+          "file": "packages/control-plane/src/pi/turn-authority.test.ts",
+          "name": "atomically refuses parallel actions beyond the durable ceiling"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/turn-authority.ts",
+        "find": "       WHERE operation_id = ? AND remaining_actions > 0",
+        "replace": "       WHERE operation_id = ? AND remaining_actions < 0",
+        "cmd": "npm test -w @open-inspect/control-plane -- turn-authority -t \"atomically refuses parallel actions beyond the durable ceiling\""
+      }
+    },
+    "B-8": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:299",
+        "packages/control-plane/src/cloudflare/binding-scope.ts:33"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "holds no deployment secret in its runtime bindings"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "    super(ctx, scopeBindings(env, PI_DO_BINDING_KEYS));",
+        "replace": "    super(ctx, env);",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do"
+      }
+    },
+    "B-9": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/routing/identity-enforcement.ts:1",
+        "packages/control-plane/src/session/contracts.ts:110"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/auth/identity-enforcement.test.ts",
+          "name": "restricts callbackContext to callback-owning bots"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/routing/identity-enforcement.ts",
+        "find": "    (CALLBACK_DESTINATIONS as readonly ServiceName[]).includes(principal.service)",
+        "replace": "    true",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/auth/identity-enforcement.test.ts -t \"restricts callbackContext\""
+      }
+    },
+    "C1": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/http/handlers/personal-mcp-session.handler.ts:1",
+        "packages/control-plane/src/harness/turn-authority.ts:1"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/http/handlers/mcp-session.handler.test.ts",
+          "name": "refuses a read after the turn author loses current authority"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/http/handlers/personal-mcp-session.handler.ts",
+        "find": "    return this.options.mcp.authorMayAct(operationId);",
+        "replace": "    return Promise.resolve(true);",
+        "cmd": "npm test -w @open-inspect/control-plane -- mcp-session.handler"
+      }
+    },
+    "C2": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/message-queue.ts:795"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/message-queue.test.ts",
+          "name": "does not dispatch when another worker wins the processing claim"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/message-queue.ts",
+        "find": "    if (!claimed) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/message-queue.test.ts -t \"does not dispatch when another worker wins the processing claim\""
+      }
+    },
+    "C3": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/pi/projection-outbox.ts:1"],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/pi-export-projection.test.ts",
+          "name": "puts a Pi turn's tool call and its completion in the session's events"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/projection-outbox.ts",
+        "find": "        await this.deliver(row.sequence, row.display_id, row.operation_id, event);",
+        "replace": "        await Promise.resolve();",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
+      }
+    },
+    "C4": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/sandbox-events/processor.ts:62"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/sandbox-events/processor.test.ts",
+          "name": "correlates tool processing without logging content or credentials"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/sandbox-events/processor.ts",
+        "find": "        messageId: eventMessageId ?? processingMessage?.id ?? null,",
+        "replace": "        messageId: null,",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/sandbox-events/processor.test.ts -t \"correlates tool processing\""
+      }
+    },
+    "C5": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/message-queue.ts:1",
+        "packages/control-plane/src/session/contracts.ts:110"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/message-queue.test.ts",
+          "name": "dispatches Pi prompts without consulting, spawning, or sending to a sandbox"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/message-queue.ts",
+        "find": "    if (this.inProcessRuntime?.harness === harness) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- message-queue"
+      }
+    },
+    "C6": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/sandbox-events/execution.handler.ts:63"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/message-queue.test.ts",
+          "name": "cannot dispatch while final-cost settlement waits for terminal projection"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/sandbox-events/execution.handler.ts",
+        "find": "      await this.projectTerminalMessage(\n        completion.messageId,\n        completion.messageCreatedAt,\n        completion.completedAt\n      );",
+        "replace": "      await Promise.resolve();",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/message-queue.test.ts -t \"cannot dispatch while final-cost settlement\""
+      }
+    },
+    "C7": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/sandbox-events/processor.ts:62"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/sandbox-events/processor.test.ts",
+          "name": "correlates tool processing without logging content or credentials"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/sandbox-events/processor.ts",
+        "find": "    let fields = eventLogContext(event, eventMessageId ?? null);",
+        "replace": "    let fields = { ...event };",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/sandbox-events/processor.test.ts -t \"correlates tool processing\""
+      }
+    },
+    "C8": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/harness/turn-authority.ts:1"],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/turn-authority.test.ts",
+          "name": "denies an author who is not on the session"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/harness/turn-authority.ts",
+        "find": "  const decision = checkSessionAccess(viewer, row, options.action);",
+        "replace": "  const decision = { allowed: true };",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- turn-authority"
+      }
+    },
+    "D-1": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/pi/computer-workspace-policy.ts:47"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/computer-workspace-policy.test.ts",
+          "name": "blocks oversized content and paths outside scratch"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/computer-workspace-policy.ts",
+        "find": "  if (path === null) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/computer-workspace-policy.test.ts -t \"blocks oversized content and paths outside scratch\""
+      }
+    },
+    "D-2": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/pi/codemode-extension.ts:1"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/codemode-durable.test.ts",
+          "name": "aborts the active script and its nested call"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/codemode-extension.ts",
+        "find": "                await policy.parents.set(api.taskId, api.callId);",
+        "replace": "                await Promise.resolve();",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/codemode-durable.test.ts -t \"aborts the active script and its nested call\""
+      }
+    },
+    "D-3": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/harness/turn-deadline.ts:60",
+        "packages/control-plane/src/pi/turn-authority.ts:1",
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:1226",
+        "packages/control-plane/src/session/http/handlers/pi-control.handler.ts:209"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/harness/turn-deadline.test.ts",
+          "name": "expires when the deadline passes"
+        },
+        {
+          "file": "packages/control-plane/src/pi/turn-authority.test.ts",
+          "name": "restores the original deadline and consumed action count"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/harness/turn-deadline.ts",
+        "find": "    handle = timers.set(expire, remaining);",
+        "replace": "    handle = undefined;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/harness/turn-deadline.test.ts -t \"expires when the deadline passes\""
+      }
+    },
+    "D-4": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/pi/projection-outbox.ts:1"],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/pi-export-projection.test.ts",
+          "name": "puts a Pi turn's tool call and its completion in the session's events"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/projection-outbox.ts",
+        "find": "    const eventJson = JSON.stringify(sandboxIngressEventSchema.parse(event));",
+        "replace": "    const eventJson = JSON.stringify({ type: \"heartbeat\", sandboxId: \"mutated\", timestamp: createdAt });",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-export-projection -t \"puts a Pi turn's tool call\""
+      }
+    },
+    "D-5": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/cloudflare/browser-rendering-transport.ts:1",
+        "packages/control-plane/src/mcp/egress-policy.ts:53",
+        "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/browser-transport.test.ts",
+          "name": "fails closed when the binding cannot constrain redirects and subresources"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/cloudflare/browser-rendering-transport.ts",
+        "find": "    return false;",
+        "replace": "    return true;",
+        "cmd": "npm test -w @open-inspect/control-plane -- browser-transport"
+      }
+    },
+    "D-6": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/pi/external-action-policy-extension.ts:117",
+        "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts:177",
+        "packages/control-plane/src/session/external-action-target-authority.ts:1"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/external-action-policy-extension.test.ts",
+          "name": "refuses a new effect when the live deployment policy denies it"
+        },
+        {
+          "file": "packages/control-plane/src/pi/external-action-policy-integration.test.ts",
+          "name": "binds a new real Pi call to approval and executes only through SessionDO"
+        },
+        {
+          "file": "packages/control-plane/src/db/automation-external-action-grants.test.ts",
+          "name": "returns a grant only for the automation's current executor"
+        },
+        {
+          "file": "packages/control-plane/src/session/external-action-target-authority.test.ts",
+          "name": "requires Slack channels to remain bound to the session team"
+        },
+        {
+          "file": "packages/control-plane/src/session/external-action-providers/executor.test.ts",
+          "name": "reads Slack conversations.replies messages for reconciliation"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/external-action-policy-extension.ts",
+        "find": "        if (admission && !admission.allowed) {",
+        "replace": "      if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- external-action-policy-extension -t \"refuses a new effect when the live deployment policy denies it\""
+      }
+    },
+    "E-1": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/pi/codex-credential-store.ts:1",
+        "packages/control-plane/src/session/provider-account-resolution.ts:100"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/codex-credential-store.test.ts",
+          "name": "rechecks broker authority even while the cached token remains valid"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/codex-credential-store.ts",
+        "find": "    return { ...(await this.loadOnce(undefined, options?.signal)) };",
+        "replace": "    return this.credential ? { ...this.credential } : { ...(await this.loadOnce(undefined, options?.signal)) };",
+        "cmd": "npm test -w @open-inspect/control-plane -- codex-credential-store"
+      }
+    },
+    "E-2": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/provider-account-resolution.ts:78"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/provider-account-resolution.test.ts",
+          "name": "does not let an explicit account bypass unattended API-key policy"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/provider-account-resolution.ts",
+        "find": "    providerDefault?.unattendedMode !== \"provider_account\"",
+        "replace": "    false",
+        "cmd": "npm test -w @open-inspect/control-plane -- provider-account-resolution -t \"does not let an explicit account bypass unattended API-key policy\""
+      }
+    },
+    "E-3": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/source-control/credential-scope.ts:15"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/source-control/credential-scope.test.ts",
+          "name": "refuses more than 500 unique ids without truncating the set"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/source-control/credential-scope.ts",
+        "find": "  if (ids.length > MAX_CREDENTIAL_SCOPE_REPOSITORY_IDS) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/source-control/credential-scope.test.ts -t \"refuses more than 500\""
+      }
+    },
+    "E-4": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/pull-request-service.ts:46"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/pull-request-service.per-branch.test.ts",
+          "name": "reports the resolved head, base, and updated=false on creation"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/pull-request-service.ts",
+        "find": "        updated: false,",
+        "replace": "        updated: true,",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/pull-request-service.per-branch.test.ts -t \"reports the resolved head\""
+      }
+    },
+    "E-5": {
+      "status": "PASS",
+      "code": [
+        "packages/shared/src/types/overlay-integrations.ts:706",
+        "packages/control-plane/src/routes/mcp-connections.ts:59"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
+          "name": "derives ownership from the human principal and never the request body"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/types/overlay-integrations.ts",
+        "find": "export const mcpConnectionCreateInputSchema = z\n  .object({\n    serverId: z.string().trim().min(1),\n  })\n  .strict();",
+        "replace": "export const mcpConnectionCreateInputSchema = z\n  .object({\n    serverId: z.string().trim().min(1),\n  })\n  .passthrough();",
+        "cmd": "npm run build -w @open-inspect/shared && npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"derives ownership from the human principal\""
+      }
+    },
+    "E-6": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/mcp/egress-policy.ts:34"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/mcp/egress-policy.test.ts",
+          "name": "refuses a redirect to another host"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/mcp/egress-policy.ts",
+        "find": "  assertExactMcpHost(candidateUrl, policy.endpointHost);",
+        "replace": "  void policy.endpointHost;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/mcp/egress-policy.test.ts -t \"refuses a redirect to another host\""
+      }
+    },
+    "E-7": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63",
+        "packages/control-plane/src/routes/mcp-connections.ts:25"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
+          "name": "rechecks durable D1 authority before every broker tool call"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts",
+        "find": "    const authority = await this.requireD1Authority(call.connectionId, call.ownerUserId);",
+        "replace": "    const authority = { status: \"oauth_ready\" };",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"rechecks durable D1 authority\""
+      }
+    },
+    "E-8": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/mcp/egress-policy.ts:21"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/mcp/egress-policy.test.ts",
+          "name": "refuses an endpoint that carries credentials"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/mcp/egress-policy.ts",
+        "find": "  const validated = validateMcpRemoteUrl(candidateUrl);",
+        "replace": "  const validated = new URL(candidateUrl);",
+        "cmd": "npm test -w @open-inspect/control-plane -- egress-policy"
+      }
+    },
+    "E-9": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/mcp/connection-saga.ts:80",
+        "packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:574"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/mcp-connections.test.ts",
+          "name": "closes the dormant transport cache and clears credentials before D1 cascade deletion"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/mcp/connection-saga.ts",
+        "find": "    await this.broker.destroy(connectionId, ownerUserId);",
+        "replace": "    await Promise.resolve();",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- mcp-connections -t \"closes the dormant transport cache\""
+      }
+    },
+    "F-1": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/initialize.ts:97",
+        "packages/control-plane/src/routes/session-create.ts:78"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/pi-session-creation.test.ts",
+          "name": "retries exact initialization when Pi commits before the first RPC response is lost"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/initialize.ts",
+        "find": "  if (!existingSession)\n    await sessionStore.create({",
+        "replace": "  if (false)\n    await sessionStore.create({",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-creation -t \"retries exact initialization\""
+      }
+    },
+    "F-2": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/http/handlers/session-init.handler.ts:142"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/http/handlers/session-init.handler.test.ts",
+          "name": "initializes the separate durable runtime without creating or warming a sandbox"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/http/handlers/session-init.handler.ts",
+        "find": "      if (!inProcessRuntimeForSession) {",
+        "replace": "      if (true) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- session-init.handler"
+      }
+    },
+    "F-3": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/scheduler/scheduler.ts:622",
+        "packages/control-plane/src/scheduler/scheduler.ts:2033"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/scheduler/scheduler.test.ts",
+          "name": "resolves one provider auth snapshot for every child in a fan-out invocation"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/scheduler/scheduler.ts",
+        "find": "  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true, harness });",
+        "replace": "  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: false, harness });",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/scheduler/scheduler.test.ts -t \"resolves one provider auth snapshot\""
+      }
+    },
+    "F-4": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/authorization/slack-post-gate.ts:9"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/authorization/slack-post-gate.test.ts",
+          "name": "refuses a missing session even for an unbound channel"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/authorization/slack-post-gate.ts",
+        "find": "  if (!session) return \"missing_session\";",
+        "replace": "  if (!session) return null;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/authorization/slack-post-gate.test.ts -t \"refuses a missing session\""
+      }
+    },
+    "F-5": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/scheduler/scheduler.ts:223"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/scheduler/scheduler.test.ts",
+          "name": "appends workspace session instructions to a new Slack automation session"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/scheduler/scheduler.ts",
+        "find": "  return `${instructions}\\n---\\n\\n${contextBlock}\\n\\n---\\n\\n${AUTOMATION_CONTEXT_GUARDRAIL}`;",
+        "replace": "  return `${instructions}\\n---\\n\\n${contextBlock}`;",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/scheduler/scheduler.test.ts -t \"appends workspace session instructions\""
+      }
+    },
+    "F-6": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/routes/session-child-spawn.ts:1",
+        "packages/control-plane/src/routes/session-children.ts:1",
+        "packages/control-plane/src/pi/open-inspect-extension.ts:142"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/spawn-children.test.ts",
+          "name": "rejects when depth >= 2 (403)"
+        },
+        {
+          "file": "packages/control-plane/src/pi/open-inspect-extension.test.ts",
+          "name": "rejects a fourth active subagent so parent plus children stay capped at four"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/routes/session-child-spawn.ts",
+        "find": "  if (parentDepth >= MAX_SPAWN_DEPTH) {",
+        "replace": "  if (false) {",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- spawn-children -t \"rejects when depth >= 2\""
+      }
+    },
+    "G-1": {
+      "status": "PASS",
+      "code": [
+        "packages/shared/src/overlay-migration-reservations.ts:1",
+        "packages/shared/src/migration-reservations.ts:31"
+      ],
+      "tests": [
+        {
+          "file": "packages/shared/src/migration-reservations.test.ts",
+          "name": "assigns the cross-cutting feature migration ranges"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/overlay-migration-reservations.ts",
+        "find": "export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 90;",
+        "replace": "export const PI_D1_HARNESS_DISCRIMINATOR_MIGRATION_VERSION = 9001;",
+        "cmd": "npm test -w @open-inspect/shared -- src/migration-reservations.test.ts -t \"assigns the cross-cutting feature migration ranges\""
+      }
+    },
+    "G-2": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/session/schema.ts:210"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/schema.test.ts",
+          "name": "has unique, strictly increasing migration ids"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/schema.ts",
+        "find": "return [...CORE_MIGRATIONS, ...sessionSchemaExtensionMigrations()].sort(",
+        "replace": "return [...CORE_MIGRATIONS, ...sessionSchemaExtensionMigrations(), ...sessionSchemaExtensionMigrations()].sort(",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/schema.test.ts -t \"has unique, strictly increasing migration ids\""
+      }
+    },
+    "G-3": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:1",
+        "packages/control-plane/src/session/batch-archive.ts:35"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "preserves its durable record for an archive without deleting it"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "    await this.ctx.storage.put(ARCHIVE_STATE_KEY, \"archived\");",
+        "replace": "    await Promise.resolve();",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do"
+      }
+    },
+    "G-4": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/routes/session-index.ts:460"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/routes/session-index.test.ts",
+          "name": "destroys the session runtime before deleting its D1 index row"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/routes/session-index.ts",
+        "find": "  if (session) {",
+        "replace": "  if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/routes/session-index.test.ts -t \"destroys the session runtime before deleting its D1 index row\""
+      }
+    },
+    "G-5": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:1",
+        "packages/control-plane/src/pi/projection-outbox.ts:1",
+        "packages/control-plane/src/routes/session-export.ts:122",
+        "packages/control-plane/test/integration/session-export.test.ts:109"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "refuses to confirm an archive while a transcript event is undelivered"
+        },
+        {
+          "file": "packages/control-plane/test/integration/session-export.test.ts",
+          "name": "exports Pi through the canonical projection without an incomplete parallel marker"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "      await this.projectionOutbox.drain(operationId);",
+        "replace": "      void operationId;",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do"
+      }
+    },
+    "G-6": {
+      "status": "PASS",
+      "code": ["packages/shared/src/types/audit-events.ts:28"],
+      "tests": [
+        {
+          "file": "packages/shared/src/types/audit-events.test.ts",
+          "name": "interprets a shadow denial as an observation regardless of stored result %s"
+        }
+      ],
+      "mutation": {
+        "file": "packages/shared/src/types/audit-events.ts",
+        "find": "    return { kind: \"observation\", observation: \"would_deny\" };",
+        "replace": "    return { kind: \"operation\", result: event.operationResult };",
+        "cmd": "npm test -w @open-inspect/shared -- src/types/audit-events.test.ts -t \"interprets a shadow denial\""
+      }
+    },
+    "H-1": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/budget-service.ts:154",
+        "packages/control-plane/src/session/budget-service.ts:184"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/budget-service.pi.test.ts",
+          "name": "routes a running Pi step across a tiny cap through exact Pi stop"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/budget-service.ts",
+        "find": "    if (this.inProcess?.isInProcessSession()) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/budget-service.pi.test.ts"
+      }
+    },
+    "H-2": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/harness/trusted-usage-meter.ts:1",
+        "packages/control-plane/src/pi/trusted-usage-storage.ts:1",
+        "packages/control-plane/src/harness/pricing.ts:18",
+        "packages/control-plane/src/harness/accounting.ts:1"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/harness/trusted-usage-meter.test.ts",
+          "name": "prices measured usage only through the server-held price table"
+        },
+        {
+          "file": "packages/control-plane/src/pi/trusted-usage-storage.test.ts",
+          "name": "routes every usage write through the shared SQLite database"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/harness/trusted-usage-meter.ts",
+        "find": "      state.costUsd += this.prices.costOf(modelId, usage);",
+        "replace": "      state.costUsd += 0;",
+        "cmd": "npm test -w @open-inspect/control-plane -- trusted-usage-meter"
+      }
+    },
+    "H-3": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/harness/budget-gate.ts:52",
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:906"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/harness/budget-gate.test.ts",
+          "name": "refuses the call once the limit is reached"
+        },
+        {
+          "file": "packages/control-plane/test/integration/pi-session-do.test.ts",
+          "name": "fails the model budget gate closed without an attributable active operation"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/cloudflare/pi-durable-object.ts",
+        "find": "    if (!sessionId || !operationId) return refusedBudgetState();",
+        "replace": "    if (!sessionId || !operationId) return { exhausted: false, spentUsd: 0, capUsd: null };",
+        "cmd": "npm run test:integration -w @open-inspect/control-plane -- pi-session-do -t \"fails the model budget gate closed\""
+      }
+    },
+    "I-1": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/memory/session-memory-service.ts:39",
+        "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts:87"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/memory/session-memory-service.test.ts",
+          "name": "denies a write when the principal can no longer read the partition"
+        },
+        {
+          "file": "packages/control-plane/src/session/http/handlers/pi-memory.handler.test.ts",
+          "name": "refuses memory after the turn author loses current authority"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/http/handlers/pi-memory.handler.ts",
+        "find": "    if (!(await this.options.authorMayAct(request))) {",
+        "replace": "    if (false) {",
+        "cmd": "npm test -w @open-inspect/control-plane -- pi-memory.handler"
+      }
+    },
+    "I-2": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/pi/managed-skills-extension.ts:11"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/managed-skills-extension.test.ts",
+          "name": "reads only declared skill resources"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/managed-skills-extension.ts",
+        "find": "  const extension = await skills(sources);",
+        "replace": "  const extension = await skills([]);",
+        "cmd": "npm test -w @open-inspect/control-plane -- managed-skills-extension"
+      }
+    },
+    "I-3": {
+      "status": "PASS",
+      "code": ["packages/control-plane/src/pi/managed-skills-extension.ts:11"],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/pi/managed-skills-extension.test.ts",
+          "name": "activates a managed skill through Pi's output contract"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/pi/managed-skills-extension.ts",
+        "find": "    name: \"open-inspect.skills\",",
+        "replace": "    name: \"disabled.skills\",",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/pi/managed-skills-extension.test.ts -t \"activates a managed skill through Pi's output contract\""
+      }
+    },
+    "I-4": {
+      "status": "PASS",
+      "code": [
+        "packages/control-plane/src/session/http/handlers/sandbox.handler.ts:1",
+        "packages/control-plane/src/session/artifacts.ts:3"
+      ],
+      "tests": [
+        {
+          "file": "packages/control-plane/src/session/http/handlers/sandbox.handler.test.ts",
+          "name": "creates a media artifact row and matching timeline event"
+        }
+      ],
+      "mutation": {
+        "file": "packages/control-plane/src/session/http/handlers/sandbox.handler.ts",
+        "find": "    this.artifactRepository.createArtifact({",
+        "replace": "    if (false) this.artifactRepository.createArtifact({",
+        "cmd": "npm test -w @open-inspect/control-plane -- src/session/http/handlers/sandbox.handler.test.ts -t \"creates a media artifact row\""
+      }
+    }
+  },
+  "suspects": {
+    "1": {
+      "verdict": "fixed",
+      "evidence": [
+        "packages/control-plane/src/cloudflare/pi-durable-object.ts:299",
+        "packages/control-plane/src/cloudflare/binding-scope.ts:33"
+      ]
+    },
+    "2": {
+      "verdict": "fixed",
+      "evidence": [
+        "packages/shared/src/harnesses.ts:95",
+        "packages/control-plane/src/harness-admission.ts:40"
+      ]
+    },
+    "3": {
+      "verdict": "fixed",
+      "evidence": ["packages/shared/src/harnesses.ts:78"]
+    },
+    "4": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63"]
+    },
+    "5": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/cloudflare/mcp-connection-durable-object.ts:63"]
+    },
+    "6": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/pi/codemode-extension.ts:1"]
+    },
+    "7": {
+      "verdict": "fixed",
+      "evidence": ["packages/shared/src/migration-reservations.ts:31"]
+    },
+    "8": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/session/sandbox-events/execution.handler.ts:63"]
+    },
+    "9": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/harness/accounting.ts:1"]
+    },
+    "10": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/harness/turn-authority.ts:1"]
+    },
+    "11": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/session/provider-account-resolution.ts:100"]
+    },
+    "12": {
+      "verdict": "fixed",
+      "evidence": ["packages/control-plane/src/pi/projection-outbox.ts:1"]
+    },
+    "13": {
+      "verdict": "killed",
+      "evidence": ["features/pi-first-class/DEVIATIONS.md:1"]
+    },
+    "14": {
+      "verdict": "killed",
+      "evidence": ["features/pi-first-class/LAYERS.md:1"]
+    }
+  },
+  "allow": []
+}

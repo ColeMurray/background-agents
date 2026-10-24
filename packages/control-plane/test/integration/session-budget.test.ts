@@ -1,21 +1,183 @@
 import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
   initNamedSession,
   initNamedSessionDO,
+  initSession,
   openClientWs,
   queryDO,
   seedMessage,
   serviceFetch,
   waitForSandboxStatus,
 } from "./helpers";
+import type { PiRuntimeDispatch } from "../../src/pi/runtime-contract";
 
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 
 describe("session budgets", () => {
   beforeEach(cleanD1Tables);
+
+  it("charges a Pi terminal result exactly once and exhausts a tiny budget", async () => {
+    const name = `budget-pi-terminal-${Date.now()}`;
+    const { stub } = await initNamedSessionDO(name, {
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      sandboxSettings: { maxSessionCostUsd: 0.0001 },
+    });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "pi-budget-message",
+      authorId,
+      content: "priced work",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 10,
+      startedAt: Date.now() - 5,
+    });
+    const submit = () =>
+      stub.fetch("http://internal/internal/pi-result", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId: "pi-budget-message",
+          status: "done",
+          text: "done",
+          usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, total: 18 },
+          costUsd: 0.0002,
+        }),
+      });
+
+    expect((await submit()).status).toBe(200);
+    await seedMessage(stub, {
+      id: "pi-budget-message-b",
+      authorId,
+      content: "newer work",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+    expect(await (await submit()).json()).toEqual({ status: "already_projected" });
+    expect(
+      await queryDO<{
+        total_cost: number;
+        budget_exhausted: number;
+        reported_cost_usd: number;
+      }>(
+        stub,
+        `SELECT s.total_cost, s.budget_exhausted, m.reported_cost_usd
+         FROM session s JOIN messages m ON m.id = 'pi-budget-message'`
+      )
+    ).toEqual([{ total_cost: 0.0002, budget_exhausted: 1, reported_cost_usd: 0.0002 }]);
+    expect(
+      await queryDO<{ status: string }>(
+        stub,
+        "SELECT status FROM messages WHERE id = 'pi-budget-message-b'"
+      )
+    ).toEqual([{ status: "processing" }]);
+  });
+
+  it("exactly aborts and settles a running Pi operation when a step crosses the cap", async () => {
+    const abort = vi.fn(async () => true);
+    const lookup = vi.fn<PiRuntimeDispatch["lookup"]>(async (_sessionId, operationId) => ({
+      status: "settled",
+      result: {
+        operationId,
+        status: "unanswered",
+        text: "",
+        reason: "aborted",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+        costUsd: 0.0002,
+      },
+    }));
+    const runtime = {
+      initialize: vi.fn(async () => {}),
+      submit: vi.fn(),
+      lookup,
+      abort,
+      status: vi.fn(async () => ({ busy: true, pending: 1 })),
+      control: vi.fn(),
+      refreshDiff: vi.fn(async () => {}),
+      preserveForArchive: vi.fn(async () => {}),
+      restoreFromArchive: vi.fn(async () => {}),
+      destroy: vi.fn(async () => {}),
+    } satisfies PiRuntimeDispatch;
+    const { sessionName, stub } = await initSession({
+      sessionName: `budget-pi-running-${crypto.randomUUID()}`,
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+      sandboxSettings: { maxSessionCostUsd: 0.0001 },
+      configureSessionEnv: (sessionEnv) => {
+        sessionEnv.PI_SESSION = runtime;
+      },
+    });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "pi-running-budget-message",
+      authorId,
+      content: "keep working",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 10,
+      startedAt: Date.now() - 5,
+    });
+    await queryDO(
+      stub,
+      `INSERT INTO pi_operation_dispatch
+       (operation_id, state, last_projection_sequence, created_at, updated_at)
+       VALUES ('pi-running-budget-message', 'admitted', 0, ?, ?)`,
+      Date.now(),
+      Date.now()
+    );
+
+    const projectionInit = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Pi-Operation-ID": "pi-running-budget-message",
+        "X-Pi-Projection-ID": "pi-running-budget-message:step:1",
+        "X-Pi-Projection-Sequence": "1",
+      },
+      body: JSON.stringify({
+        type: "step_finish",
+        sandboxId: `pi:${sessionName}`,
+        timestamp: Date.now() / 1_000,
+        messageId: "pi-running-budget-message",
+        stepId: "pi-entry:1",
+        cost: 0.0002,
+        messageCostUsd: 0.0002,
+        tokens: { input: 1, output: 1, total: 2 },
+      }),
+    } satisfies RequestInit;
+    const response = await stub.fetch("http://internal/internal/pi-event", projectionInit);
+
+    expect(response.status).toBe(200);
+    expect(
+      await (await stub.fetch("http://internal/internal/pi-event", projectionInit)).json()
+    ).toEqual({ status: "already_projected" });
+    await vi.waitFor(async () => {
+      expect(abort).toHaveBeenCalledWith(sessionName, "pi-running-budget-message");
+      expect(lookup).toHaveBeenCalledWith(sessionName, "pi-running-budget-message");
+      expect(
+        await queryDO<{ status: string; budget_exhausted: number; total_cost: number }>(
+          stub,
+          `SELECT m.status, s.budget_exhausted, s.total_cost FROM messages m JOIN session s
+           WHERE m.id = 'pi-running-budget-message'`
+        )
+      ).toEqual([{ status: "failed", budget_exhausted: 1, total_cost: 0.0002 }]);
+    });
+  });
 
   it("lets the canonical owner manage a bot-created session from the browser", async () => {
     const name = `budget-bot-owner-${Date.now()}`;

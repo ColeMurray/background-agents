@@ -16,6 +16,19 @@ resource "cloudflare_queue" "slack_completion_delivery_dlq" {
   queue_name = "open-inspect-slack-completion-dlq-${local.name_suffix}"
 }
 
+resource "cloudflare_queue" "slack_ingress" {
+  count      = var.enable_slack_bot ? 1 : 0
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-slack-ingress-${local.name_suffix}"
+  settings   = { message_retention_period = 86400 }
+}
+resource "cloudflare_queue" "slack_ingress_dlq" {
+  count      = var.enable_slack_bot ? 1 : 0
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-slack-ingress-dlq-${local.name_suffix}"
+  settings   = { message_retention_period = 1209600 }
+}
+
 # Build slack-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "slack_bot_build" {
   count = var.enable_slack_bot ? 1 : 0
@@ -56,19 +69,20 @@ module "slack_bot_worker" {
   enable_service_bindings = var.enable_service_bindings
 
   queue_bindings = {
-    SLACK_COMPLETION_QUEUE = {
-      queue_name = cloudflare_queue.slack_completion_delivery[0].queue_name
-    }
+    SLACK_COMPLETION_QUEUE = { queue_name = cloudflare_queue.slack_completion_delivery[0].queue_name }
+    SLACK_INGRESS_QUEUE    = { queue_name = cloudflare_queue.slack_ingress[0].queue_name }
   }
 
   plain_text_bindings = merge(
     {
-      CONTROL_PLANE_URL    = { value = local.control_plane_url }
-      WEB_APP_URL          = { value = local.web_app_url }
-      DEPLOYMENT_NAME      = { value = var.deployment_name }
-      APP_NAME             = { value = var.app_name }
-      DEFAULT_MODEL        = { value = var.slack_bot_default_model }
-      CLASSIFICATION_MODEL = { value = var.classification_model }
+      CONTROL_PLANE_URL                = { value = local.control_plane_url }
+      WEB_APP_URL                      = { value = local.web_app_url }
+      DEPLOYMENT_NAME                  = { value = var.deployment_name }
+      APP_NAME                         = { value = var.app_name }
+      DEFAULT_MODEL                    = { value = var.slack_bot_default_model }
+      PI_DURABLE_ENABLED               = { value = tostring(local.pi_durable_available) }
+      PI_SLACK_DURABLE_INGRESS_ENABLED = { value = tostring(var.pi_slack_durable_ingress_enabled) }
+      CLASSIFICATION_MODEL             = { value = var.classification_model }
     },
     local.classifier_reasoning_effort_bindings
   )
@@ -86,6 +100,26 @@ module "slack_bot_worker" {
   compatibility_flags = ["nodejs_compat"]
 
   depends_on = [null_resource.slack_bot_build[0], module.slack_kv[0]]
+}
+
+resource "cloudflare_queue_consumer" "slack_ingress" {
+  count             = var.enable_slack_bot ? 1 : 0
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.slack_ingress[0].queue_id
+  type              = "worker"
+  script_name       = module.slack_bot_worker[0].worker_name
+  dead_letter_queue = cloudflare_queue.slack_ingress_dlq[0].queue_name
+  settings          = { batch_size = 1, max_wait_time_ms = 100, max_concurrency = 10, max_retries = 5, retry_delay = 5 }
+  depends_on        = [module.slack_bot_worker]
+}
+resource "cloudflare_queue_consumer" "slack_ingress_dlq" {
+  count       = var.enable_slack_bot ? 1 : 0
+  account_id  = var.cloudflare_account_id
+  queue_id    = cloudflare_queue.slack_ingress_dlq[0].queue_id
+  type        = "worker"
+  script_name = module.slack_bot_worker[0].worker_name
+  settings    = { batch_size = 1, max_wait_time_ms = 1000, max_concurrency = 1, max_retries = 1, retry_delay = 60 }
+  depends_on  = [module.slack_bot_worker]
 }
 
 resource "cloudflare_queue_consumer" "slack_completion_delivery" {

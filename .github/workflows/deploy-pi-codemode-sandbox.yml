@@ -1,0 +1,92 @@
+name: Deploy Pi Code Mode Sandbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy/upgrade the sandbox, or roll it back to a known version
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+      rollback_version:
+        description: Required only for rollback; exact target Worker version ID
+        required: false
+        type: string
+      confirm_worker_name:
+        description: Exact open-inspect-pi-codemode-sandbox-<DEPLOYMENT_NAME> Worker name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-infrastructure-${{ vars.DEPLOYMENT_NAME || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Wrangler-owned sandbox ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Guard reviewed default branch
+        env:
+          REVIEWED_WORKFLOW_REF: ${{ github.ref }}
+          CODEMODE_MODE: ${{ vars.PI_CODEMODE_MODE || 'off' }}
+          PAID_CANARY_VERIFIED: ${{ vars.PI_CODEMODE_PAID_CANARY_VERIFIED || 'false' }}
+        run: |
+          if [[ "$REVIEWED_WORKFLOW_REF" != "refs/heads/main" ]]; then
+            echo "Sandbox deployment requires reviewed workflow code from refs/heads/main" >&2
+            exit 1
+          fi
+          if [[ "$CODEMODE_MODE" != "off" ]] || [[ "$PAID_CANARY_VERIFIED" != "false" ]]; then
+            echo "Disable Code Mode and clear paid-canary verification before changing the sandbox version" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate sandbox bundle and ownership contracts
+        run: |
+          npm run build -w @open-inspect/pi-codemode-sandbox
+          npm test -w @open-inspect/pi-codemode-sandbox
+
+      - name: Preserve exact sandbox artifact evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: pi-codemode-sandbox-${{ github.sha }}
+          path: |
+            packages/pi-codemode-sandbox/dist/index.js
+            packages/pi-codemode-sandbox/dist/quickjs.wasm
+            packages/pi-codemode-sandbox/dist/artifact-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Deploy or roll back with Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOYMENT_NAME: ${{ vars.DEPLOYMENT_NAME || secrets.DEPLOYMENT_NAME }}
+          CONFIRM_WORKER_NAME: ${{ inputs.confirm_worker_name }}
+          OPERATION: ${{ inputs.operation }}
+          ROLLBACK_VERSION: ${{ inputs.rollback_version }}
+        run: bash scripts/deploy-pi-codemode-sandbox.sh "$OPERATION" "$ROLLBACK_VERSION"
+
+      - name: Print evidence checklist path
+        run: echo "Record live verification in docs/templates/PI_CODEMODE_SANDBOX_CANARY.md"

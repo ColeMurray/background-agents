@@ -43,6 +43,7 @@ import {
   type StopConfig,
   type StopResult,
 } from "../provider";
+import { secureExecutionSandboxConfig } from "../execution-isolation";
 
 /** Preserve typed VM lookup details separately from ambiguous-launch classification. */
 export function modalVmAllocationDetail(error: unknown): string | undefined {
@@ -207,6 +208,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       supportsRestore: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
+      executionIsolation: "canary_blocked",
     };
   }
 
@@ -214,6 +216,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Create a new sandbox via Modal API.
    */
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    config = secureExecutionSandboxConfig(config, this.name, this.capabilities);
     this.validateResources(config.sandboxSettings);
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
@@ -230,6 +233,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           sandboxAuthToken: config.sandboxAuthToken,
           agentSessionId: config.agentSessionId,
           harness: config.harness,
+          runtimeMode: config.runtimeMode,
+          execution: config.execution,
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,
@@ -274,6 +279,12 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    * Restore a sandbox from a filesystem snapshot.
    */
   async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
+    if (config.runtimeMode === "execution") {
+      throw new SandboxProviderError(
+        "Execution sandboxes cannot restore session snapshots",
+        "permanent"
+      );
+    }
     this.validateResources(config.sandboxSettings);
     const observedAtMs = Date.now();
     const timeoutSeconds = config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS;
@@ -291,6 +302,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           repoOwner: config.repoOwner,
           repoName: config.repoName,
           harness: config.harness,
+          runtimeMode: config.runtimeMode,
           provider: config.provider,
           model: config.model,
           userEnvVars: config.userEnvVars,

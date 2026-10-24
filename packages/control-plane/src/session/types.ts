@@ -2,7 +2,6 @@
  * Session-specific type definitions.
  */
 
-import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import {
   messageStatusSchema,
@@ -14,6 +13,7 @@ import {
 } from "@open-inspect/shared/types/sessions";
 import { artifactTypeSchema } from "@open-inspect/shared/types/artifacts";
 import type { GitPushSpec } from "../source-control";
+import { sandboxRuntimeModeSchema } from "@open-inspect/shared";
 import { z } from "zod";
 
 // Database row types (match SQLite schema)
@@ -45,7 +45,10 @@ export const sessionRowSchema = z.object({
   base_sha: z.string().nullable(),
   current_sha: z.string().nullable(),
   agent_session_id: z.string().nullable(), // The agent's own conversation id
-  harness: harnessIdSchema, // Agent harness the session runs on; fixed at create
+  // Persisted ids may have been written by a newer binary. Consumers must
+  // resolve this string with getStoredHarnessOrRefuse rather than silently
+  // interpreting an unknown id as the built-in harness.
+  harness: z.string(), // Agent harness the session runs on; fixed at create
   model: z.string(), // LLM model to use (e.g., "anthropic/claude-haiku-4-5")
   reasoning_effort: z.string().nullable(), // Reasoning effort level (e.g., "high", "max")
   status: sessionStatusSchema,
@@ -60,6 +63,7 @@ export const sessionRowSchema = z.object({
   max_cost_usd: z.number().nullable(), // Mutable effective session cost limit; NULL = unlimited
   budget_exhausted: z.number(), // 0 = promptable by budget, 1 = paused
   environment_id: z.string().nullable(), // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
+  pi_feature_capability_snapshot: z.string().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });
@@ -127,6 +131,7 @@ export const messageRowSchema = z.object({
   autofix_feedback_key: z.string().nullable(),
   autofix_pr_key: z.string().nullable(),
   origin_context: z.string().nullable(),
+  in_process_control: z.string().nullable().optional(),
   status: messageStatusSchema,
   error_message: z.string().nullable(),
   stop_confirmation_deadline: z.number().nullable(),
@@ -214,6 +219,8 @@ export const sandboxRowSchema = z.object({
    */
   fenced: z.number(),
   startup_rejected: z.number().default(0),
+  runtime_mode: sandboxRuntimeModeSchema.removeDefault().optional(),
+  execution_bridge_id: z.string().nullable().optional(),
   created_at: z.number(),
 });
 

@@ -64,6 +64,7 @@ export const traceExportSessionSchema = z.object({
   pullRequests: z.array(exportPullRequestSchema),
   createdAt: z.number(),
   updatedAt: z.number(),
+  /** What the harness's own durable state contributed, when it is not all here. */
   messages: z.array(sessionMessageSchema).optional(),
   events: z.array(sessionEventSchema).optional(),
   usage: z.array(stepUsageSchema).optional(),

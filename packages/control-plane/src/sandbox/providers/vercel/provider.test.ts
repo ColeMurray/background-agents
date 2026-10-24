@@ -170,7 +170,18 @@ describe("VercelSandboxProvider", () => {
       supportsPersistentResume: false,
       supportsExplicitStop: true,
       snapshotRequiresShutdown: true,
+      executionIsolation: "canary_blocked",
     });
+  });
+
+  it("rejects execution before contacting Vercel", async () => {
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(
+      provider.createSandbox({ ...baseCreateConfig, runtimeMode: "execution" })
+    ).rejects.toThrow("vercel execution isolation is canary-blocked");
+    expect(client.createSandbox).not.toHaveBeenCalled();
   });
 
   it("creates a sandbox from the configured base snapshot and launches the entrypoint", async () => {

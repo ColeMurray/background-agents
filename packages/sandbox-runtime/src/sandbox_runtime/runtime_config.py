@@ -32,6 +32,11 @@ class BootMode(StrEnum):
         return cls.FRESH
 
 
+class RuntimeMode(StrEnum):
+    AGENT = "agent"
+    EXECUTION = "execution"
+
+
 def _freeze_json(value: Any) -> Any:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
@@ -103,7 +108,8 @@ class BridgeProcessConfig:
     control_plane_url: str
     sandbox_token: str
     session_id: str
-    harness: HarnessId
+    runtime_mode: RuntimeMode
+    harness: HarnessId | None
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,7 @@ class RuntimeConfig:
         environment: Mapping[str, str],
         *,
         workspace_path: Path = Path("/workspace"),
+        sandbox_token_override: str | None = None,
     ) -> RuntimeConfig:
         repo_owner = environment.get("REPO_OWNER", "")
         repo_name = environment.get("REPO_NAME", "")
@@ -140,7 +147,11 @@ class RuntimeConfig:
         return cls(
             sandbox_id=environment.get("SANDBOX_ID", "unknown"),
             control_plane_url=control_plane_url,
-            sandbox_token=environment.get("SANDBOX_AUTH_TOKEN", ""),
+            sandbox_token=(
+                sandbox_token_override
+                if sandbox_token_override is not None
+                else environment.get("SANDBOX_AUTH_TOKEN", "")
+            ),
             repo_owner=repo_owner,
             repo_name=repo_name,
             vcs_host=environment.get("VCS_HOST", "github.com"),
@@ -166,6 +177,13 @@ class RuntimeConfig:
     def harness(self) -> HarnessId:
         """Which agent runs this session; absent means the built-in OpenCode harness."""
         return parse_harness_id(self.session_config.get("harness"))
+
+    @property
+    def runtime_mode(self) -> RuntimeMode:
+        try:
+            return RuntimeMode(str(self.session_config.get("runtime_mode") or "agent"))
+        except ValueError as error:
+            raise ValueError("Unsupported sandbox runtime mode") from error
 
     @property
     def bridge_early_connect(self) -> bool:
@@ -225,12 +243,14 @@ class RuntimeConfig:
         )
 
     def bridge_process_config(self) -> BridgeProcessConfig:
+        runtime_mode = self.runtime_mode
         return BridgeProcessConfig(
             sandbox_id=self.sandbox_id,
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
             session_id=self.session_id,
-            harness=self.harness,
+            runtime_mode=runtime_mode,
+            harness=self.harness if runtime_mode is RuntimeMode.AGENT else None,
         )
 
     def managed_skills_config(self) -> ManagedSkillsConfig:

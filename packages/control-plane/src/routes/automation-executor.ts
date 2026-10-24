@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { checkAutomationExecutorReassignment, isCanonicalUserId } from "@open-inspect/shared";
 import { AutomationStore, type AutomationRow } from "../db/automation-store";
-import { bindAppliedAuditEvent } from "../db/team-audit";
+import { bindAppliedAuditEventWithId } from "../db/team-audit";
 import { automationActionDeniedBody } from "../authorization/owned-resource-admission";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { dispatch } from "../routing/admit";
@@ -74,24 +74,24 @@ async function changeExecutor(
     return json({ automation: await hydrateAutomationResponse(ctx, automation, viewer) });
   }
   const store = new AutomationStore(ctx.db);
-  const results = await ctx.db.batch([
-    store.bindExecutorChange(automation, body.userId, viewer.userId),
-    bindAppliedAuditEvent(
-      ctx.db,
-      {
-        requestId: ctx.request_id,
-        actorUserId: viewer.userId,
-        action: "automation.executor_changed",
-        resourceType: "automation",
-        resourceId: automation.id,
-        teamId: automation.owner_team_id,
-        targetUserId: body.userId,
-        before: { userId: automation.user_id },
-        after: { userId: body.userId },
-      },
-      true
-    ),
-  ]);
+  const audit = bindAppliedAuditEventWithId(
+    ctx.db,
+    {
+      requestId: ctx.request_id,
+      actorUserId: viewer.userId,
+      action: "automation.executor_changed",
+      resourceType: "automation",
+      resourceId: automation.id,
+      teamId: automation.owner_team_id,
+      targetUserId: body.userId,
+      before: { userId: automation.user_id },
+      after: { userId: body.userId },
+    },
+    true
+  );
+  const results = await ctx.db.batch(
+    store.bindExecutorChange(automation, body.userId, viewer.userId, audit)
+  );
   if ((results[0]?.meta.changes ?? 0) === 0) {
     // The guarded write re-checks everything above; report a candidate that stopped qualifying,
     // otherwise the row or the caller's reassignment authority changed after admission.

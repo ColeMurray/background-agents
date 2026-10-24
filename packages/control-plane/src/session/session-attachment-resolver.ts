@@ -11,6 +11,8 @@ export class SessionAttachmentError extends Error {}
 export interface ResolvedSessionAttachments {
   attachments: ResolvedSessionAttachment[];
   attachmentIds: string[];
+  /** The stored size of the resolved images together, in bytes. */
+  totalBytes: number;
 }
 
 type SessionAttachmentLookup = Pick<SessionAttachmentRepository, "getUnreferenced">;
@@ -67,5 +69,9 @@ export function resolveSessionAttachments(
     };
   });
 
-  return { attachments: resolved, attachmentIds };
+  return {
+    attachments: resolved,
+    attachmentIds,
+    totalBytes: [...rowsById.values()].reduce((sum, row) => sum + row.size_bytes, 0),
+  };
 }

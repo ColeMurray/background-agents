@@ -68,6 +68,11 @@ export async function handleSessionPrompt(
     return json(promptValidationError(bodyResult.error, rawBody), 400);
   }
   const body = bodyResult.data;
+  if (body.clientRequestId?.startsWith("slack-message-")) {
+    const principal = ctx.principal;
+    if (principal?.kind !== "service" || principal.service !== "slack-bot")
+      return error("Prompt request identity is service-only", 403);
+  }
 
   const attachments = validateAttachments(body.attachments);
   if (attachments instanceof Response) return attachments;
@@ -133,6 +138,7 @@ export async function handleSessionPrompt(
     reasoningEffort: body.reasoningEffort,
     attachments,
     callbackContext,
+    clientRequestId: body.clientRequestId,
     scmEnrichment: enrichment
       ? {
           userId: enrichment.scmUserId,

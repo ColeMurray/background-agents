@@ -106,6 +106,30 @@ describe("GET /sessions/export with include", () => {
     expect(lines.every((line) => line.id !== hidden.sessionName)).toBe(true);
   });
 
+  it("exports Pi through the canonical projection without an incomplete parallel marker", async () => {
+    const pi = await initSession({
+      title: "pi",
+      harness: "pi",
+      model: "openai/gpt-5.6-sol",
+      repoOwner: null,
+      repoName: null,
+      repoId: null,
+    });
+    const sandbox = await initSession({ title: "sandbox" });
+
+    const lines = await exportLines("messages");
+
+    const piLine = lines.find((line) => line.id === pi.sessionName);
+    expect(piLine).toMatchObject({
+      type: "session",
+      harness: "pi",
+    });
+    expect(piLine).not.toHaveProperty("harnessState");
+
+    const sandboxLine = lines.find((line) => line.id === sandbox.sessionName);
+    expect(sandboxLine).not.toHaveProperty("harnessState");
+  });
+
   it("downloads only the requested session and rejects scope on the single route", async () => {
     const root = await initSession({ title: "root" });
     const child = await initSession({ title: "child" });

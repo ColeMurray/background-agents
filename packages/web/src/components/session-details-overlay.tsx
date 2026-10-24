@@ -45,6 +45,7 @@ export function SessionDetailsOverlay({
   onOpenMedia,
   diffState,
   diffLoading,
+  diffRefresh,
   selectedDiff,
   onOpenDiff,
   canManageBudget,
@@ -178,6 +179,7 @@ export function SessionDetailsOverlay({
       onOpenMedia={onOpenMedia}
       diffState={diffState}
       diffLoading={diffLoading}
+      diffRefresh={diffRefresh}
       selectedDiff={selectedDiff}
       onOpenDiff={onOpenDiff}
       canManageBudget={canManageBudget}

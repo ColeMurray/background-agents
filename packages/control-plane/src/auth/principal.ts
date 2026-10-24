@@ -40,7 +40,12 @@ export type Principal =
   | { kind: "user"; userId: string }
   | { kind: "service"; service: ServiceName; actor: ResolvedIdentity | null }
   /** `sandboxId` is the authenticated sandbox's id when the session runtime reported it. */
-  | { kind: "sandbox"; sessionId: string; sandboxId?: string | null };
+  | {
+      kind: "sandbox";
+      sessionId: string;
+      sandboxId?: string | null;
+      credentialClass: "agent" | "execution";
+    };
 
 /**
  * The actor namespace each service may assert. Web asserts none because its

@@ -126,4 +126,48 @@ describe("Codex connected-account scope", () => {
       selectionSource: "unattended_policy",
     });
   });
+  it("does not let an explicit account bypass unattended API-key policy", async () => {
+    const deps = stores({
+      defaults: [providerDefault("openai", OPENAI_ACCOUNT_ID, "api_key")],
+      accounts: [account(OPENAI_ACCOUNT_ID, "openai")],
+    });
+
+    const resolved = await resolveProviderAccountSelections(
+      {
+        harness: "codex",
+        unattended: true,
+        explicit: { openai: { mode: "provider_account", accountId: OPENAI_ACCOUNT_ID } },
+      },
+      deps
+    );
+
+    expect(resolved[0]).toEqual({
+      provider: "openai",
+      authMode: "api_key",
+      selectionSource: "unattended_policy",
+    });
+    expect(deps.accounts.getById).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit unattended provider-account policy before using a connected account", async () => {
+    const deps = stores({
+      defaults: [providerDefault("openai", OPENAI_ACCOUNT_ID, "provider_account")],
+      accounts: [account(OPENAI_ACCOUNT_ID, "openai")],
+    });
+
+    const resolved = await resolveProviderAccountSelections(
+      {
+        harness: "codex",
+        unattended: true,
+        explicit: { openai: { mode: "provider_account", accountId: OPENAI_ACCOUNT_ID } },
+      },
+      deps
+    );
+
+    expect(resolved[0]).toMatchObject({
+      authMode: "provider_account",
+      providerAccountId: OPENAI_ACCOUNT_ID,
+      selectionSource: "explicit",
+    });
+  });
 });

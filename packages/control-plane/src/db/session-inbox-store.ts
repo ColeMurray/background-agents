@@ -279,7 +279,7 @@ export class SessionInboxStore {
               LEFT JOIN session_read_states read_state
                 ON read_state.session_id = sessions.id
                AND read_state.user_id = viewer.id
-              WHERE sessions.status != 'archived'
+              WHERE sessions.status NOT IN ('archived', 'durable_archived')
                 AND sessions.root_session_id IS NOT NULL
                 ${options.excludeAutomatedSessions ? "AND sessions.spawn_source NOT IN ('automation', 'github-bot')" : ""}
             )`,
@@ -324,7 +324,7 @@ export class SessionInboxStore {
                      MAX(updated_at) AS latest_updated_at,
                      CASE
                        WHEN MAX(unread) = 1 THEN 'needs_attention'
-                       WHEN MAX(status = 'active') = 1 THEN 'in_progress'
+                       WHEN MAX(status IN ('active', 'durable_active')) = 1 THEN 'in_progress'
                        ELSE 'finished'
                      END AS category
               FROM effective_sessions

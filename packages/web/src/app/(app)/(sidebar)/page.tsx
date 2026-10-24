@@ -15,6 +15,7 @@ import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
+import { PI_ATTACHMENT_MAX_TURN_BYTES } from "@open-inspect/shared/types/session-attachments";
 import {
   getSubscriptionProviderForModel,
   type ModelCategory,
@@ -201,10 +202,24 @@ export default function Home() {
   useEffect(() => {
     if (!warmRequested || !warmIdentity) return;
     setWarmRequested(false);
+    if (harness === "pi") return;
     void createSessionForWarming();
-  }, [warmRequested, warmIdentity, createSessionForWarming]);
+  }, [harness, warmRequested, warmIdentity, createSessionForWarming]);
 
   const hasAttachments = sessionAttachments.attachments.length > 0;
+  const piProviderError =
+    harness === "pi" && !providerAccounts.loading && !preferences.providerReady
+      ? "Pi Durable requires an active connected OpenAI account"
+      : null;
+  // A Pi turn keeps its images in one runtime record, so the images of one
+  // turn have to fit in it. The session refuses a turn that does not, and the
+  // composer says so before the upload.
+  const piAttachmentError =
+    harness === "pi" &&
+    sessionAttachments.attachments.reduce((sum, item) => sum + item.file.size, 0) >
+      PI_ATTACHMENT_MAX_TURN_BYTES
+      ? `The attached images are too large for one Pi Durable turn (limit ${PI_ATTACHMENT_MAX_TURN_BYTES / (1024 * 1024)} MB)`
+      : null;
   const launch = useFirstPromptLaunch(
     {
       prompt,
@@ -217,13 +232,15 @@ export default function Home() {
         sessionAttachments.isUploading ||
         models.loading,
       validationError:
-        preferences.modelAvailability.status === "unavailable"
+        piProviderError ??
+        piAttachmentError ??
+        (preferences.modelAvailability.status === "unavailable"
           ? preferences.modelAvailability.message
           : !isLaunchable
             ? sessionTarget?.kind === "repos"
               ? "Select at least one repository"
               : "Please select a repository or environment"
-            : null,
+            : null),
     },
     {
       sessions: warmSession,
@@ -249,7 +266,8 @@ export default function Home() {
     launch.submitting ||
     sessionAttachments.isUploading ||
     !launchContextReady ||
-    !isLaunchable;
+    !isLaunchable ||
+    piAttachmentError !== null;
 
   return (
     <HomeContent
@@ -299,7 +317,7 @@ export default function Home() {
         submitting: launch.submitting,
         warming: warmSession.isWarming,
         sendDisabled,
-        error: creationError?.message ?? launch.error,
+        error: piProviderError ?? creationError?.message ?? launch.error,
         onSubmit: (event) => {
           event.preventDefault();
           void launch.submit();
@@ -414,6 +432,7 @@ function HomeContent({
     error,
     onSubmit: handleSubmit,
   } = launch;
+  const attachmentsSupported = harness !== "pi";
   const attachmentsLocked = creating || attachments.isUploading;
   const {
     isDraggingOver,
@@ -422,7 +441,10 @@ function HomeContent({
     handleDrop,
     handleDragOver,
     handleDragLeave,
-  } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
+  } = useAttachmentDropZone({
+    locked: attachmentsLocked || !attachmentsSupported,
+    onAdd: attachments.onAdd,
+  });
   const { repos, loadingRepos } = picker;
   const selectedProvider = getSubscriptionProviderForModel(selectedModel);
 
@@ -479,7 +501,11 @@ function HomeContent({
               ) : null}
 
               <div className="mb-3 flex flex-wrap items-center gap-2 px-4 sm:gap-4">
-                <SessionTargetPicker {...picker} disabled={creating} />
+                <SessionTargetPicker
+                  {...picker}
+                  disabled={creating}
+                  checkoutLayout={harness === "pi" ? "position" : "name"}
+                />
               </div>
 
               <div
@@ -489,20 +515,26 @@ function HomeContent({
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
               >
-                <AttachmentPreviewStrip
-                  items={attachments.items}
-                  error={attachments.error}
-                  onRemove={attachments.onRemove}
-                  disabled={attachmentsLocked}
-                />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ATTACHMENT_ACCEPT}
-                  multiple
-                  className="hidden"
-                  onChange={handleFileInputChange}
-                />
+                {(attachmentsSupported || attachments.items.length > 0) && (
+                  <>
+                    <AttachmentPreviewStrip
+                      items={attachments.items}
+                      error={attachments.error}
+                      onRemove={attachments.onRemove}
+                      disabled={attachmentsLocked}
+                    />
+                    {attachmentsSupported && (
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept={ATTACHMENT_ACCEPT}
+                        multiple
+                        className="hidden"
+                        onChange={handleFileInputChange}
+                      />
+                    )}
+                  </>
+                )}
                 {/* Text input area */}
                 <div className="relative">
                   <PromptSkillTextarea
@@ -523,19 +555,21 @@ function HomeContent({
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (
                       <span className="whitespace-nowrap text-xs text-accent">
-                        Warming sandbox...
+                        {harness === "pi" ? "Starting instant session..." : "Warming sandbox..."}
                       </span>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={attachmentsLocked}
-                      className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
-                      title="Attach images"
-                      aria-label="Attach images"
-                    >
-                      <PaperclipIcon className="w-5 h-5" />
-                    </button>
+                    {attachmentsSupported && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={attachmentsLocked}
+                        className="p-2 text-secondary-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition"
+                        title="Attach images"
+                        aria-label="Attach images"
+                      >
+                        <PaperclipIcon className="w-5 h-5" />
+                      </button>
+                    )}
                     <button
                       type="submit"
                       disabled={launch.sendDisabled}

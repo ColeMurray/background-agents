@@ -1485,6 +1485,189 @@ credentials from Open-Inspect's secret store. The optional `CLASSIFICATION_REASO
 variable sets the reasoning effort an OpenAI classifier requests (for example `low`); leave it unset
 to use the model's default.
 
+### Enable Pi Durable
+
+Pi Durable is opt-in and requires a connected OpenAI provider account. It does not persist the
+account's refresh token in the Pi Durable Object. For an existing deployment:
+
+1. If the control-plane migration tag is still `v2`, run Terraform once with
+   `PI_DURABLE_ENABLED=false` to retire the historical `SchedulerDO` class.
+2. Set `PI_DURABLE_ENABLED=true` and `ENABLE_DURABLE_OBJECT_BINDINGS=false`, then run Terraform.
+   This adds `PiSessionDO` without advertising Pi to clients.
+3. Set `ENABLE_DURABLE_OBJECT_BINDINGS=true` and run Terraform again. The binding and UI/Slack
+   selector become available only in this phase.
+4. When the web app runs on Vercel, dispatch the **Deploy Web** workflow so the build-time
+   `NEXT_PUBLIC_PI_DURABLE_ENABLED` value is included in the active bundle.
+
+The scratch VFS is not the Open-Inspect workspace. The Open-Inspect workspace is the tenant: it is
+what the team switcher, the workspace permissions, and the session visibility `workspace` mean. The
+scratch VFS is the session's own Computer filesystem under `/workspace/scratch`. The native
+execution sandbox has a third `/workspace`, which is its own empty filesystem. The three are
+unrelated and are named distinctly in the APIs and in the interface.
+
+The workspace currently depends on exact-pinned `@cloudflare/computer@0.5.1`, which Cloudflare marks
+preview-only and not production-ready. Keep `PI_SCRATCH_WORKSPACE_MODE=off` for production
+deployments until that status changes or your deployment owner explicitly accepts and validates the
+preview risk. For a personal or staging canary, set `pi_computer_preview_acknowledged = true` in
+`terraform.tfvars` or set the Actions variable `PI_COMPUTER_PREVIEW_ACKNOWLEDGED=true`, **and** set
+the workspace mode. Both plan and apply receive the acknowledgement, and Terraform hard-fails if
+either workspace mode or repository editing is enabled without it:
+
+- `PI_SCRATCH_WORKSPACE_MODE=read_only` adds `read`, `ls`, `find`, and `grep` under
+  `/workspace/scratch`.
+- `PI_SCRATCH_WORKSPACE_MODE=writable` also adds `write`, `edit`, and forced `delete`. It enforces
+  an 8 MiB and 1,000-entry aggregate quota across files and directories, serializes all mutations,
+  refuses deletion of `/workspace/scratch` or its `/workspace` container, marks mutations unsafe to
+  replay after interruption, records only metadata in durable policy memos, and redacts write
+  contents and edit contents/diffs from projected timeline events.
+
+Neither mode adds a checkout, Git, shell, network, mounts, publishing, or an execution backend.
+Leave the value `off` to avoid initializing Computer VFS tables.
+
+`PI_REPOSITORY_EDITING_MODE=enabled` independently materializes strict commit-pinned repositories
+under `/workspace/repos/{position}`. Repository and scratch mutations share the canonical workspace
+FIFO, policy, redaction, and SessionDiff publication order. Scratch remains governed by
+`PI_SCRATCH_WORKSPACE_MODE`, including its durable aggregate quota when writable. Repository bytes
+cross SessionDO in bounded batches and never carry source-control credentials.
+
+The materialized bytes are pinned session state. Authorized session participants can continue to
+read a complete durable overlay after a source-control grant or provider installation is revoked;
+revocation blocks new sessions, provider-backed repair/refetch, and external publication. A missing,
+tampered, or unexplained file fails closed rather than silently refetching over an edit or deletion.
+Session deletion or an authority fence purges the pinned VFS. Immutable blob requests are coalesced
+in memory per SessionDO after fresh scope resolution; no credential-bearing cache is created. Diff
+capture is staged to a durable, coalescing PiSessionDO outbox before mutation success returns, so an
+outage leaves the mutation applied with projection pending and preserves the last successful bundle.
+
+SessionDO resolves and persists the complete Pi capability snapshot during creation, then
+initializes PiSessionDO with that exact value before reporting success. One unavailable initialize
+response is retried with the same identity and snapshot. A blank Pi object reads SessionDO's
+persisted authority before opening, so an early status or submit cannot poison later initialization.
+Changing a mode never silently installs or removes an extension for an existing session after
+eviction. An unopened legacy Pi session whose SessionDO row has no snapshot opens all-off; an
+already-open session keeps its PiSessionDO snapshot.
+
+For emergency rollback, lower the relevant mode and apply Terraform. New scratch and repository
+mutations consult current deployment policy on every invocation and are denied immediately, while
+reads continue. A top-level Code Mode recovery still in Pi Durable's `call` phase reruns current
+policy and can be denied. Before first execution, Open-Inspect records task-bound deadline and
+admission memos. Recovery after Pi Durable committed its native `execute` intent follows the native
+replay contract using that admission instead of admitting new work. Policy lookups are bounded and
+cancel with the tool, so cancellation and deletion do not wait on a hung SessionDO call. Keep
+`PI_SESSION` and any required external bindings installed while admission is off; removing them
+strands existing sessions. Delete a session only when its workspace and conversation should be
+destroyed deliberately.
+
+Native Pi Code Mode is a separate opt-in. It runs model-written JavaScript in the private
+`pi-codemode-sandbox` Worker while tools remain in `PiSessionDO`. The composite policy permits only
+replay-safe read tools and default-denies unknown, unsafe-replay, mutation, sandbox-execution, and
+control effects. The native extension occupies the canonical `code_mode` slot and uses
+`PI_CODEMODE_TOOL_EFFECT_REGISTRATIONS`. Model-powered globals remain registered for native replay
+compatibility, but their unsafe nested calls are denied. QuickJS WASM never enters the control-plane
+bundle. Parent `taskId` plus parent call identity, rather than a globally reusable call string,
+authorizes nested reads. One abort-aware FIFO serializes Code Mode across every conversation in the
+session. Its persisted absolute deadline includes queue time, defaults to 60 seconds, and is clamped
+to five minutes. Session deletion rejects queued work and drains the active host invocation.
+
+Code Mode produces no public transcript or parallel activity store. Its top-level and nested tool
+events use the existing Pi event projector and therefore appear only under the canonical SessionDO
+message/operation and shared timeline.
+
+Cloudflare bills each execution as a Durable Object request and bills the sandbox for wall-clock
+duration, including time waiting on tools.
+
+### Preview-state ownership transfer
+
+If an earlier preview already placed `module.pi_codemode_sandbox_worker` in Terraform state and the
+external binding must remain available for latched-session replay:
+
+1. Set Code Mode admission to `off` and deploy/upgrade the same deterministic Worker through the
+   protected Wrangler workflow.
+2. Complete the live deployment proof, record its exact Worker version ID in
+   `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, then set `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`
+   **before the first Terraform apply** that contains the ownership-transfer `removed` block.
+   Applying with the flag false would remove the retained external binding even though
+   `destroy = false` preserves the Worker.
+3. Run Terraform. It forgets the preview module without destroying the Worker and retains the
+   external binding. Continue with the paid canary before restoring admission.
+
+### Fresh Code Mode deployment
+
+1. Keep `PI_CODEMODE_MODE=off`, `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=false`, and
+   `PI_CODEMODE_PAID_CANARY_VERIFIED=false` during normal Terraform deployment. Terraform creates no
+   Code Mode Worker, version, WASM upload, or migration.
+2. Dispatch **Deploy Pi Code Mode Sandbox** with operation `deploy` and confirm the exact
+   `open-inspect-pi-codemode-sandbox-<DEPLOYMENT_NAME>` name. Wrangler uploads the private Worker,
+   QuickJS WASM, fixed 60000 ms CPU limit, and `CodemodeSandbox` v1 SQLite migration. The workflow
+   builds once, records exact JS/WASM SHA-256 hashes, preserves that immutable artifact, and deploys
+   those bytes with bundling disabled. The job uses the protected `production` environment and fails
+   unless the reviewed workflow runs from `main`; Cloudflare credentials are scoped only to the
+   final deploy/rollback step after validation.
+3. Record the deployed version ID as `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION`, complete the deployment
+   portion of `docs/templates/PI_CODEMODE_SANDBOX_CANARY.md`, then set
+   `PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true` and run Terraform to add only the retained
+   external `CODEMODE_SANDBOX` binding. Keep admission off.
+4. Run the paid runtime canary through an ordinary authorized SessionDO prompt. Save bounded-script,
+   nested-read, abort, and canonical timeline IDs in a credential-free runtime evidence JSON file.
+   Run `scripts/attest-pi-codemode-sandbox.mjs` with the artifact manifest, runtime evidence, exact
+   version, Worker name, and all managed zone IDs. The read-only script verifies one version at 100%
+   traffic, the artifact digest annotation, Cloudflare etag, CPU/migration/export, and absence of
+   bindings, routes, custom domains, secrets, workers.dev, and previews. It never deploys. After it
+   passes, set `PI_CODEMODE_PAID_CANARY_VERSION` to the same version ID,
+   `PI_CODEMODE_PAID_CANARY_VERIFIED=true`, and `PI_CODEMODE_MODE=paid`, then apply Terraform. The
+   hard Terraform gate refuses admission when the two version IDs differ.
+
+### Code Mode upgrade
+
+1. Set `PI_CODEMODE_MODE=off` and `PI_CODEMODE_PAID_CANARY_VERIFIED=false` first, then apply
+   Terraform while retaining the external binding. The deployment workflow refuses a deploy or
+   rollback while paid admission or the old canary approval remains active.
+2. Dispatch the Wrangler workflow with operation `deploy`; Terraform never adopts its version.
+3. Set `PI_CODEMODE_SANDBOX_DEPLOYED_VERSION` to the new version ID. Repeat exact artifact,
+   Cloudflare attestation, execution, nested-read, abort, replay, and canonical-timeline checks,
+   then set `PI_CODEMODE_PAID_CANARY_VERSION` to that same ID before restoring paid admission.
+
+Provider issues [#6852](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6852) and
+[#6404](https://github.com/cloudflare/terraform-provider-cloudflare/issues/6404) remain live canary
+concerns. Local plans/workerd tests do not prove provider behavior, and this repository has no
+paid-account proof, so production admission remains blocked by default.
+
+### Code Mode rollback
+
+Set `PI_CODEMODE_MODE=off` and apply Terraform first. Keep
+`PI_CODEMODE_SANDBOX_DEPLOYMENT_VERIFIED=true`, the external binding, Worker, and class. A
+recovering top-level Code Mode task still in Pi Durable's `call` phase reruns current policy and is
+denied. A task that already committed Pi Durable's `execute` checkpoint follows the native replay
+contract using its durable admission memo without rerunning `beforeTool`. To roll back the Worker
+version, dispatch the dedicated workflow with operation `rollback` and an exact known-good version
+ID. Never delete or import the Wrangler-owned Worker through Terraform during normal rollback.
+Before restoring paid admission, set both version variables to the rollback target and ensure the
+recorded canary evidence covers that exact version.
+
+### Pi execution isolation boundary
+
+Generation 78 includes a separate, default-off execution artifact. It is not an agent sandbox: it
+contains no harness, repository image/snapshot, user environment, VCS/model/MCP credentials,
+repository hooks, code server, VNC, terminal, or desktop service. Its privileged in-process bridge
+receives a rotating, two-hour execution credential through stdin rather than argv/environment;
+commands run as dedicated UID/GID 10001 with a root-owned runtime and a mode-0700 workspace.
+
+Execution startup fails unless the provider supplies `/proc` `hidepid=2`, Yama ptrace isolation, and
+the exact `package-install-v1` egress policy: the control-plane host, `registry.npmjs.org`,
+`pypi.org`, and `files.pythonhosted.org`. The pinned Modal SDK does not expose domain allowlists,
+and the other provider adapters do not yet have reviewed enforcement, so **all providers remain
+canary-blocked**. This is intentional; no Pi execution tool is exposed in Slice 6A. Use
+`docs/templates/PI_EXECUTION_ISOLATION_CANARY.md` and the read-only
+`scripts/attest-execution-isolation.mjs` before changing a provider verdict. Never use an execution
+credential on SCM, provider-token, diff, push, or public routes.
+
+Rollback first ensures `ENABLE_DURABLE_OBJECT_BINDINGS=true`, then sets `PI_DURABLE_ENABLED=false`.
+The workflow detects migration tag `v4` and keeps `pi_durable_binding_enabled=true`, so existing Pi
+sessions can still continue, stop, and delete while new admission and selectors are disabled. Direct
+Terraform operators must likewise keep `pi_durable_binding_enabled=true` after the class migration.
+When the web app runs on Vercel, dispatch **Deploy Web** again so the disabled build-time flag
+reaches the active bundle. Do not delete the class or its storage as part of a normal rollback.
+
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
 application in **Linear Settings → API → Applications**. This provider-side setting is not managed
 by Terraform. Existing eligible single-workspace installations transition on their next request

@@ -212,12 +212,12 @@ export class AnalyticsStore {
            COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
            COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
            COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-           COALESCE(SUM(CASE WHEN status = 'created' THEN 1 ELSE 0 END), 0) AS created_count,
-           COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_count,
-           COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_count,
-           COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
-           COALESCE(SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END), 0) AS archived_count,
-           COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled_count
+           COALESCE(SUM(CASE WHEN status IN ('created', 'durable_created') THEN 1 ELSE 0 END), 0) AS created_count,
+           COALESCE(SUM(CASE WHEN status IN ('active', 'durable_active') THEN 1 ELSE 0 END), 0) AS active_count,
+           COALESCE(SUM(CASE WHEN status IN ('completed', 'durable_completed') THEN 1 ELSE 0 END), 0) AS completed_count,
+           COALESCE(SUM(CASE WHEN status IN ('failed', 'durable_failed') THEN 1 ELSE 0 END), 0) AS failed_count,
+           COALESCE(SUM(CASE WHEN status IN ('archived', 'durable_archived') THEN 1 ELSE 0 END), 0) AS archived_count,
+           COALESCE(SUM(CASE WHEN status IN ('cancelled', 'durable_cancelled') THEN 1 ELSE 0 END), 0) AS cancelled_count
           FROM sessions s
           WHERE s.created_at >= ? AND s.created_at < ?
               ${sql} ${visible.sql ? `AND ${visible.sql}` : ""}`
@@ -412,9 +412,9 @@ export class AnalyticsStore {
            ${groupExpression} AS key,
            ${displayNameSelect}
            COUNT(*) AS sessions,
-           COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
-           COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
-           COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) AS cancelled,
+           COALESCE(SUM(CASE WHEN status IN ('completed', 'durable_completed') THEN 1 ELSE 0 END), 0) AS completed,
+           COALESCE(SUM(CASE WHEN status IN ('failed', 'durable_failed') THEN 1 ELSE 0 END), 0) AS failed,
+           COALESCE(SUM(CASE WHEN status IN ('cancelled', 'durable_cancelled') THEN 1 ELSE 0 END), 0) AS cancelled,
            COALESCE(SUM(total_cost), 0) AS cost,
            COALESCE(SUM(pr_count), 0) AS prs,
            COALESCE(SUM(s.input_tokens), 0) AS input_tokens,

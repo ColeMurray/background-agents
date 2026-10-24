@@ -61,8 +61,12 @@ run "docs_site_builds_from_the_docs_package" {
   # deploy from: only the Deploy Docs workflow publishes. That is the gate
   # documented in packages/docs/README.md.
   assert {
-    condition     = module.docs_site[0].root_directory == "packages/docs"
-    error_message = "The docs project must build from packages/docs."
+    condition = (
+      module.docs_site[0].root_directory == "packages/docs" &&
+      jsondecode(file("${path.root}/../../../packages/docs/vercel.json")).framework == "nextjs" &&
+      jsondecode(file("${path.root}/../../../packages/docs/vercel.json")).regions == ["iad1"]
+    )
+    error_message = "The docs project must build packages/docs as Next.js in iad1."
   }
 }
 
@@ -74,8 +78,12 @@ run "docs_site_is_separate_from_the_web_app" {
     vercel_team_id    = "test-team"
   }
   assert {
-    condition     = module.docs_site[0].project_name != module.web_app[0].project_name
-    error_message = "The docs site must be its own Vercel project, so a docs publish cannot touch the product."
+    condition = (
+      module.docs_site[0].project_name != module.web_app[0].project_name &&
+      jsondecode(file("${path.root}/../../../packages/web/vercel.json")).framework == "nextjs" &&
+      jsondecode(file("${path.root}/../../../packages/web/vercel.json")).regions == ["iad1"]
+    )
+    error_message = "The docs site must be separate from the Next.js product deployment in iad1."
   }
 }
 

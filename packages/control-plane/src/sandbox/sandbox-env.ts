@@ -1,4 +1,5 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type { SandboxRuntimeMode } from "@open-inspect/shared";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
@@ -38,12 +39,14 @@ export interface SessionRepositoryConfigPayload {
 /** Canonical `SESSION_CONFIG` payload handed to the sandbox runtime. */
 export interface SessionConfigPayload {
   session_id: string;
-  repo_owner: string | null;
-  repo_name: string | null;
+  repo_owner?: string | null;
+  repo_name?: string | null;
   /** Agent harness the runtime must boot. */
-  harness: HarnessId;
-  provider: string;
-  model: string;
+  harness?: HarnessId;
+  /** Omitted for the legacy/default agent runtime. */
+  runtime_mode?: Extract<SandboxRuntimeMode, "execution">;
+  provider?: string;
+  model?: string;
   /** Omitted from the serialized payload when undefined. */
   mcp_servers?: McpServerConfig[];
   /** Omitted from the serialized payload when undefined. */
@@ -64,7 +67,8 @@ export interface SessionConfigInput {
   sessionId: string;
   repoOwner: string | null;
   repoName: string | null;
-  harness: HarnessId;
+  harness?: HarnessId;
+  runtimeMode?: SandboxRuntimeMode;
   provider: string;
   model: string;
   mcpServers?: McpServerConfig[];
@@ -81,16 +85,25 @@ export interface SessionConfigInput {
  * explicitly represent a no-repository session.
  */
 export function buildSessionConfig(input: SessionConfigInput): SessionConfigPayload {
+  if (input.runtimeMode === "execution") {
+    return {
+      session_id: input.sessionId,
+      runtime_mode: "execution",
+      bridge_early_connect: true,
+    };
+  }
   const payload: SessionConfigPayload = {
     session_id: input.sessionId,
     repo_owner: input.repoOwner,
     repo_name: input.repoName,
-    harness: input.harness,
     provider: input.provider,
     model: input.model,
     mcp_servers: input.mcpServers,
     bridge_early_connect: true,
   };
+  if (input.harness !== undefined) {
+    payload.harness = input.harness;
+  }
   if (input.branch !== undefined) {
     payload.branch = input.branch;
   }
@@ -172,9 +185,9 @@ export interface ImageBuildCallbackEnvValues {
   failureCallbackUrl: string;
   token: string;
   /**
-   * Omitted from the returned map when absent: E2B bakes the callback env at
-   * create time, before the provider session id exists, and delivers the id
-   * separately when starting the runtime.
+   * Omitted from the returned map when absent: OpenComputer and E2B bake the
+   * callback env at create time, before the provider session id exists, and
+   * deliver the id separately when starting the runtime.
    */
   providerSessionId?: string;
 }
@@ -210,7 +223,7 @@ export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS: readonly string[] = [
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
 ];
 /** One-shot clone token used only by image-build sandboxes. */
-const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
+export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 
 /** Host/username pair git pairs with the brokered clone token in the sandbox. */
 export interface ScmCloneIdentity {
@@ -293,12 +306,18 @@ export interface SandboxEnvVarsOptions {
   portPlan?: SandboxPortPlan;
   /** Override terminal state inherited from a captured provider image when disabled. */
   emitDisabledTerminalEnv?: boolean;
+  /**
+   * Overrides `config.userEnvVars` as the user layer when a provider composes
+   * it differently (OpenComputer layers provider LLM credentials underneath
+   * user secrets). System vars still overlay whatever is passed here.
+   */
+  baseEnvVars?: Record<string, string>;
 }
 
 /**
  * Build the per-session env map delivered to the sandbox runtime — the one
  * canonical assembly shared by the REST-style providers (Daytona, E2B,
- * Vercel), which used to hand-roll near-identical copies.
+ * OpenComputer, Vercel), which used to hand-roll near-identical copies.
  *
  * User env vars (repo secrets) come first, system vars are overlaid so they
  * can't be shadowed. Provider-specific additions (platform paths, image-mode
@@ -309,7 +328,10 @@ export function buildSandboxEnvVars(
   config: CreateSandboxConfig | RestoreConfig,
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
-  const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
+  const execution = config.runtimeMode === "execution";
+  const envVars: Record<string, string> = execution
+    ? {}
+    : { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
   delete envVars.CODE_SERVER_PORT;
   delete envVars.CODE_SERVER_PASSWORD;
   delete envVars.VNC_PASSWORD;
@@ -339,12 +361,14 @@ export function buildSandboxEnvVars(
     PYTHONUNBUFFERED: "1",
     SANDBOX_ID: config.sandboxId,
     CONTROL_PLANE_URL: config.controlPlaneUrl,
-    SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
     SANDBOX_TIMEOUT_SECONDS: String(config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS),
-    REPO_OWNER: config.repoOwner ?? "",
-    REPO_NAME: config.repoName ?? "",
     [SESSION_CONFIG_ENV_VAR]: JSON.stringify(sessionConfig),
   });
+  if (!execution) {
+    envVars.SANDBOX_AUTH_TOKEN = config.sandboxAuthToken;
+    envVars.REPO_OWNER = config.repoOwner ?? "";
+    envVars.REPO_NAME = config.repoName ?? "";
+  }
 
   if (portPlan.codeServerPort !== undefined) {
     envVars.CODE_SERVER_PORT = String(portPlan.codeServerPort);
@@ -370,7 +394,7 @@ export function buildSandboxEnvVars(
     envVars.AGENT_SLACK_NOTIFY_ENABLED = "true";
   }
 
-  applyScmCloneEnv(envVars, options.scmIdentity);
+  if (!execution) applyScmCloneEnv(envVars, options.scmIdentity);
 
   // Note: this builder never sets VCS_CLONE_TOKEN / GITHUB_TOKEN /
   // GITHUB_APP_TOKEN as system vars. Git operations in the sandbox
@@ -380,7 +404,8 @@ export function buildSandboxEnvVars(
   // installation tokens) — exactly the failure that broke long-running and
   // resumed sessions before brokered credentials landed. User-defined secrets
   // are passed through verbatim, though, so a user-supplied VCS_CLONE_TOKEN
-  // survives.
+  // survives — OpenComputer deliberately preserves one on prebuilt-image
+  // boots (see its provider tests).
 
   return envVars;
 }
@@ -392,7 +417,7 @@ export function buildSandboxEnvVars(
  * timestamp (`Date.now()`) as `now` so the impure input is visible at the
  * call site and one config yields one name per trigger attempt;
  * `labels` are the canonical build identity shared by providers (tags on
- * Vercel, metadata on E2B). Providers with extra or legacy label
+ * Vercel, labels on OpenComputer). Providers with extra or legacy label
  * conventions spread and extend `labels`.
  *
  * The `build-env-` prefix is deliberately scope-agnostic legacy: it predates
@@ -426,7 +451,9 @@ export interface ImageBuildEnvVarsOptions {
   /** One-shot clone token delivered as `VCS_CLONE_TOKEN`. */
   cloneToken?: string;
   /**
-   * User env vars (repo secrets). Reserved image-build keys are scrubbed from this layer so user-defined
+   * User env vars (repo secrets), or a provider-composed base layer
+   * (OpenComputer layers provider LLM credentials underneath user secrets).
+   * Reserved image-build keys are scrubbed from this layer so user-defined
    * secrets can never hijack the build callback contract.
    */
   baseEnvVars?: Record<string, string>;
@@ -434,8 +461,8 @@ export interface ImageBuildEnvVarsOptions {
 
 /**
  * Build the env map for an image-build sandbox — the build-mode sibling of
- * {@link buildSandboxEnvVars}, shared by the Vercel and E2B
- * providers and mirrored by
+ * {@link buildSandboxEnvVars}, shared by the Vercel and OpenComputer
+ * providers (which used to hand-roll byte-identical copies) and mirrored by
  * Modal's Python `ModalBuildSessionService.create` in
  * `packages/modal-infra/src/sandbox/build_session.py`.
  *

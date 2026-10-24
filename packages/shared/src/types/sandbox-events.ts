@@ -5,6 +5,9 @@ import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 import { githubAutofixOriginSchema } from "./github-autofix";
 
+import { sandboxExecutionEventSchemas } from "./sandbox-execution";
+import { sandboxRuntimeModeSchema } from "./sandbox-execution";
+
 const recordSchema = z.record(z.string(), z.unknown());
 const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
@@ -80,6 +83,28 @@ export const sandboxBootPhaseSchema = z.object({
 });
 export type SandboxBootPhase = z.infer<typeof sandboxBootPhaseSchema>;
 
+/**
+ * Where a message came from, when it did not come from this session's own turn.
+ *
+ * A harness that can receive a message from somewhere else records the
+ * provenance here, so the timeline can show where it came from. The core
+ * never sets it: it is a slot, not a capability.
+ */
+export const messageOriginSchema = z
+  .object({
+    kind: z.string().min(1),
+    receiptId: z.string().min(1),
+    sourceSessionId: z.string().min(1),
+    humanActorId: z.string().min(1),
+    agentConversationId: z.string().nullable().optional(),
+    sourceTaskId: z.string().nullable().optional(),
+    /** How many session-to-session hops this message has already made. */
+    depth: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type MessageOrigin = z.infer<typeof messageOriginSchema>;
+
 const sandboxEventBaseSchema = z.object({
   sandboxId: z.string(),
   timestamp: z.number(),
@@ -97,6 +122,7 @@ export const sandboxGenerationSchema = z.object({
 });
 
 const nonArtifactSandboxEventSchemas = [
+  ...sandboxExecutionEventSchemas,
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
   }),
@@ -104,6 +130,10 @@ const nonArtifactSandboxEventSchemas = [
     // Emitted after the runtime attaches its harness. This is the readiness
     // signal that moves the sandbox row to `ready`.
     type: z.literal("ready"),
+    /** Absent on legacy/default agent runtimes. */
+    runtimeMode: sandboxRuntimeModeSchema.removeDefault().optional(),
+    bridgeInstanceId: z.string().min(1).optional(),
+    bridgeRestarted: z.boolean().optional(),
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
     harness: harnessIdSchema.optional(),
@@ -187,6 +217,25 @@ const nonArtifactSandboxEventSchemas = [
     error: z.string().optional(),
     /** Final cumulative reported cost of the turn. */
     messageCostUsd: z.number().nonnegative().optional(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    /**
+     * One browser request this session authorized or refused.
+     *
+     * The activity is visible to the collaborators of the session, so a
+     * browser the agent drove is never invisible.
+     */
+    type: z.literal("browser_activity"),
+    url: z.string().nullable(),
+    outcome: z.enum(["authorized", "refused"]),
+    reason: z.string().nullable(),
+  }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("cross_session_message"),
+    targetSessionId: z.string().min(1),
+    receiptId: z.string().min(1),
+    status: z.enum(["delivered", "duplicate", "rejected"]),
+    reason: z.string().nullable(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("context_compacted"),
@@ -277,6 +326,25 @@ const nonArtifactSandboxEventSchemas = [
     // events table and every broadcast. attachmentId lets clients stream attachments.
     attachments: resolvedSessionAttachmentsSchema.optional(),
     origin: githubAutofixOriginSchema.optional(),
+    // The provenance of a message that another session handed to this one.
+    provenance: messageOriginSchema.optional(),
+    piControl: z
+      .object({
+        action: z.enum([
+          "send",
+          "follow_up",
+
+          "cancel_exact",
+          "retry_parked",
+          "fork",
+          "reset",
+          "handoff",
+          "compact",
+        ]),
+        conversationId: z.number().int().positive().optional(),
+        taskId: z.number().int().positive().optional(),
+      })
+      .optional(),
   }),
 ] as const;
 

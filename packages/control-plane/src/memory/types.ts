@@ -89,6 +89,14 @@ export interface MemorySession {
   personalAutoSaveEligible: boolean;
 }
 
+/**
+ * Whether a session may write a memory right now.
+ *
+ * A refusal states the reason the agent is told; it never carries an internal
+ * string, a principal, or a scope identity.
+ */
+export type MemoryWriteAuthorization = { allowed: true } | { allowed: false; reason: string };
+
 /** One pinned revision ready to render: directives in full, facts as a summary. */
 export type PinnedMemoryEntry = RenderableRevision & {
   /** Live partition, used to recheck access before rendering boot context. */

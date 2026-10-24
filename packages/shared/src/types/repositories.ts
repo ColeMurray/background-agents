@@ -132,14 +132,8 @@ export const repositoriesInputSchema = z
     });
   });
 
-/**
- * Session flavor of the list: additionally rejects empty lists (the field is
- * either absent — scalar-era request — or names at least one repository, so an
- * empty array never masquerades as a third mode) and duplicate repoName
- * across different owners — clone paths are /workspace/{repoName}, and a
- * clear 400 beats path disambiguation.
- */
-export const sessionRepositoriesInputSchema = repositoriesInputSchema.superRefine(
+/** Non-empty session repository list for position-rooted harnesses such as Pi. */
+export const positionedSessionRepositoriesInputSchema = repositoriesInputSchema.superRefine(
   (repositories, ctx) => {
     if (repositories.length === 0) {
       ctx.addIssue({
@@ -147,6 +141,12 @@ export const sessionRepositoriesInputSchema = repositoriesInputSchema.superRefin
         message: "repositories must contain at least one entry (omit the field instead)",
       });
     }
+  }
+);
+
+/** Name-rooted sandbox flavor: duplicate repo names would collide on checkout paths. */
+export const sessionRepositoriesInputSchema = positionedSessionRepositoriesInputSchema.superRefine(
+  (repositories, ctx) => {
     const seenNames = new Set<string>();
     repositories.forEach((repository, index) => {
       if (seenNames.has(repository.repoName)) {

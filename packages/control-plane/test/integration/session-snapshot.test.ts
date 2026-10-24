@@ -133,6 +133,19 @@ describe("session snapshot synchronization", () => {
     expect(unavailableSandboxAccess.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
+  it("refuses to project an unknown persisted harness as OpenCode", async () => {
+    const name = `snapshot-unknown-harness-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await queryDO(stub, "UPDATE session SET harness = 'newer-harness'");
+
+    const response = await stub.fetch("http://internal/internal/snapshot");
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Session harness "newer-harness" is not supported by this deployment',
+    });
+  });
+
   it("rejects a second subscribe on the same socket", async () => {
     const name = `snapshot-duplicate-subscribe-${Date.now()}`;
     await initNamedSession(name);

@@ -211,7 +211,11 @@ function SessionContent({
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
-  const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
+  const {
+    state: diffState,
+    isLoading: diffLoading,
+    refresh: diffRefresh,
+  } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
@@ -508,6 +512,7 @@ function SessionContent({
                 onOpenMedia={setSelectedMediaArtifactId}
                 diffState={diffState}
                 diffLoading={diffLoading}
+                diffRefresh={diffRefresh}
                 selectedDiff={selectedDiff}
                 onOpenDiff={openDiff}
                 canManageBudget={canManageBudget}
@@ -527,6 +532,7 @@ function SessionContent({
                   onSelect={selectDiff}
                   sidebarShowsFileList={isDesktopDetailsOpen && inspectorTab === "changes"}
                   capabilities={capabilities}
+                  diffRefresh={diffRefresh}
                 />
               ) : null
             }
@@ -546,6 +552,7 @@ function SessionContent({
               onOpenMedia={setSelectedMediaArtifactId}
               diffState={diffState}
               diffLoading={diffLoading}
+              diffRefresh={diffRefresh}
               selectedDiff={selectedDiff}
               onOpenDiff={openDiff}
               canManageBudget={canManageBudget}
@@ -575,6 +582,7 @@ function SessionContent({
           onOpenMedia={setSelectedMediaArtifactId}
           diffState={diffState}
           diffLoading={diffLoading}
+          diffRefresh={diffRefresh}
           selectedDiff={selectedDiff}
           onOpenDiff={openDiff}
           canManageBudget={canManageBudget}
@@ -601,6 +609,7 @@ function SessionContent({
                 onClose={closeDiff}
                 onSelect={selectDiff}
                 capabilities={capabilities}
+                diffRefresh={diffRefresh}
               />
             )}
           </SheetContent>

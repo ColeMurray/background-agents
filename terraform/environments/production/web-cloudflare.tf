@@ -16,10 +16,11 @@ resource "null_resource" "web_app_cloudflare_build" {
 
     environment = {
       # NEXT_PUBLIC_* vars must be set at build time (inlined into client bundle)
-      NEXT_PUBLIC_WS_URL           = local.ws_url
-      NEXT_PUBLIC_SANDBOX_PROVIDER = var.sandbox_provider
-      NEXT_PUBLIC_APP_NAME         = var.app_name
-      NEXT_PUBLIC_APP_ICON_URL     = var.app_icon_url
+      NEXT_PUBLIC_WS_URL             = local.ws_url
+      NEXT_PUBLIC_SANDBOX_PROVIDER   = var.sandbox_provider
+      NEXT_PUBLIC_PI_DURABLE_ENABLED = tostring(local.pi_durable_available)
+      NEXT_PUBLIC_APP_NAME           = var.app_name
+      NEXT_PUBLIC_APP_ICON_URL       = var.app_icon_url
     }
   }
 }
@@ -71,6 +72,7 @@ resource "local_file" "web_app_wrangler_production" {
     CONTROL_PLANE_URL = "${local.control_plane_url}"
     NEXT_PUBLIC_WS_URL = "${local.ws_url}"
     NEXT_PUBLIC_SANDBOX_PROVIDER = "${var.sandbox_provider}"
+    NEXT_PUBLIC_PI_DURABLE_ENABLED = "${local.pi_durable_available}"
     NEXT_PUBLIC_APP_NAME = "${var.app_name}"
     NEXT_PUBLIC_APP_ICON_URL = "${var.app_icon_url}"
 

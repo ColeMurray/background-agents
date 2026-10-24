@@ -98,6 +98,19 @@ export function createEnv(permissions: readonly PermissionId[] = PERMISSION_IDS)
   return createTestEnv({
     ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "github",
+    PI_DURABLE_ENABLED: "true",
+    PI_SESSION: {
+      initialize: vi.fn(),
+      submit: vi.fn(),
+      abort: vi.fn(),
+      lookup: vi.fn(),
+      status: vi.fn(),
+      control: vi.fn(),
+      refreshDiff: vi.fn(),
+      preserveForArchive: vi.fn(),
+      restoreFromArchive: vi.fn(),
+      destroy: vi.fn(),
+    },
     DB: createDatabase(permissions),
   });
 }

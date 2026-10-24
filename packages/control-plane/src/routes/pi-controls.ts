@@ -1,0 +1,129 @@
+import { Hono } from "hono";
+import { z } from "zod";
+import { piRuntimeControlSchema } from "../pi/runtime-contract";
+import { admit } from "../routing/admit";
+import type { ControlPlaneHonoEnv } from "../routing/hono-env";
+import { SessionInternalPaths } from "../session/contracts";
+import {
+  error,
+  requireSession,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+} from "./shared";
+import { dispatchSession, type SessionRouteContext } from "./session-route";
+
+const requestIdSchema = z.string().min(1).max(128);
+function forward(control: unknown, sessionId: string, ctx: SessionRouteContext) {
+  const candidate = typeof control === "object" && control !== null ? control : {};
+  const parsed = piRuntimeControlSchema.safeParse({ ...candidate, sessionId });
+  if (!parsed.success) return error("Invalid Pi control request", 400);
+  const principal = ctx.principal;
+  if (principal?.kind === "service") {
+    return error("Service is not authorized for this Pi control", 403);
+  }
+  const authority =
+    principal?.kind === "user"
+      ? { actorId: principal.userId, canonicalUserId: principal.userId, source: "web" }
+      : null;
+  if (!authority) return error("Pi controls require an authorized actor", 403);
+  return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.piControl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...authority, control: parsed.data }),
+  });
+}
+/**
+ * The actions a collaborator may take.
+ *
+ * Messaging only: a collaborator who may post a message may follow up, and
+ * nothing more.
+ */
+// Model-producing messages belong to SessionMessageQueue. The ordinary prompt
+// route is the only public way to start a turn; Pi controls never form a
+// parallel admission lane.
+const COLLABORATION_ACTIONS = new Set<string>();
+/**
+ * The actions that reshape the agent's durable conversation.
+ *
+ * `fork`, `reset`, `handoff` and `compact` create or rewrite conversations
+ * that every collaborator of the session can see, so they need the same
+ * authority Open-Inspect already uses for "this person may reshape the
+ * session": the session's `lifecycle` action, which the sandbox harness's
+ * own stop, cancel and diff routes already require.
+ */
+const LIFECYCLE_ACTIONS = new Set([
+  "cancel_exact",
+  "retry_parked",
+  "fork",
+  "reset",
+  "handoff",
+  "compact",
+]);
+function post(allowed: Set<string>) {
+  return async (
+    request: Request,
+    _env: unknown,
+    params: { id: string },
+    ctx: SessionRouteContext
+  ) => {
+    const body = await request.json().catch(() => null);
+    const action =
+      typeof body === "object" && body !== null && "action" in body ? body.action : undefined;
+    if (typeof action !== "string" || !allowed.has(action))
+      return error("Pi control action is not allowed on this route", 400);
+    return forward(body, params.id, ctx);
+  };
+}
+function readAction(
+  action: "list_conversations" | "get_conversation" | "inspect_agents" | "inspect" | "task_graph"
+) {
+  return async (
+    request: Request,
+    _env: unknown,
+    params: { id: string; conversationId?: string },
+    ctx: SessionRouteContext
+  ) => {
+    const requestId = requestIdSchema.safeParse(new URL(request.url).searchParams.get("requestId"));
+    if (!requestId.success) return error("requestId is required", 400);
+    return forward(
+      {
+        action,
+        requestId: requestId.data,
+        ...(params.conversationId ? { conversationId: Number(params.conversationId) } : {}),
+      },
+      params.id,
+      ctx
+    );
+  };
+}
+export const piControlRoutes = new Hono<ControlPlaneHonoEnv>();
+const READ = admit({ ...SCM_AGNOSTIC_HUMAN_USER_ROUTE, authorization: requireSession("read") });
+const COLLABORATE = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requireSession("collaborate"),
+});
+const LIFECYCLE = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requireSession("lifecycle"),
+});
+piControlRoutes.get("/sessions/:id/pi/conversations", READ, (c) =>
+  dispatchSession(c, readAction("list_conversations"))
+);
+piControlRoutes.get("/sessions/:id/pi/conversations/:conversationId", READ, (c) =>
+  dispatchSession(c, readAction("get_conversation"))
+);
+piControlRoutes.get("/sessions/:id/pi/inspect", READ, (c) =>
+  dispatchSession(c, readAction("inspect"))
+);
+piControlRoutes.get("/sessions/:id/pi/agents", READ, (c) =>
+  dispatchSession(c, readAction("inspect_agents"))
+);
+piControlRoutes.get("/sessions/:id/pi/task-graph", READ, (c) =>
+  dispatchSession(c, readAction("task_graph"))
+);
+piControlRoutes.post("/sessions/:id/pi/control", COLLABORATE, (c) =>
+  dispatchSession(c, post(COLLABORATION_ACTIONS))
+);
+piControlRoutes.post("/sessions/:id/pi/lifecycle-control", LIFECYCLE, (c) =>
+  dispatchSession(c, post(LIFECYCLE_ACTIONS))
+);

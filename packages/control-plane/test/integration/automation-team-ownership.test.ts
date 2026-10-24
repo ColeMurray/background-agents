@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AutomationStore } from "../../src/db/automation-store";
 import { TeamSettingsStore } from "../../src/db/team-settings";
+import { bindAppliedAuditEventWithId } from "../../src/db/team-audit";
 import * as routeShared from "../../src/routes/shared";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
@@ -273,9 +274,24 @@ describe("automation team ownership", () => {
   it("rolls back an executor mutation when its batched audit fails", async () => {
     await automation("executor-change", TEAM_A);
     const row = (await store.getById("executor-change"))!;
+    const audit = bindAppliedAuditEventWithId(
+      sqlDatabase(env.DB),
+      {
+        requestId: "executor-change-rollback",
+        actorUserId: LEAD,
+        action: "automation.executor_changed",
+        resourceType: "automation",
+        resourceId: row.id,
+        teamId: TEAM_A,
+        targetUserId: MEMBER,
+        before: { userId: EXECUTOR },
+        after: { userId: MEMBER },
+      },
+      true
+    );
     await expect(
       sqlDatabase(env.DB).batch([
-        store.bindExecutorChange(row, MEMBER, LEAD),
+        ...store.bindExecutorChange(row, MEMBER, LEAD, audit),
         env.DB.prepare("INSERT INTO authorization_audit_events (id) VALUES ('invalid-audit')"),
       ])
     ).rejects.toThrow();

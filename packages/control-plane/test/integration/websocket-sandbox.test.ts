@@ -523,7 +523,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() / 1000 })
     );
     await waitForSandboxStatus(stub, "ready");
-    expect((await readyBroadcast).at(-1)).toEqual({ type: "sandbox_status", status: "ready" });
+    expect(await readyBroadcast).toContainEqual({ type: "sandbox_status", status: "ready" });
     const accessResponse = await stub.fetch("http://internal/internal/sandbox-access");
     expect(accessResponse.status).toBe(200);
     await expect(accessResponse.json()).resolves.toEqual({

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "artifactVersion": "execution-v1",
+  "runtimeGeneration": 78,
+  "commandUid": 10001,
+  "commandGid": 10001,
+  "authDelivery": "stdin-fd",
+  "runtimeInstall": "root-owned-read-only",
+  "procIsolation": "hidepid=2",
+  "ptraceScopeMinimum": 2,
+  "networkProfiles": {
+    "package-install-v1": ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+  }
+}

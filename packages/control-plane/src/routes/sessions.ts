@@ -16,12 +16,14 @@ import { sessionDiffRoutes } from "./session-diffs";
 import { sessionSkillRoutes } from "./session-skills";
 import { sessionExportRoutes } from "./session-export";
 import { sessionScopeRoutes } from "./session-scope";
+import { sessionExternalActionRoutes } from "./session-external-actions";
 
 /** Mount order is precedence order: static session paths precede `/sessions/:id`. */
 export const sessionRoutes = new Hono<ControlPlaneHonoEnv>();
 for (const module of [
   sessionCreateRoutes,
   sessionScopeRoutes,
+  sessionExternalActionRoutes,
   sessionIndexRoutes,
   sessionExportRoutes,
   sessionRuntimeProxyRoutes,

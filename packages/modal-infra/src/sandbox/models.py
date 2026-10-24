@@ -40,6 +40,7 @@ class SandboxConfig:
     sandbox_backend: ModalBackend = "modal"
     retire_sandbox_id: str | None = None
     launch_deadline_at_ms: int | None = None
+    execution_policy: dict[str, Any] | None = None
 
 
 @dataclass

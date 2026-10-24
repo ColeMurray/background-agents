@@ -3,7 +3,7 @@ import { generatedFileDetailsSchema } from "../generated-files";
 import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
 import { artifactTypeSchema, type AgentResponse, type StoredFileArtifactType } from "./artifacts";
-import { sessionRepositoriesInputSchema } from "./repositories";
+import { positionedSessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
@@ -45,6 +45,7 @@ export const slackCallbackContextSchema = z.object({
    * control plane knows which automation (if any) owns the thread.
    */
   automationId: z.string().optional(),
+  ingressReceiptId: z.string().min(1).max(128).optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
@@ -154,6 +155,7 @@ export const sendPromptRequestSchema = z
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
     callbackContext: z.unknown().optional(),
+    clientRequestId: z.string().min(1).max(128).optional(),
   })
   .refine(
     (prompt) =>
@@ -230,6 +232,17 @@ function hasExclusiveSessionTarget(
   return activeModes <= 1;
 }
 
+function hasCheckoutCompatibleRepositoryNames(data: {
+  harness?: string;
+  repositories?: Array<{ repoName: string }> | null;
+}): boolean {
+  if (data.harness === "pi" || !data.repositories) return true;
+  return (
+    new Set(data.repositories.map((repository) => repository.repoName)).size ===
+    data.repositories.length
+  );
+}
+
 const createSessionRequestBaseSchema = z.object({
   teamId: z.string().min(1).nullable().optional(),
   visibility: sessionVisibilitySchema.optional(),
@@ -245,7 +258,7 @@ const createSessionRequestBaseSchema = z.object({
    * Ordered repository list ([0] = primary). Mutually exclusive with the
    * scalar repoOwner/repoName/branch fields and environmentId.
    */
-  repositories: sessionRepositoriesInputSchema.optional(),
+  repositories: positionedSessionRepositoriesInputSchema.optional(),
   /**
    * Launch from a named environment: its snapshotted repositories become the
    * session's repository list and sessions.environment_id records provenance
@@ -272,6 +285,10 @@ export const createSessionRequestSchema = createSessionRequestBaseSchema
   .refine(hasExclusiveSessionTarget, {
     message: "environmentId, repositories, and repoOwner/repoName/branch are mutually exclusive",
     path: ["repositories"],
+  })
+  .refine(hasCheckoutCompatibleRepositoryNames, {
+    message: "repository names must be unique for name-rooted sandbox checkouts",
+    path: ["repositories"],
   });
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
@@ -288,6 +305,12 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    ingress: z
+      .strictObject({
+        receiptId: z.string().min(1).max(128),
+        sessionId: z.string().min(1).max(128),
+      })
+      .optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",
@@ -299,6 +322,10 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
   })
   .refine(hasExclusiveSessionTarget, {
     message: "environmentId, repositories, and repoOwner/repoName/branch are mutually exclusive",
+    path: ["repositories"],
+  })
+  .refine(hasCheckoutCompatibleRepositoryNames, {
+    message: "repository names must be unique for name-rooted sandbox checkouts",
     path: ["repositories"],
   });
 

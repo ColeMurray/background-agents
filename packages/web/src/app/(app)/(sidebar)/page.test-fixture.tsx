@@ -178,7 +178,7 @@ vi.mock("@/components/model-reasoning-selector", () => ({
   }: {
     disabled?: boolean;
     harness?: string | null;
-    onHarnessChange?: (harness: "opencode" | "claude") => void;
+    onHarnessChange?: (harness: "opencode" | "claude" | "pi") => void;
     onModelChange: (model: string) => void;
   }) => (
     <>
@@ -203,6 +203,9 @@ vi.mock("@/components/model-reasoning-selector", () => ({
           </button>
           <button type="button" onClick={() => onHarnessChange("opencode")}>
             Switch agent to opencode
+          </button>
+          <button type="button" onClick={() => onHarnessChange("pi")}>
+            Switch agent to pi
           </button>
         </>
       )}

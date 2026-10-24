@@ -8,12 +8,6 @@ variable "team_id" {
   type        = string
 }
 
-variable "framework" {
-  description = "Framework preset (e.g., 'nextjs', 'vite', 'remix')"
-  type        = string
-  default     = "nextjs"
-}
-
 variable "git_repository" {
   description = "Git repository configuration"
   type = object({
@@ -52,12 +46,6 @@ variable "ignore_command" {
   description = "Command to determine if a build should be skipped"
   type        = string
   default     = null
-}
-
-variable "serverless_region" {
-  description = "Region for serverless functions"
-  type        = string
-  default     = "iad1" # US East (N. Virginia)
 }
 
 variable "environment_variables" {

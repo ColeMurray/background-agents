@@ -75,6 +75,7 @@ class SessionConfig(BaseModel):
     opencode_session_id: str | None = None
     # Which agent runs the session; absent means the built-in OpenCode harness.
     harness: str = "opencode"
+    runtime_mode: str = "agent"
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     mcp_servers: list[McpServerConfig] | None = None

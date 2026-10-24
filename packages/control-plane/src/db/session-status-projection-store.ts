@@ -1,5 +1,6 @@
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SqlDatabase } from "./sql-database";
+import { IN_PROCESS_HARNESS_SQL } from "./session-row";
 
 /** Owns lifecycle projection writes; activity timestamps never fence status. */
 export class SessionStatusProjectionStore {
@@ -14,10 +15,14 @@ export class SessionStatusProjectionStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = ?, status_revision = ?, updated_at = MAX(updated_at, ?)
-       WHERE id = ? AND (status_revision < ? OR (status_revision = ? AND status = ?))`
+        `UPDATE sessions
+         SET status = ${persistedStatusSql()}, status_revision = ?, updated_at = MAX(updated_at, ?)
+         WHERE id = ? AND (
+           status_revision < ? OR
+           (status_revision = ? AND status = ${persistedStatusSql()})
+         )`
       )
-      .bind(status, revision, updatedAt, id, revision, revision, status)
+      .bind(status, status, revision, updatedAt, id, revision, revision, status, status)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -26,9 +31,10 @@ export class SessionStatusProjectionStore {
   async updateUnclaimed(id: string, status: SessionStatus, updatedAt: number): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? AND updated_at <= ? AND status_revision = 0`
+        `UPDATE sessions SET status = ${persistedStatusSql()}, updated_at = ?
+         WHERE id = ? AND updated_at <= ? AND status_revision = 0`
       )
-      .bind(status, updatedAt, id, updatedAt)
+      .bind(status, status, updatedAt, id, updatedAt)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
@@ -37,10 +43,19 @@ export class SessionStatusProjectionStore {
   async archiveOrphanedDraft(id: string): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'created' AND status_revision = 0`
+        `UPDATE sessions SET status = ${persistedStatusSql()}, updated_at = ?
+         WHERE id = ? AND status IN ('created', 'durable_created') AND status_revision = 0`
       )
-      .bind(Date.now(), id)
+      .bind("archived", "archived", Date.now(), id)
       .run();
     return (result.meta?.changes ?? 0) > 0;
   }
+}
+
+/** Preserve the fail-closed marker while an in-process session remains promptable. */
+function persistedStatusSql(): string {
+  return `CASE
+    WHEN harness IN (${IN_PROCESS_HARNESS_SQL}) THEN 'durable_' || ?
+    ELSE ?
+  END`;
 }

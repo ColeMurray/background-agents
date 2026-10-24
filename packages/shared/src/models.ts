@@ -23,6 +23,9 @@ export interface ModelReasoningConfig {
   default: ReasoningEffort | undefined;
 }
 
+/** Runtime catalogs a model is known to exist in. */
+export type ModelCapability = "codex" | "openai-codex";
+
 interface ModelCatalogGroup {
   category: string;
   enabledByDefault: boolean;
@@ -39,6 +42,8 @@ interface ModelCatalogEntry {
     readonly additionalEfforts?: readonly ReasoningEffort[];
     readonly default?: ReasoningEffort;
   };
+  /** Provider/runtime catalogs verified by the dependency versions pinned by Open-Inspect. */
+  capabilities?: readonly Exclude<ModelCapability, "codex">[];
   reasoning?: {
     readonly efforts: readonly ReasoningEffort[];
     readonly default: ReasoningEffort | undefined;
@@ -184,6 +189,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-5.6-sol",
         codex: { additionalEfforts: ["max"], default: "low" },
+        capabilities: ["openai-codex"],
         name: "GPT 5.6 Sol",
         description: "Frontier model for complex professional work",
         reasoning: {
@@ -194,6 +200,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-5.6-terra",
         codex: { additionalEfforts: ["max"] },
+        capabilities: ["openai-codex"],
         name: "GPT 5.6 Terra",
         description: "Balanced, cost-efficient everyday work",
         reasoning: {
@@ -204,6 +211,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-5.6-luna",
         codex: {},
+        capabilities: ["openai-codex"],
         name: "GPT 5.6 Luna",
         description: "Fast, cost-efficient high-volume workloads",
         reasoning: {
@@ -214,6 +222,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-6-astra",
         codex: { default: "low" },
+        capabilities: ["openai-codex"],
         name: "GPT-6 Astra",
         description: "Most capable model for complex, demanding work",
         reasoning: {
@@ -224,6 +233,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-6-sol",
         codex: {},
+        capabilities: ["openai-codex"],
         name: "GPT-6 Sol",
         description: "Complex coding and agentic workflows",
         reasoning: {
@@ -234,6 +244,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-6.1-sol",
         codex: { default: "low" },
+        capabilities: ["openai-codex"],
         name: "GPT-6.1 Sol",
         description: "Complex coding, computer use, and professional work",
         reasoning: {
@@ -244,6 +255,7 @@ export const MODEL_CATALOG = [
       {
         id: "openai/gpt-6-luna",
         codex: {},
+        capabilities: ["openai-codex"],
         name: "GPT-6 Luna",
         description: "Efficient model for focused, high-volume tasks",
         reasoning: {
@@ -571,6 +583,18 @@ export function getCodexReasoningConfig(model: string): ModelReasoningConfig | u
     ],
     default: entry.codex.default ?? entry.reasoning.default,
   };
+}
+
+/** Whether a model exists in a pinned runtime catalog. */
+export function modelHasCapability(model: string, capability: ModelCapability): boolean {
+  const normalized = normalizeModelId(model);
+  const entry: ModelCatalogEntry | undefined = MODEL_DEFINITIONS.find(
+    (candidate) => candidate.id === normalized
+  );
+  if (!entry) return false;
+  return capability === "codex"
+    ? entry.codex !== undefined
+    : (entry.capabilities?.includes(capability) ?? false);
 }
 
 /**

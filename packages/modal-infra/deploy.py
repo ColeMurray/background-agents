@@ -27,6 +27,8 @@ if __name__ == "__main__":
         base_image,
         base_image_plan,
         docker_image,
+        execution_image,
+        execution_image_plan,
         image_reference_path,
     )
     from sandbox.launch_policy import launch_kwargs, parse_launch
@@ -38,6 +40,8 @@ else:
         base_image,
         base_image_plan,
         docker_image,
+        execution_image,
+        execution_image_plan,
         image_reference_path,
     )
     from src.sandbox.launch_policy import launch_kwargs, parse_launch
@@ -105,6 +109,24 @@ def build_sandbox_image(*, with_docker: bool = False) -> None:
         "imageId": base_image.object_id,
         "buildHash": base_image_plan["buildHash"],
     }
+    if execution_image is not None and execution_image_plan is not None:
+        with modal.enable_output():
+            execution_image.build(deployed_app)
+        execution_sandbox = modal.Sandbox.create(
+            "sleep",
+            "infinity",
+            app=deployed_app,
+            image=modal.Image.from_id(execution_image.object_id),
+            env=execution_image_plan["runtimeEnv"],
+            block_network=True,
+            timeout=300,
+        )
+        try:
+            _verify_image(execution_sandbox, ("/app/verify/execution_smoke.py",))
+        finally:
+            execution_sandbox.terminate()
+        record["executionImageId"] = execution_image.object_id
+        record["executionBuildHash"] = execution_image_plan["buildHash"]
     if not with_docker:
         retained_vm_image = _deployed_vm_image()
         if retained_vm_image:

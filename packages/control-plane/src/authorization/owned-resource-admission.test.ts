@@ -176,7 +176,7 @@ describe("owned-resource admission outcomes", () => {
   it("allows sandbox clone inheritance with dangling environment provenance", async () => {
     vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(null);
     const ctx = context();
-    ctx.principal = { kind: "sandbox", sessionId: "parent" };
+    ctx.principal = { kind: "sandbox", sessionId: "parent", credentialClass: "agent" };
     delete ctx.authorization;
     await expect(
       authorizeEnvironmentTarget(ctx, { environmentId: "env_deleted", ownerTeamId: "team" })
@@ -219,7 +219,7 @@ describe("owned-resource admission outcomes", () => {
 
   it("binds a sandbox's inherited team environment to the destination team", async () => {
     const ctx = context();
-    ctx.principal = { kind: "sandbox", sessionId: "parent" };
+    ctx.principal = { kind: "sandbox", sessionId: "parent", credentialClass: "agent" };
     delete ctx.authorization;
     const response = await authorizeEnvironmentTarget(ctx, {
       environmentId: "environment",
