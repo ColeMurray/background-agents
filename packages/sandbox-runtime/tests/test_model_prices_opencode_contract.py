@@ -1,7 +1,8 @@
-"""Opt-in parity check: OPENCODE_TEST_BINARY=/path/to/opencode pytest ... -v.
+"""Opt-in comparison: OPENCODE_TEST_BINARY=/path/to/opencode pytest ... -v.
 
 Runs real OpenCode 1.18.29 against a loopback Responses fixture with the frozen
-catalog fixture and checks that Codex pricing reproduces each step-finish cost.
+catalog fixture. Token buckets and arithmetic agree, but Codex honors the
+catalog's 272k tier instead of OpenCode's legacy over-200k fallback.
 """
 
 import json
@@ -23,14 +24,15 @@ BINARY = os.environ.get("OPENCODE_TEST_BINARY")
 pytestmark = pytest.mark.skipif(not BINARY, reason="set OPENCODE_TEST_BINARY for wire tests")
 CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
 MODEL = "gpt-6.1-sol"
-# (input, cached, cache write, output, reasoning), spanning base, over-200k and tier rates.
-USAGES = [
-    (48_000, 40_000, 6_000, 1_200, 800),
-    (52_000, 46_000, 0, 2_500, 1_500),
-    (200_000, 0, 0, 10, 0),
-    (230_000, 50_000, 0, 800, 300),
-    (272_000, 1_000, 500, 40, 20),
-    (272_001, 0, 0, 0, 0),
+# ((input, cached, cache write, output, reasoning), published cost, OpenCode cost).
+CASES = [
+    ((48_000, 40_000, 6_000, 1_200, 800), 0.035, 0.035),
+    ((52_000, 46_000, 0, 2_500, 1_500), 0.0416, 0.0416),
+    ((200_000, 0, 0, 10, 0), 0.4001, 0.4001),
+    ((200_001, 0, 0, 10, 0), 0.400102, 0.800154),
+    ((230_000, 50_000, 0, 800, 300), 0.373, 0.742),
+    ((272_000, 1_000, 500, 40, 20), 0.54275, 1.0853),
+    ((272_001, 0, 0, 0, 0), 1.088004, 1.088004),
 ]
 
 
@@ -46,7 +48,7 @@ def response_usage(input_tokens, cached, write, output, reasoning):
 
 @pytest.fixture
 def opencode(tmp_path):
-    pending = [response_usage(*usage) for usage in USAGES]
+    pending = [response_usage(*usage) for usage, _, _ in CASES]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -164,10 +166,10 @@ def opencode(tmp_path):
         thread.join(timeout=5)
 
 
-def test_codex_pricing_matches_opencode_step_cost(opencode):
+def test_codex_pricing_uses_published_tiers_instead_of_opencode_legacy_fallback(opencode):
     assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
     session = opencode("/session", {"title": "Pricing contract"})["id"]
-    for _ in USAGES:
+    for _ in CASES:
         result = opencode(
             f"/session/{session}/message",
             {
@@ -183,8 +185,8 @@ def test_codex_pricing_matches_opencode_step_cost(opencode):
         if part.get("type") == "step-finish"
     ]
     price = ModelPriceCatalog(CATALOG, MagicMock()).price(MODEL)
-    assert len(steps) == len(USAGES)
-    for step, (input_tokens, *_rest) in zip(steps, USAGES, strict=True):
+    assert len(steps) == len(CASES)
+    for step, (usage, published_cost, opencode_cost) in zip(steps, CASES, strict=True):
         tokens = step["tokens"]
         buckets = TokenBuckets(
             input=tokens["input"],
@@ -193,4 +195,5 @@ def test_codex_pricing_matches_opencode_step_cost(opencode):
             cache_read=tokens["cache"]["read"],
             cache_write=tokens["cache"]["write"],
         )
-        assert float(price.cost(buckets, input_tokens)) == step["cost"], step
+        assert float(price.cost(buckets, usage[0])) == published_cost, step
+        assert step["cost"] == opencode_cost, step

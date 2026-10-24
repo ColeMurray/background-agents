@@ -552,7 +552,7 @@ def test_each_request_is_priced_at_the_rate_for_its_own_context():
     requests = [
         breakdown(48_000, 40_000, 6_000, 1_200, 800),
         breakdown(52_000, 46_000, 0, 2_500, 1_500),
-        # Over 200k but under the 272k tier: OpenCode's context_over_200k rates.
+        # Over 200k but below the published 272k tier: still base rates.
         breakdown(230_000, 50_000, 0, 800, 300),
     ]
     total = breakdown(0, 0, 0, 0, 0)
@@ -560,10 +560,10 @@ def test_each_request_is_priced_at_the_rate_for_its_own_context():
     for request in requests:
         total = add(total, request)
         reported.append(usage(state, total, last=request)["messageCostUsd"])
-    # $0.035 + $0.0416 + $0.742. Pricing the summed 330k input at the tier
+    # $0.035 + $0.0416 + $0.373. Pricing the summed 330k input at the tier
     # rate instead would report $0.8767.
-    assert reported == [0.035, 0.0766, 0.8186]
-    assert state.finish()["cost"] == 0.8186
+    assert reported == [0.035, 0.0766, 0.4496]
+    assert state.finish()["cost"] == 0.4496
     assert state.tokens == {
         "input": 188_000,
         "output": 1_900,
@@ -587,18 +587,18 @@ def test_request_without_last_usage_selects_its_rate_from_the_delta():
     assert usage(state, counts(272_001))["cost"] == 0.344002
 
 
-def test_usage_for_several_requests_in_one_update_is_an_estimate():
+@pytest.mark.parametrize(("input_tokens", "expected_cost"), [(220_000, 0.44), (300_000, 1.2)])
+def test_usage_for_several_requests_in_one_update_is_an_estimate(input_tokens, expected_cost):
     state = CodexTurnEvents(
         "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
     )
-    # The total advanced by 220k input, but the update reports a 10k request:
-    # the 210k request before it was never reported on its own.
-    projected = usage(state, counts(220_000), last=counts(10_000))
+    # Earlier requests were not reported on their own; only the last 10k is known.
+    projected = usage(state, counts(input_tokens), last=counts(10_000))
     assert not state.requests_separable
     assert "cost" not in projected
-    # Priced as one 220k request, at the over-200k rate, never at the 10k request's.
-    assert projected["messageCostUsd"] == 0.88
-    assert projected["tokens"]["input"] == 220_000
+    # The estimate selects the aggregate's tier, not the last 10k request's.
+    assert projected["messageCostUsd"] == expected_cost
+    assert projected["tokens"]["input"] == input_tokens
 
 
 def _turn():

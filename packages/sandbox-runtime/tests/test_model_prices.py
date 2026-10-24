@@ -16,7 +16,7 @@ from sandbox_runtime.model_prices import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures/reasoning-models.json"
-# Distinct over-200k and tier rates expose which one OpenCode's selection picks.
+# Legacy over-200k rates must not override the catalog's explicit context tiers.
 TIERED = {
     "input": 12,
     "output": 52,
@@ -41,11 +41,17 @@ def only_input(count):
 
 @pytest.mark.parametrize(
     ("context", "input_rate"),
-    [(200_000, 12), (200_001, 24), (272_000, 24), (272_001, 25)],
+    [
+        (200_000, 12),
+        (200_001, 12),
+        (230_000, 12),
+        (271_999, 12),
+        (272_000, 12),
+        (272_001, 25),
+    ],
 )
-def test_rate_selection_matches_opencode(context, input_rate):
-    # A tier wins once exceeded; until then OpenCode falls back to its fixed
-    # 200k threshold, so 200,001-272,000 is priced at the over-200k rates.
+def test_rate_selection_uses_catalog_context_boundaries(context, input_rate):
+    # OpenAI's short-context rates include exactly 272,000 input tokens.
     assert ModelPrice.parse(TIERED).rates_for(context).input == input_rate
 
 
@@ -100,10 +106,8 @@ def test_entries_without_a_usable_base_price_are_unpriced(raw):
     assert ModelPrice.parse(raw) is None
 
 
-def test_missing_or_invalid_cache_rates_are_free_and_bad_over_200k_is_ignored():
-    price = ModelPrice.parse(
-        {"input": 1, "output": 2, "cache_read": -1, "context_over_200k": {"input": 5}}
-    )
+def test_missing_or_invalid_cache_rates_are_free():
+    price = ModelPrice.parse({"input": 1, "output": 2, "cache_read": -1})
     assert price == ModelPrice(base=Rates(Decimal(1), Decimal(2), Decimal(0), Decimal(0)))
     assert price.rates_for(300_000) == price.base
 
@@ -134,6 +138,18 @@ def test_catalog_reads_openai_prices_from_the_fixture():
     assert price.base == Rates(Decimal(2), Decimal(10), Decimal("0.1"), Decimal("2.5"))
     assert price.rates_for(272_001).input == 4
     assert catalog.price("claude-opus-4-5") is None
+
+
+@pytest.mark.parametrize(
+    ("context", "expected_cost"),
+    [(272_000, "0.54275"), (272_001, "1.085304")],
+)
+def test_published_context_boundary_prices_all_token_buckets(context, expected_cost):
+    price = ModelPriceCatalog(FIXTURE, MagicMock()).price("gpt-6.1-sol")
+    tokens = TokenBuckets(
+        input=context - 1_500, output=20, reasoning=20, cache_read=1_000, cache_write=500
+    )
+    assert price.cost(tokens, context) == Decimal(expected_cost)
 
 
 def test_missing_catalog_is_logged_once_and_picked_up_when_it_appears(tmp_path):

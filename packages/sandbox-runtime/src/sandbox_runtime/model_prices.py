@@ -1,4 +1,4 @@
-"""Model prices from OpenCode's cached models.dev catalog, priced as OpenCode prices a step.
+"""Model prices and explicit context tiers from OpenCode's cached models.dev catalog.
 
 The image build writes the catalog with ``opencode models --refresh`` (see
 ``supervisor.OPENCODE_MODELS_REFRESH_COMMAND``); ``plugins/codex-auth-plugin.js``
@@ -21,9 +21,6 @@ if TYPE_CHECKING:
 
 #: OpenCode's default catalog source; only that source is cached at the default path.
 DEFAULT_MODELS_URL = "https://models.opencode.ai"
-#: Input size above which OpenCode applies a model's ``context_over_200k`` rates
-#: when no context tier matches. Hard-coded in OpenCode, not read from the catalog.
-OVER_200K_CONTEXT_TOKENS = 200_000
 TOKENS_PER_MILLION = Decimal(1_000_000)
 #: USD per million tokens; larger catalog values are malformed. Token counts are
 #: capped at 2**53, so any turn priced within this bound has a finite float cost.
@@ -38,7 +35,7 @@ def _rate(value: Any) -> Decimal | None:
             return None
     except OverflowError:  # An integer too large for a float.
         return None
-    # str() is the shortest round-trip form, the digits OpenCode's Decimal sees.
+    # str() avoids importing binary floating-point artifacts into Decimal.
     rate = Decimal(str(value))
     return rate if rate <= MAX_RATE_USD_PER_MILLION_TOKENS else None
 
@@ -82,7 +79,6 @@ class TokenBuckets:
 class ModelPrice:
     base: Rates
     context_tiers: tuple[tuple[Decimal, Rates], ...] = ()
-    over_200k: Rates | None = None
 
     @classmethod
     def parse(cls, raw: Any) -> ModelPrice | None:
@@ -99,25 +95,19 @@ class ModelPrice:
             rates, size = Rates.parse(entry), _rate(tier.get("size"))
             if rates is not None and size is not None:
                 tiers.append((size, rates))
-        return cls(
-            base=base,
-            context_tiers=tuple(tiers),
-            over_200k=Rates.parse(raw.get("context_over_200k")),
-        )
+        return cls(base=base, context_tiers=tuple(tiers))
 
     def rates_for(self, context_tokens: int) -> Rates:
-        """OpenCode's selection: the largest exceeded tier, else over-200k, else base."""
+        """Use the largest exceeded catalog tier, otherwise the base rates."""
         exceeded = [tier for tier in self.context_tiers if context_tokens > tier[0]]
         if exceeded:
             return max(exceeded, key=lambda tier: tier[0])[1]
-        if self.over_200k is not None and context_tokens > OVER_200K_CONTEXT_TOKENS:
-            return self.over_200k
         return self.base
 
     def cost(self, tokens: TokenBuckets, context_tokens: int) -> Decimal:
         """USD for one request; ``context_tokens`` is its total input, cache included."""
         rates = self.rates_for(context_tokens)
-        # Reasoning is priced at the output rate, as OpenCode does.
+        # Reasoning is priced at the output rate.
         total = (
             tokens.input * rates.input
             + tokens.output * rates.output
