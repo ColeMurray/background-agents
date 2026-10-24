@@ -613,7 +613,7 @@ here is cherry-picked from either. This branch is `compound/pi-overlay`, its his
 
 ### The type and lint escapes (TEST-3)
 
-The branch adds 159 type or lint escapes. Every one of them is listed here with the reason it is
+The branch adds 160 type or lint escapes. Every one of them is listed here with the reason it is
 there.
 
 The three assertions in `packages/control-plane/test/integration/session-do-access.ts` are confined
@@ -660,7 +660,7 @@ component graph for overlay integration tests without exposing overlay types in 
 | `packages/control-plane/test/integration/pi-end-to-end.test.ts`                  | 2           | The test stands in the runtime's provider and reads the object's own models registry.                                                                                                                                                                               |
 | `packages/control-plane/test/integration/pi-export-projection.test.ts`           | 2           | The test stands in the runtime's provider and reads the object's own models registry.                                                                                                                                                                               |
 | `packages/control-plane/test/integration/pi-session-creation.test.ts`            | 2           | A test stands in the Durable Object stub the session creation calls.                                                                                                                                                                                                |
-| `packages/control-plane/test/integration/pi-session-do.test.ts`                  | 58          | The test reaches the Durable Object's own internals — its bindings, its models registry, its accounting totals, its alarm — which the class does not export; each cast is the test's way in, and none of them grants the object a binding it does not already have. |
+| `packages/control-plane/test/integration/pi-session-do.test.ts`                  | 59          | The test reaches the Durable Object's own internals — its bindings, its models registry, its accounting totals, its alarm — which the class does not export; each cast is the test's way in, and none of them grants the object a binding it does not already have. |
 | `packages/control-plane/test/integration/sandbox-early-connect.test.ts`          | 1           | A test reads the runtime's own readiness outcome.                                                                                                                                                                                                                   |
 | `packages/slack-bot/src/routes/events.test.ts`                                   | 3           | A test stands in the bot's own bindings.                                                                                                                                                                                                                            |
 | `packages/slack-bot/src/sessions/control-plane-client.test.ts`                   | 1           | A test reads the fetch call the client made.                                                                                                                                                                                                                        |
