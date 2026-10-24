@@ -397,7 +397,7 @@ export type SandboxStartupIntent = "spawn" | "warm";
  * What a fatal report's termination did, for the queue to apply.
  * `terminated`: the sandbox is down and a replacement may run queued work.
  * `stop_failed`: the row was failed and counted toward the circuit breaker,
- * but the provider kept the runtime, so nothing may replace it yet.
+ * but teardown did not complete, so nothing may replace it yet.
  * `retries_exhausted`: the failure opened the circuit breaker, so no
  * replacement will be admitted for the prompt the boot was for.
  */
@@ -1870,6 +1870,9 @@ export class SandboxLifecycleManager
       error: reason,
     });
     this.isTerminatingSandbox = true;
+    // Once the row is failed and counted, a later cleanup throw must not hide
+    // that, or an exhausted boot's prompt is left pending.
+    let countedOutcome: FatalTerminationOutcome = "not_terminated";
     try {
       const ownership = await this.shutdown.requestShutdown("fatal_runtime_error", "emergency");
       if (ownership !== "unmanaged") {
@@ -1883,6 +1886,7 @@ export class SandboxLifecycleManager
       this.storage.updateSandboxStatus("failed");
       this.recordSpawnFailure(Date.now(), sandbox.created_at);
       const retriesExhausted = this.isCircuitBreakerOpen(Date.now());
+      if (!held) countedOutcome = retriesExhausted ? "retries_exhausted" : "stop_failed";
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(reason);
       this.access.clearAccess();
@@ -1898,14 +1902,14 @@ export class SandboxLifecycleManager
           intent: "destroy",
           failureMessage: "Provider stop failed after fatal runtime error",
         });
-        if (!stopped) return retriesExhausted ? "retries_exhausted" : "stop_failed";
+        if (!stopped) return countedOutcome;
       }
       if (retriesExhausted) return "retries_exhausted";
     } catch (error) {
       this.log.warn("Fatal runtime termination failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return "not_terminated";
+      return countedOutcome;
     } finally {
       this.isTerminatingSandbox = false;
     }

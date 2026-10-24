@@ -702,7 +702,8 @@ describe("fatal runtime report termination", () => {
 
   function fatalReportHarness(
     sandbox: Parameters<typeof createMockSandbox>[0],
-    stop: { success: boolean; error?: string } = stopSucceeds
+    stop: { success: boolean; error?: string } = stopSucceeds,
+    wsManager = createMockWebSocketManager()
   ) {
     const storage = createMockStorage(createMockSession(), createMockSandbox(sandbox));
     const stopSandbox = vi.fn(async () => stop);
@@ -711,7 +712,7 @@ describe("fatal runtime report termination", () => {
       storage,
       storage,
       createMockBroadcaster(),
-      createMockWebSocketManager(),
+      wsManager,
       createMockAlarmScheduler(),
       createMockIdGenerator(),
       createUnmanagedShutdown(),
@@ -743,6 +744,34 @@ describe("fatal runtime report termination", () => {
       expect(stopSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ providerObjectId: "modal-obj-booting" })
       );
+      expect(storage.getSandbox()?.status).toBe("failed");
+    }
+  );
+
+  it.each([
+    { priorFailures: 0, outcome: "stop_failed" },
+    { priorFailures: exhaustingFailureCount, outcome: "retries_exhausted" },
+  ])(
+    "resolves $outcome when cleanup throws after the failure is counted (prior failures: $priorFailures)",
+    async ({ priorFailures, outcome }) => {
+      const wsManager = createMockWebSocketManager();
+      vi.mocked(wsManager.detachSandboxWebSocket).mockImplementation(() => {
+        throw new Error("storage write failed");
+      });
+      const { manager, storage, stopSandbox } = fatalReportHarness(
+        {
+          status: "connecting",
+          modal_object_id: "modal-obj-booting",
+          spawn_failure_count: priorFailures,
+          last_spawn_failure: priorFailures > 0 ? Date.now() : 0,
+        },
+        stopSucceeds,
+        wsManager
+      );
+
+      await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toBe(outcome);
+
+      expect(stopSandbox).not.toHaveBeenCalled();
       expect(storage.getSandbox()?.status).toBe("failed");
     }
   );
