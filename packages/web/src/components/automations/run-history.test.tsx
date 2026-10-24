@@ -70,6 +70,31 @@ describe("RunHistory", () => {
     expect(screen.getByText("No runs yet.")).toBeInTheDocument();
   });
 
+  it("shows skeleton rows instead of the empty state while the first page loads", () => {
+    render(<RunHistory invocations={[]} total={0} loading={true} hasMore={false} />);
+
+    expect(screen.getByRole("status", { name: "Loading run history" })).toBeInTheDocument();
+    expect(screen.queryByText("No runs yet.")).not.toBeInTheDocument();
+  });
+
+  it("appends skeleton rows below loaded runs and hides load more while loading", () => {
+    const onLoadMore = vi.fn();
+    render(
+      <RunHistory
+        invocations={[makeInvocation()]}
+        total={5}
+        loading={true}
+        hasMore={true}
+        onLoadMore={onLoadMore}
+      />
+    );
+
+    const skeleton = screen.getByRole("status", { name: "Loading run history" });
+    const row = screen.getByText("Nightly review");
+    expect(row.compareDocumentPosition(skeleton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Load more/ })).not.toBeInTheDocument();
+  });
+
   it("renders a childless skipped firing as a reason-only row", () => {
     const invocation = makeInvocation({
       status: "skipped",

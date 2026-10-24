@@ -159,6 +159,17 @@ describe("SessionSidebar", () => {
     expect(screen.getByRole("button", { name: "Signed in as Test User" })).toBeInTheDocument();
   });
 
+  it("shows a skeleton list instead of sections while sessions load", () => {
+    mockHook.mockReturnValue({ ...mockHook(), loading: true });
+
+    render(<SessionSidebar />);
+
+    const skeleton = screen.getByRole("status", { name: "Loading sessions" });
+    expect(skeleton).toHaveClass("animate-pulse", "motion-reduce:animate-none");
+    expect(screen.queryByRole("heading", { name: "Needs attention" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
+  });
+
   it("toggles groups independently with accessible controls and matching chevrons", () => {
     render(<SessionSidebar />);
 

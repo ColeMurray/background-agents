@@ -31,11 +31,16 @@ let environmentsValue: Array<{
 let environmentsError: unknown = undefined;
 let reposError: unknown = undefined;
 let teamsError: unknown = null;
+/** Suspends search-param reads, as Next.js does before the params resolve. */
+let suspendSearchParams = false;
 const replace = vi.fn();
 const push = vi.fn();
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(search),
+  useSearchParams: () => {
+    if (suspendSearchParams) throw new Promise(() => {});
+    return new URLSearchParams(search);
+  },
   useRouter: () => ({ push, replace }),
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -145,6 +150,7 @@ beforeEach(() => {
   environmentsError = undefined;
   reposError = undefined;
   teamsError = null;
+  suspendSearchParams = false;
   replace.mockReset();
   push.mockReset();
   vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
@@ -163,6 +169,18 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
   await user.click(screen.getByRole("combobox", { name: "Team" }));
   await user.click(await screen.findByRole("option", { name }));
 }
+
+describe("NewAutomationPage loading", () => {
+  it("shows the form skeleton while search params suspend", () => {
+    suspendSearchParams = true;
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
+    // The collapsed-sidebar header stays up so the layout doesn't shift on load.
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+});
 
 describe("NewAutomationPage template pre-fill", () => {
   it("requires an explicit team for the auto-review replacement even when workspace creation is allowed", async () => {
@@ -588,6 +606,7 @@ describe("NewAutomationPage duplicate", () => {
     render(<NewAutomationPage />);
 
     expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
   });
 
   it("falls back to a blank form when the source cannot be loaded", () => {

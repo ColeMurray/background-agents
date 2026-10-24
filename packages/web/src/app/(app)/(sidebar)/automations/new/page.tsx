@@ -8,6 +8,7 @@ import {
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { useAutomationDuplicate } from "@/components/automations/use-automation-duplicate";
+import { AutomationFormSkeleton } from "@/components/automations/automation-form-skeleton";
 import { WebhookConfig } from "@/components/automations/webhook-config";
 import { automationTemplates } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
@@ -58,13 +59,24 @@ function NewAutomationContent() {
 
   if (authorizationLoading || !canCreate) return null;
 
+  const collapsedHeader = !isOpen && (
+    <header className="border-b border-border-muted flex-shrink-0">
+      <div className="px-4 py-3 flex items-center gap-2">
+        <CollapsedSidebarControls />
+        <Link
+          href={navigation.list}
+          className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          aria-label="Back to automations"
+        >
+          <BackIcon className="w-4 h-4" />
+        </Link>
+      </div>
+    </header>
+  );
+
   // The form reads initial values once on mount, so wait for the source.
   if (duplicateState?.status === "loading") {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-      </div>
-    );
+    return <AutomationFormSkeleton mode="create" header={collapsedHeader} />;
   }
   if (duplicateState?.status === "unavailable") {
     return (
@@ -180,20 +192,7 @@ function NewAutomationContent() {
 
   return (
     <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <CollapsedSidebarControls />
-            <Link
-              href={navigation.list}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              aria-label="Back to automations"
-            >
-              <BackIcon className="w-4 h-4" />
-            </Link>
-          </div>
-        </header>
-      )}
+      {collapsedHeader}
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-2xl mx-auto">
@@ -249,15 +248,29 @@ function NewAutomationContent() {
   );
 }
 
+// Search params are what suspended, so the scope-preserving back link can't be
+// built yet; keep the sidebar controls so the layout doesn't shift on load.
+function NewAutomationFallback() {
+  const { isOpen } = useSidebarContext();
+  return (
+    <AutomationFormSkeleton
+      mode="create"
+      header={
+        !isOpen && (
+          <header className="border-b border-border-muted flex-shrink-0">
+            <div className="px-4 py-3 flex items-center gap-2">
+              <CollapsedSidebarControls />
+            </div>
+          </header>
+        )
+      }
+    />
+  );
+}
+
 export default function NewAutomationPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="h-full flex items-center justify-center">
-          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-        </div>
-      }
-    >
+    <Suspense fallback={<NewAutomationFallback />}>
       <NewAutomationContent />
     </Suspense>
   );

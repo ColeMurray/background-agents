@@ -91,6 +91,14 @@ describe("automation collection", () => {
     expect(mocks.useAutomations).toHaveBeenCalledWith("", "team/one");
   });
 
+  it("shows a loading skeleton in place of the list on the initial load", () => {
+    mocks.useAutomations.mockReturnValue({ ...list, automations: [], loading: true });
+    render(<AutomationCollection>{() => null}</AutomationCollection>);
+    expect(screen.getByRole("status", { name: "Loading automations" })).toBeInTheDocument();
+    expect(screen.queryByText("No automations yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more automations" })).not.toBeInTheDocument();
+  });
+
   it("does not show an empty-state creation prompt after a failed initial load", () => {
     mocks.useAutomations.mockReturnValue({ ...list, automations: [], error: new Error("failed") });
     render(<TeamAutomations teamId="team/one" />);

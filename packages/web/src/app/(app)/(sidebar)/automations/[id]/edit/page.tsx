@@ -10,6 +10,7 @@ import {
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { automationToFormValues } from "@/components/automations/automation-form-policy";
+import { AutomationFormSkeleton } from "@/components/automations/automation-form-skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -72,12 +73,23 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     }
   };
 
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+  const collapsedHeader = !isOpen && (
+    <header className="border-b border-border-muted flex-shrink-0">
+      <div className="px-4 py-3 flex items-center gap-2">
+        <CollapsedSidebarControls />
+        <Link
+          href={navigation.detail(id)}
+          className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          aria-label="Back to automation"
+        >
+          <BackIcon className="w-4 h-4" />
+        </Link>
       </div>
-    );
+    </header>
+  );
+
+  if (loading) {
+    return <AutomationFormSkeleton mode="edit" header={collapsedHeader} />;
   }
 
   if (!automation) {
@@ -97,20 +109,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
 
   return (
     <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <CollapsedSidebarControls />
-            <Link
-              href={navigation.detail(id)}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              aria-label="Back to automation"
-            >
-              <BackIcon className="w-4 h-4" />
-            </Link>
-          </div>
-        </header>
-      )}
+      {collapsedHeader}
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-2xl mx-auto">
