@@ -63,7 +63,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(48);
+    expect(PERMISSION_IDS).toHaveLength(49);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
