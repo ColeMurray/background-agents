@@ -126,19 +126,21 @@ export class EnvironmentStore {
     return row ? withValidatedOwnerTeam(row) : null;
   }
 
-  /** Load an admission snapshot within D1's bound-parameter limit. */
+  /** Load an admission snapshot in one round trip, chunked within D1's bound-parameter limit. */
   async getByIds(ids: readonly string[]): Promise<EnvironmentRow[]> {
     const uniqueIds = [...new Set(ids)];
-    const rows: EnvironmentRow[] = [];
+    if (!uniqueIds.length) return [];
+    const statements: SqlStatement[] = [];
     for (let start = 0; start < uniqueIds.length; start += MAX_D1_QUERY_PARAMETERS) {
       const chunk = uniqueIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
-      const result = await this.db
-        .prepare(`SELECT * FROM environments WHERE id IN (${chunk.map(() => "?").join(", ")})`)
-        .bind(...chunk)
-        .all<EnvironmentRow>();
-      rows.push(...result.results.map(withValidatedOwnerTeam));
+      statements.push(
+        this.db
+          .prepare(`SELECT * FROM environments WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+          .bind(...chunk)
+      );
     }
-    return rows;
+    const results = await this.db.batch<EnvironmentRow>(statements);
+    return results.flatMap((result) => result.results.map(withValidatedOwnerTeam));
   }
 
   /**

@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   MEMORY_LIST_PAGE_SIZE,
-  MEMORY_SHARED_LIST_MAX_OFFSET,
   memoryScopeDisplayKey,
   type MemoryDto,
   type MemoryListScope,
@@ -59,8 +58,7 @@ export function useMemoryCollection(scope: MemoryListScope, search: string) {
     error: page.error,
     hasPreviousPage: offset > 0,
     hasNextPage: page.nextOffset !== null,
-    atOffsetLimit:
-      scope === "shared" && offset + MEMORY_LIST_PAGE_SIZE > MEMORY_SHARED_LIST_MAX_OFFSET,
+    truncated: page.truncated,
     previousPage() {
       setOffset((current) => Math.max(0, current - MEMORY_LIST_PAGE_SIZE));
     },

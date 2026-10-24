@@ -97,15 +97,18 @@ export class TeamRepositoryGrantStore {
       repoIds.map((id) => [id, []])
     );
     const ids = [...owners.keys()];
+    if (!ids.length) return owners;
+    const statements = [];
     for (let start = 0; start < ids.length; start += MAX_D1_QUERY_PARAMETERS) {
-      const rows = await prepareSql(
-        this.db,
-        sql`WITH requested(repo_id) AS (VALUES ${sql.join(
-          ids
-            .slice(start, start + MAX_D1_QUERY_PARAMETERS)
-            .map((id) => sql`(CAST(${id} AS BIGINT))`),
-          ", "
-        )})
+      statements.push(
+        prepareSql(
+          this.db,
+          sql`WITH requested(repo_id) AS (VALUES ${sql.join(
+            ids
+              .slice(start, start + MAX_D1_QUERY_PARAMETERS)
+              .map((id) => sql`(CAST(${id} AS BIGINT))`),
+            ", "
+          )})
         SELECT DISTINCT requested.repo_id, g.team_id,
           CASE WHEN t.id IS NOT NULL AND t.archived_at IS NULL THEN 1 ELSE 0 END AS team_active
         FROM requested JOIN team_repository_grants g
@@ -113,10 +116,14 @@ export class TeamRepositoryGrantStore {
             OR (g.grant_kind = 'repository' AND g.repo_external_id = requested.repo_id)
         LEFT JOIN teams t ON t.id = g.team_id
         ORDER BY requested.repo_id, g.team_id`
-      ).all<{ repo_id: number; team_id: string; team_active: number }>();
-      for (const row of rows.results)
-        owners.get(row.repo_id)!.push({ teamId: row.team_id, active: row.team_active === 1 });
+        )
+      );
     }
+    const results = await this.db.batch<{ repo_id: number; team_id: string; team_active: number }>(
+      statements
+    );
+    for (const row of results.flatMap((result) => result.results))
+      owners.get(row.repo_id)!.push({ teamId: row.team_id, active: row.team_active === 1 });
     return owners;
   }
 

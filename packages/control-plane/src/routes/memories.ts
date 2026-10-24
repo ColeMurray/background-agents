@@ -103,10 +103,7 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   const canManage = new Map<string, boolean>();
   let canCreate = false;
   if (scope === "shared") {
-    const candidates = await store.sharedPartitions({
-      status: status.data,
-      terms,
-    });
+    const candidates = await store.sharedPartitions(status.data);
     for (const access of await policy.authorizeSharedCatalog(candidates)) {
       partitions.push(access.partition);
       canManage.set(partitionId(access.partition), access.canManage);
@@ -126,6 +123,9 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
     terms,
   });
   const page = records.slice(0, limit);
+  const hasMore = records.length > limit;
+  // The All view stops paging at a fixed depth; `truncated` says matches remain past it.
+  const atDepthLimit = scope === "shared" && offset + limit > MEMORY_SHARED_LIST_MAX_OFFSET;
   const supersededBy = await store.supersededByIds(page.map((record) => record.id));
   return json({
     memories: page.map((record) =>
@@ -135,11 +135,8 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
         supersededBy.get(record.id) ?? []
       )
     ),
-    nextOffset:
-      records.length > limit &&
-      (scope !== "shared" || offset + limit <= MEMORY_SHARED_LIST_MAX_OFFSET)
-        ? offset + limit
-        : null,
+    nextOffset: hasMore && !atDepthLimit ? offset + limit : null,
+    truncated: hasMore && atDepthLimit,
     canCreate,
   });
 }

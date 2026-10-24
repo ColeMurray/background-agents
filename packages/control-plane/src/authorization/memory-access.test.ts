@@ -158,7 +158,7 @@ const outcome = (decision: MemoryManagementDecision) =>
 describe("MemoryManagementPolicy", () => {
   it("preloads environments independently of repository read permission", async () => {
     const { policy, deps } = managementPolicy(["repositories.read"]);
-    const candidates = [recordIn(api), recordIn(dev), recordIn(personal)];
+    const candidates = [api, dev, personal];
     await policy.authorizeSharedCatalog(candidates);
     expect(deps.repositoryGrants.preload).toHaveBeenCalledWith(
       authorization(["repositories.read"]),
@@ -193,19 +193,14 @@ describe("MemoryManagementPolicy", () => {
         : { kind: "allowed", effectivePermission: null, admission: {} as never }
     );
     const result = await policy.authorizeSharedCatalog([
-      recordIn(api, apiScope),
-      recordIn(dev, { type: "environment", environmentId: "dev" }),
-      recordIn({ type: "environment", environmentId: "hidden" }),
-      recordIn(personal),
+      api,
+      dev,
+      { type: "environment", environmentId: "hidden" },
+      personal,
     ]);
     expect(result).toEqual([
-      { kind: "granted", partition: api, scope: apiScope, canManage: false },
-      {
-        kind: "granted",
-        partition: dev,
-        scope: { type: "environment", environmentId: "dev" },
-        canManage: true,
-      },
+      { partition: api, canManage: false },
+      { partition: dev, canManage: true },
     ]);
     expect(deps.environments.preload).toHaveBeenCalledExactlyOnceWith(["dev", "hidden"]);
     expect(deps.repositories.resolve).not.toHaveBeenCalled();

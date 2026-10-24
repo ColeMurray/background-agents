@@ -40,6 +40,8 @@ const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
 export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
   const search = useMemorySearch();
   const collection = useMemoryCollection(scope, search.search);
+  // Creation needs a concrete scope; the All view only browses and reviews.
+  const canCreate = scope !== "shared" && collection.canCreate;
   const [panel, setPanel] = useState<MemoryPanel>(() =>
     collection.focusedId ? { kind: "history", memoryId: collection.focusedId } : NO_PANEL
   );
@@ -88,7 +90,7 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
             changePanel(NO_PANEL);
           }}
         />
-        {scope !== "shared" && collection.canCreate && (
+        {canCreate && (
           <Button type="button" size="sm" onClick={() => changePanel({ kind: "create" })}>
             New memory
           </Button>
@@ -116,7 +118,7 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
           {search.problem}
         </p>
       )}
-      {collection.atOffsetLimit && (
+      {collection.truncated && (
         <p className="text-sm text-muted-foreground">
           All-view browsing limit reached. Select a scope or narrow your search to find more
           memories.
@@ -177,7 +179,7 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
           record={record}
           panel={panel}
           busy={busy}
-          canCreate={scope !== "shared" && collection.canCreate}
+          canCreate={canCreate}
           showScope={scope === "shared"}
           onPanelChange={changePanel}
           onAction={(action, archiveNote) =>

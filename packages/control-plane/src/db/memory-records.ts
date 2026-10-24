@@ -11,6 +11,7 @@ import {
   type MemoryContent,
   type MemoryRevision,
   type MemoryScope,
+  type MemoryScopeType,
   type MemoryStatus,
   type MemoryType,
 } from "@open-inspect/shared/types/memories";
@@ -20,6 +21,7 @@ import { initialStatus } from "../memory/lifecycle";
 import {
   partitionColumns,
   partitionFromColumns,
+  partitionFromKey,
   samePartition,
   type MemoryPartition,
   type PartitionColumns,
@@ -41,6 +43,8 @@ import {
 } from "./session-memory-write-guard";
 
 const MEMORY_CHANGED = "Memory changed; reload before editing";
+/** Candidate chunks per batch when a list spans more partitions than one statement can bind. */
+const LIST_CHUNKS_PER_BATCH = 4;
 
 interface MemoryRow extends PartitionColumns, ScopeDisplayColumns {
   id: string;
@@ -144,23 +148,18 @@ export class MemoryRecordStore {
     return this.listPartitions([partition], options);
   }
 
-  /** Enumerate matching shared identities without returning unauthorized revision content. */
-  async sharedPartitions(
-    options: Pick<MemoryListOptions, "status" | "terms">
-  ): Promise<Pick<MemoryRecord, "partition" | "scope">[]> {
+  /**
+   * Shared identities holding records of `status`, read from the partition index alone. Search
+   * terms are applied later, over authorized partitions only, so no unauthorized body is scanned.
+   */
+  async sharedPartitions(status: MemoryStatus): Promise<MemoryPartition[]> {
     const rows = await prepareSql(
       this.db,
-      sql`SELECT m.partition_type, m.owner_user_id, m.repo_id, m.environment_id,
-          MIN(m.repo_owner) AS repo_owner, MIN(m.repo_name) AS repo_name
-        ${options.terms.length ? CURRENT_MEMORY : sql`FROM memories m`}
-        WHERE m.partition_type IN ('repository', 'environment') AND m.status = ${options.status}
-          AND ${revisionMatchesAllTerms(options.terms.map(likeContains))}
-        GROUP BY m.partition_type, m.owner_user_id, m.repo_id, m.environment_id`
-    ).all<PartitionColumns & ScopeDisplayColumns>();
-    return rows.results.map((row) => ({
-      partition: partitionFromColumns(row),
-      scope: scopeFromColumns(row),
-    }));
+      sql`SELECT m.partition_type, m.partition_key FROM memories m
+        WHERE m.partition_type IN ('repository', 'environment') AND m.status = ${status}
+        GROUP BY m.partition_type, m.partition_key`
+    ).all<{ partition_type: MemoryScopeType; partition_key: string }>();
+    return rows.results.map((row) => partitionFromKey(row.partition_type, row.partition_key));
   }
 
   /** Query only authorized partitions, merging bounded chunks into one globally ordered page. */
@@ -174,27 +173,41 @@ export class MemoryRecordStore {
     // Each partition binds its type and key; status, limit and offset bind three more values.
     const chunkSize = Math.floor((MAX_D1_QUERY_PARAMETERS - search.values.length - 3) / 2);
     if (partitions.length <= chunkSize) {
+      // Select the page's IDs first so the sort never carries revision bodies; only the page's
+      // own rows are joined to their content.
       const result = await prepareSql(
         this.db,
         sql`${CURRENT_MEMORY_SELECT}
-          WHERE ${inPartitions(partitions)} AND m.status = ${options.status} AND ${search}
-          ORDER BY m.updated_at DESC, m.id LIMIT ${options.limit} OFFSET ${options.offset}`
+          JOIN (SELECT m.id ${options.terms.length ? CURRENT_MEMORY : sql`FROM memories m`}
+            WHERE ${inPartitions(partitions)} AND m.status = ${options.status} AND ${search}
+            ORDER BY m.updated_at DESC, m.id LIMIT ${options.limit} OFFSET ${options.offset}
+          ) page ON page.id = m.id
+          ORDER BY m.updated_at DESC, m.id`
       ).all<MemoryRow>();
       return result.results.map(memoryFromRow);
     }
     const limit = options.offset + options.limit;
+    const statements = [];
+    for (let start = 0; start < partitions.length; start += chunkSize) {
+      statements.push(
+        prepareSql(
+          this.db,
+          sql`SELECT m.*, r.title, r.description, r.revision_number ${CURRENT_MEMORY}
+            WHERE ${inPartitions(partitions.slice(start, start + chunkSize))} AND m.status = ${options.status}
+              AND ${search}
+            ORDER BY m.updated_at DESC, m.id LIMIT ${limit}`
+        )
+      );
+    }
     // Capture metadata with the revision identity; lifecycle changes must not drop the sentinel
     // or combine new content with the selected ordering. Bodies stay out of the candidate merge.
+    // Batches share a round trip and snapshot while bounding how many candidates are held at once.
     let rows: Omit<MemoryRow, "content">[] = [];
-    for (let start = 0; start < partitions.length; start += chunkSize) {
-      const result = await prepareSql(
-        this.db,
-        sql`SELECT m.*, r.title, r.description, r.revision_number ${CURRENT_MEMORY}
-          WHERE ${inPartitions(partitions.slice(start, start + chunkSize))} AND m.status = ${options.status}
-            AND ${search}
-          ORDER BY m.updated_at DESC, m.id LIMIT ${limit}`
-      ).all<Omit<MemoryRow, "content">>();
-      rows = rows.concat(result.results);
+    for (let start = 0; start < statements.length; start += LIST_CHUNKS_PER_BATCH) {
+      const results = await this.db.batch<Omit<MemoryRow, "content">>(
+        statements.slice(start, start + LIST_CHUNKS_PER_BATCH)
+      );
+      rows = rows.concat(...results.map((result) => result.results));
       rows.sort((a, b) => b.updated_at - a.updated_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       rows = rows.slice(0, limit);
     }

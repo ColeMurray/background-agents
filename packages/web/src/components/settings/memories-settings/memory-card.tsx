@@ -45,14 +45,20 @@ export function MemoryCard({
     <article id={record.id} className="space-y-3 rounded-sm border border-border p-4">
       <div>
         <h3 className="font-medium">{record.title}</h3>
-        {showScope && (
-          <a
-            href={memorySettingsLink(record.scope, record.id)}
-            className="block break-words text-xs text-muted-foreground underline"
-          >
-            {memoryScopeLabel(record.scope)}
-          </a>
-        )}
+        {/* Repository links resolve to this All view, so only environments link to their scope. */}
+        {showScope &&
+          (record.scope.type === "environment" ? (
+            <a
+              href={memorySettingsLink(record.scope, record.id)}
+              className="block break-words text-xs text-muted-foreground underline"
+            >
+              {memoryScopeLabel(record.scope)}
+            </a>
+          ) : (
+            <p className="break-words text-xs text-muted-foreground">
+              {memoryScopeLabel(record.scope)}
+            </p>
+          ))}
         <p className="text-xs text-muted-foreground">
           {memoryTypeLabel(record.memoryType)} · Revision {record.revisionNumber} ·{" "}
           {record.authorKind === "agent" && record.authorSessionId ? (

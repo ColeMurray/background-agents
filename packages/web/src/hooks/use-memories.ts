@@ -68,6 +68,7 @@ export function useMemories(
   return {
     memories: data?.memories ?? [],
     nextOffset: data?.nextOffset ?? null,
+    truncated: data?.truncated ?? false,
     canCreate: data?.canCreate ?? false,
     loading: authStatus === "loading" || isLoading,
     error,

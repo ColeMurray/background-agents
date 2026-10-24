@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   revisions: [] as MemoryRevision[],
   canCreate: true,
   nextOffset: null as number | null,
+  truncated: false,
   collection: vi.fn(),
   canManageOwn: true,
   replaceState: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock("@/hooks/use-memories", () => ({
       memories: mocks.records,
       canCreate: mocks.canCreate,
       nextOffset: mocks.nextOffset,
+      truncated: mocks.truncated,
       loading: false,
       mutate: mocks.mutate,
     };
@@ -140,6 +142,7 @@ describe("memory management", () => {
     mocks.revisions = [];
     mocks.canCreate = true;
     mocks.nextOffset = null;
+    mocks.truncated = false;
     mocks.canManageOwn = true;
     mocks.environments = [];
     for (const mutation of [mocks.createMemory, mocks.reviseMemory, mocks.applyMemoryAction]) {
@@ -314,13 +317,25 @@ describe("memory management", () => {
       scope: { type: "repository" as const, repoOwner: "acme", repoName: "api" },
       capabilities: { canEdit: false, actions: [] },
     };
-    mocks.records = [first, second];
+    const environment = {
+      ...record,
+      id: "mem_env",
+      title: "Warm the build cache",
+      scope: { type: "environment" as const, environmentId: "env-1" },
+      capabilities: { canEdit: false, actions: [] },
+    };
+    mocks.records = [first, second, environment];
     render(<SharedMemoriesSettings />);
     expect(screen.getByRole("button", { name: "Memory scope All" })).toBeTruthy();
     expect(mocks.collection).toHaveBeenLastCalledWith("shared", "active", 0, "");
     expect(screen.queryByText("New memory")).toBeNull();
-    expect(screen.getByRole("link", { name: "acme/web" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "acme/api" })).toBeTruthy();
+    // Repository links would only reopen All, so their scope is a label; environments link out.
+    expect(screen.getByText("acme/web")).toBeTruthy();
+    expect(screen.getByText("acme/api")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "acme/web" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Environment env-1" }).getAttribute("href")).toBe(
+      "/settings?scope=environment&environmentId=env-1&tab=shared-memories&memoryId=mem_env"
+    );
     fireEvent.click(screen.getByRole("radio", { name: "Proposed" }));
     expect(mocks.collection).toHaveBeenLastCalledWith("shared", "proposed", 0, "");
     expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(1);
@@ -368,23 +383,26 @@ describe("memory management", () => {
     render(<SharedMemoriesSettings />);
     expect(screen.getByRole("button", { name: "Memory scope All" })).toBeTruthy();
     expect(screen.getByText(historical.title)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "old/group/reused" }).getAttribute("href")).toBe(
-      `/settings?scope=shared&tab=shared-memories&memoryId=${historical.id}`
-    );
+    expect(screen.getByText("old/group/reused")).toBeTruthy();
     expect(screen.getByRole("link", { name: "mem_old" }).getAttribute("href")).toBe(
       "/settings?scope=shared&tab=shared-memories&memoryId=mem_old"
     );
     expect(mocks.collection).toHaveBeenLastCalledWith("shared", "proposed", 0, "");
   });
 
-  it("explains the shared browsing cap and lets search restart from page one", async () => {
+  it("explains the shared browsing cap only when the server truncates the list", async () => {
     mocks.nextOffset = MEMORY_SHARED_LIST_MAX_OFFSET;
     const { rerender } = render(<SharedMemoriesSettings />);
     fireEvent.click(screen.getByText("Next page"));
+    // A final page at the depth limit with nothing past it is not truncated.
     mocks.nextOffset = null;
+    rerender(<SharedMemoriesSettings />);
+    expect(screen.queryByText(/All-view browsing limit reached/)).toBeNull();
+    mocks.truncated = true;
     rerender(<SharedMemoriesSettings />);
     expect(screen.getByText(/All-view browsing limit reached/)).toBeTruthy();
     expect((screen.getByText("Next page") as HTMLButtonElement).disabled).toBe(true);
+    mocks.truncated = false;
     fireEvent.change(screen.getByRole("searchbox", { name: "Search memories" }), {
       target: { value: "docker" },
     });

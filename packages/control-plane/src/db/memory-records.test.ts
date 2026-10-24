@@ -8,7 +8,64 @@ import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { MemoryRecordStore } from "./memory-records";
 import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
+
+interface MeasuredCall {
+  query: string;
+  values: unknown[];
+  columns: string[];
+  count: number;
+  batched: boolean;
+}
+
+/** Record each statement's SQL, bound values, and returned shape, including batched ones. */
+function measure(db: SqlDatabase): { db: SqlDatabase; calls: MeasuredCall[]; batches: number[] } {
+  const calls: MeasuredCall[] = [];
+  /** Statement count of each batch() call, in order. */
+  const batches: number[] = [];
+  const originals = new WeakMap<SqlStatement, { statement: SqlStatement; call: MeasuredCall }>();
+  const record = (call: MeasuredCall, rows: unknown[]) => {
+    call.columns = Object.keys((rows[0] ?? {}) as object);
+    call.count = rows.length;
+  };
+  return {
+    calls,
+    batches,
+    db: {
+      prepare(query) {
+        const statement = db.prepare(query);
+        return {
+          ...statement,
+          bind(...values) {
+            const call = { query, values, columns: [] as string[], count: 0, batched: false };
+            calls.push(call);
+            const bound = statement.bind(...values);
+            const wrapped: SqlStatement = {
+              ...bound,
+              async all<T>() {
+                const result = await bound.all<T>();
+                record(call, result.results);
+                return result;
+              },
+            };
+            originals.set(wrapped, { statement: bound, call });
+            return wrapped;
+          },
+        };
+      },
+      async batch<T>(statements: SqlStatement[]) {
+        batches.push(statements.length);
+        const entries = statements.map((statement) => originals.get(statement)!);
+        const results = await db.batch<T>(entries.map((entry) => entry.statement));
+        results.forEach((result, index) => {
+          entries[index].call.batched = true;
+          record(entries[index].call, result.results);
+        });
+        return results;
+      },
+    },
+  };
+}
 
 describe("memory management pagination", () => {
   let db: NodeSqlDatabase;
@@ -35,30 +92,7 @@ describe("memory management pagination", () => {
       updatedAt: index % 5,
     }));
     await seedSearchFacts(db, "owner", facts);
-    const calls: { query: string; values: unknown[]; columns: string[]; count: number }[] = [];
-    const measured: SqlDatabase = {
-      prepare(query) {
-        const statement = db.prepare(query);
-        return {
-          ...statement,
-          bind(...values) {
-            const call = { query, values, columns: [] as string[], count: 0 };
-            calls.push(call);
-            const bound = statement.bind(...values);
-            return {
-              ...bound,
-              async all<T>() {
-                const result = await bound.all<T>();
-                call.columns = Object.keys((result.results[0] ?? {}) as object);
-                call.count = result.results.length;
-                return result;
-              },
-            };
-          },
-        };
-      },
-      batch: (statements) => db.batch(statements),
-    };
+    const { db: measured, calls } = measure(db);
     const result = await new MemoryRecordStore(measured).listPartitions(partitions, {
       status: "active",
       offset: 120,
@@ -76,6 +110,7 @@ describe("memory management pagination", () => {
     );
     expect(candidates).toHaveLength(2);
     for (const call of candidates) {
+      expect(call.batched).toBe(true);
       expect(call.columns).toContain("current_revision_id");
       expect(call.columns).toContain("status");
       expect(call.columns).toContain("title");
@@ -85,6 +120,113 @@ describe("memory management pagination", () => {
     expect(bodies.reduce((total, call) => total + call.count, 0)).toBe(101);
     for (const call of calls)
       expect(call.values.length).toBeLessThanOrEqual(MAX_D1_QUERY_PARAMETERS);
+  });
+
+  const repositories = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      type: "repository" as const,
+      repoId: index + 1,
+    }));
+  /** Facts spread across `partitions` with frequent `updatedAt` ties broken by ID. */
+  const spreadFacts = (partitions: { type: "repository"; repoId: number }[], count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `fact-${String(index).padStart(3, "0")}`,
+      partition: partitions[(index * 7) % partitions.length],
+      title: index % 3 ? "Needle routine" : "Routine",
+      content: `Body ${index}`,
+      updatedAt: index % 4,
+    }));
+  const expectedPage = (
+    facts: ReturnType<typeof spreadFacts>,
+    options: { offset: number; limit: number; needle: boolean }
+  ) =>
+    facts
+      .filter((fact) => !options.needle || fact.title.startsWith("Needle"))
+      .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1))
+      .slice(options.offset, options.offset + options.limit)
+      .map((fact) => [fact.id, fact.content]);
+
+  it.each([
+    { partitions: 30, offset: 0, needle: false },
+    { partitions: 30, offset: 37, needle: true },
+    { partitions: 60, offset: 0, needle: false },
+    { partitions: 60, offset: 37, needle: true },
+  ])(
+    "returns the same global page through single-statement and chunked paths (%o)",
+    async ({ partitions: count, offset, needle }) => {
+      const partitions = repositories(count);
+      const facts = spreadFacts(partitions, 180);
+      await seedSearchFacts(db, "owner", facts);
+      const { db: measured, calls } = measure(db);
+      const result = await new MemoryRecordStore(measured).listPartitions(partitions, {
+        status: "active",
+        offset,
+        limit: 51,
+        terms: needle ? ["needle"] : [],
+      });
+      expect(result.map((record) => [record.id, record.content])).toEqual(
+        expectedPage(facts, { offset, limit: 51, needle })
+      );
+      // Up to one statement's worth of partitions, the page is read in a single query.
+      if (count <= 47) expect(calls).toHaveLength(1);
+      else expect(calls.length).toBeGreaterThan(1);
+    }
+  );
+
+  it("selects the single-statement page before joining revision bodies", async () => {
+    const partitions = repositories(10);
+    await seedSearchFacts(db, "owner", spreadFacts(partitions, 40));
+    const { db: measured, calls } = measure(db);
+    await new MemoryRecordStore(measured).listPartitions(partitions, {
+      status: "active",
+      offset: 20,
+      limit: 5,
+      terms: [],
+    });
+    expect(calls).toHaveLength(1);
+    // Ordering and paging happen over IDs alone; the outer query loads only the page's content.
+    expect(calls[0].query).toMatch(/JOIN \(SELECT m\.id FROM memories m\s+WHERE/);
+    expect(calls[0].count).toBe(5);
+  });
+
+  it("batches candidate chunks in bounded groups", async () => {
+    // Without search, each statement binds 48 partitions: 200 partitions make five chunks.
+    const partitions = repositories(200);
+    const facts = spreadFacts(partitions, 300);
+    await seedSearchFacts(db, "owner", facts);
+    const { db: measured, calls, batches } = measure(db);
+    const result = await new MemoryRecordStore(measured).listPartitions(partitions, {
+      status: "active",
+      offset: 0,
+      limit: 51,
+      terms: [],
+    });
+    expect(result.map((record) => [record.id, record.content])).toEqual(
+      expectedPage(facts, { offset: 0, limit: 51, needle: false })
+    );
+    expect(batches).toEqual([4, 1]);
+    expect(calls.filter((call) => call.query.startsWith("SELECT m.*")).length).toBe(5);
+  });
+
+  it("lists shared partitions with records of a status from identity alone", async () => {
+    await seedSearchFacts(db, "owner", [
+      { id: "repo-active", partition: { type: "repository", repoId: 42 } },
+      { id: "repo-active-2", partition: { type: "repository", repoId: 42 } },
+      { id: "repo-archived", partition: { type: "repository", repoId: 7 }, status: "archived" },
+      { id: "env-active", partition: { type: "environment", environmentId: "env-1" } },
+      { id: "personal-active", partition: { type: "personal", userId: "owner" } },
+    ]);
+    const partitions = await new MemoryRecordStore(db).sharedPartitions("active");
+    expect(partitions).toHaveLength(2);
+    expect(partitions).toEqual(
+      expect.arrayContaining([
+        { type: "repository", repoId: 42 },
+        { type: "environment", environmentId: "env-1" },
+      ])
+    );
+    expect(await new MemoryRecordStore(db).sharedPartitions("archived")).toEqual([
+      { type: "repository", repoId: 7 },
+    ]);
   });
 
   it.each(["archive", "edit"] as const)(
@@ -109,10 +251,10 @@ describe("memory management pagination", () => {
       const expected = await Promise.all(["a", "b", "c"].map((id) => store.get(id)));
       const prepare = db.prepare.bind(db);
       let changed = false;
-      let candidateReads = 0;
+      // Change the record after the candidate merge, just before its body is hydrated.
       const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
         const statement = prepare(query);
-        if (!query.startsWith("SELECT m.")) return statement;
+        if (!query.startsWith("SELECT id, content FROM memory_revisions")) return statement;
         return {
           ...statement,
           bind(...values) {
@@ -120,8 +262,7 @@ describe("memory management pagination", () => {
             return {
               ...bound,
               async all<T>() {
-                const result = await bound.all<T>();
-                if (++candidateReads === 2) {
+                if (!changed) {
                   changed = true;
                   const actor = { kind: "user" as const, userId: "owner", requestId: "race" };
                   if (action === "archive") await store.transition("b", "archive", "rev_b", actor);
@@ -138,7 +279,7 @@ describe("memory management pagination", () => {
                       actor
                     );
                 }
-                return result;
+                return bound.all<T>();
               },
             };
           },

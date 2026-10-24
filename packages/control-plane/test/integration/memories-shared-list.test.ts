@@ -213,7 +213,7 @@ describe("shared memory management list", () => {
     expect(rest.canCreate).toBe(false);
   });
 
-  it("bulk admits environment candidates narrowed by status/search without per-environment reads", async () => {
+  it("bulk admits environment candidates narrowed by status without per-environment reads", async () => {
     const owners = [null, "managed", "readable", "hidden"] as const;
     const facts = Array.from({ length: 250 }, (_, index) => ({
       id: `environment-${String(index).padStart(3, "0")}`,
@@ -251,27 +251,27 @@ describe("shared memory management list", () => {
       for (const search of ["", "NEEDLE 100%_"]) {
         bulk.mockClear();
         query.mockClear();
-        const matching = facts.filter(
-          (fact) => fact.status === status && (!search || fact.title === "Needle")
-        );
-        const expected = matching.filter(
-          (fact) => Number(fact.partition.environmentId.slice(5)) % 4 !== 3
+        const visible = (fact: (typeof facts)[number]) =>
+          Number(fact.partition.environmentId.slice(5)) % 4 !== 3;
+        // Candidates depend on status alone; search applies only within authorized partitions.
+        const candidates = facts.filter((fact) => fact.status === status);
+        const expected = candidates.filter(
+          (fact) => visible(fact) && (!search || fact.title === "Needle")
         );
         const result = await list(
           `scope=shared&status=${status}&search=${encodeURIComponent(search)}&limit=100`
         );
         expect(bulk).toHaveBeenCalledOnce();
         expect(bulk.mock.calls[0][0]).toEqual(
-          expect.arrayContaining(matching.map((fact) => fact.partition.environmentId))
+          expect.arrayContaining(candidates.map((fact) => fact.partition.environmentId))
         );
         expect(bulk.mock.calls[0][0]).toHaveLength(
-          matching.length + (status === "active" && !search ? 1 : 0)
+          candidates.length + (status === "active" ? 1 : 0)
         );
         expect(single).not.toHaveBeenCalled();
-        expect(query.mock.calls[0][0]).toEqual(
-          expect.arrayContaining(expected.map((fact) => fact.partition))
-        );
-        expect(query.mock.calls[0][0]).toHaveLength(expected.length);
+        const authorized = candidates.filter(visible).map((fact) => fact.partition);
+        expect(query.mock.calls[0][0]).toEqual(expect.arrayContaining(authorized));
+        expect(query.mock.calls[0][0]).toHaveLength(authorized.length);
         expect(result.memories.map((record) => record.id)).toEqual(
           [...expected]
             .reverse()
@@ -316,13 +316,19 @@ describe("shared memory management list", () => {
     const last = await list(`scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET}&limit=1`);
     expect(last.memories).toHaveLength(1);
     expect(last.nextOffset).toBeNull();
+    expect(last.truncated).toBe(true);
     expect(pages.mock.calls[0][1]).toMatchObject({
       offset: MEMORY_SHARED_LIST_MAX_OFFSET,
       limit: 2,
     });
     expect(
-      (await list(`scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET - 1}&limit=1`)).nextOffset
-    ).toBe(MEMORY_SHARED_LIST_MAX_OFFSET);
+      await list(`scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET - 1}&limit=1`)
+    ).toMatchObject({ nextOffset: MEMORY_SHARED_LIST_MAX_OFFSET, truncated: false });
+    // The final page is not truncated when nothing remains past it.
+    pages.mockResolvedValueOnce(records.slice(0, 1));
+    expect(
+      await list(`scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET}&limit=1`)
+    ).toMatchObject({ nextOffset: null, truncated: false });
     pages.mockClear();
     expect(
       (await request(`/memories?scope=shared&offset=${MEMORY_SHARED_LIST_MAX_OFFSET + 1}`)).status
@@ -335,7 +341,12 @@ describe("shared memory management list", () => {
   });
 
   it("returns an empty non-creatable aggregate and retains request validation", async () => {
-    expect(await list()).toEqual({ memories: [], nextOffset: null, canCreate: false });
+    expect(await list()).toEqual({
+      memories: [],
+      nextOffset: null,
+      truncated: false,
+      canCreate: false,
+    });
     for (const query of [
       "scope=invalid",
       "scope=shared&status=invalid",

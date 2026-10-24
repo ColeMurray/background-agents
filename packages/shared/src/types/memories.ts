@@ -321,6 +321,8 @@ export const memoryResponseSchema = z.object({ memory: memoryDtoSchema });
 export const memoryListResponseSchema = z.object({
   memories: z.array(memoryDtoSchema),
   nextOffset: z.number().int().nullable(),
+  /** More matches exist past the All view's paging depth (`MEMORY_SHARED_LIST_MAX_OFFSET`). */
+  truncated: z.boolean().default(false),
   canCreate: z.boolean(),
 });
 export type MemoryListResponse = z.infer<typeof memoryListResponseSchema>;

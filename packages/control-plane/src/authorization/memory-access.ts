@@ -93,12 +93,18 @@ const granted = (
   scope: MemoryScope,
   canManage: boolean
 ): MemoryManagementDecision => ({ kind: "granted", partition, scope, canManage });
-const denied = (denial: MemoryAccessDenial): MemoryManagementDecision => ({
+const denied = (denial: MemoryAccessDenial): DeniedDecision => ({
   kind: "denied",
   denial,
 });
 type DeniedDecision = Extract<MemoryManagementDecision, { kind: "denied" }>;
-type GrantedDecision = Extract<MemoryManagementDecision, { kind: "granted" }>;
+/** Read access to a partition and whether the principal may also manage it. */
+type PartitionAccess = { kind: "granted"; canManage: boolean } | DeniedDecision;
+/** A shared partition the principal may read, from {@link MemoryManagementPolicy.authorizeSharedCatalog}. */
+export interface SharedCatalogGrant {
+  partition: MemoryPartition;
+  canManage: boolean;
+}
 const NOT_FOUND: DeniedDecision = {
   kind: "denied",
   denial: { reason: "not_found", message: MEMORY_NOT_FOUND },
@@ -110,7 +116,7 @@ const REPOSITORY_READ_REQUIRED: DeniedDecision = {
 
 function admissionDenial(
   outcome: Exclude<OwnedResourceAdmissionOutcome, { kind: "allowed" }>
-): MemoryManagementDecision {
+): DeniedDecision {
   const { response } = outcome;
   return denied({
     reason: outcome.status === 404 ? "not_found" : "forbidden",
@@ -119,7 +125,7 @@ function admissionDenial(
   });
 }
 
-function grantDenial(repository: string): MemoryManagementDecision {
+function grantDenial(repository: string): DeniedDecision {
   return denied({
     reason: "forbidden",
     message: REPOSITORY_GRANT_REQUIRED.message,
@@ -140,24 +146,28 @@ export class MemoryManagementPolicy {
 
   /** Admit shared catalog identities in bulk using one request-local admission snapshot. */
   async authorizeSharedCatalog(
-    candidates: readonly Pick<MemoryRecord, "partition" | "scope">[]
-  ): Promise<GrantedDecision[]> {
-    const shared = candidates.filter((candidate) => candidate.partition.type !== "personal");
-    const partitions = shared.map((candidate) => candidate.partition);
-    await this.deps.environments.preload(
-      partitions
-        .filter((partition) => partition.type === "environment")
-        .map((partition) => partition.environmentId)
-    );
-    if (this.deps.authorization && this.can("repositories.read"))
-      await this.deps.repositoryGrants.preload(
-        this.deps.authorization,
-        partitions.filter((partition) => partition.type === "repository")
-      );
-    const admitted: GrantedDecision[] = [];
-    for (const candidate of shared) {
-      const decision = await this.authorizeRecord(candidate, "read");
-      if (decision.kind === "granted") admitted.push(decision);
+    partitions: readonly MemoryPartition[]
+  ): Promise<SharedCatalogGrant[]> {
+    const shared = partitions.filter((partition) => partition.type !== "personal");
+    const authorization = this.deps.authorization;
+    await Promise.all([
+      this.deps.environments.preload(
+        shared.flatMap((partition) =>
+          partition.type === "environment" ? [partition.environmentId] : []
+        )
+      ),
+      authorization && this.can("repositories.read")
+        ? this.deps.repositoryGrants.preload(
+            authorization,
+            shared.filter((partition) => partition.type === "repository")
+          )
+        : undefined,
+    ]);
+    const admitted: SharedCatalogGrant[] = [];
+    for (const partition of shared) {
+      // Denials are dropped, so no display scope is needed to describe them.
+      const access = await this.partitionAccess(partition);
+      if (access.kind === "granted") admitted.push({ partition, canManage: access.canManage });
     }
     return admitted;
   }
@@ -191,8 +201,9 @@ export class MemoryManagementPolicy {
     scope: MemoryScope,
     mode: "read" | "write"
   ): Promise<MemoryManagementDecision> {
-    const decision = await this.partitionAccess(partition, scope);
-    if (decision.kind === "denied" || mode === "read" || decision.canManage) return decision;
+    const access = await this.partitionAccess(partition, scope);
+    if (access.kind === "denied") return access;
+    if (mode === "read" || access.canManage) return granted(partition, scope, access.canManage);
     return denied({
       reason: "forbidden",
       message: `${SCOPE_LABELS[partition.type]} memory management permission required`,
@@ -239,16 +250,16 @@ export class MemoryManagementPolicy {
     }
   }
 
-  /** The principal's read/manage access to a partition; `scope` is for display only. */
+  /** The principal's read/manage access to a partition; `scope` only labels denials. */
   private partitionAccess(
     partition: MemoryPartition,
-    scope: MemoryScope
-  ): Promise<MemoryManagementDecision> {
+    scope?: MemoryScope
+  ): Promise<PartitionAccess> {
     switch (partition.type) {
       case "personal":
-        return this.personalAccess(partition, scope);
+        return this.personalAccess(partition);
       case "environment":
-        return this.environmentAccess(partition, scope);
+        return this.environmentAccess(partition);
       case "repository":
         return this.repositoryAccess(partition, scope);
       default:
@@ -258,40 +269,37 @@ export class MemoryManagementPolicy {
 
   /** Personal stores are owner-only, even for administrators and collaborators. */
   private async personalAccess(
-    partition: Extract<MemoryPartition, { type: "personal" }>,
-    scope: MemoryScope
-  ): Promise<MemoryManagementDecision> {
+    partition: Extract<MemoryPartition, { type: "personal" }>
+  ): Promise<PartitionAccess> {
     if (partition.userId !== this.deps.userId) return NOT_FOUND;
     if (!this.can("memories.manage_own"))
       return denied({ reason: "forbidden", message: "Personal memory permission required" });
-    return granted(partition, scope, true);
+    return { kind: "granted", canManage: true };
   }
 
   private async environmentAccess(
-    partition: Extract<MemoryPartition, { type: "environment" }>,
-    scope: MemoryScope
-  ): Promise<MemoryManagementDecision> {
+    partition: Extract<MemoryPartition, { type: "environment" }>
+  ): Promise<PartitionAccess> {
     const read = await this.deps.environments.evaluate(partition.environmentId, "read");
     if (read.kind !== "allowed") return admissionDenial(read);
     const manage = await this.deps.environments.evaluate(partition.environmentId, "manage");
-    return granted(
-      partition,
-      scope,
-      manage.kind === "allowed" && this.can("environments.settings.manage")
-    );
+    return {
+      kind: "granted",
+      canManage: manage.kind === "allowed" && this.can("environments.settings.manage"),
+    };
   }
 
   /** Repository grants are evaluated by the stable repository ID. */
   private async repositoryAccess(
     partition: RepositoryPartition,
-    scope: MemoryScope
-  ): Promise<MemoryManagementDecision> {
+    scope?: MemoryScope
+  ): Promise<PartitionAccess> {
     const authorization = this.deps.authorization;
     if (!authorization || !this.can("repositories.read")) return REPOSITORY_READ_REQUIRED;
     const target = [partition];
     if (await this.deps.repositoryGrants.ungrantedRepository(authorization, target))
       return grantDenial(
-        scope.type === "repository"
+        scope?.type === "repository"
           ? `${scope.repoOwner}/${scope.repoName}`
           : `repository ${partition.repoId}`
       );
@@ -300,7 +308,7 @@ export class MemoryManagementPolicy {
       !(await this.deps.repositoryGrants.ungrantedRepository(authorization, target, {
         requireLead: true,
       }));
-    return granted(partition, scope, canManage);
+    return { kind: "granted", canManage };
   }
 
   private can(permission: PermissionId): boolean {
