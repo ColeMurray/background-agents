@@ -10,6 +10,7 @@ import { CollapsedSidebarControls, useSidebarContext } from "@/components/sideba
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
 import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
+import { AutomationDetailSkeleton } from "@/components/automations/automation-detail-skeleton";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
 
-  // Deletion evicts the cached automation before navigation; keep the spinner up
+  // Deletion evicts the cached automation before navigation; keep the skeleton up
   // meanwhile instead of flashing "not found".
   const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
@@ -62,11 +63,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   };
 
   if (loading || (deleting && !automation)) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-      </div>
-    );
+    return <AutomationDetailSkeleton />;
   }
 
   if (!automation) {

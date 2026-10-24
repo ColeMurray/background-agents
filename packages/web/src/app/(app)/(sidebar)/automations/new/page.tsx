@@ -7,6 +7,7 @@ import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
+import { AutomationFormSkeleton } from "@/components/automations/automation-form-skeleton";
 import { WebhookConfig } from "@/components/automations/webhook-config";
 import { automationTemplates } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
@@ -195,13 +196,7 @@ function NewAutomationContent() {
 
 export default function NewAutomationPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="h-full flex items-center justify-center">
-          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-        </div>
-      }
-    >
+    <Suspense fallback={<AutomationFormSkeleton />}>
       <NewAutomationContent />
     </Suspense>
   );

@@ -18,11 +18,16 @@ afterEach(cleanup);
 let search = "";
 let enabledModelsValue: string[] = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
 let canCreate = true;
+/** Suspends search-param reads, as Next.js does before the params resolve. */
+let suspendSearchParams = false;
 const replace = vi.fn();
 const push = vi.fn();
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(search),
+  useSearchParams: () => {
+    if (suspendSearchParams) throw new Promise(() => {});
+    return new URLSearchParams(search);
+  },
   useRouter: () => ({ push, replace }),
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -107,6 +112,7 @@ beforeEach(() => {
   search = "";
   enabledModelsValue = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
   canCreate = true;
+  suspendSearchParams = false;
   replace.mockReset();
   push.mockReset();
   vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
@@ -125,6 +131,16 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
   await user.click(screen.getByRole("combobox", { name: "Team" }));
   await user.click(await screen.findByRole("option", { name }));
 }
+
+describe("NewAutomationPage loading", () => {
+  it("shows the form skeleton while search params suspend", () => {
+    suspendSearchParams = true;
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+});
 
 describe("NewAutomationPage template pre-fill", () => {
   it("requires an explicit team for the auto-review replacement even when workspace creation is allowed", async () => {

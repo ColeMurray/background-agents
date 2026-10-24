@@ -9,6 +9,7 @@ import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
+import { AutomationFormSkeleton } from "@/components/automations/automation-form-skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -72,11 +73,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
   };
 
   if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-      </div>
-    );
+    return <AutomationFormSkeleton />;
   }
 
   if (!automation) {
