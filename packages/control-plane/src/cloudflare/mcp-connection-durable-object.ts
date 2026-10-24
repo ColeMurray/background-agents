@@ -5,6 +5,7 @@ import { requireMcpOAuthEncryptionKey } from "../env-validation";
 import type { McpBrokerCall, McpBrokerCallResult } from "../mcp/broker-contract";
 import { collectCredentialValues, containsCredentialValue } from "../mcp/credential-values";
 import { assertMcpEgress } from "../mcp/egress-policy";
+import { validateMcpRemoteUrl } from "../mcp/remote-url-policy";
 import {
   D1McpOAuthStorage,
   EncryptedMcpOAuthClientProvider,
@@ -482,20 +483,46 @@ export class McpConnectionDO extends DurableObject<McpConnectionBindings> {
    * authorization attempt and a reviewed read share one path.
    */
   private async ensureServerRegistered(connectionId: string): Promise<string> {
-    if (this.mcp.mcpConnections[connectionId]) return connectionId;
     // eslint-disable-next-line no-restricted-syntax -- the broker re-reads the D1 connection authority on every use
     const row = await this.env.DB.prepare(
-      `SELECT endpoint_url, endpoint_host, server_name FROM mcp_connections WHERE id = ?`
+      `SELECT c.endpoint_url, c.endpoint_host, c.server_name, c.server_revision,
+              s.revision AS current_revision, s.url AS current_url, s.enabled AS server_enabled
+       FROM mcp_connections c
+       JOIN mcp_servers s ON s.id = c.server_id
+       WHERE c.id = ?`
     )
       .bind(connectionId)
-      .first<{ endpoint_url: string; endpoint_host: string; server_name: string }>();
+      .first<{
+        endpoint_url: string;
+        endpoint_host: string;
+        server_name: string;
+        server_revision: number;
+        current_revision: number;
+        current_url: string | null;
+        server_enabled: number;
+      }>();
     if (!row) throw new Error("MCP connection is not authorized by D1");
+    if (
+      row.server_enabled !== 1 ||
+      row.server_revision !== row.current_revision ||
+      !row.current_url
+    ) {
+      throw new Error("MCP connection no longer matches its reviewed server");
+    }
+    const currentEndpoint = validateMcpRemoteUrl(row.current_url);
+    if (
+      currentEndpoint.endpointUrl !== row.endpoint_url ||
+      currentEndpoint.endpointHost !== row.endpoint_host
+    ) {
+      throw new Error("MCP connection no longer matches its reviewed server");
+    }
     // The endpoint is checked again here, at the moment the transport is
     // about to open it: a stored endpoint is not the reviewed endpoint if it
     // no longer matches the host the operator reviewed, if it is not HTTPS,
     // if it carries credentials, or if its host is a literal internal
     // address.
     assertMcpEgress({ endpointHost: row.endpoint_host }, row.endpoint_url);
+    if (this.mcp.mcpConnections[connectionId]) return connectionId;
     await this.mcp.registerServer(connectionId, {
       url: row.endpoint_url,
       name: row.server_name,

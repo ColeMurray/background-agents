@@ -108,6 +108,53 @@ export class CrossSessionReceiptStore {
   }
 
   /**
+   * Atomically claim one receipt while enforcing the operation's fan-out cap.
+   *
+   * The subquery and insert are one SQLite statement, so concurrent tool calls
+   * cannot all pass a stale count before recording their receipts.
+   */
+  async createWithinFanOutLimit(
+    receipt: CrossSessionReceiptRecord,
+    limit: number
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO cross_session_receipts
+           (id, source_session_id, target_session_id, operation_id, human_actor_id,
+            agent_conversation_id, source_task_id, depth, idempotency_key, content_sha256, status,
+            target_message_id, rejection_reason, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE (
+           SELECT COUNT(*) FROM cross_session_receipts
+           WHERE source_session_id = ? AND operation_id = ?
+         ) < ?
+         ON CONFLICT (source_session_id, idempotency_key) DO NOTHING`
+      )
+      .bind(
+        receipt.id,
+        receipt.sourceSessionId,
+        receipt.targetSessionId,
+        receipt.operationId,
+        receipt.humanActorId,
+        receipt.agentConversationId,
+        receipt.sourceTaskId,
+        receipt.depth,
+        receipt.idempotencyKey,
+        receipt.contentSha256,
+        receipt.status,
+        receipt.targetMessageId,
+        receipt.rejectionReason,
+        receipt.createdAt,
+        receipt.updatedAt,
+        receipt.sourceSessionId,
+        receipt.operationId,
+        limit
+      )
+      .run();
+    return result.meta.changes === 1;
+  }
+
+  /**
    * One receipt by its id.
    *
    * The target reads the receipt before it accepts a delivery, so the
@@ -124,23 +171,6 @@ export class CrossSessionReceiptStore {
       .bind(id)
       .first<ReceiptRow>();
     return row ? toRecord(row) : null;
-  }
-
-  /**
-   * How deep the message chain of one turn already is.
-   *
-   * A message that arrived from another session carries its depth; a message
-   * that started here has none.
-   */
-  async depthForOperation(sourceSessionId: string, operationId: string): Promise<number> {
-    const row = await this.db
-      .prepare(
-        `SELECT MAX(depth) AS depth FROM cross_session_receipts
-         WHERE source_session_id = ? AND operation_id = ?`
-      )
-      .bind(sourceSessionId, operationId)
-      .first<{ depth: number | null }>();
-    return row?.depth ?? 0;
   }
 
   /** How many messages one turn already produced in this session. */

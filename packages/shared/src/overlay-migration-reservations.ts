@@ -32,6 +32,8 @@ export type MigrationStore = "session_do" | "pi_do" | "d1";
 
 export const PI_DO_OUTBOX_MIGRATION_ID = 1;
 export const PI_DO_REPOSITORY_DIFF_OUTBOX_MIGRATION_ID = 2;
+export const PI_DO_TRUSTED_USAGE_MIGRATION_ID = 3;
+export const PI_DO_TURN_AUTHORITY_MIGRATION_ID = 4;
 /**
  * The session-DO migration the Pi result receipts took.
  *
@@ -109,6 +111,18 @@ export const MIGRATION_RESERVATIONS = [
     version: PI_DO_REPOSITORY_DIFF_OUTBOX_MIGRATION_ID,
     feature: "repositoryEditing",
     purpose: "Pi repository diff publication outbox",
+  },
+  {
+    store: "pi_do",
+    version: PI_DO_TRUSTED_USAGE_MIGRATION_ID,
+    feature: "coreAuthority",
+    purpose: "Pi trusted usage accounting",
+  },
+  {
+    store: "pi_do",
+    version: PI_DO_TURN_AUTHORITY_MIGRATION_ID,
+    feature: "coreAuthority",
+    purpose: "Pi turn deadlines and action ceilings",
   },
   {
     store: "session_do",

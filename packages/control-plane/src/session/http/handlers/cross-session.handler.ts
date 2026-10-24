@@ -45,6 +45,8 @@ export interface CrossSessionBridge {
   operationActor(operationId: string): string | null;
   /** Whether the current operation belongs to this session. */
   operationBelongsToSession(operationId: string): boolean;
+  /** The incoming message's persisted hop depth, or null when it originated here. */
+  operationDepth(operationId: string): number | null;
   /** Record the send on the source session's own timeline. */
   recordSend(input: {
     operationId: string;
@@ -150,22 +152,9 @@ export class CrossSessionHandler {
       );
     }
 
-    // One turn may reach only so many other sessions. The count is what this
-    // turn already produced, so a retry of the same request does not consume
-    // another slot.
-    const produced = await bridge.receipts.countForOperation(sourceSessionId, operationId);
-    if (produced >= MAX_CROSS_SESSION_FAN_OUT) {
-      return Response.json(
-        {
-          error: "This turn already reached the maximum number of other sessions",
-          code: "cross_session_fan_out_exceeded",
-        },
-        { status: 409 }
-      );
-    }
     // A message may only travel so far. The depth comes from the message
     // that started this turn, so a chain of agents cannot ping-pong forever.
-    const depth = await bridge.receipts.depthForOperation(sourceSessionId, operationId);
+    const depth = (bridge.operationDepth(operationId) ?? -1) + 1;
     if (depth >= MAX_CROSS_SESSION_DEPTH) {
       return Response.json(
         {
@@ -194,7 +183,13 @@ export class CrossSessionHandler {
       updatedAt: Date.now(),
     };
     if (!existing) {
-      const created = await bridge.receipts.create(receipt);
+      // The fan-out check and receipt insert are one D1 statement. Pi may run
+      // independent tool calls concurrently, so a count followed by an insert
+      // would let every caller observe the same stale count.
+      const created = await bridge.receipts.createWithinFanOutLimit(
+        receipt,
+        MAX_CROSS_SESSION_FAN_OUT
+      );
       if (!created) {
         // Another attempt claimed the same key. Its receipt is the truth, and
         // this attempt does not deliver a second copy.
@@ -204,7 +199,10 @@ export class CrossSessionHandler {
         );
         if (!raced) {
           return Response.json(
-            { error: "The cross-session receipt could not be claimed" },
+            {
+              error: "This turn already reached the maximum number of other sessions",
+              code: "cross_session_fan_out_exceeded",
+            },
             { status: 409 }
           );
         }

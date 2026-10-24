@@ -195,17 +195,17 @@ export class MessageRepository {
    * A message that arrived from another session carries its depth. A message
    * that started here has none, so it has travelled no hops at all.
    */
-  getMessageCrossSessionDepth(messageId: string): number {
+  getMessageCrossSessionDepth(messageId: string): number | null {
     const raw = this.sql
       .exec("SELECT origin_context FROM messages WHERE id = ?", messageId)
       .toArray()[0];
     const originContext = (raw as { origin_context?: string | null } | undefined)?.origin_context;
-    if (!originContext) return 0;
+    if (!originContext) return null;
     try {
       const parsed = crossSessionOriginSchema.safeParse(JSON.parse(originContext));
-      return parsed.success ? parsed.data.depth : 0;
+      return parsed.success ? parsed.data.depth : null;
     } catch {
-      return 0;
+      return null;
     }
   }
 

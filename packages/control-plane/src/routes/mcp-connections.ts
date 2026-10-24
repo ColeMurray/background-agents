@@ -144,7 +144,11 @@ async function authorizeConnection(
     // That is a refusal the owner can act on, so it is a 400 with the
     // reason, not a crash.
     const message = errorValue instanceof Error ? errorValue.message : "";
-    if (message.includes("MCP endpoint") || message.includes("MCP transport")) {
+    if (
+      message.includes("MCP endpoint") ||
+      message.includes("MCP transport") ||
+      message.includes("MCP connection no longer matches")
+    ) {
       return error(message, 400);
     }
     throw errorValue;

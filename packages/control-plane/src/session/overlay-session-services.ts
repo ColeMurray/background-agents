@@ -333,6 +333,7 @@ export function createOverlaySessionServices(context: SessionExtensionServicesCo
       operationActor: (operationId) => messageRepository.getMessageHumanActor(operationId),
       operationBelongsToSession: (operationId) =>
         messageRepository.getMessageById(operationId) !== null,
+      operationDepth: (operationId) => messageRepository.getMessageCrossSessionDepth(operationId),
       recordSend: (input) => {
         eventRepository.createEvent({
           id: `cross-session:${input.receiptId}`,

@@ -21,6 +21,7 @@ import type {
   McpServerMetadata,
 } from "@open-inspect/shared/types/integrations";
 import type { SqlDatabase } from "../db/sql-database";
+import { validateMcpRemoteUrl } from "../mcp/remote-url-policy";
 
 /** The repositories a session holds. */
 export interface McpGrantRepositories {
@@ -78,6 +79,23 @@ export async function evaluateMcpGrantScope(
   if (!server) return { kind: "denied", reason: "MCP server not found" };
   if (!server.enabled) {
     return { kind: "denied", reason: "This MCP server is not available to this session" };
+  }
+  if (connection.serverRevision !== server.revision || !server.url) {
+    return { kind: "denied", reason: "This MCP connection no longer matches its reviewed server" };
+  }
+  try {
+    const endpoint = validateMcpRemoteUrl(server.url);
+    if (
+      endpoint.endpointUrl !== connection.endpointUrl ||
+      endpoint.endpointHost !== connection.endpointHost
+    ) {
+      return {
+        kind: "denied",
+        reason: "This MCP connection no longer matches its reviewed server",
+      };
+    }
+  } catch {
+    return { kind: "denied", reason: "This MCP connection no longer matches its reviewed server" };
   }
 
   const scopes = server.repoScopes;

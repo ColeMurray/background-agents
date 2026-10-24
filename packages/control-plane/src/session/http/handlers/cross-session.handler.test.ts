@@ -53,7 +53,6 @@ function harness(
         }
         return null;
       },
-      depthForOperation: async () => options.depth ?? 0,
       findById: async (id: string) => {
         for (const receipt of receipts.values()) {
           if (receipt.id === id) return receipt;
@@ -69,7 +68,18 @@ function harness(
         }
         return total;
       },
-      create: async (receipt: typeof receipts extends Map<string, infer V> ? V : never) => {
+      createWithinFanOutLimit: async (
+        receipt: typeof receipts extends Map<string, infer V> ? V : never,
+        limit: number
+      ) => {
+        const produced = [...receipts.values()].filter(
+          (candidate) =>
+            candidate.sourceSessionId === receipt.sourceSessionId &&
+            candidate.operationId === receipt.operationId
+        ).length;
+        if ((options.fanOut ?? produced) >= limit || receipts.has(receipt.idempotencyKey)) {
+          return false;
+        }
         receipts.set(receipt.idempotencyKey, receipt);
         return true;
       },
@@ -98,6 +108,7 @@ function harness(
       options.decision ?? { kind: "allowed", row: {} as never, actorId: "user-1" },
     authorizeSource: async () => options.sourceDecision ?? { kind: "allowed" },
     operationBelongsToSession: () => true,
+    operationDepth: () => options.depth ?? null,
     recordSend: vi.fn(),
     deliver,
     operationActor: () => (options.actorId === undefined ? "user-1" : options.actorId),
@@ -226,6 +237,15 @@ describe("CrossSessionHandler", () => {
       "session-2",
       expect.objectContaining({ content: request.content })
     );
+  });
+
+  it("increments depth from the incoming message provenance", async () => {
+    const h = harness({ depth: 1 });
+
+    const response = await h.handler.outbound(outboundRequest());
+
+    expect(response.status).toBe(200);
+    expect([...h.receipts.values()][0]?.depth).toBe(2);
   });
 
   it("refuses a new message when the session capability is off", async () => {

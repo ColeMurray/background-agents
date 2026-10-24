@@ -728,12 +728,35 @@ describe("personal MCP connections API", () => {
     // reviewed one.
     expect(response.status).toBe(400);
     const body = await response.text();
-    expect(body).toMatch(/exact configured host|private/);
+    expect(body).toMatch(/no longer matches|exact configured host|private/);
     // The transport was never opened: the connection is still staged.
     const status = await env.DB.prepare("SELECT status FROM mcp_connections WHERE id = ?")
       .bind(connection.id)
       .first<{ status: string }>();
     expect(status?.status).toBe("foundation_staged");
+  });
+
+  it("revokes a connection when its reviewed server endpoint changes", async () => {
+    const server = await createRemoteServer();
+    const created = await serviceFetch("https://test.local/mcp-connections", {
+      method: "POST",
+      body: JSON.stringify({ serverId: server.id }),
+    });
+    const connection = await created.json<McpConnectionMetadata>();
+
+    await env.DB.prepare("UPDATE mcp_servers SET revision = revision + 1, url = ? WHERE id = ?")
+      .bind("https://replacement.example.com/mcp", server.id)
+      .run();
+
+    const response = await serviceFetch(
+      `https://test.local/mcp-connections/${connection.id}/authorize`,
+      { method: "POST", body: JSON.stringify({}) }
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain(
+      "MCP connection no longer matches its reviewed server"
+    );
   });
 
   it("refuses to let anybody but the owner authorize a connection", async () => {
