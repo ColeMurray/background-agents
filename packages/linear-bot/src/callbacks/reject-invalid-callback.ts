@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { isSignedCallbackPayload, verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import { getCallbackAuthRejection } from "@open-inspect/shared/callback-auth";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 
@@ -18,36 +18,22 @@ export async function rejectInvalidCallback(
   payload: unknown,
   logContext?: { path: string; traceId: string; startTime: number; sessionId?: string }
 ): Promise<Response | null> {
-  if (!c.env.SERVICE_AUTH_SECRET) {
-    if (logContext) {
-      log.error("http.request", {
-        trace_id: logContext.traceId,
-        http_path: logContext.path,
-        http_status: 500,
-        outcome: "error",
-        reject_reason: "secret_not_configured",
-        duration_ms: Date.now() - logContext.startTime,
-      });
-    }
-    return c.json({ error: "not configured" }, 500);
+  const rejection = await getCallbackAuthRejection(payload, c.env);
+  if (!rejection) return null;
+  if (logContext) {
+    const fields = {
+      trace_id: logContext.traceId,
+      http_path: logContext.path,
+      http_status: rejection.status,
+      outcome: rejection.status === 500 ? "error" : "rejected",
+      reject_reason: rejection.reason,
+      ...(rejection.status === 401 && logContext.sessionId !== undefined
+        ? { session_id: logContext.sessionId }
+        : {}),
+      duration_ms: Date.now() - logContext.startTime,
+    };
+    if (rejection.status === 500) log.error("http.request", fields);
+    else log.warn("http.request", fields);
   }
-
-  const authentic =
-    isSignedCallbackPayload(payload) && (await verifyCallbackFromControlPlane(payload, c.env));
-  if (!authentic) {
-    if (logContext) {
-      log.warn("http.request", {
-        trace_id: logContext.traceId,
-        http_path: logContext.path,
-        http_status: 401,
-        outcome: "rejected",
-        reject_reason: "invalid_signature",
-        ...(logContext.sessionId !== undefined ? { session_id: logContext.sessionId } : {}),
-        duration_ms: Date.now() - logContext.startTime,
-      });
-    }
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  return null;
+  return c.json({ error: rejection.error }, rejection.status);
 }

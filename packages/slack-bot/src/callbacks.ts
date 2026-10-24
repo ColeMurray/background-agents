@@ -3,7 +3,8 @@
  */
 
 import { postEphemeral, postMessage } from "@open-inspect/shared/slack";
-import { TOKEN_VALIDITY_MS, verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
+import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
+import { getCallbackAuthRejection } from "@open-inspect/shared/callback-auth";
 import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
@@ -140,35 +141,21 @@ async function rejectInvalidCallback(
 ): Promise<Response | null> {
   const { path, traceId, startTime } = opts;
 
-  if (!c.env.SERVICE_AUTH_SECRET) {
-    log.error("http.request", {
-      trace_id: traceId,
-      http_method: "POST",
-      http_path: path,
-      http_status: 500,
-      outcome: "error",
-      reject_reason: "secret_not_configured",
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "not configured" }, 500);
-  }
-
-  const authentic = await verifyCallbackFromControlPlane(payload, c.env);
-  if (!authentic) {
-    log.warn("http.request", {
-      trace_id: traceId,
-      http_method: "POST",
-      http_path: path,
-      http_status: 401,
-      outcome: "rejected",
-      reject_reason: "invalid_signature",
-      session_id: payload.sessionId,
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "unauthorized" }, 401);
-  }
-
-  return null;
+  const rejection = await getCallbackAuthRejection(payload, c.env);
+  if (!rejection) return null;
+  const fields = {
+    trace_id: traceId,
+    http_method: "POST",
+    http_path: path,
+    http_status: rejection.status,
+    outcome: rejection.status === 500 ? "error" : "rejected",
+    reject_reason: rejection.reason,
+    ...(rejection.status === 401 ? { session_id: payload.sessionId } : {}),
+    duration_ms: Date.now() - startTime,
+  };
+  if (rejection.status === 500) log.error("http.request", fields);
+  else log.warn("http.request", fields);
+  return c.json({ error: rejection.error }, rejection.status);
 }
 
 function rejectInvalidPayload(

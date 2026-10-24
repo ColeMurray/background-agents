@@ -29,6 +29,9 @@ import {
   type OutboundServiceCredential,
 } from "../service-auth";
 
+import { toolCallFilePath } from "./tool-status";
+
+export { toolCallFilePath } from "./tool-status";
 export type { ControlPlaneFetcher };
 
 /** Failed purpose-protected reads must never fall back to previously collected content. */
@@ -420,21 +423,6 @@ function isArtifactInEventRange(
 ): boolean {
   if (!range) return false;
   return createdAt >= range.start && createdAt <= range.end;
-}
-
-/**
- * Argument keys that name the file a tool works on, across harnesses: Claude
- * Agent sends `file_path`, OpenCode sends `filePath`, and MCP-style tools vary.
- */
-const TOOL_CALL_FILE_ARG_KEYS = ["file_path", "filePath", "filepath", "path", "file"] as const;
-
-/** The file a tool call targets, whichever harness named the argument. */
-export function toolCallFilePath(args: Record<string, unknown>): string | undefined {
-  for (const key of TOOL_CALL_FILE_ARG_KEYS) {
-    const value = args[key];
-    if (typeof value === "string" && value) return value;
-  }
-  return undefined;
 }
 
 /**
