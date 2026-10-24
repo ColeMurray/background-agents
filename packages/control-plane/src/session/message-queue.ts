@@ -630,14 +630,15 @@ export class SessionMessageQueue {
     const bootPrompt = this.messageRepository.getNextPendingMessage();
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
-    if (!(await termination)) return;
+    const outcome = await termination;
+    if (outcome === "not_terminated") return;
     if (bootPrompt && this.sandboxLifecycle.isCircuitBreakerOpen()) {
       // The breaker would refuse the replacement and leave the prompt pending
       // with its caller never told, so fail it as the connecting watchdog does.
       await this.failPendingMessage(bootPrompt.id, reason);
       return;
     }
-    await this.executionStop.resumeAfterSandboxTermination();
+    if (outcome === "terminated") await this.executionStop.resumeAfterSandboxTermination();
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */

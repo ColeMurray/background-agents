@@ -19,6 +19,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import type { FatalTerminationOutcome } from "../sandbox/lifecycle/manager";
 import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
@@ -236,7 +237,9 @@ function buildQueue(
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     onPromptDispatched: vi.fn(() => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
-    terminateFailedSandbox: vi.fn(async () => true),
+    terminateFailedSandbox: vi.fn(
+      async (_reason: string) => "terminated" as FatalTerminationOutcome
+    ),
     isCircuitBreakerOpen: vi.fn((_now?: number) => false),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
@@ -2339,7 +2342,7 @@ describe("SessionMessageQueue", () => {
 
   it("redrives a pending prompt after fatal sandbox termination completes", async () => {
     const h = buildQueue();
-    let resolveTermination!: (terminated: boolean) => void;
+    let resolveTermination!: (outcome: FatalTerminationOutcome) => void;
     h.sandboxLifecycle.terminateFailedSandbox.mockReturnValue(
       new Promise((resolve) => {
         resolveTermination = resolve;
@@ -2351,7 +2354,7 @@ describe("SessionMessageQueue", () => {
     await Promise.resolve();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
 
-    resolveTermination(true);
+    resolveTermination("terminated");
     await handling;
     await h.backgroundTasks.settle();
 
@@ -2359,44 +2362,65 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
   });
 
-  it("fails the boot prompt instead of redriving once the circuit breaker is open", async () => {
+  it.each(["terminated", "stop_failed"] as const)(
+    "fails the boot prompt instead of redriving once the circuit breaker is open (%s)",
+    async (outcome) => {
+      const h = buildQueue();
+      const pending = createMessage({ id: "msg-pending", status: "pending" });
+      h.repository.getNextPendingMessage.mockReturnValue(pending);
+      h.repository.getMessageById.mockReturnValue(pending);
+      h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue(outcome);
+      h.sandboxLifecycle.isCircuitBreakerOpen.mockReturnValue(true);
+
+      await h.queue.handleFatalSandboxFailure("git sync failed");
+      await h.backgroundTasks.settle();
+
+      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: "msg-pending",
+          success: false,
+          error: "git sync failed",
+        }),
+        expect.any(Number),
+        "pending"
+      );
+      expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+        "msg-pending",
+        false,
+        "git sync failed"
+      );
+      expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("neither fails nor redrives a pending prompt when a stop failed under a closed breaker", async () => {
     const h = buildQueue();
-    const pending = createMessage({ id: "msg-pending", status: "pending" });
-    h.repository.getNextPendingMessage.mockReturnValue(pending);
-    h.repository.getMessageById.mockReturnValue(pending);
-    h.sandboxLifecycle.isCircuitBreakerOpen.mockReturnValue(true);
-
-    await h.queue.handleFatalSandboxFailure("git sync failed");
-    await h.backgroundTasks.settle();
-
-    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "msg-pending",
-        success: false,
-        error: "git sync failed",
-      }),
-      expect.any(Number),
-      "pending"
-    );
-    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
-      "msg-pending",
-      false,
-      "git sync failed"
-    );
-    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
-  });
-
-  it("leaves a pending prompt alone when the fatal report terminated nothing", async () => {
-    const h = buildQueue();
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue(false);
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("stop_failed");
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
 
     await h.queue.handleFatalSandboxFailure("Sandbox crashed");
     await h.backgroundTasks.settle();
 
-    expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "leaves a pending prompt alone when the fatal report terminated nothing (breaker open: %s)",
+    async (breakerOpen) => {
+      const h = buildQueue();
+      h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("not_terminated");
+      h.sandboxLifecycle.isCircuitBreakerOpen.mockReturnValue(breakerOpen);
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
+
+      await h.queue.handleFatalSandboxFailure("Sandbox crashed");
+      await h.backgroundTasks.settle();
+
+      expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+    }
+  );
 
   describe("enqueuePromptFromApi", () => {
     it("returns the prompt it already queued for a client request id it has seen", async () => {

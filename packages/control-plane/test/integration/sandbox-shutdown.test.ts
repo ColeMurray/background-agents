@@ -1663,7 +1663,7 @@ describe("unconfirmed checkpoint across a Durable Object reset", () => {
     await runInSessionDO(restored, async (instance: SessionDO, durableState) => {
       await expect(
         componentsOf(instance).lifecycleManager.terminateFailedSandbox("runtime crashed")
-      ).resolves.toBe(false);
+      ).resolves.toBe("not_terminated");
       // Its settle time arrives while the heartbeat is still recent.
       const store = new SandboxShutdownRepository(durableState.storage.sql);
       const record = store.read()!;

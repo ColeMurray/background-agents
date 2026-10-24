@@ -695,6 +695,37 @@ describe("idle queue redrive", () => {
   });
 });
 
+describe("fatal runtime report termination", () => {
+  it.each([
+    { stop: { success: true }, outcome: "terminated" },
+    { stop: { success: false, error: "provider unavailable" }, outcome: "stop_failed" },
+  ])("resolves $outcome once the row is failed", async ({ stop, outcome }) => {
+    const storage = createMockStorage(
+      createMockSession(),
+      createMockSandbox({ status: "connecting", modal_object_id: "modal-obj-booting" })
+    );
+    const stopSandbox = vi.fn(async () => stop);
+    const manager = createTestLifecycleManager(
+      createMockProvider({ capabilities: { supportsExplicitStop: true }, stopSandbox }),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createUnmanagedShutdown(),
+      createTestConfig()
+    );
+
+    await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toBe(outcome);
+
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "modal-obj-booting" })
+    );
+    expect(storage.getSandbox()?.status).toBe("failed");
+  });
+});
+
 describe("fatal runtime report during a checkpoint hold", () => {
   it("records the failure instead of dropping it", async () => {
     const storage = createMockStorage(createMockSession(), createMockSandbox({ status: "ready" }));
@@ -711,7 +742,7 @@ describe("fatal runtime report during a checkpoint hold", () => {
       createTestConfig()
     );
 
-    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe("not_terminated");
 
     expect(shutdown.recordRuntimeFailure).toHaveBeenCalledExactlyOnceWith("runtime crashed");
   });
@@ -768,7 +799,7 @@ describe("fatal runtime report during a checkpoint hold", () => {
 
     const checkpoint = manager.triggerSnapshot("execution_complete");
     await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
-    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe(false);
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe("not_terminated");
     expect(broadcaster.messages).not.toContainEqual({
       type: "sandbox_error",
       error: "runtime crashed",
