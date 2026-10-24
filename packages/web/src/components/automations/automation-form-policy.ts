@@ -22,6 +22,7 @@ import {
   type HarnessId,
 } from "@open-inspect/shared/harnesses";
 import type { HarnessModelAvailability } from "@/lib/session-harness";
+import { repositoryKey } from "./automation-target-selection";
 import type { ModelProviderSelections } from "@open-inspect/shared/types/provider-accounts";
 
 export interface AutomationFormValues {
@@ -159,15 +160,15 @@ export interface AutomationDuplicate {
   initialValues: InitialAutomationFormValues;
   /** The viewer can't create in the source's team, so the copy starts elsewhere without targets. */
   teamReset: boolean;
-  /** Environments the viewer can't use were left out of the copy. */
-  environmentsDropped: boolean;
+  /** Repositories or environments the viewer can't use were left out of the copy. */
+  targetsDropped: boolean;
 }
 
 /**
  * Create-form values for a copy of `source`. The copy keeps the source's team and targets when
  * the viewer can create there; otherwise it starts in `fallbackTeamId` with no targets, as a team
- * change in the form would. Create mode only submits usable environments, so unusable ones are
- * left out. Per-automation credentials aren't part of an automation: the server issues new
+ * change in the form would. Targets missing from the viewer's pickers would block or fail
+ * creation, so they are left out. Per-automation credentials aren't part of an automation: the server issues new
  * webhook keys and the form asks for the Sentry client secret again.
  */
 export function createAutomationDuplicate(
@@ -175,10 +176,13 @@ export function createAutomationDuplicate(
   {
     teamSelectable,
     fallbackTeamId,
+    usableRepositoryKeys,
     usableEnvironmentIds,
   }: {
     teamSelectable: boolean;
     fallbackTeamId: string | null;
+    /** Lowercase full names, as `repositoryKey` formats them. */
+    usableRepositoryKeys: readonly string[];
     usableEnvironmentIds: readonly string[];
   }
 ): AutomationDuplicate {
@@ -188,15 +192,20 @@ export function createAutomationDuplicate(
       sourceName: source.name,
       initialValues: { ...values, teamId: fallbackTeamId, repositories: [], environmentIds: [] },
       teamReset: true,
-      environmentsDropped: false,
+      targetsDropped: false,
     };
   }
+  const repositories = source.repositories.filter((repository) =>
+    usableRepositoryKeys.includes(repositoryKey(repository.repoOwner, repository.repoName))
+  );
   const environmentIds = source.environmentIds.filter((id) => usableEnvironmentIds.includes(id));
   return {
     sourceName: source.name,
-    initialValues: { ...values, environmentIds },
+    initialValues: { ...values, repositories, environmentIds },
     teamReset: false,
-    environmentsDropped: environmentIds.length < source.environmentIds.length,
+    targetsDropped:
+      repositories.length < source.repositories.length ||
+      environmentIds.length < source.environmentIds.length,
   };
 }
 

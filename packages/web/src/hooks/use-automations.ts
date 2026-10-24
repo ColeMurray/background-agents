@@ -87,7 +87,7 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
 }
 
 export function useAutomation(id: string | undefined) {
-  const { data: session } = useAuthSession();
+  const { data: session, status } = useAuthSession();
 
   const { data, error, isLoading, mutate } = useSWR<{ automation: AutomationView }>(
     session && id ? `/api/automations/${encodeURIComponent(id)}` : null
@@ -95,7 +95,9 @@ export function useAutomation(id: string | undefined) {
 
   return {
     automation: usableFetchData(data, error)?.automation ?? null,
-    loading: isLoading,
+    // The fetch is gated on the auth session, so a requested automation is still
+    // loading while the session itself resolves — don't report it missing.
+    loading: Boolean(id) && (status === "loading" || isLoading),
     mutate,
   };
 }

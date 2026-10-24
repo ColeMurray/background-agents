@@ -66,6 +66,15 @@ function NewAutomationContent() {
       </div>
     );
   }
+  if (duplicateState?.status === "unavailable") {
+    return (
+      <div className="h-full flex items-center justify-center px-6">
+        <ErrorBanner role="alert">
+          Couldn&apos;t load your teams, repositories, or environments for the copy. Retrying…
+        </ErrorBanner>
+      </div>
+    );
+  }
 
   // A duplicate (`?from=`) wins over a template id from the gallery; one that
   // fails to load leaves the form blank. Templates never pre-fill a
@@ -210,7 +219,8 @@ function NewAutomationContent() {
               <span className="font-medium text-foreground">{duplicate.sourceName}</span>.
               {duplicate.teamReset &&
                 " You can't create automations in its team, so choose a team and targets for the copy."}
-              {duplicate.environmentsDropped && " Environments you can't use weren't copied."}{" "}
+              {duplicate.targetsDropped &&
+                " Repositories or environments you can't use weren't copied."}{" "}
               Review the details and create it.
             </PrefillNotice>
           )}

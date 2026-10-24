@@ -28,6 +28,9 @@ let environmentsValue: Array<{
   repositories: Array<{ repoOwner: string; repoName: string }>;
   capabilities?: { canUse: boolean };
 }> = [];
+let environmentsError: unknown = undefined;
+let reposError: unknown = undefined;
+let teamsError: unknown = null;
 const replace = vi.fn();
 const push = vi.fn();
 
@@ -71,26 +74,35 @@ vi.mock("@/components/sidebar-layout", () => ({
 
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({
-    repos: [{ id: 1, owner: "acme", name: "api", fullName: "acme/api", defaultBranch: "main" }],
+    repos: reposError
+      ? []
+      : [{ id: 1, owner: "acme", name: "api", fullName: "acme/api", defaultBranch: "main" }],
     loading: false,
+    error: reposError,
   }),
 }));
 
 vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: () => ({ environments: environmentsValue, loading: false }),
+  useEnvironments: () => ({
+    environments: environmentsError ? [] : environmentsValue,
+    loading: false,
+    error: environmentsError,
+  }),
 }));
 vi.mock("@/hooks/use-resource-teams", () => ({
   useResourceTeams: () => ({
-    teams: [
-      { id: "team-1", name: "Engineering" },
-      { id: "team-2", name: "Design" },
-    ],
+    teams: teamsError
+      ? []
+      : [
+          { id: "team-1", name: "Engineering" },
+          { id: "team-2", name: "Design" },
+        ],
     allTeams: [
       { id: "team-1", name: "Engineering" },
       { id: "team-2", name: "Design" },
     ],
     loading: false,
-    error: null,
+    error: teamsError,
     allowWorkspace: true,
   }),
 }));
@@ -129,6 +141,9 @@ beforeEach(() => {
   sourcesById = {};
   sourceLoading = false;
   environmentsValue = [];
+  environmentsError = undefined;
+  reposError = undefined;
+  teamsError = null;
   replace.mockReset();
   push.mockReset();
   vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
@@ -398,6 +413,54 @@ describe("NewAutomationPage duplicate", () => {
     expect(screen.getByText("No repository")).toBeInTheDocument();
   });
 
+  it("copies only the repositories the viewer can pick", async () => {
+    sourceAutomation = {
+      ...source,
+      repositories: [
+        { repoOwner: "acme", repoName: "secret", baseBranch: null },
+        { repoOwner: "Acme", repoName: "API", baseBranch: null },
+      ],
+    };
+    search = "from=auto-1";
+    const { container } = render(<NewAutomationPage />);
+
+    expect(screen.getByText(/repositories or environments you can't use/i)).toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.repositories).toEqual([{ repoOwner: "acme", repoName: "api" }]);
+  });
+
+  it("waits out a failed environment lookup instead of dropping environments", () => {
+    environmentsValue = [
+      { id: "env-1", name: "Usable", repositories: [], capabilities: { canUse: true } },
+    ];
+    environmentsError = new Error("503");
+    sourceAutomation = { ...source, environmentIds: ["env-1"] };
+    search = "from=auto-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/retrying/i);
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+
+    environmentsError = undefined;
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+    expect(screen.queryByText(/weren't copied/i)).not.toBeInTheDocument();
+  });
+
+  it("waits out a failed team lookup before deciding whether to reset the team", () => {
+    teamsError = new Error("503");
+    sourceAutomation = { ...source, ownerTeamId: "team-archived" };
+    search = "from=auto-1&teamId=team-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/retrying/i);
+
+    teamsError = null;
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+    expect(screen.getByText(/can't create automations in its team/i)).toBeInTheDocument();
+  });
+
   it("copies only the environments the viewer can use", async () => {
     environmentsValue = [
       { id: "env-1", name: "Usable", repositories: [], capabilities: { canUse: true } },
@@ -407,7 +470,7 @@ describe("NewAutomationPage duplicate", () => {
     search = "from=auto-1";
     const { container } = render(<NewAutomationPage />);
 
-    expect(screen.getByText(/environments you can't use weren't copied/i)).toBeInTheDocument();
+    expect(screen.getByText(/repositories or environments you can't use/i)).toBeInTheDocument();
     fireEvent.submit(container.querySelector("form")!);
     await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
     const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
