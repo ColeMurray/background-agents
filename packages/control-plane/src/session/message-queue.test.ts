@@ -2408,6 +2408,20 @@ describe("SessionMessageQueue", () => {
     );
   });
 
+  it("leaves a queued follow-up alone while a stopped prompt awaits confirmation", async () => {
+    const h = buildQueue();
+    const followUp = createMessage({ id: "msg-follow-up", status: "pending" });
+    h.repository.markMessageAwaitingStopConfirmation("msg-stopped", Date.now() + 10_000);
+    h.repository.getNextPendingMessage.mockReturnValue(followUp);
+    h.repository.getMessageById.mockReturnValue(followUp);
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("retries_exhausted");
+
+    await h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+  });
+
   it("neither fails nor redrives a pending prompt when a retryable stop failed", async () => {
     const h = buildQueue();
     h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("stop_failed");

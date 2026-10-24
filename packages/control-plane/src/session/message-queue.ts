@@ -627,11 +627,13 @@ export class SessionMessageQueue {
 
   async handleFatalSandboxFailure(reason: string): Promise<void> {
     // Identified before termination, which may yield on provider I/O. A
-    // sandbox serving a prompt was not booting for the next one; that running
-    // prompt is failStuckProcessingMessage's to settle.
-    const bootPrompt = this.messageRepository.getProcessingMessage()
-      ? null
-      : this.messageRepository.getNextPendingMessage();
+    // sandbox serving a prompt, or still confirming a stopped one, was not
+    // booting for the next one; the served prompt is already settled or is
+    // failStuckProcessingMessage's to settle.
+    const servingPrompt =
+      this.messageRepository.getProcessingMessage() ??
+      this.messageRepository.getMessageAwaitingStopConfirmation();
+    const bootPrompt = servingPrompt ? null : this.messageRepository.getNextPendingMessage();
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
     const outcome = await termination;
