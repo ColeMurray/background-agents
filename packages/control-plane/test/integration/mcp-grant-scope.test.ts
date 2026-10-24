@@ -153,7 +153,7 @@ describe("MCP grant scope, re-evaluated against current authority", () => {
     expect(decision.kind).toBe("denied");
   });
 
-  it("refuses a tool the server's current review no longer carries", async () => {
+  it("revokes the connection when the server review revision changes", async () => {
     const server = await createServerWithScope([]);
     const { connectionId, pin } = await grant(server);
 
@@ -168,19 +168,10 @@ describe("MCP grant scope, re-evaluated against current authority", () => {
       ownerUserId: OWNER,
       repositories: REPOSITORIES,
     });
-    expect(scope.kind).toBe("allowed");
-
-    const decision = await evaluateMcpGrantTool(scopeOptions(), {
-      connectionId,
-      ownerUserId: OWNER,
-      repositories: REPOSITORIES,
-      toolName: "read_page",
-      pinnedToolNames: pin.toolNames,
-    });
-
-    expect(decision.kind).toBe("denied");
-    if (decision.kind === "denied") {
-      expect(decision.reason).toBe("This MCP tool is not part of the reviewed catalog");
+    expect(pin.toolNames).toEqual(["read_page"]);
+    expect(scope.kind).toBe("denied");
+    if (scope.kind === "denied") {
+      expect(scope.reason).toBe("This MCP connection no longer matches its reviewed server");
     }
   });
 
