@@ -9,6 +9,7 @@ import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { reconcileProviderSelectionsForHarness } from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { setProviderSelection } from "@/lib/provider-selection";
@@ -195,7 +196,7 @@ export function AutomationForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={isSchedule ? "Daily code review" : "Review new PRs"}
-          maxLength={200}
+          maxLength={MAX_AUTOMATION_NAME_LENGTH}
           required
         />
       </div>

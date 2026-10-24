@@ -8,7 +8,9 @@ export async function invalidateAutomationCache(
   automationId?: string,
   { deleted = false }: { deleted?: boolean } = {}
 ): Promise<void> {
-  const resourcePath = automationId ? `/api/automations/${automationId}` : undefined;
+  const resourcePath = automationId
+    ? `/api/automations/${encodeURIComponent(automationId)}`
+    : undefined;
   const collectionKeys: string[] = [];
   const resourceKeys: string[] = [];
   for (const key of cache.keys()) {

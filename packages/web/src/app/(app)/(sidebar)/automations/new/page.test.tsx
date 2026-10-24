@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
 import NewAutomationPage from "./page";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
@@ -18,6 +19,15 @@ afterEach(cleanup);
 let search = "";
 let enabledModelsValue: string[] = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
 let canCreate = true;
+let sourceAutomation: Record<string, unknown> | null = null;
+let sourcesById: Record<string, Record<string, unknown>> = {};
+let sourceLoading = false;
+let environmentsValue: Array<{
+  id: string;
+  name: string;
+  repositories: Array<{ repoOwner: string; repoName: string }>;
+  capabilities?: { canUse: boolean };
+}> = [];
 const replace = vi.fn();
 const push = vi.fn();
 
@@ -46,6 +56,14 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-automations", () => ({
+  useAutomation: (id: string | undefined) => ({
+    automation: id ? (sourcesById[id] ?? sourceAutomation) : null,
+    loading: id ? sourceLoading : false,
+    mutate: vi.fn(),
+  }),
+}));
+
 vi.mock("@/components/sidebar-layout", () => ({
   CollapsedSidebarControls: () => null,
   useSidebarContext: () => ({ isOpen: false, toggle: vi.fn() }),
@@ -59,7 +77,7 @@ vi.mock("@/hooks/use-repos", () => ({
 }));
 
 vi.mock("@/hooks/use-environments", () => ({
-  useEnvironments: () => ({ environments: [], loading: false }),
+  useEnvironments: () => ({ environments: environmentsValue, loading: false }),
 }));
 vi.mock("@/hooks/use-resource-teams", () => ({
   useResourceTeams: () => ({
@@ -107,6 +125,10 @@ beforeEach(() => {
   search = "";
   enabledModelsValue = [DEFAULT_MODEL, "anthropic/claude-opus-4-8", "openai/gpt-5.5"];
   canCreate = true;
+  sourceAutomation = null;
+  sourcesById = {};
+  sourceLoading = false;
+  environmentsValue = [];
   replace.mockReset();
   push.mockReset();
   vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
@@ -297,5 +319,169 @@ describe("NewAutomationPage template pre-fill", () => {
     // Falls back to the enabled default model rather than the unenabled suggestion.
     expect(screen.getByText("claude sonnet 4.6")).toBeInTheDocument();
     expect(screen.queryByText("claude opus 4.8")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewAutomationPage duplicate", () => {
+  const source = {
+    id: "auto-1",
+    name: "Nightly review",
+    instructions: "Review yesterday's commits",
+    harness: "opencode",
+    triggerType: "schedule",
+    scheduleCron: "30 6 * * 1",
+    scheduleTz: "UTC",
+    model: "openai/gpt-5.5",
+    reasoningEffort: null,
+    eventType: null,
+    triggerConfig: null,
+    repositories: [],
+    environmentIds: [],
+    providerSelections: {},
+  };
+
+  it("pre-fills the form from the source automation with a copy name", () => {
+    sourceAutomation = source;
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Review yesterday's commits")).toBeInTheDocument();
+    expect(screen.getByText("gpt 5.5")).toBeInTheDocument();
+    expect(screen.getByText(/duplicating/i)).toBeInTheDocument();
+  });
+
+  it("keeps the source automation's owning team rather than the entry scope", () => {
+    sourceAutomation = {
+      ...source,
+      ownerTeamId: "team-2",
+      repositories: [{ repoOwner: "acme", repoName: "api", baseBranch: null }],
+    };
+    search = "from=auto-1&teamId=team-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Design");
+    expect(screen.getByText("acme/api")).toBeInTheDocument();
+  });
+
+  it("trims a long source name so the copy name fits the limit", () => {
+    sourceAutomation = { ...source, name: "a".repeat(MAX_AUTOMATION_NAME_LENGTH) };
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
+    expect(nameInput.value).toHaveLength(MAX_AUTOMATION_NAME_LENGTH);
+    expect(nameInput.value.endsWith(" (copy)")).toBe(true);
+  });
+
+  it("drops half of a surrogate pair cut by the name trim", () => {
+    const kept = "a".repeat(MAX_AUTOMATION_NAME_LENGTH - " (copy)".length - 1);
+    sourceAutomation = { ...source, name: `${kept}\u{1F600}tail` };
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
+    expect(nameInput.value).toBe(`${kept} (copy)`);
+  });
+
+  it("starts in the entry scope without targets when the source's team isn't selectable", () => {
+    sourceAutomation = {
+      ...source,
+      ownerTeamId: "team-archived",
+      repositories: [{ repoOwner: "acme", repoName: "api", baseBranch: null }],
+    };
+    search = "from=auto-1&teamId=team-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+    expect(screen.getByText(/can't create automations in its team/i)).toBeInTheDocument();
+    expect(screen.getByText("No repository")).toBeInTheDocument();
+  });
+
+  it("copies only the environments the viewer can use", async () => {
+    environmentsValue = [
+      { id: "env-1", name: "Usable", repositories: [], capabilities: { canUse: true } },
+      { id: "env-2", name: "Locked", repositories: [], capabilities: { canUse: false } },
+    ];
+    sourceAutomation = { ...source, environmentIds: ["env-1", "env-2", "env-deleted"] };
+    search = "from=auto-1";
+    const { container } = render(<NewAutomationPage />);
+
+    expect(screen.getByText(/environments you can't use weren't copied/i)).toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.environmentIds).toEqual(["env-1"]);
+  });
+
+  it("refills the form when navigation switches to another cached source", () => {
+    sourcesById = {
+      first: { ...source, id: "first", name: "First" },
+      second: { ...source, id: "second", name: "Second" },
+    };
+    search = "from=first";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("First (copy)")).toBeInTheDocument();
+
+    search = "from=second";
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Second (copy)")).toBeInTheDocument();
+  });
+
+  it("keeps the user's edits when the loaded source later disappears", () => {
+    sourceAutomation = source;
+    search = "from=auto-1";
+    const view = render(<NewAutomationPage />);
+    fireEvent.change(screen.getByDisplayValue("Nightly review (copy)"), {
+      target: { value: "Edited copy" },
+    });
+
+    // A focus revalidation that 404s drops the cached source.
+    sourceAutomation = null;
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Edited copy")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps the fallback form through retries and a late successful load", () => {
+    search = "from=auto-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t load/i);
+    fireEvent.change(screen.getByPlaceholderText("Daily code review"), {
+      target: { value: "Typed by hand" },
+    });
+
+    sourceLoading = true;
+    view.rerender(<NewAutomationPage />);
+    sourceLoading = false;
+    sourceAutomation = source;
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByDisplayValue("Typed by hand")).toBeInTheDocument();
+  });
+
+  it("prefers the source automation over a template", () => {
+    sourceAutomation = source;
+    search = "from=auto-1&template=find-bugs";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+    expect(screen.queryByText(/prefilled from/i)).not.toBeInTheDocument();
+  });
+
+  it("waits for the source before mounting the form", () => {
+    sourceLoading = true;
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to a blank form when the source cannot be loaded", () => {
+    search = "from=missing&template=find-bugs";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn.t load/i);
+    const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
+    expect(nameInput.value).toBe("");
   });
 });

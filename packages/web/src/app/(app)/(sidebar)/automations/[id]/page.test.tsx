@@ -18,6 +18,7 @@ const CURRENT_USER_ID = "11111111111111111111111111111111";
 const OTHER_USER_ID = "22222222222222222222222222222222";
 let permissions: string[] = [];
 let search = "";
+let canCreate = false;
 const push = vi.fn();
 /** How many invocations the automation has, and every limit the page asked for. */
 const history = vi.hoisted(() => ({ total: 0, requestedLimits: [] as number[] }));
@@ -91,7 +92,11 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
       userId: CURRENT_USER_ID,
       permissions,
     },
+    hasPermission: (permission: string) => permissions.includes(permission),
   }),
+}));
+vi.mock("@/hooks/use-can-create-automation", () => ({
+  useCanCreateAutomation: () => ({ canCreate, loading: false }),
 }));
 vi.mock("@/components/automations/run-history", () => ({
   RunHistory: ({ hasMore, onLoadMore }: { hasMore: boolean; onLoadMore?: () => void }) =>
@@ -116,6 +121,7 @@ async function renderPage() {
 beforeEach(() => {
   permissions = [];
   search = "";
+  canCreate = false;
   push.mockReset();
   vi.mocked(browserApiFetch).mockReset();
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
@@ -213,5 +219,21 @@ describe("AutomationDetailPage authorization", () => {
     expect(screen.getByRole("button", { name: "Trigger Now" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("links to a duplicate only when the viewer can create automations", async () => {
+    await renderPage();
+    await screen.findByRole("heading", { name: "Nightly review" });
+    expect(screen.queryByRole("link", { name: /duplicate/i })).not.toBeInTheDocument();
+
+    cleanup();
+    canCreate = true;
+    search = "teamId=team-1";
+    await renderPage();
+    await screen.findByRole("heading", { name: "Nightly review" });
+    expect(screen.getByRole("link", { name: /duplicate/i })).toHaveAttribute(
+      "href",
+      "/automations/new?from=auto-1&teamId=team-1"
+    );
   });
 });

@@ -90,7 +90,7 @@ export function useAutomation(id: string | undefined) {
   const { data: session } = useAuthSession();
 
   const { data, error, isLoading, mutate } = useSWR<{ automation: AutomationView }>(
-    session && id ? `/api/automations/${id}` : null
+    session && id ? `/api/automations/${encodeURIComponent(id)}` : null
   );
 
   return {
@@ -104,7 +104,9 @@ export function useAutomationInvocations(id: string | undefined, limit = 20, off
   const { data: session } = useAuthSession();
 
   const { data, error, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
-    session && id ? `/api/automations/${id}/invocations?limit=${limit}&offset=${offset}` : null
+    session && id
+      ? `/api/automations/${encodeURIComponent(id)}/invocations?limit=${limit}&offset=${offset}`
+      : null
   );
   const visible = usableFetchData(data, error);
 

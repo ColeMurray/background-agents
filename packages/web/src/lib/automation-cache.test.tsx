@@ -43,6 +43,9 @@ vi.mock("@/hooks/use-environments", () => ({
   useEnvironments: () => ({ environments: [] }),
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
+vi.mock("@/hooks/use-can-create-automation", () => ({
+  useCanCreateAutomation: () => ({ canCreate: false, loading: false }),
+}));
 
 const original: AutomationListItem = {
   id: "auto-1",

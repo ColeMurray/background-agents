@@ -9,7 +9,9 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import {
+  MAX_AUTOMATION_NAME_LENGTH,
   validateAutomationTargetCounts,
+  type Automation,
   type AutomationRepositoryInput,
 } from "@open-inspect/shared/types/automations";
 import { isValidHarnessReasoningEffort } from "@open-inspect/shared/harnesses";
@@ -117,6 +119,84 @@ export function createAutomationFormDraft(
       model: initialValues.model ?? DEFAULT_MODEL,
       reasoningEffort: initialValues.reasoningEffort ?? "",
     },
+  };
+}
+
+/** Form values for an existing automation, used to edit or duplicate it. */
+export function automationToFormValues(automation: Automation): InitialAutomationFormValues {
+  return {
+    teamId: automation.ownerTeamId ?? null,
+    name: automation.name,
+    repositories: automation.repositories,
+    environmentIds: automation.environmentIds,
+    harness: automation.harness,
+    model: automation.model,
+    reasoningEffort: automation.reasoningEffort,
+    scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
+    scheduleTz: automation.scheduleTz,
+    instructions: automation.instructions,
+    triggerType: automation.triggerType,
+    eventType: automation.eventType ?? undefined,
+    triggerConfig: automation.triggerConfig ?? undefined,
+    providerSelections: automation.providerSelections,
+  };
+}
+
+const COPY_NAME_SUFFIX = " (copy)";
+
+/** The source name plus a copy suffix, trimmed to fit MAX_AUTOMATION_NAME_LENGTH. */
+export function automationCopyName(name: string): string {
+  const base = name
+    .slice(0, MAX_AUTOMATION_NAME_LENGTH - COPY_NAME_SUFFIX.length)
+    // The cut counts UTF-16 units, so it can split a surrogate pair; drop the lone half.
+    .replace(/[\uD800-\uDBFF]$/, "")
+    .trimEnd();
+  return `${base}${COPY_NAME_SUFFIX}`;
+}
+
+export interface AutomationDuplicate {
+  sourceName: string;
+  initialValues: InitialAutomationFormValues;
+  /** The viewer can't create in the source's team, so the copy starts elsewhere without targets. */
+  teamReset: boolean;
+  /** Environments the viewer can't use were left out of the copy. */
+  environmentsDropped: boolean;
+}
+
+/**
+ * Create-form values for a copy of `source`. The copy keeps the source's team and targets when
+ * the viewer can create there; otherwise it starts in `fallbackTeamId` with no targets, as a team
+ * change in the form would. Create mode only submits usable environments, so unusable ones are
+ * left out. Per-automation credentials aren't part of an automation: the server issues new
+ * webhook keys and the form asks for the Sentry client secret again.
+ */
+export function createAutomationDuplicate(
+  source: Automation,
+  {
+    teamSelectable,
+    fallbackTeamId,
+    usableEnvironmentIds,
+  }: {
+    teamSelectable: boolean;
+    fallbackTeamId: string | null;
+    usableEnvironmentIds: readonly string[];
+  }
+): AutomationDuplicate {
+  const values = { ...automationToFormValues(source), name: automationCopyName(source.name) };
+  if (!teamSelectable) {
+    return {
+      sourceName: source.name,
+      initialValues: { ...values, teamId: fallbackTeamId, repositories: [], environmentIds: [] },
+      teamReset: true,
+      environmentsDropped: false,
+    };
+  }
+  const environmentIds = source.environmentIds.filter((id) => usableEnvironmentIds.includes(id));
+  return {
+    sourceName: source.name,
+    initialValues: { ...values, environmentIds },
+    teamReset: false,
+    environmentsDropped: environmentIds.length < source.environmentIds.length,
   };
 }
 

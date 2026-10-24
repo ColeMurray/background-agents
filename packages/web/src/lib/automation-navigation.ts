@@ -21,5 +21,6 @@ export function automationNavigation(teamId?: string | null) {
     templates: withScope("/automations/templates"),
     new: (templateId?: string) =>
       withScope("/automations/new", templateId ? { template: templateId } : {}),
+    duplicate: (id: string) => withScope("/automations/new", { from: id }),
   };
 }

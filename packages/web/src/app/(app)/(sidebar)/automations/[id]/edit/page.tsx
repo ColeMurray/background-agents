@@ -9,6 +9,7 @@ import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
+import { automationToFormValues } from "@/components/automations/automation-form-policy";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -125,22 +126,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
 
           <AutomationForm
             mode="edit"
-            initialValues={{
-              teamId: automation.ownerTeamId ?? null,
-              name: automation.name,
-              repositories: automation.repositories,
-              environmentIds: automation.environmentIds,
-              harness: automation.harness,
-              model: automation.model,
-              reasoningEffort: automation.reasoningEffort,
-              scheduleCron: automation.scheduleCron ?? "0 9 * * *",
-              scheduleTz: automation.scheduleTz,
-              instructions: automation.instructions,
-              triggerType: automation.triggerType,
-              eventType: automation.eventType ?? undefined,
-              triggerConfig: automation.triggerConfig ?? undefined,
-              providerSelections: automation.providerSelections,
-            }}
+            initialValues={automationToFormValues(automation)}
             onSubmit={handleSubmit}
             submitting={submitting}
           />
