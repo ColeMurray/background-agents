@@ -16,7 +16,7 @@ module "web_app" {
   # resolves to the newest supported major; vercel/vercel 2.x cannot set 24.x.
   root_directory  = "packages/web"
   install_command = "cd ../.. && npm install && npm run build -w @open-inspect/shared"
-  build_command   = "next build"
+  build_command   = "npm run build"
 
   environment_variables = [
     # Control Plane

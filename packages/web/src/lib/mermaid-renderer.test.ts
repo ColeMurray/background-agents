@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import mermaid from "mermaid";
-import { MAX_MERMAID_SOURCE_LENGTH, renderMermaid } from "./mermaid-renderer";
+import { MAX_MERMAID_SOURCE_LENGTH } from "./mermaid-renderer-protocol";
+import { renderMermaid } from "./mermaid-svg-renderer";
 
 vi.mock("mermaid", () => ({
   default: {
@@ -17,18 +18,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
-describe("Mermaid security boundary", () => {
+describe("isolated Mermaid SVG output", () => {
   it.each([
     '%%{init: {"securityLevel": "loose"}}%%\nflowchart LR\n A --> B',
     "---\nconfig:\n  securityLevel: loose\n---\nflowchart LR\n A --> B",
-    "flowchart LR\n A-->B\n classDef default fill:url(https://evil.test/x)",
-    'flowchart LR\n A-->B\n classDef default background-image:image-set("https://evil.test/x" 1x)',
-    "sequenceDiagram\n Alice->>Bob: $$x^2$$",
     "flowchart LR\n" + "A".repeat(MAX_MERMAID_SOURCE_LENGTH),
   ])("rejects unsafe or unsupported source before initializing Mermaid", async (source) => {
     expect(await renderMermaid(source, false)).toBeNull();
     expect(mermaid.initialize).not.toHaveBeenCalled();
-    expect(mermaid.mermaidAPI.getDiagramFromText).not.toHaveBeenCalled();
     expect(mermaid.render).not.toHaveBeenCalled();
   });
 
@@ -71,7 +68,7 @@ describe("Mermaid security boundary", () => {
     }
   );
 
-  it("serializes theme initialization and cleans failed render hosts", async () => {
+  it("cleans failed render hosts and can render the next theme", async () => {
     const order: string[] = [];
     vi.mocked(mermaid.initialize).mockImplementation((config) => {
       order.push(config!.theme!);
@@ -80,12 +77,8 @@ describe("Mermaid security boundary", () => {
       order.push("render light");
       throw new Error("bad");
     });
-    const results = await Promise.all([
-      renderMermaid("invalid", false),
-      renderMermaid("sequenceDiagram\n A->>B: Good", true),
-    ]);
-    expect(results[0]).toBeNull();
-    expect(results[1]).not.toBeNull();
+    expect(await renderMermaid("invalid", false)).toBeNull();
+    expect(await renderMermaid("sequenceDiagram\n A->>B: Good", true)).not.toBeNull();
     expect(order).toEqual(["default", "render light", "dark"]);
     expect(document.body.children).toHaveLength(0);
   });

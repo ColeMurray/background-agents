@@ -6,7 +6,7 @@ import type { ExtraProps } from "react-markdown";
 import { useTheme } from "next-themes";
 import type { MermaidImage } from "@/lib/mermaid-renderer";
 
-export const MermaidMarkdownContext = createContext({ enabled: false, content: "" });
+export const MermaidMarkdownContext = createContext(false);
 const CODE_BLOCK_CLASS = "not-prose max-w-full overflow-x-auto text-sm leading-relaxed rounded";
 const MAX_CACHED_DIAGRAMS = 32;
 
@@ -97,7 +97,7 @@ export function MarkdownPre({
   node,
   ...props
 }: ComponentPropsWithoutRef<"pre"> & ExtraProps) {
-  const { enabled, content } = useContext(MermaidMarkdownContext);
+  const enabled = useContext(MermaidMarkdownContext);
   const fallback = (
     <pre className={CODE_BLOCK_CLASS} {...props}>
       {children}
@@ -108,21 +108,12 @@ export function MarkdownPre({
     !enabled ||
     code?.type !== "element" ||
     code.tagName !== "code" ||
+    code.properties.dataFenceClosed !== "true" ||
     !Array.isArray(code.properties.className) ||
     !code.properties.className.includes("language-mermaid")
   )
     return fallback;
 
-  const start = node?.position?.start.offset;
-  const end = node?.position?.end.offset;
-  if (start === undefined || end === undefined) return fallback;
-  const lines = content.slice(start, end).split("\n");
-  const opening = /^(`{3,}|~{3,})/.exec(lines[0]);
-  if (!opening || lines.length < 2) return fallback;
-  const fence = opening[1];
-  // CommonMark accepts unclosed fences; do not process those during streaming.
-  const closing = new RegExp(`^[\\s>]*${fence[0]}{${fence.length},}\\s*$`);
-  if (!closing.test(lines[lines.length - 1])) return fallback;
   // Mermaid is unknown to the highlighter, so its contents remain one plain text node.
   const source = code.children.map((child) => (child.type === "text" ? child.value : "")).join("");
   return <MermaidDiagram source={source} fallback={fallback} />;

@@ -10,6 +10,7 @@ import type { Root, RootContent } from "mdast";
 import { isPathWithLineReference, isRepositoryFileHref } from "@/lib/diff-file-links";
 import { useSessionFileLinks } from "@/lib/session-file-links";
 import { getSafeExternalUrl } from "@/lib/urls";
+import { remarkClosedFences } from "@/lib/remark-closed-fences";
 
 // Strict sanitization schema to prevent XSS
 // Based on GitHub's sanitization but even more restrictive
@@ -52,7 +53,7 @@ const sanitizeSchema = {
     a: ["href"],
     img: ["src", "alt", "title"],
     // Allow className for syntax highlighting
-    code: ["className"],
+    code: ["className", ["dataFenceClosed", "true"]],
     span: ["className"],
     pre: ["className"],
   },
@@ -164,6 +165,30 @@ function ExternalOnlyMarkdownLink({ href, children, ...props }: ComponentPropsWi
   );
 }
 
+function MarkdownUnorderedList({ children, ...props }: ComponentPropsWithoutRef<"ul">) {
+  return (
+    <ul className="list-disc pl-4 mb-2" {...props}>
+      {children}
+    </ul>
+  );
+}
+
+function MarkdownOrderedList({ children, ...props }: ComponentPropsWithoutRef<"ol">) {
+  return (
+    <ol className="list-decimal pl-4 mb-2" {...props}>
+      {children}
+    </ol>
+  );
+}
+
+function MarkdownBlockquote({ children, ...props }: ComponentPropsWithoutRef<"blockquote">) {
+  return (
+    <blockquote className="border-l-4 border-border pl-4 italic text-muted-foreground" {...props}>
+      {children}
+    </blockquote>
+  );
+}
+
 export function SafeMarkdown({
   content,
   renderMermaid = false,
@@ -176,10 +201,12 @@ export function SafeMarkdown({
     <div
       className={`prose prose-sm dark:prose-invert min-w-0 max-w-none break-words [overflow-wrap:anywhere] ${className}`}
     >
-      <MermaidMarkdownContext.Provider value={{ enabled: renderMermaid, content }}>
+      <MermaidMarkdownContext.Provider value={renderMermaid}>
         <ReactMarkdown
           remarkPlugins={
-            linkMode === "repositoryFiles" ? [remarkGfm, preserveFileLineReferences] : [remarkGfm]
+            linkMode === "repositoryFiles"
+              ? [remarkGfm, remarkClosedFences, preserveFileLineReferences]
+              : [remarkGfm, remarkClosedFences]
           }
           rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
           components={{
@@ -242,25 +269,10 @@ export function SafeMarkdown({
               </p>
             ),
             // Lists
-            ul: ({ children, ...props }: ComponentPropsWithoutRef<"ul">) => (
-              <ul className="list-disc pl-4 mb-2" {...props}>
-                {children}
-              </ul>
-            ),
-            ol: ({ children, ...props }: ComponentPropsWithoutRef<"ol">) => (
-              <ol className="list-decimal pl-4 mb-2" {...props}>
-                {children}
-              </ol>
-            ),
+            ul: MarkdownUnorderedList,
+            ol: MarkdownOrderedList,
             // Blockquotes
-            blockquote: ({ children, ...props }: ComponentPropsWithoutRef<"blockquote">) => (
-              <blockquote
-                className="border-l-4 border-border pl-4 italic text-muted-foreground"
-                {...props}
-              >
-                {children}
-              </blockquote>
-            ),
+            blockquote: MarkdownBlockquote,
             // Tables
             table: ({ children, ...props }: ComponentPropsWithoutRef<"table">) => (
               <div className="max-w-full overflow-x-auto">
