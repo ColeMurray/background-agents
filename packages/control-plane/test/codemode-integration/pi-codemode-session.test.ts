@@ -15,12 +15,31 @@ import { runInSessionDO } from "../integration/session-do-access";
 import { defineExtension, defineTool, type Registry } from "@earendil-works/pi-durable";
 import type { RemoteCodemodeSandbox } from "@earendil-works/pi-codemode/portable";
 import type { Workspace } from "@cloudflare/computer";
+import { HARNESS_ACTION_CEILING } from "../../src/harness/action-ceiling";
+import type { PiTurnAuthorityStore } from "../../src/pi/turn-authority";
 
 interface PiSessionInternals {
   registry: Registry;
   models: MutableModels;
   codemodeSandbox?: RemoteCodemodeSandbox;
   workspace?: Workspace;
+  turnAuthority: PiTurnAuthorityStore;
+  installTurnActionCeiling(
+    operationId: string,
+    authority: Awaited<ReturnType<PiTurnAuthorityStore["initialize"]>>
+  ): void;
+}
+
+async function installTurnAuthority(
+  internals: PiSessionInternals,
+  operationId: string
+): Promise<void> {
+  const authority = await internals.turnAuthority.initialize(
+    operationId,
+    undefined,
+    HARNESS_ACTION_CEILING
+  );
+  internals.installTurnActionCeiling(operationId, authority);
 }
 
 async function recordLiveTurn(sessionName: string, operationId: string): Promise<void> {
@@ -78,6 +97,7 @@ describe("PiSessionDO native Code Mode", () => {
       const root = await (await instance.harness.pi()).root(BACKGROUND_CONTEXT);
       const selected = await root.agent(BACKGROUND_CONTEXT);
       await root.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+      await installTurnAuthority(internals, "codemode-emergency");
       const submission = await root.submit(
         { type: "input", content: "run new code", requestId: "codemode-emergency" },
         BACKGROUND_CONTEXT
@@ -256,6 +276,7 @@ describe("PiSessionDO native Code Mode", () => {
         },
         projectedCostUsd: 0,
       });
+      await installTurnAuthority(internals, "remote-restart");
       await root.submit(
         { type: "input", content: "read after restart", requestId: "remote-restart" },
         BACKGROUND_CONTEXT
@@ -346,6 +367,7 @@ describe("PiSessionDO native Code Mode", () => {
           { model: { provider: "faux", modelId: "faux-1" } },
           BACKGROUND_CONTEXT
         );
+        await installTurnAuthority(internals, "destroy-active-code");
         await root.submit(
           { type: "input", content: "run until deleted", requestId: "destroy-active-code" },
           BACKGROUND_CONTEXT
