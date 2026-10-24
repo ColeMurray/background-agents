@@ -28,6 +28,7 @@ import {
 import {
   createAutomationFormDraft,
   evaluateAutomationForm,
+  automationOwnerSelectable,
   requiresRepositoryContext,
   withoutOwnerBoundConditions,
   type AutomationAgentDraft,
@@ -54,11 +55,7 @@ export function AutomationForm({
   const [teamId, setTeamId] = useState(initialValues?.teamId ?? null);
   const scope = useResourceTeams("automation");
   const allowWorkspace = scope.allowWorkspace && !requireTeam;
-  const scopeValid =
-    mode === "edit" ||
-    (!scope.loading &&
-      !scope.error &&
-      (teamId ? scope.teams.some((team) => team.id === teamId) : allowWorkspace));
+  const scopeValid = mode === "edit" || automationOwnerSelectable(teamId, scope, requireTeam);
   const { repos, loading: loadingRepos } = useRepos(true, teamId);
   const { environments, loading: loadingEnvironments } = useEnvironments({ ownerTeamId: teamId });
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();

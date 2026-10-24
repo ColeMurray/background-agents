@@ -80,10 +80,18 @@ function NewAutomationContent() {
   }
   if (duplicateState?.status === "unavailable") {
     return (
-      <div className="h-full flex items-center justify-center px-6">
-        <ErrorBanner role="alert">
-          Couldn&apos;t load your teams, repositories, or environments for the copy. Retrying…
-        </ErrorBanner>
+      <div className="h-full flex flex-col">
+        {collapsedHeader}
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6">
+          <ErrorBanner role="alert">
+            Couldn&apos;t load your teams, repositories, or environments for the copy. Retrying…
+          </ErrorBanner>
+          <Link href={navigation.new()}>
+            <Button variant="outline" size="sm">
+              Start from a blank form
+            </Button>
+          </Link>
+        </div>
       </div>
     );
   }

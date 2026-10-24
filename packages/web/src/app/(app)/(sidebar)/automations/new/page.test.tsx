@@ -418,6 +418,24 @@ describe("NewAutomationPage duplicate", () => {
     expect(nameInput.value).toBe(`${kept} (copy)`);
   });
 
+  it("keeps whole graphemes when the name trim lands inside a joined emoji", () => {
+    const kept = "a".repeat(MAX_AUTOMATION_NAME_LENGTH - " (copy)".length - 2);
+    sourceAutomation = { ...source, name: `${kept}\u{1F468}\u200D\u{1F469}\u200D\u{1F467}` };
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    const nameInput = screen.getByPlaceholderText("Daily code review") as HTMLInputElement;
+    expect(nameInput.value).toBe(`${kept} (copy)`);
+  });
+
+  it("doesn't stack copy suffixes when duplicating a copy", () => {
+    sourceAutomation = { ...source, name: "Nightly review (copy)" };
+    search = "from=auto-1";
+    render(<NewAutomationPage />);
+
+    expect(screen.getByDisplayValue("Nightly review (copy)")).toBeInTheDocument();
+  });
+
   it("starts in the entry scope without targets when the source's team isn't selectable", () => {
     sourceAutomation = {
       ...source,
@@ -510,6 +528,11 @@ describe("NewAutomationPage duplicate", () => {
     const view = render(<NewAutomationPage />);
     expect(screen.getByRole("alert")).toHaveTextContent(/retrying/i);
     expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Start from a blank form" })).toHaveAttribute(
+      "href",
+      "/automations/new"
+    );
+    expect(screen.getByRole("link", { name: "Back to automations" })).toBeInTheDocument();
 
     environmentsError = undefined;
     view.rerender(<NewAutomationPage />);

@@ -5,7 +5,11 @@ import { useAutomation } from "@/hooks/use-automations";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
 import { useResourceTeams } from "@/hooks/use-resource-teams";
-import { createAutomationDuplicate, type AutomationDuplicate } from "./automation-form-policy";
+import {
+  automationOwnerSelectable,
+  createAutomationDuplicate,
+  type AutomationDuplicate,
+} from "./automation-form-policy";
 
 export type AutomationDuplicateState =
   | { status: "loading" }
@@ -27,12 +31,7 @@ export function useAutomationDuplicate(
   const { automation: source, loading: sourceLoading } = useAutomation(sourceId);
   const scope = useResourceTeams("automation");
   const sourceTeamId = source?.ownerTeamId ?? null;
-  const teamSelectable =
-    !scope.loading &&
-    !scope.error &&
-    (sourceTeamId
-      ? scope.teams.some((team) => team.id === sourceTeamId)
-      : scope.allowWorkspace && !requireTeam);
+  const teamSelectable = automationOwnerSelectable(sourceTeamId, scope, requireTeam);
   // Only targets kept with the source's team need their catalog, so a copy never depends on a
   // catalog (and its permission) that can't change the result.
   const repos = useRepos(teamSelectable && Boolean(source?.repositories.length), sourceTeamId);

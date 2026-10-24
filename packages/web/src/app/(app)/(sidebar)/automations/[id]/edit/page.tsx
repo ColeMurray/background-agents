@@ -16,6 +16,7 @@ import { BackIcon } from "@/components/ui/icons";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
+import { automationApiPath } from "@/lib/automation-navigation";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
 import {
   sameEnvironmentIds,
@@ -48,7 +49,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       // Unchanged targets are omitted so an edit that leaves them alone is not
       // revalidated as a target replacement.
       const { repositories, environmentIds, ...otherValues } = values;
-      const res = await browserApiFetch(`/api/automations/${id}`, {
+      const res = await browserApiFetch(automationApiPath(id), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

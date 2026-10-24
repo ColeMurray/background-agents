@@ -168,16 +168,38 @@ export function changeAutomationFormOwner(
   };
 }
 
+/**
+ * Whether a new automation may be owned by `teamId` (null for the workspace), once the viewer's
+ * team choices have loaded.
+ */
+export function automationOwnerSelectable(
+  teamId: string | null,
+  scope: { teams: { id: string }[]; loading: boolean; error: unknown; allowWorkspace: boolean },
+  requireTeam: boolean
+): boolean {
+  if (scope.loading || scope.error) return false;
+  return teamId
+    ? scope.teams.some((team) => team.id === teamId)
+    : scope.allowWorkspace && !requireTeam;
+}
+
 const COPY_NAME_SUFFIX = " (copy)";
 
-/** The source name plus a copy suffix, trimmed to fit MAX_AUTOMATION_NAME_LENGTH. */
+/**
+ * The source name plus a copy suffix, trimmed to fit MAX_AUTOMATION_NAME_LENGTH. A copy of a copy
+ * keeps one suffix, and the trim cuts between graphemes so it can't split an emoji or accent.
+ */
 export function automationCopyName(name: string): string {
-  const base = name
-    .slice(0, MAX_AUTOMATION_NAME_LENGTH - COPY_NAME_SUFFIX.length)
-    // The cut counts UTF-16 units, so it can split a surrogate pair; drop the lone half.
-    .replace(/[\uD800-\uDBFF]$/, "")
-    .trimEnd();
-  return `${base}${COPY_NAME_SUFFIX}`;
+  const original = name.endsWith(COPY_NAME_SUFFIX) ? name.slice(0, -COPY_NAME_SUFFIX.length) : name;
+  const limit = MAX_AUTOMATION_NAME_LENGTH - COPY_NAME_SUFFIX.length;
+  let base = "";
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+    original
+  )) {
+    if (base.length + segment.length > limit) break;
+    base += segment;
+  }
+  return `${base.trimEnd()}${COPY_NAME_SUFFIX}`;
 }
 
 export interface AutomationDuplicate {
