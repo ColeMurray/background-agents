@@ -543,7 +543,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     async (model) => {
       const session = sessionCoreRepository.getSession();
       try {
-        await validateHarnessExecution(db, env, {
+        await validateHarnessExecution(db, {
           harness: getValidHarnessOrDefault(session?.harness),
           model,
         });

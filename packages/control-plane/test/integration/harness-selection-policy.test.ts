@@ -75,11 +75,11 @@ describe("harness policy with real D1 and Durable Object storage", () => {
 
   it("resolves native enabled defaults without changing legacy defaults", async () => {
     await setEnabledModels([DEFAULT_MODEL, "openai/gpt-5.6-sol"]);
-    await expect(resolveHarnessSelection(env.DB, {}, { harness: "codex" })).resolves.toEqual({
+    await expect(resolveHarnessSelection(env.DB, { harness: "codex" })).resolves.toEqual({
       model: "openai/gpt-5.6-sol",
       reasoningEffort: "low",
     });
-    await expect(resolveHarnessSelection(env.DB, {}, { harness: "opencode" })).resolves.toEqual({
+    await expect(resolveHarnessSelection(env.DB, { harness: "opencode" })).resolves.toEqual({
       model: DEFAULT_MODEL,
       reasoningEffort: null,
     });

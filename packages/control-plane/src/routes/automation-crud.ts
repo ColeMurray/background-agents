@@ -266,7 +266,7 @@ async function handleCreateAutomation(
   const harness = getValidHarnessOrDefault(body.harness);
   let harnessSelection;
   try {
-    harnessSelection = await resolveHarnessSelection(ctx.db, env, {
+    harnessSelection = await resolveHarnessSelection(ctx.db, {
       harness,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
@@ -559,7 +559,6 @@ async function handleUpdateAutomation(
   try {
     updatedSelection = await resolveHarnessAutomationUpdate(
       ctx.db,
-      env,
       { model: existing.model, reasoningEffort: existing.reasoning_effort },
       {
         harness: nextHarness,

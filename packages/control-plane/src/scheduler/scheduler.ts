@@ -622,7 +622,6 @@ export class Scheduler {
         const providerAuth = await resolveAutomationProviderAuth(this.db, automation.id, harness);
         await validateHarnessExecution(
           this.db,
-          this.env,
           { harness, model: automation.model, reasoningEffort: automation.reasoning_effort },
           Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
         );

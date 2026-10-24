@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -12,7 +14,40 @@ from urllib.parse import urlsplit
 from ..base import HarnessStartError
 
 CODEX_VERSION = "0.163.0"
-CODEX_BINARY = "/usr/local/bin/codex"
+# The image's pinned install, never a /usr/local/bin link: a substrate may
+# re-link its own coding agents there at boot (Boat does).
+CODEX_BINARY = "/opt/openinspect/codex/bin/codex"
+CODEX_VERSION_TIMEOUT_SECONDS = 10.0
+
+
+async def verify_codex_binary(binary: str = CODEX_BINARY) -> None:
+    """Fail clearly when the image predates the pinned Codex CLI, instead of at launch."""
+    rebuild = "rebuild the sandbox image"
+    try:
+        process = await asyncio.create_subprocess_exec(
+            binary,
+            "--version",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        raise HarnessStartError(
+            f"The Codex CLI is not installed in this image; {rebuild}"
+        ) from None
+    try:
+        output, _ = await asyncio.wait_for(
+            process.communicate(), timeout=CODEX_VERSION_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise HarnessStartError("The Codex CLI did not report its version") from None
+    observed = re.fullmatch(r"codex-cli (\S+)", output.decode(errors="replace").strip())
+    if process.returncode != 0 or observed is None or observed.group(1) != CODEX_VERSION:
+        raise HarnessStartError(
+            f"This image's Codex CLI does not match the pinned {CODEX_VERSION}; {rebuild}"
+        )
 
 
 def clean_codex_env(parent: Mapping[str, str], state_dir: Path) -> dict[str, str]:

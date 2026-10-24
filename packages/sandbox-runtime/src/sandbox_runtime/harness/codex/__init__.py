@@ -43,7 +43,7 @@ from .events import TURN_FAILED_MESSAGE, CodexRateLimits, CodexTurnEvents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
     from ...model_prices import ModelPriceCatalog
 
@@ -84,9 +84,13 @@ class CodexHarness:
         client_factory: Callable[..., CodexClient] = CodexClient,
         environ: Mapping[str, str] | None = None,
         prices: ModelPriceCatalog | None = None,
+        verify_binary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.config, self.log, self.limits = config, log, limits
         self._prices = prices
+        # Checked once per harness: the image's binary does not change under a
+        # running sandbox, only between images.
+        self._verify_binary = verify_binary
         self._credentials = credential_client
         self._factory = client_factory
         self._environ = dict(os.environ if environ is None else environ)
@@ -140,6 +144,9 @@ class CodexHarness:
             if not await self._client.close(timeout_seconds=STOP_TIMEOUT_SECONDS):
                 raise HarnessStartError("Codex process containment could not be confirmed")
             self._client = None
+        if self._verify_binary is not None:
+            await self._verify_binary()
+            self._verify_binary = None
         env = clean_codex_env(self._environ, self.config.state_dir)
         self._mcp = mcp_configuration(self.config.mcp_servers)
         self._epoch = uuid.uuid4().hex

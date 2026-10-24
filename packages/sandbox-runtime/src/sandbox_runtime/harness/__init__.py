@@ -28,6 +28,7 @@ from .base import (
 )
 from .claude_env import OAUTH_MANAGED_ENV_VAR
 from .codex import CodexHarness, CodexHarnessConfig
+from .codex.env import verify_codex_binary
 from .opencode import OpencodeHarness
 from .opencode_client import OpenCodeClient
 from .tools import ToolServerConfig
@@ -149,6 +150,7 @@ def build_agent_harness(
                 limits=limits,
                 credential_client=token_client,
                 prices=ModelPriceCatalog(default_catalog_path(os.environ), log),
+                verify_binary=verify_codex_binary,
             )
     raise ValueError(f"Unsupported harness: {harness_id}")
 

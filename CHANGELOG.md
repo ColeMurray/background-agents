@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 24, 2026
+
+**Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;
+Daytona, E2B, Vercel, and Boat deployments can run Codex sessions, automations, and child sessions
+too. The harness now launches the image's pinned Codex CLI rather than whatever `codex` sits in
+`/usr/local/bin`, which Boat replaces at boot. It checks that CLI's version before starting, so a
+sandbox image built before Codex support fails with a request to rebuild the image instead of an
+opaque launch error. Rebuild your base image or snapshot if it predates the Codex CLI, including a
+pinned `vercel_base_snapshot_id`. Codex sessions skip prebuilt repository images older than runtime
+v77 until those are rebuilt.
+
 ## October 23, 2026
 
 **Faster sandbox boots.** The runtime now fetches managed skills and session memory side by side

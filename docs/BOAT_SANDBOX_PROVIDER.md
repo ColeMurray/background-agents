@@ -159,7 +159,9 @@ smallest Boat size that satisfies it (`small` 2 vCPU/4 GB, `default` 4/8, `large
 auto-stop TTL, clamped to Boat's bounds of one second to thirty days.
 
 Prebuilt repository and environment images are supported; see [Prebuilt images](#prebuilt-images).
-The Codex harness is limited to Modal and is not available on Boat.
+All three harnesses run on Boat. Boat re-links its own coding agents, including a `codex`, under
+`/usr/local/bin` at boot, so the Codex harness launches the image's pinned install under
+`/opt/openinspect/codex` and checks its version before it starts.
 
 ### Ports
 

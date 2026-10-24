@@ -18,28 +18,11 @@ import {
 } from "@open-inspect/shared/models";
 import { ModelPreferencesStore } from "./db/model-preferences";
 import type { SqlDatabase } from "./db/sql-database";
-import type { EnvConfig } from "./types";
 import type {
   ModelProviderSelections,
   SessionProviderAuthMode,
 } from "@open-inspect/shared/types/provider-accounts";
 import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
-
-type HarnessAdmissionConfig = Pick<EnvConfig, "SANDBOX_PROVIDER">;
-
-export function getHarnessAdmissionError(
-  env: HarnessAdmissionConfig,
-  harness: HarnessId
-): { code: string; message: string } | null {
-  if (harness !== "codex") return null;
-  if (!["modal", "modal-vm"].includes(env.SANDBOX_PROVIDER?.trim().toLowerCase() || "modal")) {
-    return {
-      code: "harness_provider_unqualified",
-      message: "Codex currently requires a qualified Modal sandbox provider.",
-    };
-  }
-  return null;
-}
 
 export class HarnessAdmissionError extends Error {
   constructor(
@@ -69,7 +52,6 @@ export function resolveHarnessInitialization(
 /** Resolve new execution selections without silently replacing an explicit Codex model. */
 export async function resolveHarnessSelection(
   db: SqlDatabase,
-  env: HarnessAdmissionConfig,
   input: {
     harness: HarnessId;
     model?: string | null;
@@ -77,8 +59,6 @@ export async function resolveHarnessSelection(
   },
   enabledModels?: readonly ValidModel[]
 ): Promise<{ model: ValidModel; reasoningEffort: ReasoningEffort | null }> {
-  const unavailable = getHarnessAdmissionError(env, input.harness);
-  if (unavailable) throw new HarnessAdmissionError(unavailable.message, 409);
   if (getHarnessCapabilities(input.harness).selectionPolicy === "legacy_fallback") {
     const model = getValidModelOrDefault(input.model);
     const incompatible = checkHarnessCompatibility(input.harness, model);
@@ -123,12 +103,11 @@ export async function resolveHarnessSelection(
 /** Recheck mutable deployment policy before execution, without changing legacy dispatch semantics. */
 export async function validateHarnessExecution(
   db: SqlDatabase,
-  env: HarnessAdmissionConfig,
   input: { harness: HarnessId; model: string; reasoningEffort?: string | null },
   providerAuthModes?: Readonly<Partial<Record<string, SessionProviderAuthMode>>>
 ): Promise<void> {
   if (getHarnessCapabilities(input.harness).selectionPolicy === "legacy_fallback") return;
-  await resolveHarnessSelection(db, env, input);
+  await resolveHarnessSelection(db, input);
   const incompatible = checkHarnessCompatibility(
     input.harness,
     input.model,
@@ -173,7 +152,6 @@ export function inheritReasoningEffort(
 /** Children inherit only efforts valid for their selected model. Native defaults must be enabled. */
 export async function resolveChildHarnessSelection(
   db: SqlDatabase,
-  env: HarnessAdmissionConfig,
   parent: { harness: HarnessId; model: string; reasoningEffort: string | null },
   requested: { model?: string; reasoningEffort?: string },
   enabledModels: ValidModel[]
@@ -202,7 +180,6 @@ export async function resolveChildHarnessSelection(
   }
   return resolveHarnessSelection(
     db,
-    env,
     {
       harness: parent.harness,
       model,
@@ -215,7 +192,6 @@ export async function resolveChildHarnessSelection(
 /** Metadata-only automation edits must not depend on current execution availability. */
 export async function resolveHarnessAutomationUpdate(
   db: SqlDatabase,
-  env: HarnessAdmissionConfig,
   existing: { model: string; reasoningEffort: string | null },
   input: {
     harness: HarnessId;
@@ -227,7 +203,7 @@ export async function resolveHarnessAutomationUpdate(
   const model =
     input.model === undefined ? existing.model : resolveHarnessModel(input.harness, input.model);
   if (getHarnessCapabilities(input.harness).selectionPolicy === "strict" && input.executionChanged)
-    return resolveHarnessSelection(db, env, {
+    return resolveHarnessSelection(db, {
       harness: input.harness,
       model,
       reasoningEffort:

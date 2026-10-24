@@ -1,0 +1,86 @@
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from sandbox_runtime.harness.base import HarnessStartError, PromptLimits
+from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
+from sandbox_runtime.harness.codex import env as codex_env
+from sandbox_runtime.harness.codex.env import CODEX_VERSION, verify_codex_binary
+
+
+def fake_binary(tmp_path, body):
+    path = tmp_path / "codex"
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_launches_the_pinned_install_not_a_substrate_link():
+    assert codex_env.CODEX_BINARY == "/opt/openinspect/codex/bin/codex"
+
+
+async def test_pinned_version_is_accepted(tmp_path):
+    await verify_codex_binary(fake_binary(tmp_path, f"echo 'codex-cli {CODEX_VERSION}'"))
+
+
+async def test_missing_binary_asks_for_an_image_rebuild(tmp_path):
+    with pytest.raises(HarnessStartError, match="rebuild the sandbox image"):
+        await verify_codex_binary(str(tmp_path / "absent"))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "echo 'codex-cli 0.1.0'",
+        f"echo 'codex-cli {CODEX_VERSION}'; exit 1",
+        f"echo 'codex-cli {CODEX_VERSION}-boat'",
+        "echo unexpected",
+    ],
+)
+async def test_unpinned_binary_asks_for_an_image_rebuild(tmp_path, body):
+    with pytest.raises(HarnessStartError, match="rebuild the sandbox image"):
+        await verify_codex_binary(fake_binary(tmp_path, body))
+
+
+async def test_hung_binary_is_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_env, "CODEX_VERSION_TIMEOUT_SECONDS", 0.1)
+    with pytest.raises(HarnessStartError, match="did not report its version"):
+        await verify_codex_binary(fake_binary(tmp_path, "exec sleep 30"))
+
+
+def build(tmp_path, verify_binary):
+    client = MagicMock()
+    client.running = True
+    client.open = AsyncMock()
+    client.close = AsyncMock(return_value=True)
+    client.notify = AsyncMock()
+    client.request = AsyncMock(return_value={"account": {"type": "apiKey"}})
+    harness = CodexHarness(
+        config=CodexHarnessConfig(tmp_path, tmp_path / "native", "gpt-6.1-sol", False),
+        log=MagicMock(),
+        limits=PromptLimits(1, 30, 5),
+        client_factory=MagicMock(return_value=client),
+        environ={"OPENAI_API_KEY": "fixture"},
+        verify_binary=verify_binary,
+    )
+    return harness, client
+
+
+async def test_rejected_binary_is_never_launched(tmp_path):
+    verify = AsyncMock(side_effect=HarnessStartError("rebuild the sandbox image"))
+    harness, client = build(tmp_path, verify)
+    with pytest.raises(HarnessStartError, match="rebuild the sandbox image"):
+        await harness.open()
+    harness._factory.assert_not_called()
+    client.open.assert_not_called()
+
+
+async def test_binary_is_verified_once_per_harness(tmp_path):
+    verify = AsyncMock()
+    harness, client = build(tmp_path, verify)
+    await harness.open()
+    client.running = False
+    await harness.open()
+    assert harness._factory.call_count == 2
+    verify.assert_awaited_once()
+    await harness.close()
