@@ -7,11 +7,10 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 **Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;
 Daytona, E2B, Vercel, and Boat deployments can run Codex sessions, automations, and child sessions
 too. The harness now launches the image's pinned Codex CLI rather than whatever `codex` sits in
-`/usr/local/bin`, which Boat replaces at boot. It checks that CLI's version before starting, so a
-sandbox image built before Codex support fails with a request to rebuild the image instead of an
-opaque launch error. Rebuild your base image or snapshot if it predates the Codex CLI, including a
-pinned `vercel_base_snapshot_id`. Prebuilt repository images older than runtime v77 are rebuilt
-automatically; until then, Codex sessions start without them while other harnesses keep using them.
+`/usr/local/bin`, which Boat replaces at boot. Rebuild your base image or snapshot if it predates
+the Codex CLI, including a pinned `vercel_base_snapshot_id`. Prebuilt repository images older than
+runtime v77 are rebuilt automatically; until then, Codex sessions start without them while other
+harnesses keep using them.
 
 ## October 23, 2026
 

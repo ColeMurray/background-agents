@@ -43,7 +43,7 @@ from .events import TURN_FAILED_MESSAGE, CodexRateLimits, CodexTurnEvents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Callable, Mapping
 
     from ...model_prices import ModelPriceCatalog
 
@@ -84,13 +84,9 @@ class CodexHarness:
         client_factory: Callable[..., CodexClient] = CodexClient,
         environ: Mapping[str, str] | None = None,
         prices: ModelPriceCatalog | None = None,
-        verify_binary: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.config, self.log, self.limits = config, log, limits
         self._prices = prices
-        # Checked once per harness: the image's binary does not change under a
-        # running sandbox, only between images.
-        self._verify_binary = verify_binary
         self._credentials = credential_client
         self._factory = client_factory
         self._environ = dict(os.environ if environ is None else environ)
@@ -148,13 +144,6 @@ class CodexHarness:
         self._mcp = mcp_configuration(self.config.mcp_servers)
         self._epoch = uuid.uuid4().hex
         epoch = self._epoch
-        if self._verify_binary is not None:
-            await self._verify_binary()
-            self._verify_binary = None
-            # stop_execution does not wait for the open lock; a stop that saw no
-            # client during verification must not be followed by a launch.
-            if epoch != self._epoch:
-                raise HarnessStartError("Codex was stopped while starting")
 
         async def callback(method: str, params: dict[str, Any]) -> dict[str, Any]:
             if epoch != self._epoch:
