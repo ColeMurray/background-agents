@@ -138,6 +138,8 @@ describe("NewAutomationPage loading", () => {
     render(<NewAutomationPage />);
 
     expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
+    // The collapsed-sidebar header stays up so the layout doesn't shift on load.
+    expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Create Automation" })).not.toBeInTheDocument();
   });
 });

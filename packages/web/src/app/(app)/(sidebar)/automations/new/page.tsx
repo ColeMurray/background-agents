@@ -194,9 +194,28 @@ function NewAutomationContent() {
   );
 }
 
+// Search params are what suspended, so the scope-preserving back link can't be
+// built yet; keep the sidebar controls so the layout doesn't shift on load.
+function NewAutomationFallback() {
+  const { isOpen } = useSidebarContext();
+  return (
+    <AutomationFormSkeleton
+      header={
+        !isOpen && (
+          <header className="border-b border-border-muted flex-shrink-0">
+            <div className="px-4 py-3 flex items-center gap-2">
+              <CollapsedSidebarControls />
+            </div>
+          </header>
+        )
+      }
+    />
+  );
+}
+
 export default function NewAutomationPage() {
   return (
-    <Suspense fallback={<AutomationFormSkeleton />}>
+    <Suspense fallback={<NewAutomationFallback />}>
       <NewAutomationContent />
     </Suspense>
   );

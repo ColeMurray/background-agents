@@ -137,6 +137,10 @@ describe("EditAutomationPage loading", () => {
     await renderPage();
 
     expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to automation" })).toHaveAttribute(
+      "href",
+      "/automations/auto-1"
+    );
     expect(screen.queryByText("Automation edit form")).not.toBeInTheDocument();
     expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();

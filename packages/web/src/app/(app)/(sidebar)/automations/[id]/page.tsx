@@ -62,8 +62,23 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     else setDeleting(false);
   };
 
+  const collapsedHeader = !isOpen && (
+    <header className="border-b border-border-muted flex-shrink-0">
+      <div className="px-4 py-3 flex items-center gap-2">
+        <CollapsedSidebarControls />
+        <Link
+          href={navigation.list}
+          className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          aria-label="Back to automations"
+        >
+          <BackIcon className="w-4 h-4" />
+        </Link>
+      </div>
+    </header>
+  );
+
   if (loading || (deleting && !automation)) {
-    return <AutomationDetailSkeleton />;
+    return <AutomationDetailSkeleton header={collapsedHeader} />;
   }
 
   if (!automation) {
@@ -83,20 +98,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <CollapsedSidebarControls />
-            <Link
-              href={navigation.list}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              aria-label="Back to automations"
-            >
-              <BackIcon className="w-4 h-4" />
-            </Link>
-          </div>
-        </header>
-      )}
+      {collapsedHeader}
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-3xl mx-auto">

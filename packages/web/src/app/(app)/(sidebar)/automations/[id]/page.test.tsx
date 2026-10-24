@@ -134,6 +134,10 @@ describe("AutomationDetailPage loading", () => {
 
     expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
+      "href",
+      "/automations"
+    );
     expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
   });
 });
