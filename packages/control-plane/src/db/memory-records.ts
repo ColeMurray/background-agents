@@ -187,26 +187,27 @@ export class MemoryRecordStore {
       return result.results.map(memoryFromRow);
     }
     const limit = options.offset + options.limit;
-    const statements = [];
-    for (let start = 0; start < partitions.length; start += chunkSize) {
-      statements.push(
-        prepareSql(
-          this.db,
-          sql`SELECT m.*, r.title, r.description, r.revision_number ${CURRENT_MEMORY}
-            WHERE ${inPartitions(partitions.slice(start, start + chunkSize))} AND m.status = ${options.status}
-              AND ${search}
-            ORDER BY m.updated_at DESC, m.id LIMIT ${limit}`
-        )
-      );
-    }
     // Capture metadata with the revision identity; lifecycle changes must not drop the sentinel
     // or combine new content with the selected ordering. Bodies stay out of the candidate merge.
-    // Batches share a round trip and snapshot while bounding how many candidates are held at once.
+    // Batches share a round trip and snapshot; preparing each batch only when it runs bounds both
+    // the statements and the candidate rows held at once.
+    const batchSize = chunkSize * LIST_CHUNKS_PER_BATCH;
     let rows: Omit<MemoryRow, "content">[] = [];
-    for (let start = 0; start < statements.length; start += LIST_CHUNKS_PER_BATCH) {
-      const results = await this.db.batch<Omit<MemoryRow, "content">>(
-        statements.slice(start, start + LIST_CHUNKS_PER_BATCH)
-      );
+    for (let batchStart = 0; batchStart < partitions.length; batchStart += batchSize) {
+      const statements = [];
+      const end = Math.min(batchStart + batchSize, partitions.length);
+      for (let start = batchStart; start < end; start += chunkSize) {
+        statements.push(
+          prepareSql(
+            this.db,
+            sql`SELECT m.*, r.title, r.description, r.revision_number ${CURRENT_MEMORY}
+              WHERE ${inPartitions(partitions.slice(start, start + chunkSize))}
+                AND m.status = ${options.status} AND ${search}
+              ORDER BY m.updated_at DESC, m.id LIMIT ${limit}`
+          )
+        );
+      }
+      const results = await this.db.batch<Omit<MemoryRow, "content">>(statements);
       rows = rows.concat(...results.map((result) => result.results));
       rows.sort((a, b) => b.updated_at - a.updated_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       rows = rows.slice(0, limit);

@@ -19,10 +19,17 @@ interface MeasuredCall {
 }
 
 /** Record each statement's SQL, bound values, and returned shape, including batched ones. */
-function measure(db: SqlDatabase): { db: SqlDatabase; calls: MeasuredCall[]; batches: number[] } {
+function measure(db: SqlDatabase): {
+  db: SqlDatabase;
+  calls: MeasuredCall[];
+  batches: number[];
+  preparedAtBatch: number[];
+} {
   const calls: MeasuredCall[] = [];
   /** Statement count of each batch() call, in order. */
   const batches: number[] = [];
+  /** Statements prepared so far when each batch() call ran. */
+  const preparedAtBatch: number[] = [];
   const originals = new WeakMap<SqlStatement, { statement: SqlStatement; call: MeasuredCall }>();
   const record = (call: MeasuredCall, rows: unknown[]) => {
     call.columns = Object.keys((rows[0] ?? {}) as object);
@@ -31,6 +38,7 @@ function measure(db: SqlDatabase): { db: SqlDatabase; calls: MeasuredCall[]; bat
   return {
     calls,
     batches,
+    preparedAtBatch,
     db: {
       prepare(query) {
         const statement = db.prepare(query);
@@ -55,6 +63,7 @@ function measure(db: SqlDatabase): { db: SqlDatabase; calls: MeasuredCall[]; bat
       },
       async batch<T>(statements: SqlStatement[]) {
         batches.push(statements.length);
+        preparedAtBatch.push(calls.length);
         const entries = statements.map((statement) => originals.get(statement)!);
         const results = await db.batch<T>(entries.map((entry) => entry.statement));
         results.forEach((result, index) => {
@@ -194,7 +203,7 @@ describe("memory management pagination", () => {
     const partitions = repositories(200);
     const facts = spreadFacts(partitions, 300);
     await seedSearchFacts(db, "owner", facts);
-    const { db: measured, calls, batches } = measure(db);
+    const { db: measured, calls, batches, preparedAtBatch } = measure(db);
     const result = await new MemoryRecordStore(measured).listPartitions(partitions, {
       status: "active",
       offset: 0,
@@ -205,6 +214,8 @@ describe("memory management pagination", () => {
       expectedPage(facts, { offset: 0, limit: 51, needle: false })
     );
     expect(batches).toEqual([4, 1]);
+    // Each batch's statements are prepared only when it runs, not for the whole catalog up front.
+    expect(preparedAtBatch).toEqual([4, 5]);
     expect(calls.filter((call) => call.query.startsWith("SELECT m.*")).length).toBe(5);
   });
 
