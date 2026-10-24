@@ -186,6 +186,10 @@ citations are in `conformance.json`.
 19. The neutral migration registry contains no personal-MCP `9002`; that reservation and its test
     live only in the overlay registry. Every conformance mutation now changes observable behavior
     rather than merely renaming a symbol and relying on a compilation failure.
+20. External-action targets are re-authorized from current repository, team-channel, or originating
+    issue authority before any provider credential is used, including reconciliation.
+21. Cross-session depth is assigned once by the source receipt and copied unchanged into target
+    provenance; Slack reconciliation reads `conversations.replies.messages`.
 
 ## Verification state
 

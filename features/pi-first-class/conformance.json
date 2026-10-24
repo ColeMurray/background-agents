@@ -511,7 +511,8 @@
       "status": "PASS",
       "code": [
         "packages/control-plane/src/pi/external-action-policy-extension.ts:117",
-        "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts:177"
+        "packages/control-plane/src/session/http/handlers/external-action-bridge.handler.ts:177",
+        "packages/control-plane/src/session/external-action-target-authority.ts:1"
       ],
       "tests": [
         {
@@ -525,6 +526,14 @@
         {
           "file": "packages/control-plane/src/db/automation-external-action-grants.test.ts",
           "name": "returns a grant only for the automation's current executor"
+        },
+        {
+          "file": "packages/control-plane/src/session/external-action-target-authority.test.ts",
+          "name": "requires Slack channels to remain bound to the session team"
+        },
+        {
+          "file": "packages/control-plane/src/session/external-action-providers/executor.test.ts",
+          "name": "reads Slack conversations.replies messages for reconciliation"
         }
       ],
       "mutation": {

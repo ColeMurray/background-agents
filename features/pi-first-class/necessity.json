@@ -1480,6 +1480,11 @@
       "need": ["DEV:external-actions"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
     },
+    "packages/control-plane/src/session/external-action-providers/executor.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions", "D-6"],
+      "why": "Proves reconciliation reads Slack conversations.replies messages and cannot re-arm an applied reply."
+    },
     "packages/control-plane/src/session/external-action-providers/executor.ts": {
       "layer": "overlay",
       "need": ["DEV:external-actions"],
@@ -1494,6 +1499,16 @@
       "layer": "overlay",
       "need": ["DEV:external-actions"],
       "why": "This file implements an off-by-default Compound overlay capability that is not part of the upstream-compatible core."
+    },
+    "packages/control-plane/src/session/external-action-target-authority.test.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions", "D-6"],
+      "why": "Proves external-action targets remain inside current session repository, team-channel, and issue authority."
+    },
+    "packages/control-plane/src/session/external-action-target-authority.ts": {
+      "layer": "overlay",
+      "need": ["DEV:external-actions", "D-6"],
+      "why": "Reauthorizes the exact repository, Slack channel, or originating Linear issue before provider credential use."
     },
     "packages/control-plane/src/session/harness-result-receipt-repository.test.ts": {
       "layer": "core-support",
