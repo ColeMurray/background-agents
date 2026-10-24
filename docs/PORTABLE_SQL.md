@@ -49,6 +49,11 @@ host would bring its own adapter rather than reinterpret this one. The check ski
 in exchange, store logic does not belong there — anything a Postgres deployment would also need
 lives in `src/db` or `src/session` and is checked.
 
+`src/db/sqlite-sets.ts` is shared engine-adapter code for D1 and Node SQLite. Its JSON expansion is
+exposed only through optional `SqlDatabase.bulkInsert` and `idList` capabilities, with exact
+constructs recorded in the portability baseline. Stores use portable fallbacks when these
+capabilities are absent; a future Postgres adapter can implement its own expansion there.
+
 Migrations already merged are grandfathered by number, not rewritten. Converting them is a separate
 piece of work; the baseline exists so the pile stops growing meanwhile.
 

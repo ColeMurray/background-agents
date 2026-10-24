@@ -1,7 +1,7 @@
 import type { SkillProfile } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
 import { bulkInsertStatements } from "./bulk-insert";
-import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
+import { idListBatches } from "./id-list";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 interface ProfileRow {
@@ -29,15 +29,9 @@ export class SkillProfileStore {
   /**
    * Read every profile this user owns, with its membership.
    *
-   * Two statements rather than one `json_group_array` aggregate. The aggregate
-   * builds a profile's whole membership into a single value, which the engine
-   * caps at 2 MB — roughly fifty thousand ids. Nothing bounds profile width, so
-   * that ceiling is only out of reach because the write path gives out first,
-   * at about 33,000 members. Anything that makes profile writes cheaper moves
-   * the write cliff past the read one and turns this into a profile that can be
-   * saved and then never loaded, so the read should not depend on the write
-   * staying expensive. Grouping in memory has no such ceiling, matches what
-   * `getOwned` already does, and drops a SQLite-only aggregate.
+   * Read membership separately rather than building one JSON aggregate that
+   * can exceed the engine's maximum string size. Grouping in memory matches
+   * getOwned and keeps profile reads independent of write payload splitting.
    */
   async list(userId: string): Promise<SkillProfile[]> {
     const profiles = await this.db
@@ -167,14 +161,12 @@ export class SkillProfileStore {
     }
     if (unique.length === 0) return;
     let found = 0;
-    for (let start = 0; start < unique.length; start += MAX_D1_QUERY_PARAMETERS) {
-      const chunk = unique.slice(start, start + MAX_D1_QUERY_PARAMETERS);
-      const placeholders = chunk.map(() => "?").join(", ");
+    for (const list of idListBatches(this.db, unique)) {
       const result = await this.db
         .prepare(
-          `SELECT COUNT(*) AS count FROM skills WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+          `SELECT COUNT(*) AS count FROM skills WHERE id IN (${list.sql}) AND deleted_at IS NULL`
         )
-        .bind(...chunk)
+        .bind(...list.values)
         .first<{ count: number }>();
       found += result?.count ?? 0;
     }
@@ -184,9 +176,8 @@ export class SkillProfileStore {
   }
 
   /**
-   * Pack membership rows into multi-row INSERTs. Profile size is caller-chosen,
-   * so a statement per member would let one profile write exhaust the
-   * invocation's query budget; the statements stay batchable either way.
+   * Build batchable membership inserts through the engine's set capability
+   * (or the portable fallback), preserving atomic profile replacement.
    */
   private itemStatements(profileId: string, skillIds: string[]): SqlStatement[] {
     return bulkInsertStatements(

@@ -378,9 +378,8 @@ export class SessionIndexStore {
    * execution so the session, repository snapshot, and pinned skills commit
    * atomically rather than leaving a partially initialized session.
    *
-   * Revisions are packed into multi-row INSERTs: the pinned set is as wide as
-   * the applicable catalog, and a statement per skill would spend the
-   * invocation's whole query budget on one session create.
+   * Revisions use the engine's set capability (or the portable fallback) so
+   * the pinned catalog does not require a statement per skill.
    */
   private bindManifestInserts(
     sessionId: string,

@@ -27,6 +27,7 @@
 
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { SqlDatabase, SqlResult, SqlStatement } from "../db/sql-database";
+import { sqliteSetOperations } from "../db/sqlite-sets";
 import { applyMigrations } from "./migrate";
 import { openPrivateSqliteFile } from "./sqlite-file";
 import { isStatementlessSql } from "./sqlite-sql";
@@ -75,7 +76,7 @@ export function createNodeSqlDatabase(db: DatabaseSync): NodeSqlDatabase {
     return statement;
   };
 
-  return {
+  const database: NodeSqlDatabase = {
     prepare: (query) => statementFor(query, []),
     async batch<T>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
       const work = statements.map((statement) => {
@@ -100,6 +101,7 @@ export function createNodeSqlDatabase(db: DatabaseSync): NodeSqlDatabase {
     },
     close: () => db.close(),
   };
+  return Object.assign(database, sqliteSetOperations(database));
 }
 
 interface StatementExecutor {

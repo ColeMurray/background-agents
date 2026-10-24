@@ -356,11 +356,11 @@ Removing the count cap exposed three resources scaling with skill count rather t
 was enforced, so each surfaced as an engine error rather than a validation message. What each cost
 and what it costs now:
 
-| Resource                     | Was                            | Now                                          | Cliff         |
-| ---------------------------- | ------------------------------ | -------------------------------------------- | ------------- |
-| Installation payload         | Whole manifest in one response | `MANAGED_SKILLS_PAGE_SIZE` per response      | none          |
-| Session manifest persistence | One INSERT per skill           | 10 `session_skill_revisions` rows per INSERT | 9,041 skills  |
-| Profile membership writes    | One INSERT per skill           | 50 `skill_profile_items` rows per INSERT     | 33,251 skills |
+| Resource                     | Was                            | Now                                                      |
+| ---------------------------- | ------------------------------ | -------------------------------------------------------- |
+| Installation payload         | Whole manifest in one response | `MANAGED_SKILLS_PAGE_SIZE` per response                  |
+| Session manifest persistence | One INSERT per skill           | Engine-side JSON expansion, split by UTF-8 payload bytes |
+| Profile membership writes    | One INSERT per skill           | Engine-side JSON expansion, split by UTF-8 payload bytes |
 
 The payload was the binding constraint at roughly 2,400 skills, assuming the worst realistic shape:
 `MAX_SKILL_FILES` near-empty files per skill, where roughly 134 bytes plus the path length of
@@ -374,28 +374,27 @@ writes each page into the staging tree as it arrives, so peak memory is one page
 whole installation. Duplicate names and the content aggregate accumulate across pages, because they
 are properties of the installation and not of a response.
 
-The two write paths are bounded by D1's 1,000 queries per Worker invocation. Both pack rows into
-multi-row `INSERT`s sized to the 100-parameter ceiling (`bulkInsertStatements`), which divides the
-statement count by rows-per-statement and keeps the write inside its caller's atomic `batch()`.
-Multi-row `VALUES` is standard SQL, so neither path needs an engine branch. `bindManifestCopy` is
-set-based (`INSERT … SELECT`) and stays fully count-independent.
+D1 and Node SQLite supply optional `SqlDatabase.bulkInsert` and `idList` capabilities. Both write
+paths expand JSON parameters into rows inside the existing atomic `batch()`; assignment hydration
+and profile skill-ID validation use the same engine-side expansion for their ID sets. Store SQL
+remains portable: engines without these capabilities retain bounded multi-row `VALUES` and
+parameter-list fallbacks. The SQLite-only SQL is isolated in the adapter's `sqlite-sets.ts`.
+`bindManifestCopy` remains a set-based `INSERT … SELECT`.
 
-Packing lowers the constant; it does not remove the linear term, and the budget is spent by the
-whole invocation rather than by the write alone. The cliffs above are the minimum end-to-end cost
-for `N` skills, so any additional per-request work lowers them further:
+For a payload fitting a single JSON parameter, session resolution plus persistence uses four reads
+(two generation, one catalog, one assignment set) and three writes (session, manifest, revision
+set). Profile creation uses one validation read and three writes (profile, membership set,
+generation). These costs no longer grow by one statement per ten/fifty/hundred skills.
+Repository/provider-auth queries, auth/routing, profile-mode selection and catalog consistency
+retries still add work.
 
-| Path           | Reads                                                   | Writes                                    | Total     |
-| -------------- | ------------------------------------------------------- | ----------------------------------------- | --------- |
-| Session create | 2 generation + 1 catalog + ⌈N/100⌉ assignment hydration | 1 session + 1 manifest + ⌈N/10⌉ revisions | 5 + 0.11N |
-| Profile create | ⌈N/100⌉ `validateSkillIds`                              | 1 profile + ⌈N/50⌉ items + 1 generation   | 2 + 0.03N |
-
-Session create excludes repository and provider-auth statements and assumes resolution does not
-retry; a generation change retries the read phase up to `MAX_CATALOG_READ_ATTEMPTS` times, and
-profile-mode selection adds two more reads. Profile create excludes authentication and routing.
-Making either genuinely count-independent needs a set-based bulk write behind the database boundary
-— `json_each`-style expansion of a single parameter — which the `SqlDatabase` port cannot express
-today because it is types-only and erased at build time, leaving no runtime dispatch point for an
-engine branch.
+A literal single parameter for every possible catalog would exceed D1's 2,000,000-byte string limit.
+The adapter therefore measures serialized UTF-8 bytes, including JSON framing, and splits each set
+at `MAX_SQLITE_JSON_BYTES`. Every chunk stays in the original transaction; a failure rolls back all
+chunks and surrounding writes. An individual serialized row exceeding that limit is rejected before
+execution. This removes the old row-count cliffs, not all resource limits: query count grows with
+serialized bytes, and hosted query/CPU/memory limits still apply. The portable fallback still has
+the original count-dependent costs. No Postgres adapter is implemented yet.
 
 Paths must be normalized relative POSIX paths. Reject absolute paths, empty segments, `.`, `..`,
 backslashes, NUL/control characters, duplicate normalized paths, symlinks, hard links, and reserved

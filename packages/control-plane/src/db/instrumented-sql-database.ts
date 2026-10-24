@@ -206,7 +206,14 @@ function instrumentStatement(stmt: SqlStatement, metrics: RequestMetrics): SqlSt
  * without any changes to the store code.
  */
 export function instrumentSqlDatabase(db: SqlDatabase, metrics: RequestMetrics): SqlDatabase {
+  const bulkInsert = db.bulkInsert?.bind(db);
   return {
+    bulkInsert: bulkInsert
+      ? (table, columns, rows) =>
+          bulkInsert(table, columns, rows).map((stmt) => instrumentStatement(stmt, metrics))
+      : undefined,
+    idList: db.idList?.bind(db),
+
     prepare(query: string): SqlStatement {
       return instrumentStatement(db.prepare(query), metrics);
     },

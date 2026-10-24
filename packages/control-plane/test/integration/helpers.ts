@@ -1,4 +1,5 @@
 import { SELF, env } from "cloudflare:test";
+import { createD1SqlDatabase } from "../../src/cloudflare/sql-database";
 import { createCloudflareEnv, type WorkerBindings } from "../../src/cloudflare/platform";
 import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
 import { runInSessionDO } from "./session-do-access";
@@ -12,14 +13,9 @@ import type { SqlDatabase } from "../../src/db/sql-database";
 import { SessionIndexStore } from "../../src/db/session-index";
 import type { SessionModelProviderAuthInput } from "../../src/model-provider-accounts/provider-auth-contracts";
 
-/**
- * The test D1 binding viewed through the engine-neutral interface, so tests
- * can `batch()` statements bound by stores (which type them as SqlStatement).
- * Plain assignment — D1Database satisfies SqlDatabase structurally by the
- * interface's documented method bivariance.
- */
+/** The test D1 binding through the same adapter used by production. */
 export function sqlDatabase(db: D1Database): SqlDatabase {
-  return db;
+  return createD1SqlDatabase(db);
 }
 
 /**
