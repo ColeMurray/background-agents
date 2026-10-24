@@ -14,8 +14,8 @@ export const HARNESS_ACTION_CEILING = 512;
 export interface HarnessActionCeiling {
   /** How many actions the turn may still take. */
   remaining(): number;
-  /** Take one action's worth of the budget. */
-  consume(): void;
+  /** Atomically take one action, or return false when none remain. */
+  consume(): boolean | Promise<boolean>;
 }
 
 /**
@@ -23,7 +23,7 @@ export interface HarnessActionCeiling {
  */
 export const UNLIMITED_ACTION_CEILING: HarnessActionCeiling = {
   remaining: () => Number.POSITIVE_INFINITY,
-  consume: () => undefined,
+  consume: () => true,
 };
 
 /**
@@ -34,7 +34,9 @@ export function createFixedActionCeiling(limit: number): HarnessActionCeiling {
   return {
     remaining: () => remaining,
     consume: () => {
+      if (remaining <= 0) return false;
       remaining = Math.max(0, remaining - 1);
+      return true;
     },
   };
 }

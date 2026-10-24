@@ -34,7 +34,7 @@ export interface PiToolPolicyOptions {
   /** The deployment's kill switch. */
   readonly emergencyPolicy?: PiToolEmergencyPolicy;
   /** The ceiling on what this turn may do. */
-  readonly ceiling?: () => HarnessActionCeiling;
+  readonly ceiling?: () => HarnessActionCeiling | Promise<HarnessActionCeiling>;
 }
 
 /** The result the runtime sees when the policy fails closed. */

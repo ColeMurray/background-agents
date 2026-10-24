@@ -37,6 +37,8 @@ import { PI_MODEL_PROVIDER_ID, piProviderFactories } from "../../src/pi/provider
 import { ProviderCredentialStore } from "../../src/db/provider-account-credentials";
 import { ProviderCredentialService } from "../../src/session/provider-credential-service";
 import type { HarnessBudgetState } from "../../src/harness/budget-gate";
+import { HARNESS_ACTION_CEILING } from "../../src/harness/action-ceiling";
+import type { PiTurnAuthorityStore } from "../../src/pi/turn-authority";
 
 const defaultPiProviderFactory = piProviderFactories.factoryFor(PI_MODEL_PROVIDER_ID)!;
 afterEach(() => piProviderFactories.register(PI_MODEL_PROVIDER_ID, defaultPiProviderFactory));
@@ -120,6 +122,19 @@ async function executeAgentTool(
   args: Record<string, JsonValue>,
   requestId: string
 ) {
+  const authorityInternals = instance as unknown as {
+    turnAuthority: PiTurnAuthorityStore;
+    installTurnActionCeiling(
+      operationId: string,
+      authority: Awaited<ReturnType<PiTurnAuthorityStore["initialize"]>>
+    ): void;
+  };
+  const authority = await authorityInternals.turnAuthority.initialize(
+    requestId,
+    undefined,
+    HARNESS_ACTION_CEILING
+  );
+  authorityInternals.installTurnActionCeiling(requestId, authority);
   const models = (instance as unknown as { models: MutableModels }).models;
   const faux = fauxProvider();
   models.setProvider(faux.provider);
@@ -2900,6 +2915,7 @@ describe("PiSessionDO", () => {
     const { sessionName, stub } = await initializedPiStub("pi-slow-admission");
     await stub.status(sessionName);
     const operationId = "slow-admission-operation";
+    const executionDeadlineMs = Date.now() + 60_000;
     const result = await runInPiSessionDO(stub, async (instance, state) => {
       let releaseAdmission!: () => void;
       const admissionReleased = new Promise<void>((resolve) => {
@@ -2924,8 +2940,16 @@ describe("PiSessionDO", () => {
         content: "admit after projector alarm",
         model: "openai/gpt-5.6-sol",
         requirePricing: false,
+        executionDeadlineMs,
       });
       await started;
+      const authorityBeforeAdmission = state.storage.sql
+        .exec<{ deadline_ms: number; remaining_actions: number }>(
+          `SELECT deadline_ms, remaining_actions FROM oi_pi_turn_authority
+           WHERE operation_id = ?`,
+          operationId
+        )
+        .one();
       state.storage.sql.exec(
         `UPDATE cf_agents_jobs SET time = 0
          WHERE capability = 'pi-projection' AND id = ?`,
@@ -2942,12 +2966,17 @@ describe("PiSessionDO", () => {
         finalizedBeforeAdmission,
         receipt,
         lookup,
+        authorityBeforeAdmission,
         finalAccounting: await instance.projectionOutbox.finalAccounting(operationId),
       };
     });
 
     expect(result.finalizedBeforeAdmission).toBe(false);
     expect(result.receipt).toMatchObject({ accepted: true, operationId });
+    expect(result.authorityBeforeAdmission).toEqual({
+      deadline_ms: executionDeadlineMs,
+      remaining_actions: HARNESS_ACTION_CEILING,
+    });
     expect(result.lookup).toMatchObject({ status: "settled" });
     expect(result.finalAccounting).not.toBeNull();
   });

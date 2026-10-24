@@ -24,6 +24,8 @@
 import {
   PI_DO_OUTBOX_MIGRATION_ID,
   PI_DO_REPOSITORY_DIFF_OUTBOX_MIGRATION_ID,
+  PI_DO_TRUSTED_USAGE_MIGRATION_ID,
+  PI_DO_TURN_AUTHORITY_MIGRATION_ID,
 } from "@open-inspect/shared/migration-reservations";
 import type { MigrationOwner } from "@open-inspect/shared/migration-reservations";
 import { createLogger } from "../logger";
@@ -70,6 +72,21 @@ export const PI_REPOSITORY_DIFF_OUTBOX_TABLE_SQL = `CREATE TABLE IF NOT EXISTS o
   updated_at INTEGER NOT NULL
 )`;
 
+/** Server-priced usage, written through Pi's shared SQLite operation queue. */
+export const PI_TRUSTED_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS oi_pi_trusted_usage (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  state_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+)`;
+
+/** Per-turn authority that must survive a Pi wake or object eviction. */
+export const PI_TURN_AUTHORITY_TABLE_SQL = `CREATE TABLE IF NOT EXISTS oi_pi_turn_authority (
+  operation_id TEXT PRIMARY KEY,
+  deadline_ms INTEGER,
+  remaining_actions INTEGER NOT NULL CHECK (remaining_actions >= 0),
+  created_at INTEGER NOT NULL
+)`;
+
 /**
  * A numbered, tracked migration for the Pi Durable Object's database.
  *
@@ -101,6 +118,18 @@ export const PI_DO_MIGRATIONS: readonly PiSchemaMigration[] = [
     description: "Persist the Pi repository diff publication outbox",
     feature: "repositoryEditing",
     run: PI_REPOSITORY_DIFF_OUTBOX_TABLE_SQL,
+  },
+  {
+    id: PI_DO_TRUSTED_USAGE_MIGRATION_ID,
+    description: "Persist trusted Pi usage through the shared SQLite queue",
+    feature: "coreAuthority",
+    run: PI_TRUSTED_USAGE_TABLE_SQL,
+  },
+  {
+    id: PI_DO_TURN_AUTHORITY_MIGRATION_ID,
+    description: "Persist Pi turn deadlines and action ceilings",
+    feature: "coreAuthority",
+    run: PI_TURN_AUTHORITY_TABLE_SQL,
   },
 ];
 

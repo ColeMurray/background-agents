@@ -176,6 +176,12 @@ import {
 import { createPiPriceTable } from "../pi/price-table";
 import { createAccountingProvider } from "../pi/accounting-provider";
 import { TrustedUsageMeter } from "../harness/trusted-usage-meter";
+import { PiTrustedUsageStorage } from "../pi/trusted-usage-storage";
+import {
+  PiTurnAuthorityStore,
+  durableTurnActionCeiling,
+  type PiTurnAuthority,
+} from "../pi/turn-authority";
 import { createBudgetGateProvider, type HarnessBudgetState } from "../harness/budget-gate";
 import { armTurnDeadline, type HarnessTurnDeadline } from "../harness/turn-deadline";
 import {
@@ -315,13 +321,15 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   private readonly models = createModels({ credentials: this.credentials });
   /** The deadline of every turn this object is running. */
   private readonly turnDeadlines = new Map<string, HarnessTurnDeadline>();
-  /** The ceiling on what this turn may do; a fresh one for every turn. */
-  private turnActionCeiling: HarnessActionCeiling =
-    createFixedActionCeiling(HARNESS_ACTION_CEILING);
   private readonly prices = createPiPriceTable(this.models);
-  private readonly trustedUsage = new TrustedUsageMeter(this.ctx.storage, this.prices);
   /** Shared Pi/host/Computer queue for this Durable Object's SQLite database. */
   private readonly database = new DurableObjectSqliteDatabase(this.ctx.storage);
+  private readonly turnAuthority = new PiTurnAuthorityStore(this.database);
+  private readonly turnActionCeilings = new Map<string, Promise<HarnessActionCeiling>>();
+  private readonly trustedUsage = new TrustedUsageMeter(
+    new PiTrustedUsageStorage(this.database, this.ctx.storage),
+    this.prices
+  );
   /** Current open's registry; replaced on every PiHarness reopen. */
   private registry: ReturnType<typeof createRegistry> | undefined;
   private workspace: WorkspaceToolFacade | undefined;
@@ -447,8 +455,9 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
               effects,
               authorizeToolCall: (_call, _api, context) =>
                 this.authorizeToolInvocation(context.abortSignal),
-              // The ceiling is per turn; the policy is installed once.
-              ceiling: () => this.turnActionCeiling,
+              // The policy is installed once, but authority is selected from
+              // the active operation and restored from durable SQLite.
+              ceiling: () => this.currentTurnActionCeiling(),
               delegates: workspacePolicyDelegate
                 ? [
                     ...overlay.delegates,
@@ -829,6 +838,17 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         // control path. Relaying it would fail the whole startup and strand
         // every later prompt.
         if (!(await this.operationMetadata(operation.operationId))) return;
+        const authority = await this.turnAuthority.get(operation.operationId);
+        if (!authority) {
+          // An operation admitted by an older binary has no recoverable
+          // deadline or action count. Abort it rather than resume unbounded.
+          await this.harness
+            .abort({ session: ROOT_SESSION, operationId: operation.operationId })
+            .catch(() => false);
+        } else {
+          this.installTurnActionCeiling(operation.operationId, authority);
+          this.armTurnDeadline(operation.operationId, authority.deadlineMs);
+        }
         return this.startEventRelay(sessionId, operation.operationId, {
           recoverSnapshot: operation.status === "running",
         });
@@ -853,8 +873,6 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       // The turn's images are fetched before anything is recorded or
       // scheduled: a turn that cannot carry its image is refused outright,
       // never admitted and quietly run without one.
-      // A fresh ceiling for this turn.
-      this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
       const hydrated = await this.buildUserInput(input);
       if (!hydrated.ok) {
         await this.stopEventRelay(input.messageId).catch(() => {});
@@ -866,7 +884,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       }
       userInput = hydrated.userInput;
       const baseline = await this.accountingTotals();
-      await this.rememberOperation(input, baseline);
+      const authority = await this.rememberOperation(input, baseline);
+      this.installTurnActionCeiling(input.messageId, authority);
       await this.startEventRelay(input.sessionId, input.messageId);
       await this.projector.schedule({
         sessionId: input.sessionId,
@@ -889,7 +908,8 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     // The turn's deadline is armed inside the object. A turn that never
     // finishes would otherwise hold the object, its storage, and the
     // session's money for as long as it liked.
-    this.armTurnDeadline(input.messageId, input.executionDeadlineMs);
+    const authority = await this.turnAuthority.get(input.messageId);
+    this.armTurnDeadline(input.messageId, authority?.deadlineMs);
     this.log.info("pi.latency", {
       event: "pi.latency",
       milestone: "pi_admitted",
@@ -1025,6 +1045,39 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       },
     });
     this.turnDeadlines.set(operationId, deadline);
+  }
+
+  private async currentTurnActionCeiling(): Promise<HarnessActionCeiling> {
+    const operationId = await this.attributedOperationId(ROOT_SESSION);
+    return operationId
+      ? this.turnActionCeilingForOperation(operationId)
+      : createFixedActionCeiling(0);
+  }
+
+  private turnActionCeilingForOperation(operationId: string): Promise<HarnessActionCeiling> {
+    const existing = this.turnActionCeilings.get(operationId);
+    if (existing) return existing;
+    const loading = this.turnAuthority
+      .get(operationId)
+      .then((authority) =>
+        authority
+          ? durableTurnActionCeiling(this.turnAuthority, authority)
+          : createFixedActionCeiling(0)
+      );
+    this.turnActionCeilings.set(operationId, loading);
+    return loading;
+  }
+
+  private installTurnActionCeiling(operationId: string, authority: PiTurnAuthority): void {
+    this.turnActionCeilings.set(
+      operationId,
+      Promise.resolve(durableTurnActionCeiling(this.turnAuthority, authority))
+    );
+  }
+
+  private async clearTurnAuthority(operationId: string): Promise<void> {
+    this.turnActionCeilings.delete(operationId);
+    await this.turnAuthority.delete(operationId);
   }
 
   /**
@@ -1332,11 +1385,22 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         throw new Error("Pi active task limit reached");
       const baseline = await this.accountingTotals();
       const operationId = input.operationId ?? input.requestId;
-      this.turnActionCeiling = createFixedActionCeiling(HARNESS_ACTION_CEILING);
+      const requestedDeadlineMs =
+        input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS;
+      const authority = await this.turnAuthority.initialize(
+        operationId,
+        requestedDeadlineMs,
+        HARNESS_ACTION_CEILING
+      );
+      const deadlineMs = authority.deadlineMs;
+      this.installTurnActionCeiling(operationId, authority);
       this.activeOperationByConversation.set(ROOT_SESSION, operationId);
       if (input.operationId) {
         const model = canonicalModelOf((await conversation.agent(BACKGROUND_CONTEXT)).model);
-        await this.rememberOperation({ messageId: operationId, model }, baseline);
+        await this.rememberOperation(
+          { messageId: operationId, model, executionDeadlineMs: deadlineMs },
+          baseline
+        );
         await this.startEventRelay(input.sessionId, operationId);
       }
       const taskId = await conversation.compact(input.instructions, BACKGROUND_CONTEXT);
@@ -1346,7 +1410,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
         operationId,
         baseline,
         suppressCost: false,
-        deadlineMs: input.executionDeadlineMs ?? Date.now() + DEFAULT_NATIVE_CONTROL_TIMEOUT_MS,
+        deadlineMs,
         projection: "compaction",
         target: { kind: "task", id: taskId },
       });
@@ -1436,6 +1500,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
     if (!response.ok && response.status !== 404)
       throw new Error(`Pi control completion rejected (${response.status})`);
     await this.ctx.storage.delete(`${CONTROL_COMPLETION_PREFIX}${record.requestId}`);
+    if (!projectedOperationId) await this.clearTurnAuthority(deadlineOperationId);
   }
 
   private async restoreNativeControlDeadline(record: NativeControlCompletion): Promise<void> {
@@ -1881,20 +1946,29 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
   }
 
   private async rememberOperation(
-    input: Pick<PiRuntimePrompt, "messageId" | "model">,
+    input: Pick<PiRuntimePrompt, "messageId" | "model" | "executionDeadlineMs">,
     baseline: UsageAccountingSnapshot
-  ): Promise<void> {
+  ): Promise<PiTurnAuthority> {
     const key = `${OPERATION_METADATA_PREFIX}${input.messageId}`;
     const existing = await this.ctx.storage.get<PiOperationMetadata>(key);
     if (existing) {
       if (existing.model !== input.model) throw new Error("Pi operation model mismatch");
-      return;
+      return this.turnAuthority.initialize(
+        input.messageId,
+        input.executionDeadlineMs,
+        HARNESS_ACTION_CEILING
+      );
     }
     await this.ctx.storage.put(key, {
       model: input.model,
       baseline,
       projectedCostUsd: 0,
     });
+    return this.turnAuthority.initialize(
+      input.messageId,
+      input.executionDeadlineMs,
+      HARNESS_ACTION_CEILING
+    );
   }
 
   private operationMetadata(operationId: string): Promise<PiOperationMetadata | undefined> {
@@ -1921,6 +1995,7 @@ export class PiSessionDO extends DurableObject<PiWorkerBindings> {
       )
       .slice(MAX_OPERATION_METADATA_TOMBSTONES);
     if (expired.length > 0) await this.ctx.storage.delete(expired.map(([storedKey]) => storedKey));
+    await this.clearTurnAuthority(operationId);
   }
 
   private async accountingTotals(): Promise<UsageAccountingSnapshot> {

@@ -104,7 +104,7 @@ export interface HarnessToolPolicyOptions<
    * ceiling is read through a getter because it is per *turn*, and the policy
    * is installed once.
    */
-  readonly ceiling?: () => HarnessActionCeiling;
+  readonly ceiling?: () => HarnessActionCeiling | Promise<HarnessActionCeiling>;
   /** The facts about a call that the seam's own decision needs. */
   readonly factsOf: (call: Call) => HarnessToolCall;
   /** The result to return when the policy fails closed. */
@@ -171,11 +171,10 @@ export function createToolPolicy<
       const declaration = effects.get(facts.name);
       if (!declaration) return { block: `Tool is not declared: ${facts.name}` };
 
-      const limit = ceiling?.();
-      if (limit && limit.remaining() <= 0) {
+      const limit = await ceiling?.();
+      if (limit && !(await limit.consume())) {
         return { block: "This turn has reached the action ceiling" };
       }
-      limit?.consume();
 
       if (!declaration.callers.includes(facts.caller)) {
         return { block: `Tool caller is not allowed: ${facts.caller} -> ${facts.name}` };

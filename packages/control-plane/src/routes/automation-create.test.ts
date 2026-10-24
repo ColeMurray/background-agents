@@ -13,6 +13,7 @@ import { HttpError, resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import { createTestRequestHandler } from "../router.test-support";
 import { ModelPreferencesStore } from "../db/model-preferences";
+import { ProviderDefaultStore } from "../db/provider-account-defaults";
 import { automationRoutes } from "./automations";
 import {
   mocks,
@@ -191,24 +192,37 @@ describe("automation create route", () => {
     });
 
     it("persists repository-targeted Pi automations", async () => {
-      const response = await callRoute("POST", "/automations", {
-        body: {
-          ...validBody,
-          harness: "pi",
-          model: "openai/gpt-5.6-sol",
-          providerSelections: {
-            openai: {
-              mode: "provider_account",
-              accountId: "0123456789abcdef0123456789abcdef",
+      const unattendedPolicy = vi.spyOn(ProviderDefaultStore.prototype, "get").mockResolvedValue({
+        provider: "openai",
+        providerAccountId: "0123456789abcdef0123456789abcdef",
+        unattendedMode: "provider_account",
+        createdBy: null,
+        updatedBy: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      try {
+        const response = await callRoute("POST", "/automations", {
+          body: {
+            ...validBody,
+            harness: "pi",
+            model: "openai/gpt-5.6-sol",
+            providerSelections: {
+              openai: {
+                mode: "provider_account",
+                accountId: "0123456789abcdef0123456789abcdef",
+              },
             },
           },
-        },
-      });
+        });
 
-      expect(response.status).toBe(201);
-      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ harness: "pi", model: "openai/gpt-5.6-sol" })
-      );
+        expect(response.status).toBe(201);
+        expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+          expect.objectContaining({ harness: "pi", model: "openai/gpt-5.6-sol" })
+        );
+      } finally {
+        unattendedPolicy.mockRestore();
+      }
     });
 
     it("denies repository targets before SCM lookup or persistence", async () => {

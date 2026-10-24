@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { UsageAccountingSnapshot } from "./accounting";
 import type { HarnessPriceTable, HarnessUsage } from "./pricing";
 
-const METER_KEY = "open-inspect:trusted-usage-meter";
+export const TRUSTED_USAGE_METER_KEY = "open-inspect:trusted-usage-meter";
 const meterStateSchema = z.object({
   version: z.literal(1),
   usage: z.object({
@@ -32,7 +32,7 @@ export class TrustedUsageMeter {
     private readonly prices: HarnessPriceTable
   ) {
     this.storage = storage;
-    this.state = storage.get<unknown>(METER_KEY).then((stored) =>
+    this.state = storage.get<unknown>(TRUSTED_USAGE_METER_KEY).then((stored) =>
       stored === undefined
         ? {
             version: 1,
@@ -57,7 +57,7 @@ export class TrustedUsageMeter {
         state.usage.reasoning = (state.usage.reasoning ?? 0) + usage.reasoning;
       }
       state.costUsd += this.prices.costOf(modelId, usage);
-      await this.storage.put(METER_KEY, state);
+      await this.storage.put(TRUSTED_USAGE_METER_KEY, state);
     });
     this.tail = update.catch(() => undefined);
     return update;
