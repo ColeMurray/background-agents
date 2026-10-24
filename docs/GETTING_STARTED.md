@@ -681,7 +681,7 @@ npx vercel --prod
 > Terraform sets these automatically:
 >
 > - Install: `cd ../.. && npm install && npm run build -w @open-inspect/shared`
-> - Build: `next build`
+> - Build: `npm run build` (also generates the isolated Mermaid renderer)
 
 #### Option B: Link Git Repository (For Automatic Deployments)
 
