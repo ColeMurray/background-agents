@@ -696,14 +696,15 @@ describe("idle queue redrive", () => {
 });
 
 describe("fatal runtime report termination", () => {
-  it.each([
-    { stop: { success: true }, outcome: "terminated" },
-    { stop: { success: false, error: "provider unavailable" }, outcome: "stop_failed" },
-  ])("resolves $outcome once the row is failed", async ({ stop, outcome }) => {
-    const storage = createMockStorage(
-      createMockSession(),
-      createMockSandbox({ status: "connecting", modal_object_id: "modal-obj-booting" })
-    );
+  const exhaustingFailureCount = DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold - 1;
+  const stopSucceeds = { success: true };
+  const stopRejected = { success: false, error: "provider unavailable" };
+
+  function fatalReportHarness(
+    sandbox: Parameters<typeof createMockSandbox>[0],
+    stop: { success: boolean; error?: string } = stopSucceeds
+  ) {
+    const storage = createMockStorage(createMockSession(), createMockSandbox(sandbox));
     const stopSandbox = vi.fn(async () => stop);
     const manager = createTestLifecycleManager(
       createMockProvider({ capabilities: { supportsExplicitStop: true }, stopSandbox }),
@@ -716,13 +717,46 @@ describe("fatal runtime report termination", () => {
       createUnmanagedShutdown(),
       createTestConfig()
     );
+    return { manager, storage, stopSandbox };
+  }
 
-    await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toBe(outcome);
+  it.each([
+    { stop: stopSucceeds, priorFailures: 0, outcome: "terminated" },
+    { stop: stopRejected, priorFailures: 0, outcome: "stop_failed" },
+    { stop: stopSucceeds, priorFailures: exhaustingFailureCount, outcome: "retries_exhausted" },
+    { stop: stopRejected, priorFailures: exhaustingFailureCount, outcome: "retries_exhausted" },
+  ])(
+    "resolves $outcome once the row is failed (stop ok: $stop.success, prior failures: $priorFailures)",
+    async ({ stop, priorFailures, outcome }) => {
+      const { manager, storage, stopSandbox } = fatalReportHarness(
+        {
+          status: "connecting",
+          modal_object_id: "modal-obj-booting",
+          spawn_failure_count: priorFailures,
+          last_spawn_failure: priorFailures > 0 ? Date.now() : 0,
+        },
+        stop
+      );
 
-    expect(stopSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ providerObjectId: "modal-obj-booting" })
-    );
-    expect(storage.getSandbox()?.status).toBe("failed");
+      await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toBe(outcome);
+
+      expect(stopSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ providerObjectId: "modal-obj-booting" })
+      );
+      expect(storage.getSandbox()?.status).toBe("failed");
+    }
+  );
+
+  it("resolves not_terminated for a row that is already dead, even with retries exhausted", async () => {
+    const { manager, stopSandbox } = fatalReportHarness({
+      status: "failed",
+      spawn_failure_count: DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold,
+      last_spawn_failure: Date.now(),
+    });
+
+    await expect(manager.terminateFailedSandbox("late report")).resolves.toBe("not_terminated");
+
+    expect(stopSandbox).not.toHaveBeenCalled();
   });
 });
 

@@ -394,11 +394,15 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
 export type SandboxStartupIntent = "spawn" | "warm";
 
 /**
- * What a fatal report's termination did. `stop_failed`: the row was failed and
- * counted toward the circuit breaker, but the provider kept the runtime, so
- * nothing may replace it yet.
+ * What a fatal report's termination did, for the queue to apply.
+ * `terminated`: the sandbox is down and a replacement may run queued work.
+ * `stop_failed`: the row was failed and counted toward the circuit breaker,
+ * but the provider kept the runtime, so nothing may replace it yet.
+ * `retries_exhausted`: the failure opened the circuit breaker, so no
+ * replacement will be admitted for the prompt the boot was for.
  */
-export type FatalTerminationOutcome = "terminated" | "stop_failed" | "not_terminated";
+export type FatalTerminationOutcome =
+  "terminated" | "stop_failed" | "retries_exhausted" | "not_terminated";
 
 export interface SandboxLifecycle {
   spawnSandbox(intent?: SandboxStartupIntent): Promise<void>;
@@ -406,7 +410,6 @@ export interface SandboxLifecycle {
   onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
   terminateFailedSandbox(reason: string): Promise<FatalTerminationOutcome>;
-  isCircuitBreakerOpen(now?: number): boolean;
   reportSandboxError(reason: string): void;
 }
 
@@ -1065,7 +1068,7 @@ export class SandboxLifecycleManager
   }
 
   /** Whether `admitLaunch` would refuse a launch at `now`. */
-  isCircuitBreakerOpen(now: number = Date.now()): boolean {
+  private isCircuitBreakerOpen(now: number): boolean {
     return !evaluateCircuitBreaker(
       toCircuitBreakerState(this.storage.getSandboxWithCircuitBreaker()),
       this.config.circuitBreaker,
@@ -1839,6 +1842,8 @@ export class SandboxLifecycleManager
    * provider allows. Resolves `terminated` only when this call took the
    * sandbox down, which is the caller's cue to re-evaluate the queue, and
    * `stop_failed` when it failed the row but the provider refused the stop.
+   * Either becomes `retries_exhausted` when this failure opened the circuit
+   * breaker.
    * Serving executions remain fenced by preservation until explicit recovery;
    * only failed boots may automatically get a clean replacement, and a failed
    * boot of the retained source is held instead. A row that is already dead —
@@ -1870,12 +1875,14 @@ export class SandboxLifecycleManager
       if (ownership !== "unmanaged") {
         this.recordSpawnFailure(Date.now(), sandbox.created_at);
         this.reportSandboxError(reason);
-        return ownership === "owned" ? "terminated" : "not_terminated";
+        if (ownership !== "owned") return "not_terminated";
+        return this.isCircuitBreakerOpen(Date.now()) ? "retries_exhausted" : "terminated";
       }
       if (!this.isCurrentSandboxState(sandbox)) return "not_terminated";
       const held = this.holdFailedRetainedBoot(sandbox, reason);
       this.storage.updateSandboxStatus("failed");
       this.recordSpawnFailure(Date.now(), sandbox.created_at);
+      const retriesExhausted = this.isCircuitBreakerOpen(Date.now());
       this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
       this.reportSandboxError(reason);
       this.access.clearAccess();
@@ -1891,8 +1898,9 @@ export class SandboxLifecycleManager
           intent: "destroy",
           failureMessage: "Provider stop failed after fatal runtime error",
         });
-        if (!stopped) return "stop_failed";
+        if (!stopped) return retriesExhausted ? "retries_exhausted" : "stop_failed";
       }
+      if (retriesExhausted) return "retries_exhausted";
     } catch (error) {
       this.log.warn("Fatal runtime termination failed", {
         error: error instanceof Error ? error.message : String(error),
