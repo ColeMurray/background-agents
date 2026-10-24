@@ -399,6 +399,7 @@ export interface SandboxLifecycle {
   onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
   terminateFailedSandbox(reason: string): Promise<boolean>;
+  isCircuitBreakerOpen(now?: number): boolean;
   reportSandboxError(reason: string): void;
 }
 
@@ -1057,7 +1058,7 @@ export class SandboxLifecycleManager
   }
 
   /** Whether `admitLaunch` would refuse a launch at `now`. */
-  private isCircuitBreakerOpen(now: number): boolean {
+  isCircuitBreakerOpen(now: number = Date.now()): boolean {
     return !evaluateCircuitBreaker(
       toCircuitBreakerState(this.storage.getSandboxWithCircuitBreaker()),
       this.config.circuitBreaker,

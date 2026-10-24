@@ -626,9 +626,18 @@ export class SessionMessageQueue {
   }
 
   async handleFatalSandboxFailure(reason: string): Promise<void> {
+    // Identified before termination, which may yield on provider I/O.
+    const bootPrompt = this.messageRepository.getNextPendingMessage();
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
-    if (await termination) await this.executionStop.resumeAfterSandboxTermination();
+    if (!(await termination)) return;
+    if (bootPrompt && this.sandboxLifecycle.isCircuitBreakerOpen()) {
+      // The breaker would refuse the replacement and leave the prompt pending
+      // with its caller never told, so fail it as the connecting watchdog does.
+      await this.failPendingMessage(bootPrompt.id, reason);
+      return;
+    }
+    await this.executionStop.resumeAfterSandboxTermination();
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */
