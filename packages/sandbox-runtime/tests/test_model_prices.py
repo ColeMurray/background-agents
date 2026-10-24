@@ -149,6 +149,24 @@ def test_missing_catalog_is_logged_once_and_picked_up_when_it_appears(tmp_path):
     assert log.info.call_args.args == ("model_prices.loaded",)
 
 
+def test_catalog_recovers_from_read_failure_without_a_file_change(tmp_path, monkeypatch):
+    log = MagicMock()
+    path = tmp_path / "models.json"
+    path.write_bytes(FIXTURE.read_bytes())
+    before = path.stat()
+    catalog = ModelPriceCatalog(path, log)
+    with monkeypatch.context() as blocked:
+        blocked.setattr(Path, "read_bytes", MagicMock(side_effect=PermissionError))
+        assert catalog.price("gpt-6.1-sol") is None
+        assert not catalog.available
+    after = path.stat()
+    assert (after.st_mtime_ns, after.st_size) == (before.st_mtime_ns, before.st_size)
+    assert catalog.price("gpt-6.1-sol").base.input == 2
+    assert catalog.available
+    log.warn.assert_called_once()
+    log.info.assert_called_once()
+
+
 def test_changed_catalog_is_reloaded_and_unreadable_one_is_unavailable(tmp_path):
     log = MagicMock()
     path = tmp_path / "models.json"

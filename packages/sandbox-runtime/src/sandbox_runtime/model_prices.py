@@ -172,9 +172,10 @@ class ModelPriceCatalog:
         signature = (stat.st_mtime_ns, stat.st_size)
         if signature == self._signature:
             return
-        self._signature = signature
         try:
             raw = self._path.read_bytes()
+            # Retry failed reads even when the file's contents have not changed.
+            self._signature = signature
             models = json.loads(raw)["openai"]["models"]
             if not isinstance(models, dict):
                 raise TypeError("openai.models is not an object")
