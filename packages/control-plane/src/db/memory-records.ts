@@ -20,7 +20,6 @@ import { initialStatus } from "../memory/lifecycle";
 import {
   partitionColumns,
   partitionFromColumns,
-  partitionPredicate,
   samePartition,
   type MemoryPartition,
   type PartitionColumns,
@@ -142,14 +141,77 @@ export class MemoryRecordStore {
 
   /** Read one management page in stable updated-time/ID order. */
   async list(partition: MemoryPartition, options: MemoryListOptions): Promise<MemoryRecord[]> {
+    return this.listPartitions([partition], options);
+  }
+
+  /** Enumerate shared identities and display scopes without loading any revision content. */
+  async sharedPartitions(): Promise<Pick<MemoryRecord, "partition" | "scope">[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT partition_type, owner_user_id, repo_id, environment_id,
+          MIN(repo_owner) AS repo_owner, MIN(repo_name) AS repo_name
+        FROM memories WHERE partition_type IN ('repository', 'environment')
+        GROUP BY partition_type, owner_user_id, repo_id, environment_id`
+      )
+      .all<PartitionColumns & ScopeDisplayColumns>();
+    return rows.results.map((row) => ({
+      partition: partitionFromColumns(row),
+      scope: scopeFromColumns(row),
+    }));
+  }
+
+  /** Query only authorized partitions, merging bounded chunks into one globally ordered page. */
+  async listPartitions(
+    partitions: readonly MemoryPartition[],
+    options: MemoryListOptions
+  ): Promise<MemoryRecord[]> {
+    if (!partitions.length) return [];
     // Management search keeps the list's stable order (agent search ranks instead) so paging holds.
-    const result = await prepareSql(
-      this.db,
-      sql`${CURRENT_MEMORY_SELECT} WHERE ${partitionPredicate(partition)} AND m.status = ${options.status}
-        AND ${revisionMatchesAllTerms(options.terms.map(likeContains))}
-        ORDER BY m.updated_at DESC, m.id LIMIT ${options.limit} OFFSET ${options.offset}`
-    ).all<MemoryRow>();
-    return result.results.map(memoryFromRow);
+    const search = revisionMatchesAllTerms(options.terms.map(likeContains));
+    // Each partition binds its type and key; status, limit and offset bind three more values.
+    const chunkSize = Math.floor((MAX_D1_QUERY_PARAMETERS - search.values.length - 3) / 2);
+    if (partitions.length <= chunkSize) {
+      const result = await prepareSql(
+        this.db,
+        sql`${CURRENT_MEMORY_SELECT}
+          WHERE ${inPartitions(partitions)} AND m.status = ${options.status} AND ${search}
+          ORDER BY m.updated_at DESC, m.id LIMIT ${options.limit} OFFSET ${options.offset}`
+      ).all<MemoryRow>();
+      return result.results.map(memoryFromRow);
+    }
+    const limit = options.offset + options.limit;
+    // Deep offsets may retain many candidates; never materialize their revision bodies.
+    let rows: Pick<MemoryRow, "id" | "updated_at">[] = [];
+    for (let start = 0; start < partitions.length; start += chunkSize) {
+      const result = await prepareSql(
+        this.db,
+        sql`SELECT m.id, m.updated_at ${CURRENT_MEMORY}
+          WHERE ${inPartitions(partitions.slice(start, start + chunkSize))} AND m.status = ${options.status}
+            AND ${search}
+          ORDER BY m.updated_at DESC, m.id LIMIT ${limit}`
+      ).all<Pick<MemoryRow, "id" | "updated_at">>();
+      rows = rows.concat(result.results);
+      rows.sort((a, b) => b.updated_at - a.updated_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      rows = rows.slice(0, limit);
+    }
+    const page = rows.slice(options.offset);
+    const records = new Map<string, MemoryRecord>();
+    const idChunkSize = MAX_D1_QUERY_PARAMETERS - search.values.length - 1;
+    for (let start = 0; start < page.length; start += idChunkSize) {
+      const result = await prepareSql(
+        this.db,
+        sql`${CURRENT_MEMORY_SELECT}
+          WHERE m.id IN (${sql.join(
+            page.slice(start, start + idChunkSize).map((row) => sql`${row.id}`),
+            ", "
+          )}) AND m.status = ${options.status} AND ${search}`
+      ).all<MemoryRow>();
+      for (const row of result.results) records.set(row.id, memoryFromRow(row));
+    }
+    return page.flatMap((row) => {
+      const record = records.get(row.id);
+      return record ? [record] : [];
+    });
   }
 
   /** IDs of the records superseding each given record (oldest first), batched within the parameter limit. */

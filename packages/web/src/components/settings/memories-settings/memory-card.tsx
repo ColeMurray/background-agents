@@ -2,6 +2,7 @@
 
 import {
   MEMORY_CONTENT_LIMITS,
+  memoryScopeLabel,
   type MemoryAction,
   type MemoryContent,
   type MemoryDto,
@@ -23,6 +24,7 @@ export function MemoryCard({
   panel,
   busy,
   canCreate,
+  showScope = false,
   onPanelChange,
   onAction,
   onRevertToRevision,
@@ -31,6 +33,7 @@ export function MemoryCard({
   panel: MemoryPanel;
   busy: boolean;
   canCreate: boolean;
+  showScope?: boolean;
   onPanelChange: (panel: MemoryPanel) => void;
   onAction: (action: MemoryAction, archiveNote?: string) => void;
   /** Revert content to an earlier revision (saved as a new revision; unrelated to un-archiving). */
@@ -42,6 +45,14 @@ export function MemoryCard({
     <article id={record.id} className="space-y-3 rounded-sm border border-border p-4">
       <div>
         <h3 className="font-medium">{record.title}</h3>
+        {showScope && (
+          <a
+            href={memorySettingsLink(record.scope, record.id)}
+            className="block break-words text-xs text-muted-foreground underline"
+          >
+            {memoryScopeLabel(record.scope)}
+          </a>
+        )}
         <p className="text-xs text-muted-foreground">
           {memoryTypeLabel(record.memoryType)} · Revision {record.revisionNumber} ·{" "}
           {record.authorKind === "agent" && record.authorSessionId ? (

@@ -25,6 +25,7 @@ import { MemoryRecordStore } from "../db/memory-records";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { toMemoryDto, toSelectionSummary } from "../memory/dto";
 import { MEMORY_NOT_FOUND } from "../memory/errors";
+import { partitionId, type MemoryPartition } from "../memory/partition";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
@@ -78,10 +79,10 @@ async function authorizedRecord(
     : { record, canManage: decision.canManage };
 }
 
-/** Authorize one catalog scope before returning a bounded management page. */
+/** Authorize catalog partitions before returning a bounded management page. */
 async function list(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const query = new URL(request.url).searchParams;
-  const scope = memoryScopeFromSearchParams(query);
+  const scope = query.get("scope") === "shared" ? "shared" : memoryScopeFromSearchParams(query);
   const status = memoryStatusSchema.safeParse(query.get("status") ?? "active");
   if (!scope || !status.success) return error("Invalid memory scope or status", 400);
   const pagination = paginationSchema.safeParse({
@@ -92,11 +93,29 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   const { offset, limit } = pagination.data;
   const search = memoryListSearchSchema.safeParse(query.get("search") ?? "");
   if (!search.success) return error("Invalid memory search", 400);
-  const access = await createMemoryManagementPolicy(ctx, env).authorizeScope(scope, "read");
-  if (access.kind === "denied") return memoryDenialResponse(access.denial);
   const store = new MemoryRecordStore(ctx.db);
+  const policy = createMemoryManagementPolicy(ctx, env);
+  const partitions: MemoryPartition[] = [];
+  const canManage = new Map<string, boolean>();
+  let canCreate = false;
+  if (scope === "shared") {
+    const candidates = await store.sharedPartitions();
+    await policy.preload(candidates.map((candidate) => candidate.partition));
+    for (const candidate of candidates) {
+      const access = await policy.authorizeRecord(candidate, "read");
+      if (access.kind === "denied") continue;
+      partitions.push(access.partition);
+      canManage.set(partitionId(access.partition), access.canManage);
+    }
+  } else {
+    const access = await policy.authorizeScope(scope, "read");
+    if (access.kind === "denied") return memoryDenialResponse(access.denial);
+    partitions.push(access.partition);
+    canManage.set(partitionId(access.partition), access.canManage);
+    canCreate = access.canManage;
+  }
   // One extra row tells us whether another page exists.
-  const records = await store.list(access.partition, {
+  const records = await store.listPartitions(partitions, {
     status: status.data,
     offset,
     limit: limit + 1,
@@ -106,10 +125,14 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   const supersededBy = await store.supersededByIds(page.map((record) => record.id));
   return json({
     memories: page.map((record) =>
-      toMemoryDto(record, access.canManage, supersededBy.get(record.id) ?? [])
+      toMemoryDto(
+        record,
+        canManage.get(partitionId(record.partition)) ?? false,
+        supersededBy.get(record.id) ?? []
+      )
     ),
     nextOffset: records.length > limit ? offset + limit : null,
-    canCreate: access.canManage,
+    canCreate,
   });
 }
 

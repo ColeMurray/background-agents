@@ -49,6 +49,9 @@ export const memoryScopeSchema = z.discriminatedUnion("type", [
 ]);
 export type MemoryScope = z.infer<typeof memoryScopeSchema>;
 
+/** Management lists can aggregate shared scopes; records and writes still name one partition. */
+export type MemoryListScope = MemoryScope | "shared";
+
 /** Exhaustiveness guard for switches over memory unions. */
 function unreachable(value: never): never {
   throw new Error(`Unhandled memory variant: ${JSON.stringify(value)}`);

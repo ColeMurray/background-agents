@@ -8,7 +8,10 @@ import { MEMORY_NOT_FOUND, unhandled } from "../memory/errors";
 import { repositoryPartition } from "../memory/sources";
 import type { MemoryRecord, SessionPrincipal } from "../memory/types";
 import type { InstalledRepositoryResolver } from "../routes/shared";
-import { REPOSITORY_GRANT_REQUIRED } from "../routes/workspace-repository-authorization";
+import {
+  REPOSITORY_GRANT_REQUIRED,
+  type RepositoryGrantAuthorizer,
+} from "../routes/workspace-repository-authorization";
 import type {
   EnvironmentAdmissionEvaluator,
   OwnedResourceAdmissionOutcome,
@@ -76,7 +79,7 @@ export interface MemoryManagementPolicyDeps {
   repositories: Pick<InstalledRepositoryResolver, "resolve">;
   /** Environment ownership admission for the principal. */
   environments: Pick<EnvironmentAdmissionEvaluator, "evaluate">;
-  repositoryGrants: RepositoryGrants;
+  repositoryGrants: RepositoryGrants & Pick<RepositoryGrantAuthorizer, "preload">;
 }
 
 const SCOPE_LABELS: Record<MemoryScopeType, string> = {
@@ -134,6 +137,15 @@ function grantDenial(repository: string): MemoryManagementDecision {
 export class MemoryManagementPolicy {
   constructor(private readonly deps: MemoryManagementPolicyDeps) {}
 
+  /** Preload repository metadata once before authorizing an aggregate catalog. */
+  async preload(partitions: readonly MemoryPartition[]): Promise<void> {
+    if (!this.deps.authorization || !this.can("repositories.read")) return;
+    await this.deps.repositoryGrants.preload(
+      this.deps.authorization,
+      partitions.filter((partition) => partition.type === "repository")
+    );
+  }
+
   /** Authorize a request about a scope a person named: listing, creating, or previewing. */
   async authorizeScope(
     scope: MemoryScope,
@@ -150,7 +162,10 @@ export class MemoryManagementPolicy {
    * display names: a renamed repository's memories stay manageable, and a repository that reuses
    * a name gains nothing. Another owner's personal record is indistinguishable from none.
    */
-  authorizeRecord(record: MemoryRecord, mode: "read" | "write"): Promise<MemoryManagementDecision> {
+  authorizeRecord(
+    record: Pick<MemoryRecord, "partition" | "scope">,
+    mode: "read" | "write"
+  ): Promise<MemoryManagementDecision> {
     return this.authorizePartition(record.partition, record.scope, mode);
   }
 

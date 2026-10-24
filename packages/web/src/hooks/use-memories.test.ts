@@ -1,14 +1,21 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import type { MemoryDto } from "@open-inspect/shared/types/memories";
 import {
   applyMemoryAction,
   createMemory,
   reviseMemory,
   setMemoryPreferences,
+  useMemories,
 } from "./use-memories";
 
-const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+const { fetchMock, swrMock } = vi.hoisted(() => ({ fetchMock: vi.fn(), swrMock: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: fetchMock }));
+vi.mock("swr", () => ({ default: swrMock }));
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: { user: { id: "owner" } }, status: "authenticated" }),
+}));
 
 const record: MemoryDto = {
   id: "mem/a",
@@ -42,6 +49,16 @@ function lastRequest(): { path: string; init: RequestInit; body: unknown } {
 beforeEach(() => {
   fetchMock.mockReset();
   fetchMock.mockResolvedValue(Response.json({ memory: record }));
+  swrMock.mockReset();
+  swrMock.mockReturnValue({});
+});
+
+it("requests and caches all shared memories with status, search, and pagination", () => {
+  renderHook(() => useMemories("shared", "proposed", 50, "docker tests"));
+  expect(swrMock).toHaveBeenLastCalledWith(
+    "/api/memories?scope=shared&status=proposed&offset=50&limit=50&search=docker+tests",
+    expect.any(Function)
+  );
 });
 
 describe("memory mutations", () => {

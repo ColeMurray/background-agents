@@ -139,6 +139,7 @@ function managementPolicy(
       })),
     },
     repositoryGrants: {
+      preload: vi.fn(async () => {}),
       ungrantedRepository: vi.fn<
         MemoryManagementPolicyDeps["repositoryGrants"]["ungrantedRepository"]
       >(async () => null),
@@ -154,6 +155,18 @@ const outcome = (decision: MemoryManagementDecision) =>
   decision.kind === "denied" ? decision.denial.reason : decision.kind;
 
 describe("MemoryManagementPolicy", () => {
+  it("preloads only repository identities when repository reads are permitted", async () => {
+    const { policy, deps } = managementPolicy(["repositories.read"]);
+    await policy.preload([api, dev, personal]);
+    expect(deps.repositoryGrants.preload).toHaveBeenCalledWith(
+      authorization(["repositories.read"]),
+      [api]
+    );
+    const denied = managementPolicy([]);
+    await denied.policy.preload([api]);
+    expect(denied.deps.repositoryGrants.preload).not.toHaveBeenCalled();
+  });
+
   it("keeps personal memory owner-only and requires the personal permission", async () => {
     const { policy } = managementPolicy(["memories.manage_own"]);
     expect(await policy.authorizeScope({ type: "personal" }, "write")).toEqual({

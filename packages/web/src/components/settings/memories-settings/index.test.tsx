@@ -298,6 +298,61 @@ describe("memory management", () => {
     );
   });
 
+  it("defaults to all shared memories and reviews proposals from multiple repositories", async () => {
+    const first = {
+      ...record,
+      scope: { type: "repository" as const, repoOwner: "acme", repoName: "web" },
+    };
+    const second = {
+      ...record,
+      id: "mem_other",
+      title: "Use the API fixtures",
+      scope: { type: "repository" as const, repoOwner: "acme", repoName: "api" },
+      capabilities: { canEdit: false, actions: [] },
+    };
+    mocks.records = [first, second];
+    render(<SharedMemoriesSettings />);
+    expect(screen.getByRole("button", { name: "Memory scope All" })).toBeTruthy();
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "active", 0, "");
+    expect(screen.queryByText("New memory")).toBeNull();
+    expect(screen.getByRole("link", { name: "acme/web" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "acme/api" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Proposed" }));
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "proposed", 0, "");
+    expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(mocks.applyMemoryAction).toHaveBeenCalledWith(first, "approve", undefined)
+    );
+    await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(2));
+  });
+
+  it("returns to All from a repository and resets pagination and status", () => {
+    mocks.nextOffset = 50;
+    render(<SharedMemoriesSettings />);
+    fireEvent.click(screen.getByRole("button", { name: /Memory scope/ }));
+    fireEvent.click(screen.getByRole("option", { name: "acme/web" }));
+    fireEvent.click(screen.getByText("Next page"));
+    expect(mocks.collection).toHaveBeenLastCalledWith(
+      { type: "repository", repoOwner: "acme", repoName: "web" },
+      "active",
+      50,
+      ""
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Archived" }));
+    fireEvent.click(screen.getByRole("button", { name: /Memory scope/ }));
+    fireEvent.click(screen.getByRole("option", { name: "All" }));
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "active", 0, "");
+  });
+
+  it("does not include a deep-linked personal memory in All", () => {
+    mocks.params = new URLSearchParams({ memoryId: record.id });
+    mocks.focused = record;
+    render(<SharedMemoriesSettings />);
+    expect(screen.queryByText(record.title)).toBeNull();
+    expect(screen.getByText(/No proposed memories across your accessible/)).toBeTruthy();
+  });
+
   it("filters by a debounced search kept in the URL and returns to the first page", async () => {
     mocks.nextOffset = 50;
     render(<MemoriesSettings />);
