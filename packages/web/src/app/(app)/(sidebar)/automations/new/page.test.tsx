@@ -453,6 +453,17 @@ describe("NewAutomationPage duplicate", () => {
     expect(browserApiFetch).not.toHaveBeenCalled();
   });
 
+  it("reseeds a workspace-owned copy when the URL starts requiring a team", () => {
+    sourceAutomation = source;
+    search = "from=auto-1&teamId=team-1";
+    const view = render(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Workspace");
+
+    search = "from=auto-1&teamId=team-1&requireTeam=true";
+    view.rerender(<NewAutomationPage />);
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+  });
+
   it("copies only the repositories the viewer can pick", async () => {
     sourceAutomation = {
       ...source,

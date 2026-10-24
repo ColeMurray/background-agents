@@ -43,11 +43,16 @@ export function useAutomationDuplicate(
   const [settled, setSettled] = useState<{
     sourceId: string;
     fallbackTeamId: string | null;
+    requireTeam: boolean;
     state: AutomationDuplicateState;
   } | null>(null);
 
   if (!sourceId) return null;
-  if (settled?.sourceId === sourceId && settled.fallbackTeamId === fallbackTeamId) {
+  if (
+    settled?.sourceId === sourceId &&
+    settled.fallbackTeamId === fallbackTeamId &&
+    settled.requireTeam === requireTeam
+  ) {
     return settled.state;
   }
   if (sourceLoading || (source && (scope.loading || repos.loading || environments.loading))) {
@@ -71,6 +76,6 @@ export function useAutomationDuplicate(
         }),
       }
     : { status: "failed" };
-  setSettled({ sourceId, fallbackTeamId, state });
+  setSettled({ sourceId, fallbackTeamId, requireTeam, state });
   return state;
 }

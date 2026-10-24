@@ -233,10 +233,10 @@ function NewAutomationContent() {
             </PrefillNotice>
           )}
 
-          {/* Remount when the query-selected team or duplicate source changes, so the form
-              follows the URL. */}
+          {/* Remount when the query-selected team, team requirement, or duplicate source changes,
+              so the form follows the URL. */}
           <AutomationForm
-            key={`${teamId ?? ""}:${sourceId ?? ""}`}
+            key={`${teamId ?? ""}:${sourceId ?? ""}:${requireTeam}`}
             mode="create"
             initialValues={initialValues}
             requireTeam={requireTeam}
