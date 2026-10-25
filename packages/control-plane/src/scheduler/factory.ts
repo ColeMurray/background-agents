@@ -1,3 +1,4 @@
+import { AuthorizationService } from "../authorization/service";
 import { UserStore } from "../db/user-store";
 import { AutomationAttributionService } from "./attribution-service";
 import { SessionContinuityService } from "./session-continuity-service";
@@ -108,7 +109,16 @@ export function createScheduler(
     },
     executionDeadlineMs: resolveDeadlineMs,
   });
-  const continuity = new SessionContinuityService({ store, env, log, db, backgroundJobs });
+  const continuity = new SessionContinuityService({
+    store,
+    env,
+    log,
+    db,
+    backgroundJobs,
+    authorization: new AuthorizationService(db),
+    clock: Date,
+    crypto: schedulerCrypto,
+  });
   const launcher = new AutomationRunLaunchService({
     store,
     sessions,

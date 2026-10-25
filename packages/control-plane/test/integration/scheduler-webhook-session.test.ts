@@ -5,7 +5,7 @@ import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore } from "../../src/db/automation-store";
 import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
 import { SessionFollowUpRefusedError } from "../../src/scheduler/contracts";
-import { firstPromptRequestId } from "../../src/scheduler/session-continuity";
+import { firstPromptRequestId } from "../../src/scheduler/session-prompt";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedActiveUser } from "./helpers";
 import { fetchRuns, makeRunRow, seedRun } from "./run-helpers";
