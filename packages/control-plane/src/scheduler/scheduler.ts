@@ -83,6 +83,7 @@ import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
 import type { SessionInitInput } from "../session/initialize";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
+import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
@@ -915,8 +916,12 @@ export class Scheduler {
         : { status: "failed", failure_reason: message };
     try {
       const failedAt = Date.now();
-      // A configuration the harness cannot run fails every attempt alike, so it is not retried.
-      if (outcome.status === "failed" && retryable && !(error instanceof HarnessAdmissionError)) {
+      // A harness or provider-account configuration that cannot run fails every attempt alike,
+      // so it is not retried.
+      const configurationError =
+        error instanceof HarnessAdmissionError ||
+        error instanceof ProviderAccountSelectionPolicyError;
+      if (outcome.status === "failed" && retryable && !configurationError) {
         const retryAt = failedAt + launchRetryDelayMs(child.attempt ?? 1);
         if ((await store.failLaunchOrRetry(child.id, message, failedAt, retryAt)) === "retrying") {
           outcome = { ...outcome, status: "retrying", retry_at: retryAt, session_id: null };

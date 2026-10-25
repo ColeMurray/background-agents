@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import * as automationRepositories from "../../src/automation/repository";
+import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
+import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
@@ -352,13 +354,36 @@ describe("scheduled launch retries", () => {
     expect(await latestInvocation()).toMatchObject({ status: "partial_failed" });
   });
 
-  it("does not retry a configuration the harness cannot run", async () => {
+  it.each([
+    [
+      "a model its harness cannot run",
+      () =>
+        createOverdueAutomation({
+          max_retries: 2,
+          harness: "codex",
+          model: "anthropic/claude-sonnet-4-6",
+        }),
+    ],
+    [
+      "a pinned provider account that was archived",
+      async () => {
+        const accountId = "0".repeat(32);
+        const accounts = new ModelProviderAccountStore(env.DB);
+        await accounts.create({ id: accountId, provider: "openai", displayName: "OpenAI" });
+        await createOverdueAutomation({ max_retries: 2 });
+        await sqlDatabase(env.DB).batch(
+          new AutomationModelProviderAuthStore(env.DB).bindReplace(
+            AUTOMATION_ID,
+            { openai: { mode: "provider_account", accountId } },
+            Date.now()
+          )
+        );
+        await accounts.archive(accountId, null);
+      },
+    ],
+  ])("does not retry %s", async (_, configure) => {
     const session = sessionStub();
-    await createOverdueAutomation({
-      max_retries: 2,
-      harness: "codex",
-      model: "anthropic/claude-sonnet-4-6",
-    });
+    await configure();
 
     await session.scheduler().tick();
 
