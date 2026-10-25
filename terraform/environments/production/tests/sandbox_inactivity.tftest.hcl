@@ -105,3 +105,36 @@ run "rejects_unattended_timeout_below_minimum" {
 
   expect_failures = [var.sandbox_unattended_inactivity_timeout_ms]
 }
+
+run "maximum_safe_integer_reaches_worker_binding" {
+  command = plan
+
+  variables {
+    sandbox_unattended_inactivity_timeout_ms = 9007199254740991
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS"] == "9007199254740991"
+    error_message = "The largest safe integer must reach the Worker without changing its value."
+  }
+}
+
+run "rejects_fractional_unattended_timeout" {
+  command = plan
+
+  variables {
+    sandbox_unattended_inactivity_timeout_ms = 60000.5
+  }
+
+  expect_failures = [var.sandbox_unattended_inactivity_timeout_ms]
+}
+
+run "rejects_unsafe_integer_unattended_timeout" {
+  command = plan
+
+  variables {
+    sandbox_unattended_inactivity_timeout_ms = 9007199254740992
+  }
+
+  expect_failures = [var.sandbox_unattended_inactivity_timeout_ms]
+}

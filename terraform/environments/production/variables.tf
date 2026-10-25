@@ -769,8 +769,12 @@ variable "sandbox_unattended_inactivity_timeout_ms" {
   default     = 120000
 
   validation {
-    condition     = var.sandbox_unattended_inactivity_timeout_ms >= 60000
-    error_message = "sandbox_unattended_inactivity_timeout_ms must be at least 60000 ms; the control plane rejects lower values."
+    condition = (
+      var.sandbox_unattended_inactivity_timeout_ms >= 60000 &&
+      var.sandbox_unattended_inactivity_timeout_ms <= 9007199254740991 &&
+      floor(var.sandbox_unattended_inactivity_timeout_ms) == var.sandbox_unattended_inactivity_timeout_ms
+    )
+    error_message = "sandbox_unattended_inactivity_timeout_ms must be a whole number between 60000 and 9007199254740991 ms, matching the control plane's safe-integer range."
   }
 }
 

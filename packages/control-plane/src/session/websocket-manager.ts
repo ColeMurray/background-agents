@@ -136,6 +136,7 @@ export interface SessionWebSocketManager {
 
   enforceAuthTimeout(ws: SessionWebSocket, wsId: string): Promise<void>;
   getAuthenticatedClients(): IterableIterator<ClientInfo>;
+  /** Count open client sockets with unexpired cached or persisted authorization leases. */
   getConnectedClientCount(): number;
 }
 
@@ -566,7 +567,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     let count = 0;
     for (const ws of this.host.sockets()) {
       const parsed = this.classify(ws);
-      if (parsed.kind !== "sandbox" && isSocketOpen(ws)) {
+      if (parsed.kind !== "sandbox" && isSocketOpen(ws) && this.isAuthenticated(ws, parsed)) {
         count++;
       }
     }

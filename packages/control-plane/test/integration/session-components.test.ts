@@ -13,7 +13,13 @@ import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
 import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
 import { componentsOf, runInSessionDO } from "./session-do-access";
-import { initNamedSession, waitForSandboxStatus } from "./helpers";
+import {
+  closeWebSocket,
+  initNamedSession,
+  openClientWs,
+  seedSandboxAuth,
+  waitForSandboxStatus,
+} from "./helpers";
 
 /**
  * The composition root is fail-fast: both provider factories construct at
@@ -172,6 +178,52 @@ describe("createSessionRuntime", () => {
     });
     expect(error).toMatch(/MODAL_API_SECRET/);
   });
+
+  it.each(["unsubscribed", "authorized", "expired"] as const)(
+    "checks the %s client lease before extending an unattended sandbox after rehydration",
+    async (lease) => {
+      const name = `inactivity-client-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(name, { spawnSource: "automation" });
+      await seedSandboxAuth(stub, { sandboxId: "idle-sandbox", authToken: "idle-token" });
+      const { ws } = await openClientWs(name, { subscribe: lease !== "unsubscribed" });
+      try {
+        await runInSessionDO(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE sandbox SET last_activity = ?, last_heartbeat = ?",
+            now - 120_001,
+            now
+          );
+          if (lease === "expired") {
+            state.storage.sql.exec(
+              "UPDATE ws_client_mapping SET authorization_expires_at = ?",
+              now
+            );
+          }
+          // Rebuild the graph so authorization must come from persisted leases, not cached clients.
+          const runtime = createSessionRuntime(
+            createDurableObjectSessionPlatform(state, env.DB),
+            createCloudflareEnv((instance as unknown as { env: WorkerBindings }).env)
+          );
+          const shutdown = vi
+            .spyOn(SandboxShutdownCoordinator.prototype, "requestShutdown")
+            .mockResolvedValue("owned");
+          try {
+            await runtime.internals.lifecycleManager.handleAlarm();
+            if (lease === "authorized") {
+              expect(shutdown).not.toHaveBeenCalled();
+            } else {
+              expect(shutdown).toHaveBeenCalledExactlyOnceWith("inactivity_timeout");
+            }
+          } finally {
+            shutdown.mockRestore();
+          }
+        });
+      } finally {
+        await closeWebSocket(ws, { bestEffort: true });
+      }
+    }
+  );
 
   it("announces the dashboard link of a Boat sandbox once its provider object is known", async () => {
     const stub = env.SESSION.get(env.SESSION.idFromName(`components-boat-${crypto.randomUUID()}`));

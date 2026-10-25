@@ -1407,18 +1407,53 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("getConnectedClientCount", () => {
-    it("counts only non-sandbox open sockets", () => {
+    it("counts only authorized non-sandbox open sockets", () => {
       const { manager, sockets } = createManager();
       const clientWs1 = createFakeWebSocket();
       const clientWs2 = createFakeWebSocket(WebSocket.CLOSED);
+      const unsubscribedWs = createFakeWebSocket();
       const sandboxWs = createFakeWebSocket();
 
       sockets.set(clientWs1, ["wsid:ws-1"]);
       sockets.set(clientWs2, ["wsid:ws-2"]);
+      sockets.set(unsubscribedWs, ["wsid:ws-unsubscribed"]);
       sockets.set(sandboxWs, ["sandbox"]);
+      manager.setClient(clientWs1, createClientInfo());
+      manager.setClient(clientWs2, createClientInfo());
 
       expect(manager.getConnectedClientCount()).toBe(1);
     });
+
+    it.each(["cached", "persisted"] as const)(
+      "counts only unexpired %s authorization leases",
+      (source) => {
+        const { manager, sockets, mockRepo } = createManager();
+        const now = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+        const ws = createFakeWebSocket();
+        sockets.set(ws, ["wsid:ws-1"]);
+        mockRepo.addMapping("ws-1", {
+          participant_id: "part-1",
+          client_id: "client-1",
+          user_id: "user-1",
+          scm_name: null,
+          scm_login: null,
+          authorization_expires_at: now + 1,
+        });
+        if (source === "cached") {
+          manager.setClient(ws, createClientInfo({ authorizationExpiresAt: now + 1 }));
+        }
+        try {
+          expect(manager.getConnectedClientCount()).toBe(1);
+          clock.mockReturnValue(now + 1);
+          expect(manager.getConnectedClientCount()).toBe(0);
+          expect(mockRepo.mappings.has("ws-1")).toBe(false);
+          expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+        } finally {
+          clock.mockRestore();
+        }
+      }
+    );
 
     it("returns 0 when no sockets", () => {
       const { manager } = createManager();

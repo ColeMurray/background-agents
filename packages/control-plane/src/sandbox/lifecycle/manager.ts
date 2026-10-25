@@ -320,7 +320,7 @@ export interface WebSocketManager {
   detachSandboxWebSocket(code: number, reason: string): void;
   /** Send a message to the sandbox */
   sendToSandbox(message: object): boolean;
-  /** Get count of connected client WebSockets (excludes sandbox) */
+  /** Count open client WebSockets with valid authorization leases (excludes sandbox). */
   getConnectedClientCount(): number;
 }
 
