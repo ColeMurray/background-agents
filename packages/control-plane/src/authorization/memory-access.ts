@@ -149,20 +149,7 @@ export class MemoryManagementPolicy {
     partitions: readonly MemoryPartition[]
   ): Promise<SharedCatalogGrant[]> {
     const shared = partitions.filter((partition) => partition.type !== "personal");
-    const authorization = this.deps.authorization;
-    await Promise.all([
-      this.deps.environments.preload(
-        shared.flatMap((partition) =>
-          partition.type === "environment" ? [partition.environmentId] : []
-        )
-      ),
-      authorization && this.can("repositories.read")
-        ? this.deps.repositoryGrants.preload(
-            authorization,
-            shared.filter((partition) => partition.type === "repository")
-          )
-        : undefined,
-    ]);
+    await this.preload(shared);
     const admitted: SharedCatalogGrant[] = [];
     for (const partition of shared) {
       // Denials are dropped, so no display scope is needed to describe them.
@@ -193,6 +180,35 @@ export class MemoryManagementPolicy {
     mode: "read" | "write"
   ): Promise<MemoryManagementDecision> {
     return this.authorizePartition(record.partition, record.scope, mode);
+  }
+
+  /** {@link authorizeRecord} for many records over one request-local admission snapshot. */
+  async authorizeRecords(
+    records: readonly Pick<MemoryRecord, "partition" | "scope">[],
+    mode: "read" | "write"
+  ): Promise<MemoryManagementDecision[]> {
+    await this.preload(records.map((record) => record.partition));
+    const decisions: MemoryManagementDecision[] = [];
+    for (const record of records) decisions.push(await this.authorizeRecord(record, mode));
+    return decisions;
+  }
+
+  /** Load environment rows and repository grant owners for these partitions in bulk. */
+  private async preload(partitions: readonly MemoryPartition[]): Promise<void> {
+    const authorization = this.deps.authorization;
+    await Promise.all([
+      this.deps.environments.preload(
+        partitions.flatMap((partition) =>
+          partition.type === "environment" ? [partition.environmentId] : []
+        )
+      ),
+      authorization && this.can("repositories.read")
+        ? this.deps.repositoryGrants.preload(
+            authorization,
+            partitions.filter((partition) => partition.type === "repository")
+          )
+        : undefined,
+    ]);
   }
 
   /** Read access to the partition, plus management authority for writes. */

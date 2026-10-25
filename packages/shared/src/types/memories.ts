@@ -30,6 +30,8 @@ export const MEMORY_LIST_PAGE_SIZE = 50;
 export const MEMORY_LIST_MAX_PAGE_SIZE = 100;
 /** Bound candidate accumulation when merging shared management pages across partitions. */
 export const MEMORY_SHARED_LIST_MAX_OFFSET = 1_000;
+/** Records one bulk lifecycle request may decide: at most one full management page. */
+export const MEMORY_BULK_ACTION_MAX_RECORDS = MEMORY_LIST_MAX_PAGE_SIZE;
 
 // ---------------------------------------------------------------------------
 // Scopes
@@ -262,6 +264,33 @@ export type MemoryActionBody<A extends MemoryAction = MemoryAction> = z.infer<
 export function memoryActionAcceptsNote(action: MemoryAction): boolean {
   return "archiveNote" in memoryActionBodySchemas[action].shape;
 }
+/**
+ * One lifecycle action over several records. Each names the revision the person reviewed (the
+ * bulk form of `If-Match`) and is decided independently, so a stale record fails alone.
+ */
+export const bulkMemoryActionSchema = z
+  .object({
+    action: memoryActionNameSchema,
+    memories: z
+      .array(z.object({ id: memoryIdSchema, revisionId: memoryIdSchema }).strict())
+      .min(1)
+      .max(MEMORY_BULK_ACTION_MAX_RECORDS)
+      .refine(
+        (memories) => new Set(memories.map((memory) => memory.id)).size === memories.length,
+        "Each memory may appear only once"
+      ),
+    archiveNote: archiveNoteBodySchema.shape.archiveNote,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.archiveNote !== undefined && !memoryActionAcceptsNote(value.action))
+      ctx.addIssue({
+        code: "custom",
+        path: ["archiveNote"],
+        message: `${value.action} does not accept an archive note`,
+      });
+  });
+export type BulkMemoryActionInput = z.infer<typeof bulkMemoryActionSchema>;
 export const memoryPreferencesSchema = z.object({ includePersonalMemories: z.boolean() }).strict();
 export type MemoryPreferences = z.infer<typeof memoryPreferencesSchema>;
 /** Preview the selection a new session would pin, without persisting it. */
@@ -326,6 +355,16 @@ export const memoryListResponseSchema = z.object({
   canCreate: z.boolean(),
 });
 export type MemoryListResponse = z.infer<typeof memoryListResponseSchema>;
+/** Per-record outcomes of a bulk action, in request order. */
+export const bulkMemoryActionResponseSchema = z.object({
+  results: z.array(
+    z.discriminatedUnion("ok", [
+      z.object({ id: z.string(), ok: z.literal(true), memory: memoryDtoSchema }),
+      z.object({ id: z.string(), ok: z.literal(false), error: z.string() }),
+    ])
+  ),
+});
+export type BulkMemoryActionResponse = z.infer<typeof bulkMemoryActionResponseSchema>;
 export const memoryRevisionsResponseSchema = z.object({ revisions: z.array(memoryRevisionSchema) });
 
 // ---------------------------------------------------------------------------

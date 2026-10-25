@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { MemoryDto } from "@open-inspect/shared/types/memories";
 import {
+  applyBulkMemoryAction,
   applyMemoryAction,
   createMemory,
   reviseMemory,
@@ -108,6 +109,35 @@ describe("memory mutations", () => {
     expect(path).toBe("/api/memories/mem%2Fa/archive");
     expect(init.headers).toEqual({ "Content-Type": "application/json", "If-Match": "rev_a" });
     expect(body).toEqual(expected);
+  });
+
+  it("sends each reviewed revision in one bulk request and returns per-record results", async () => {
+    const results = [
+      { id: "mem/a", ok: true, memory: record },
+      { id: "mem_b", ok: false, error: "Memory changed; reload before acting" },
+    ];
+    fetchMock.mockImplementation(async () => Response.json({ results }));
+    const other = { id: "mem_b", currentRevisionId: "rev_b" };
+    await expect(applyBulkMemoryAction([record, other], "reject", " Duplicate ")).resolves.toEqual(
+      results
+    );
+    expect(lastRequest()).toMatchObject({
+      path: "/api/memories/bulk",
+      init: { method: "POST", headers: { "Content-Type": "application/json" } },
+      body: {
+        action: "reject",
+        memories: [
+          { id: "mem/a", revisionId: "rev_a" },
+          { id: "mem_b", revisionId: "rev_b" },
+        ],
+        archiveNote: "Duplicate",
+      },
+    });
+    await applyBulkMemoryAction([record], "approve", "Ignored");
+    expect(lastRequest().body).toEqual({
+      action: "approve",
+      memories: [{ id: "mem/a", revisionId: "rev_a" }],
+    });
   });
 
   it("saves preferences", async () => {

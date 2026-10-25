@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createMemory: vi.fn(),
   reviseMemory: vi.fn(),
   applyMemoryAction: vi.fn(),
+  applyBulkMemoryAction: vi.fn(),
   setMemoryPreferences: vi.fn(),
   records: [] as MemoryDto[],
   focused: undefined as MemoryDto | undefined,
@@ -42,6 +43,7 @@ vi.mock("@/hooks/use-memories", () => ({
   createMemory: mocks.createMemory,
   reviseMemory: mocks.reviseMemory,
   applyMemoryAction: mocks.applyMemoryAction,
+  applyBulkMemoryAction: mocks.applyBulkMemoryAction,
   setMemoryPreferences: mocks.setMemoryPreferences,
   useMemory: () => ({ memory: mocks.focused, mutate: mocks.mutate }),
   useMemories: (...args: unknown[]) => {
@@ -205,6 +207,82 @@ describe("memory management", () => {
     await waitFor(() =>
       expect(mocks.applyMemoryAction).toHaveBeenCalledWith(record, "approve", undefined)
     );
+  });
+
+  it("bulk approves the selected records in one request and reports partial failures", async () => {
+    const second = { ...record, id: "mem_b", title: "Use the API fixtures" };
+    const readOnly = {
+      ...record,
+      id: "mem_c",
+      title: "Read-only proposal",
+      capabilities: { canEdit: false, actions: [] },
+    };
+    mocks.records = [record, second, readOnly];
+    mocks.applyBulkMemoryAction.mockResolvedValue([
+      { id: record.id, ok: true, memory: record },
+      { id: second.id, ok: false, error: "Memory changed; reload before acting" },
+    ]);
+    render(<MemoriesSettings />);
+    // Only records with a granted action can be selected.
+    expect(screen.getAllByRole("checkbox", { name: /^Select “/ })).toHaveLength(2);
+    expect(screen.queryByText("Approve selected")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: `Select “${record.title}”` }));
+    expect(screen.getByText("1 memory selected")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    expect(screen.getByText("2 memories selected")).toBeTruthy();
+    fireEvent.click(screen.getByText("Approve selected"));
+    await waitFor(() =>
+      expect(mocks.applyBulkMemoryAction).toHaveBeenCalledWith(
+        [record, second],
+        "approve",
+        undefined
+      )
+    );
+    expect(await screen.findByRole("status")).toHaveProperty(
+      "textContent",
+      "Approved 1 of 2 memories."
+    );
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Could not approve 1 memory: “Use the API fixtures” (Memory changed; reload before acting)."
+    );
+    await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/selected$/)).toBeNull();
+  });
+
+  it("confirms a bulk archive with one shared note", async () => {
+    const second = { ...record, id: "mem_b", title: "Use the API fixtures" };
+    mocks.records = [record, second];
+    mocks.applyBulkMemoryAction.mockResolvedValue([
+      { id: record.id, ok: true, memory: record },
+      { id: second.id, ok: true, memory: second },
+    ]);
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    fireEvent.click(screen.getByText("Archive selected"));
+    expect(mocks.applyBulkMemoryAction).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText(/Archive note for all selected/), {
+      target: { value: "Superseded by the new runbook" },
+    });
+    fireEvent.click(screen.getByText("Archive 2 memories"));
+    await waitFor(() =>
+      expect(mocks.applyBulkMemoryAction).toHaveBeenCalledWith(
+        [record, second],
+        "archive",
+        "Superseded by the new runbook"
+      )
+    );
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "Archived 2 memories.");
+    expect(screen.queryByText("Archive 2 memories")).toBeNull();
+  });
+
+  it("starts a new selection when the status tab changes", () => {
+    mocks.records = [record];
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    expect(screen.getByText("1 memory selected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Archived" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Proposed" }));
+    expect(screen.queryByText("1 memory selected")).toBeNull();
   });
 
   it("asks for an archive note in a single panel that other panels replace", async () => {

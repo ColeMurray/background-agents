@@ -1,8 +1,10 @@
 import {
   memoryScopeToSearchParams,
+  type BulkMemoryActionResponse,
   type MemoryAction,
   type MemoryArchiveKind,
   type MemoryAuthorKind,
+  type MemoryDto,
   type MemoryInclusion,
   type MemoryScope,
   type MemoryStatus,
@@ -46,6 +48,43 @@ export const MEMORY_ACTION_LABELS: Record<MemoryAction, string> = {
   archive: "Archive",
   restore: "Restore",
 };
+
+const MEMORY_ACTION_PAST_LABELS: Record<MemoryAction, string> = {
+  approve: "Approved",
+  reject: "Rejected",
+  archive: "Archived",
+  restore: "Restored",
+};
+
+export function memoryCount(count: number): string {
+  return `${count} ${count === 1 ? "memory" : "memories"}`;
+}
+
+/**
+ * Describe a bulk action's outcome: how many records it applied to, and each failure by title with
+ * the server's reason. Either part is null when there is nothing to report.
+ */
+export function bulkActionSummary(
+  action: MemoryAction,
+  records: readonly Pick<MemoryDto, "id" | "title">[],
+  results: BulkMemoryActionResponse["results"]
+): { applied: string | null; failed: string | null } {
+  const titles = new Map(records.map((record) => [record.id, record.title]));
+  const failures = results.flatMap((result) =>
+    result.ok ? [] : [`“${titles.get(result.id) ?? result.id}” (${result.error})`]
+  );
+  const applied = results.length - failures.length;
+  return {
+    applied: applied
+      ? `${MEMORY_ACTION_PAST_LABELS[action]} ${
+          failures.length ? `${applied} of ${memoryCount(results.length)}` : memoryCount(applied)
+        }.`
+      : null,
+    failed: failures.length
+      ? `Could not ${MEMORY_ACTION_LABELS[action].toLowerCase()} ${memoryCount(failures.length)}: ${failures.join(", ")}.`
+      : null,
+  };
+}
 
 export const PERSONAL_MEMORY_DISCLOSURE =
   "Personal memories included in a session may appear in agent responses and be visible to collaborators.";

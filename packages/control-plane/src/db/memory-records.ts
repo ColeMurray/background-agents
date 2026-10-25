@@ -143,6 +143,23 @@ export class MemoryRecordStore {
     return row ? memoryFromRow(row) : null;
   }
 
+  /** Load live records by ID, batched within the parameter limit; missing IDs are absent. */
+  async getMany(ids: readonly string[]): Promise<Map<string, MemoryRecord>> {
+    const records = new Map<string, MemoryRecord>();
+    for (let offset = 0; offset < ids.length; offset += MAX_D1_QUERY_PARAMETERS) {
+      const batch = ids.slice(offset, offset + MAX_D1_QUERY_PARAMETERS);
+      const rows = await prepareSql(
+        this.db,
+        sql`${CURRENT_MEMORY_SELECT} WHERE m.id IN (${sql.join(
+          batch.map((id) => sql`${id}`),
+          ", "
+        )})`
+      ).all<MemoryRow>();
+      for (const row of rows.results) records.set(row.id, memoryFromRow(row));
+    }
+    return records;
+  }
+
   /** Read one management page in stable updated-time/ID order. */
   async list(partition: MemoryPartition, options: MemoryListOptions): Promise<MemoryRecord[]> {
     return this.listPartitions([partition], options);

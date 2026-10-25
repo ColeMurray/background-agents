@@ -282,6 +282,31 @@ describe("MemoryManagementPolicy", () => {
     );
   });
 
+  it("authorizes many records in order over one preloaded snapshot", async () => {
+    const { policy, deps } = managementPolicy([
+      "memories.manage_own",
+      "repositories.read",
+      "environments.settings.manage",
+    ]);
+    const records = [
+      recordIn(api, apiScope),
+      recordIn(dev),
+      recordIn(personal),
+      recordIn({ type: "personal", userId: "someone-else" }),
+    ];
+    const decisions = await policy.authorizeRecords(records, "write");
+    // Repository management also needs `repositories.settings.manage`.
+    expect(decisions.map(outcome)).toEqual(["forbidden", "granted", "granted", "not_found"]);
+    expect(deps.environments.preload).toHaveBeenCalledExactlyOnceWith(["dev"]);
+    expect(deps.repositoryGrants.preload).toHaveBeenCalledExactlyOnceWith(deps.authorization, [
+      api,
+    ]);
+    expect(deps.repositoryGrants.preload.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.repositoryGrants.ungrantedRepository.mock.invocationCallOrder[0]
+    );
+    expect(deps.repositories.resolve).not.toHaveBeenCalled();
+  });
+
   it("does not resolve repository names for callers without read permission", async () => {
     const { policy, deps } = managementPolicy([]);
     const scope = { type: "repository" as const, repoOwner: "acme", repoName: "api" };

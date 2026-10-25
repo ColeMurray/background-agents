@@ -4,20 +4,28 @@ import { useState } from "react";
 import {
   MEMORY_SEARCH_LIMITS,
   MEMORY_STATUSES,
+  type MemoryAction,
   type MemoryContent,
   type MemoryDto,
   type MemoryListScope,
 } from "@open-inspect/shared/types/memories";
-import { applyMemoryAction, createMemory, reviseMemory } from "@/hooks/use-memories";
-import { errorMessage, MEMORY_STATUS_LABELS } from "@/lib/memories";
+import {
+  applyBulkMemoryAction,
+  applyMemoryAction,
+  createMemory,
+  reviseMemory,
+} from "@/hooks/use-memories";
+import { bulkActionSummary, errorMessage, MEMORY_STATUS_LABELS } from "@/lib/memories";
 import { Button } from "@/components/ui/button";
 import { SearchIcon } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { MemoryBulkActions } from "./memory-bulk-actions";
 import { MemoryCard } from "./memory-card";
 import { MemoryEditor } from "./memory-editor";
 import { useMemoryCollection } from "./use-memory-collection";
 import { useMemorySearch } from "./use-memory-search";
+import { useMemorySelection } from "./use-memory-selection";
 
 /**
  * The one open panel in a collection. Card-local panels key on the record ID so actions use the
@@ -28,7 +36,8 @@ export type MemoryPanel =
   | { kind: "create"; supersedesMemoryId?: string }
   | { kind: "edit"; record: MemoryDto }
   | { kind: "archive"; memoryId: string; archiveNote: string }
-  | { kind: "history"; memoryId: string };
+  | { kind: "history"; memoryId: string }
+  | { kind: "bulk"; action: MemoryAction; archiveNote: string };
 
 const NO_PANEL: MemoryPanel = { kind: "none" };
 const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
@@ -47,11 +56,17 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
   );
   const [busy, setBusy] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const selection = useMemorySelection(
+    collection.records,
+    `${collection.status}:${collection.offset}:${search.search}`
+  );
 
   /** Serialize mutations: one in flight, one error channel, one refresh. */
   async function run(mutation: () => Promise<unknown>, nextPanel: MemoryPanel = NO_PANEL) {
     setBusy(true);
     setMutationError(null);
+    setNotice(null);
     try {
       await mutation();
       setPanel(nextPanel);
@@ -72,8 +87,24 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
     }
   }
 
+  /**
+   * Apply one action to the selection. Per-record failures are reported rather than thrown, so the
+   * records that did change still refresh.
+   */
+  function runBulk(action: MemoryAction, archiveNote?: string) {
+    const records = selection.selected;
+    void run(async () => {
+      const results = await applyBulkMemoryAction(records, action, archiveNote);
+      const summary = bulkActionSummary(action, records, results);
+      selection.clear();
+      setNotice(summary.applied);
+      setMutationError(summary.failed);
+    });
+  }
+
   function changePanel(next: MemoryPanel) {
     setMutationError(null);
+    setNotice(null);
     setPanel(next);
   }
 
@@ -144,6 +175,13 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
           Next page
         </Button>
       </nav>
+      <MemoryBulkActions
+        selection={selection}
+        panel={panel}
+        busy={busy}
+        onPanelChange={changePanel}
+        onAction={runBulk}
+      />
       {(panel.kind === "create" || panel.kind === "edit") && (
         <MemoryEditor
           key={
@@ -156,6 +194,11 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
           onSave={save}
           onCancel={() => changePanel(NO_PANEL)}
         />
+      )}
+      {notice && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {notice}
+        </p>
       )}
       {error && (
         <p role="alert" className="text-sm text-destructive">
@@ -181,6 +224,12 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
           busy={busy}
           canCreate={canCreate}
           showScope={scope === "shared"}
+          selected={selection.isSelected(record.id)}
+          onSelectedChange={
+            record.capabilities.actions.length
+              ? (checked) => selection.toggle(record.id, checked)
+              : undefined
+          }
           onPanelChange={changePanel}
           onAction={(action, archiveNote) =>
             void run(() => applyMemoryAction(record, action, archiveNote))

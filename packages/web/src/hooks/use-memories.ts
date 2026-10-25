@@ -1,6 +1,7 @@
 import useSWR from "swr";
 import type { z } from "zod";
 import {
+  bulkMemoryActionResponseSchema,
   MEMORY_LIST_PAGE_SIZE,
   memoryActionAcceptsNote,
   memoryListResponseSchema,
@@ -9,6 +10,8 @@ import {
   memoryRevisionsResponseSchema,
   memoryScopeToSearchParams,
   sessionMemorySelectionStatusSchema,
+  type BulkMemoryActionInput,
+  type BulkMemoryActionResponse,
   type CreateMemoryInput,
   type MemoryAction,
   type MemoryActionBody,
@@ -155,15 +158,19 @@ export async function reviseMemory(
   ).memory;
 }
 
+/** A trimmed archive note, sent only with actions that archive. */
+function actionNote(action: MemoryAction, archiveNote?: string): { archiveNote?: string } {
+  const note = archiveNote?.trim();
+  return note && memoryActionAcceptsNote(action) ? { archiveNote: note } : {};
+}
+
 /** Apply a lifecycle action; an archive note is sent only with actions that archive. */
 export async function applyMemoryAction(
   record: ReviewedMemory,
   action: MemoryAction,
   archiveNote?: string
 ): Promise<MemoryDto> {
-  const note = archiveNote?.trim();
-  const body: MemoryActionBody =
-    note && memoryActionAcceptsNote(action) ? { archiveNote: note } : {};
+  const body: MemoryActionBody = actionNote(action, archiveNote);
   return (
     await apiRequest(`${memoryPath(record.id)}/${action}`, memoryResponseSchema, {
       method: "POST",
@@ -171,6 +178,25 @@ export async function applyMemoryAction(
       body: JSON.stringify(body),
     })
   ).memory;
+}
+
+/** Apply one action to several reviewed records; the server decides each independently. */
+export async function applyBulkMemoryAction(
+  records: readonly ReviewedMemory[],
+  action: MemoryAction,
+  archiveNote?: string
+): Promise<BulkMemoryActionResponse["results"]> {
+  const body: BulkMemoryActionInput = {
+    action,
+    memories: records.map((record) => ({ id: record.id, revisionId: record.currentRevisionId })),
+    ...actionNote(action, archiveNote),
+  };
+  return (
+    await apiRequest(`${MEMORIES_KEY}/bulk`, bulkMemoryActionResponseSchema, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+  ).results;
 }
 
 export async function setMemoryPreferences(input: MemoryPreferences): Promise<MemoryPreferences> {

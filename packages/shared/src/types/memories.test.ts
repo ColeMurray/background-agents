@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createMemorySchema,
   allowedMemoryActions,
+  bulkMemoryActionSchema,
+  MEMORY_BULK_ACTION_MAX_RECORDS,
   memoryScopeFromSearchParams,
   memoryScopeToSearchParams,
   memoryListSearchFromInput,
@@ -163,6 +165,31 @@ describe("memory action bodies", () => {
     expect(memoryActionBodySchemas.reject.safeParse({ archiveNote: "No" }).success).toBe(true);
     expect(memoryActionBodySchemas.approve.safeParse({ archiveNote: "x" }).success).toBe(false);
     expect(memoryActionBodySchemas.restore.safeParse({ archiveNote: "x" }).success).toBe(false);
+  });
+  it("bounds bulk actions to distinct reviewed records and archiving notes", () => {
+    const memories = [
+      { id: "mem_a", revisionId: "rev_a" },
+      { id: "mem_b", revisionId: "rev_b" },
+    ];
+    expect(
+      bulkMemoryActionSchema.parse({ action: "archive", memories, archiveNote: " Stale " })
+    ).toEqual({ action: "archive", memories, archiveNote: "Stale" });
+    expect(bulkMemoryActionSchema.safeParse({ action: "approve", memories }).success).toBe(true);
+    for (const invalid of [
+      { action: "approve", memories, archiveNote: "x" },
+      { action: "approve", memories: [] },
+      { action: "approve", memories: [memories[0], memories[0]] },
+      { action: "approve", memories: [{ id: "mem_a" }] },
+      { action: "delete", memories },
+      {
+        action: "approve",
+        memories: Array.from({ length: MEMORY_BULK_ACTION_MAX_RECORDS + 1 }, (_, i) => ({
+          id: `mem_${i}`,
+          revisionId: `rev_${i}`,
+        })),
+      },
+    ])
+      expect(bulkMemoryActionSchema.safeParse(invalid).success).toBe(false);
   });
 });
 

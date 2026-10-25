@@ -53,6 +53,7 @@ export function useMemoryCollection(scope: MemoryListScope, search: string) {
       setOffset(0);
     },
     records,
+    offset,
     canCreate: page.canCreate,
     loading: page.loading,
     error: page.error,

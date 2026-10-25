@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  bulkMemoryActionSchema,
   createMemorySchema,
   MEMORY_ACTIONS,
   MEMORY_LIST_MAX_PAGE_SIZE,
@@ -14,6 +15,7 @@ import {
   memorySearchTerms,
   memoryStatusSchema,
   reviseMemorySchema,
+  type BulkMemoryActionResponse,
   type MemoryAction,
   type MemoryDto,
   type MemoryActionBody,
@@ -25,7 +27,7 @@ import { MemoryPreferenceStore } from "../db/memory-preferences";
 import { MemoryRecordStore } from "../db/memory-records";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { toMemoryDto, toSelectionSummary } from "../memory/dto";
-import { MEMORY_NOT_FOUND } from "../memory/errors";
+import { MEMORY_NOT_FOUND, MemoryError } from "../memory/errors";
 import { partitionId, type MemoryPartition } from "../memory/partition";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
@@ -247,6 +249,45 @@ function transition(action: MemoryAction) {
 }
 
 /**
+ * Apply one lifecycle action to many records. Each record is authorized against its own partition
+ * and fenced by its reviewed revision exactly like {@link transition}, then decided in request
+ * order; a missing, forbidden, or stale record fails alone and the rest still apply.
+ */
+async function bulkTransition(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
+  const body = await parseBody(request, bulkMemoryActionSchema, "Invalid bulk memory action");
+  if (body instanceof Response) return body;
+  const store = new MemoryRecordStore(ctx.db);
+  const loaded = await store.getMany(body.memories.map((target) => target.id));
+  const found = body.memories.flatMap((target) => loaded.get(target.id) ?? []);
+  const decisions = await createMemoryManagementPolicy(ctx, env).authorizeRecords(found, "write");
+  const decisionById = new Map(found.map((record, index) => [record.id, decisions[index]]));
+  // A transition never changes which records supersede the one it decides.
+  const supersededBy = await store.supersededByIds(found.map((record) => record.id));
+  const results: BulkMemoryActionResponse["results"] = [];
+  for (const { id, revisionId } of body.memories) {
+    const decision = decisionById.get(id);
+    if (decision?.kind !== "granted") {
+      results.push({ id, ok: false, error: decision?.denial.message ?? MEMORY_NOT_FOUND });
+      continue;
+    }
+    try {
+      const record = await store.transition(
+        id,
+        body.action,
+        revisionId,
+        actor(ctx),
+        body.archiveNote
+      );
+      results.push({ id, ok: true, memory: toMemoryDto(record, true, supersededBy.get(id) ?? []) });
+    } catch (cause) {
+      if (!(cause instanceof MemoryError)) throw cause;
+      results.push({ id, ok: false, error: cause.message });
+    }
+  }
+  return json({ results });
+}
+
+/**
  * Summarize the selection a new session would pin, without persisting it. Requested sources get the
  * same human admission as management reads, then the same memory filtering as session creation,
  * evaluated as the team that would own the session when `teamId` names one.
@@ -326,6 +367,7 @@ memoryRoutes.post(
 );
 memoryRoutes.get("/memories", self, (c) => dispatch(c, list));
 memoryRoutes.post("/memories", self, (c) => dispatch(c, create));
+memoryRoutes.post("/memories/bulk", self, (c) => dispatch(c, bulkTransition));
 memoryRoutes.get("/memories/:id", self, (c) => dispatch(c, get));
 memoryRoutes.patch("/memories/:id", self, (c) => dispatch(c, revise));
 memoryRoutes.get("/memories/:id/revisions", self, (c) => dispatch(c, revisions));
