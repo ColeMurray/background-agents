@@ -52,12 +52,41 @@ function formatRunReason(reason: string): string {
   return reason;
 }
 
+/**
+ * Why a run failed or was skipped. A run waiting to retry shows why its last launch failed and
+ * when it launches again.
+ */
+function RunReason({ run }: { run: AutomationRun }) {
+  if (run.status === "retrying") {
+    const reason = run.failureReason ? `: ${formatRunReason(run.failureReason)}` : "";
+    const retryAt = run.retryAt ? ` at ${new Date(run.retryAt).toLocaleTimeString()}` : "";
+    return (
+      <p className="mt-1 text-xs text-warning">{`Launch failed${reason}. Retrying${retryAt}.`}</p>
+    );
+  }
+  if (run.failureReason) {
+    return <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>;
+  }
+  if (run.skipReason) {
+    return <p className="mt-1 text-xs text-warning">{formatRunReason(run.skipReason)}</p>;
+  }
+  return null;
+}
+
+/** How many launches a run has taken, once it has relaunched. */
+function RunAttempt({ run }: { run: AutomationRun }) {
+  return run.attempt > 1 ? (
+    <span className="text-xs text-muted-foreground">Attempt {run.attempt}</span>
+  ) : null;
+}
+
 function formatRunCounts(runs: AutomationRun[]): string {
   const count = (status: AutomationRun["status"]) =>
     runs.filter((run) => run.status === status).length;
   const active = count("starting") + count("running");
   const parts = [`${count("completed")} completed`];
   if (count("failed") > 0) parts.push(`${count("failed")} failed`);
+  if (count("retrying") > 0) parts.push(`${count("retrying")} retrying`);
   if (count("unauthorized") > 0) parts.push(`${count("unauthorized")} unauthorized`);
   if (count("skipped") > 0) parts.push(`${count("skipped")} skipped`);
   if (active > 0) parts.push(`${active} running`);
@@ -106,6 +135,7 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
             <span className="text-sm text-foreground truncate">{run.sessionTitle}</span>
           )}
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
+          <RunAttempt run={run} />
           {run.artifactSummary && (
             <span className="text-xs text-muted-foreground">{run.artifactSummary}</span>
           )}
@@ -122,12 +152,7 @@ function SingleRunRow({ invocation }: { invocation: AutomationInvocation }) {
           )}
         </div>
       </div>
-      {run.failureReason && (
-        <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>
-      )}
-      {!run.failureReason && run.skipReason && (
-        <p className="mt-1 text-xs text-warning">{formatRunReason(run.skipReason)}</p>
-      )}
+      <RunReason run={run} />
     </div>
   );
 }
@@ -154,6 +179,7 @@ function TargetRunRow({
             <span className="text-xs text-muted-foreground">{run.baseBranch}</span>
           )}
           {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
+          <RunAttempt run={run} />
         </div>
         {run.sessionTitle && (
           <p className="mt-1 text-xs text-muted-foreground truncate">{run.sessionTitle}</p>
@@ -161,12 +187,7 @@ function TargetRunRow({
         {run.artifactSummary && (
           <p className="mt-1 text-xs text-muted-foreground">{run.artifactSummary}</p>
         )}
-        {run.failureReason && (
-          <p className="mt-1 text-xs text-destructive">{formatRunReason(run.failureReason)}</p>
-        )}
-        {!run.failureReason && run.skipReason && (
-          <p className="mt-1 text-xs text-warning">{formatRunReason(run.skipReason)}</p>
-        )}
+        <RunReason run={run} />
       </div>
       {run.sessionId && (
         <Link

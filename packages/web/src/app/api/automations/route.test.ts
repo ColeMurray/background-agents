@@ -152,6 +152,17 @@ describe("automations API route (POST)", () => {
     expect(sent).toEqual(validBody);
   });
 
+  it("forwards the launch retry limit", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: { id: "auto-retries" } }, { status: 201 })
+    );
+
+    await POST(postRequest({ ...validBody, maxRetries: 3 }));
+
+    expect(controlPlaneBody()).toEqual({ ...validBody, maxRetries: 3 });
+  });
+
   it("allowlists provider selections while dropping hydrated provider auth", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(

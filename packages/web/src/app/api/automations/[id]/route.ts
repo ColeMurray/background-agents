@@ -8,6 +8,7 @@ const UPDATE_FIELDS = [
   "instructions",
   "scheduleCron",
   "scheduleTz",
+  "maxRetries",
   "model",
   "reasoningEffort",
   "harness",

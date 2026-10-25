@@ -156,6 +156,15 @@ describe("automation invocations (D1 integration)", () => {
           ],
           expected: "partial_failed",
         },
+        {
+          children: [{ status: "retrying" }, { status: "completed", completed_at: 5 }],
+          expected: "retrying",
+        },
+        { children: [{ status: "retrying" }, { status: "running" }], expected: "running" },
+        {
+          children: [{ status: "retrying" }, { status: "failed", completed_at: 5 }],
+          expected: "retrying",
+        },
         // Legacy backfill shapes: skipped children exist only in old data.
         { children: [{ status: "unauthorized", completed_at: 8 }], expected: "unauthorized" },
         { children: [{ status: "skipped" }], expected: "skipped" },
@@ -188,6 +197,7 @@ describe("automation invocations (D1 integration)", () => {
             unauthorized: testCase.children.filter((child) => child.status === "unauthorized")
               .length,
             starting,
+            retrying: testCase.children.filter((child) => child.status === "retrying").length,
           })
         ).toBe(testCase.expected);
       }

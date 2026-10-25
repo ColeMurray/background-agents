@@ -43,6 +43,7 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     enabled: true,
     nextRunAt: null,
     consecutiveFailures: 0,
+    maxRetries: 0,
     createdBy: "user-1",
     userId: CURRENT_USER_ID,
     ownerTeamId: null,

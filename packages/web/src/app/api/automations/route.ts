@@ -52,6 +52,7 @@ export async function POST(request: NextRequest) {
       triggerType: body.triggerType,
       scheduleCron: body.scheduleCron,
       scheduleTz: body.scheduleTz,
+      maxRetries: body.maxRetries,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       harness: body.harness,

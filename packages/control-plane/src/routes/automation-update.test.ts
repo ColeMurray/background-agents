@@ -490,6 +490,35 @@ describe("automation read, update, and delete routes", () => {
       );
     });
 
+    it("updates the launch retry limit of a scheduled automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", { body: { maxRetries: 0 } });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ max_retries: 0 })
+      );
+    });
+
+    it("rejects a launch retry limit on a non-schedule automation", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "webhook",
+        schedule_cron: null,
+        trigger_config: JSON.stringify({ conditions: [] }),
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", { body: { maxRetries: 2 } });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "maxRetries is only valid for schedule triggers",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
     it("rejects a replacement pin the automation's harness cannot use", async () => {
       mockProviderAccountStore.getById.mockResolvedValue({
         id: "0123456789abcdef0123456789abcdef",

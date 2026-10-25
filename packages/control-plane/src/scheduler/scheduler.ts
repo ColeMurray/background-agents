@@ -150,6 +150,20 @@ const FOLLOW_UP_RECEIPT_CLAIM_MS = 2 * 60 * 1000;
 const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
 
 /**
+ * Wait before a scheduled run's first relaunch after its launch failed, doubling for each
+ * later attempt. Long enough for a transient outage, such as a stalled D1, to clear.
+ */
+const LAUNCH_RETRY_BASE_DELAY_MS = 2 * 60 * 1000;
+
+/** Most retries relaunched per tick; half the child-launch budget, so due firings still start. */
+const MAX_RETRIES_PER_TICK = TICK_CHILD_LAUNCH_BUDGET / 2;
+
+/** How long a run waits to relaunch after its `attempt`-th launch failed. */
+function launchRetryDelayMs(attempt: number): number {
+  return LAUNCH_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+}
+
+/**
  * Launch work the deadline must still cover once the longest image build has
  * finished: sandbox spawn, prompt enqueue, and the slack in the session
  * watchdog's own alarm scheduling.
@@ -385,9 +399,57 @@ interface LaunchAdmission {
   target?: AutomationSessionTarget;
 }
 
-/** Coordinates authorized automation scheduling, dispatch, and completion handling. */
 /** A launch candidate's target as resolved at admission, or why it could not be resolved. */
 type LaunchTargetSnapshot = { target: AutomationSessionTarget } | { error: unknown };
+
+/** Provider routing resolved at admission, or why the automation's harness cannot run. */
+type ProviderAuthSnapshot = { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown };
+
+/** What a run's launch uses, settled when its firing (or retry) was admitted. */
+interface RunLaunch {
+  executionPrincipal: ExecutionPrincipal;
+  authorization: AutomationExecutionAuthorizationRequest;
+  providerAuthSnapshot: ProviderAuthSnapshot;
+  /** Team automations' session targets, keyed by run id. */
+  targets: ReadonlyMap<string, LaunchTargetSnapshot>;
+  instructionsOverride?: string;
+  /** Fails the launch before it claims a session, e.g. unavailable SCM attribution. */
+  launchError?: unknown;
+  /**
+   * A failure before the prompt is sent may wait and relaunch: scheduled firings of an
+   * automation that allowed retries when admitted, and the retries themselves.
+   */
+  retryable: boolean;
+}
+
+/** The automation owner as an unattended firing's execution principal; null without an owner. */
+function ownerExecutionPrincipal(automation: AutomationRow): ExecutionPrincipal | null {
+  return automation.user_id
+    ? {
+        platformUserId: automation.user_id,
+        participantUserId: automation.created_by,
+        scmEnrichment: null,
+      }
+    : null;
+}
+
+/** Run `task` over `items`, at most `concurrency` at a time. */
+async function forEachConcurrently<T>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      for (;;) {
+        const item = items[next++];
+        if (item === undefined) return;
+        await task(item);
+      }
+    })
+  );
+}
 
 /** Repository IDs that the resolved launch targets will open. */
 function launchTargetRepoIds(snapshots: ReadonlyMap<string, LaunchTargetSnapshot>): number[] {
@@ -399,6 +461,7 @@ function launchTargetRepoIds(snapshots: ReadonlyMap<string, LaunchTargetSnapshot
   });
 }
 
+/** Coordinates authorized automation scheduling, dispatch, and completion handling. */
 export class Scheduler {
   private readonly log: Logger;
 
@@ -469,15 +532,7 @@ export class Scheduler {
   ): Promise<StartInvocationResult> {
     const { source } = params;
     const automation = await store.resolveCanonicalOwner(params.automation);
-    const executionPrincipal =
-      params.executionPrincipal ??
-      (automation.user_id
-        ? {
-            platformUserId: automation.user_id,
-            participantUserId: automation.created_by,
-            scmEnrichment: null,
-          }
-        : null);
+    const executionPrincipal = params.executionPrincipal ?? ownerExecutionPrincipal(automation);
     if (!executionPrincipal) return { outcome: "unauthorized" };
     const now = Date.now();
     const concurrencyKey = params.concurrencyKey ?? null;
@@ -600,36 +655,18 @@ export class Scheduler {
       // Snapshot the grants version before checking coverage; the guarded insert
       // refuses admission if grants change in between.
       teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
-      launchTargets = await this.resolveLaunchTargets(automation, launchCandidates);
-      if (
-        !(await new TeamRepositoryGrantStore(this.db).covers(
-          team.id,
-          launchTargetRepoIds(launchTargets)
-        ))
-      ) {
-        return { outcome: "unauthorized", reason: "target_team_missing_grant" };
-      }
+      const admittedTargets = await this.admitTeamTargets(automation, team.id, launchCandidates);
+      if (!admittedTargets) return { outcome: "unauthorized", reason: "target_team_missing_grant" };
+      launchTargets = admittedTargets;
     }
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
     // for this firing: edits made after the conditional insert cannot change which
     // account an admitted child uses.
-    let providerAuthSnapshot:
-      { providerAuth: SessionModelProviderAuthInput[] } | { error: unknown } = { providerAuth: [] };
-    if (launchCandidates.length > 0) {
-      try {
-        const harness = getValidHarnessOrDefault(automation.harness);
-        const providerAuth = await resolveAutomationProviderAuth(this.db, automation.id, harness);
-        await validateHarnessExecution(
-          this.db,
-          { harness, model: automation.model, reasoningEffort: automation.reasoning_effort },
-          Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
-        );
-        providerAuthSnapshot = { providerAuth };
-      } catch (error) {
-        providerAuthSnapshot = { error };
-      }
-    }
+    const providerAuthSnapshot: ProviderAuthSnapshot =
+      launchCandidates.length > 0
+        ? await this.resolveProviderAuthSnapshot(automation)
+        : { providerAuth: [] };
 
     const invocation: AutomationInvocationRow = {
       id: invocationId,
@@ -744,94 +781,17 @@ export class Scheduler {
       }
     }
 
-    const launchChild = async (child: AutomationRunRow): Promise<void> => {
-      try {
-        if (attributionError !== undefined) throw attributionError;
-        if ("error" in providerAuthSnapshot) throw providerAuthSnapshot.error;
-        const targetSnapshot = launchTargets.get(child.id);
-        if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
-        const sessionId = generateId();
-        // Claim the generated session before initialization. Otherwise the orphan sweep can
-        // terminalize an old `starting` row while initialization is still creating its session.
-        // The deadline claimed here is the deployment-wide one; session creation replaces it
-        // with the budget this session's own settings resolve to. If the worker dies in
-        // between, the run stays covered by the shorter of the two, which is what a launch
-        // that never finished deserves.
-        const claimedAt = Date.now();
-        const claimed = await store.claimRunSession(
-          child.id,
-          sessionId,
-          claimedAt,
-          claimedAt + this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS)
-        );
-        if (!claimed) {
-          throw new Error("Automation run was recovered before launch claimed its session");
-        }
-        await this.createSessionForAutomationRun(
-          store,
-          automation,
-          child,
-          providerAuthSnapshot.providerAuth,
-          sessionId,
-          executionPrincipal,
-          claimedAt,
-          {
-            authorization,
-            target:
-              targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
-          }
-        );
-        await this.sendPromptToSession(
-          sessionId,
-          automation,
-          child.id,
-          executionPrincipal,
-          instructionsOverride
-        );
-        child.status = "running";
-        child.session_id = sessionId;
-        await this.releaseFollowUpsHeldDuringLaunch(store, child);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        this.log.error("Failed to launch automation run", {
-          event: "scheduler.session_creation_failed",
-          automation_id: automation.id,
-          invocation_id: invocationId,
-          run_id: child.id,
-          error: message,
-        });
-        // Losing authorization is not an automation failure: the run is unauthorized, so only
-        // genuine sibling failures count a strike. The next admission re-evaluates the
-        // principal and pauses if still denied.
-        const outcome: Partial<AutomationRunRow> =
-          e instanceof AutomationExecutionUnauthorizedError
-            ? { status: "unauthorized", failure_reason: e.reason, session_id: null }
-            : { status: "failed", failure_reason: message };
-        try {
-          await store.updateRun(child.id, { ...outcome, completed_at: Date.now() });
-        } catch (updateError) {
-          this.log.error("Failed to record launch failure", {
-            event: "scheduler.fail_track_error",
-            automation_id: automation.id,
-            run_id: child.id,
-            original_reason: message,
-            error: updateError instanceof Error ? updateError.message : String(updateError),
-          });
-        }
-        Object.assign(child, outcome);
-      }
+    const launch: RunLaunch = {
+      executionPrincipal,
+      authorization,
+      providerAuthSnapshot,
+      targets: launchTargets,
+      instructionsOverride,
+      launchError: attributionError,
+      retryable: source === "schedule" && (automation.max_retries ?? 0) > 0,
     };
-
-    let nextLaunchIndex = 0;
-    const launchWorkerCount = Math.min(AUTOMATION_LAUNCH_CONCURRENCY, launchCandidates.length);
-    await Promise.all(
-      Array.from({ length: launchWorkerCount }, async () => {
-        for (;;) {
-          const child = launchCandidates[nextLaunchIndex++];
-          if (!child) return;
-          await launchChild(child);
-        }
-      })
+    await forEachConcurrently(launchCandidates, AUTOMATION_LAUNCH_CONCURRENCY, (child) =>
+      this.launchRun(store, automation, child, launch)
     );
     const launched = launchCandidates.filter((child) => child.status === "running").length;
 
@@ -852,6 +812,126 @@ export class Scheduler {
     }
 
     return { outcome: "started", invocationId, runs: children, launched };
+  }
+
+  /**
+   * Claim a session for the run, create it, and send the run's first prompt. Never throws: a
+   * failure is recorded on the run (see {@link recordLaunchFailure}).
+   */
+  private async launchRun(
+    store: AutomationStore,
+    automation: AutomationRow,
+    child: AutomationRunRow,
+    launch: RunLaunch
+  ): Promise<void> {
+    let promptSent = false;
+    try {
+      if (launch.launchError !== undefined) throw launch.launchError;
+      if ("error" in launch.providerAuthSnapshot) throw launch.providerAuthSnapshot.error;
+      const targetSnapshot = launch.targets.get(child.id);
+      if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
+      const sessionId = generateId();
+      // Claim the generated session before initialization. Otherwise the orphan sweep can
+      // terminalize an old `starting` row while initialization is still creating its session.
+      // The deadline claimed here is the deployment-wide one; session creation replaces it
+      // with the budget this session's own settings resolve to. If the worker dies in
+      // between, the run stays covered by the shorter of the two, which is what a launch
+      // that never finished deserves.
+      const claimedAt = Date.now();
+      const claimed = await store.claimRunSession(
+        child.id,
+        sessionId,
+        claimedAt,
+        claimedAt + this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS)
+      );
+      if (!claimed) {
+        throw new Error("Automation run was recovered before launch claimed its session");
+      }
+      await this.createSessionForAutomationRun(
+        store,
+        automation,
+        child,
+        launch.providerAuthSnapshot.providerAuth,
+        sessionId,
+        launch.executionPrincipal,
+        claimedAt,
+        {
+          authorization: launch.authorization,
+          target: targetSnapshot && "target" in targetSnapshot ? targetSnapshot.target : undefined,
+        }
+      );
+      // From here the session may take the prompt even when the call fails, and a second
+      // session would run it twice, so a failure is no longer retried.
+      promptSent = true;
+      await this.sendPromptToSession(
+        sessionId,
+        automation,
+        child.id,
+        launch.executionPrincipal,
+        launch.instructionsOverride
+      );
+      child.status = "running";
+      child.session_id = sessionId;
+      await this.releaseFollowUpsHeldDuringLaunch(store, child);
+    } catch (e) {
+      await this.recordLaunchFailure(store, child, e, launch.retryable && !promptSent);
+    }
+  }
+
+  /**
+   * Record why a run's launch failed, on the row and on `child`. A `retryable` failure waits to
+   * relaunch while its automation allows another attempt.
+   */
+  private async recordLaunchFailure(
+    store: AutomationStore,
+    child: AutomationRunRow,
+    error: unknown,
+    retryable: boolean
+  ): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    this.log.error("Failed to launch automation run", {
+      event: "scheduler.session_creation_failed",
+      automation_id: child.automation_id,
+      invocation_id: child.invocation_id,
+      run_id: child.id,
+      attempt: child.attempt ?? 1,
+      error: message,
+    });
+    // Losing authorization is not an automation failure: the run is unauthorized, so only
+    // genuine sibling failures count a strike. The next admission re-evaluates the
+    // principal and pauses if still denied.
+    let outcome: Partial<AutomationRunRow> =
+      error instanceof AutomationExecutionUnauthorizedError
+        ? { status: "unauthorized", failure_reason: error.reason, session_id: null }
+        : { status: "failed", failure_reason: message };
+    try {
+      const failedAt = Date.now();
+      if (outcome.status === "failed" && retryable) {
+        const retryAt = failedAt + launchRetryDelayMs(child.attempt ?? 1);
+        if ((await store.failLaunchOrRetry(child.id, message, failedAt, retryAt)) === "retrying") {
+          outcome = { ...outcome, status: "retrying", retry_at: retryAt, session_id: null };
+          this.log.info("Automation run will retry its launch", {
+            event: "scheduler.launch_retry_scheduled",
+            automation_id: child.automation_id,
+            invocation_id: child.invocation_id,
+            run_id: child.id,
+            attempt: child.attempt ?? 1,
+            retry_at: retryAt,
+          });
+        }
+      } else {
+        await store.updateRun(child.id, { ...outcome, completed_at: failedAt });
+      }
+    } catch (updateError) {
+      this.log.error("Failed to record launch failure", {
+        event: "scheduler.fail_track_error",
+        automation_id: child.automation_id,
+        run_id: child.id,
+        original_reason: message,
+        error: updateError instanceof Error ? updateError.message : String(updateError),
+      });
+    }
+    Object.assign(child, outcome);
   }
 
   /**
@@ -916,9 +996,10 @@ export class Scheduler {
     let failed = 0;
     let launchedChildren = 0;
 
-    // 1. Recovery sweeps
+    // 1. Recovery sweeps, then retries whose wait is over
     await this.recoverySweep(store);
     await sweepHeldPrompts(this.continuityDeps(store), now);
+    launchedChildren += await this.retrySweep(store, now);
 
     // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
@@ -965,8 +1046,8 @@ export class Scheduler {
           case "started":
             // Summary parity with the pre-invocations tick: a firing that
             // launched nothing (every child pre-failed or failed to launch)
-            // reports as failed, not processed.
-            if (result.launched > 0) {
+            // reports as failed, not processed — unless a run waits to retry.
+            if (result.launched > 0 || result.runs.some((run) => run.status === "retrying")) {
               processed++;
             } else if (allRunsUnauthorized(result.runs)) {
               skipped++;
@@ -1027,6 +1108,136 @@ export class Scheduler {
     });
 
     return { processed, skipped, failed };
+  }
+
+  // ─── Launch retries ──────────────────────────────────────────────────────
+
+  /**
+   * Relaunch scheduled runs whose launch failed before their prompt was sent, once their wait
+   * is over, and fail waiting runs their automation no longer allows. Returns the relaunches.
+   */
+  private async retrySweep(store: AutomationStore, now: number): Promise<number> {
+    let pending: AutomationRunRow[];
+    try {
+      pending = await store.getRetriesToSettle(now, MAX_RETRIES_PER_TICK);
+    } catch (e) {
+      this.log.error("Retry sweep failed to query waiting runs", {
+        event: "scheduler.retry.query_error",
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return 0;
+    }
+
+    const claimed: AutomationRunRow[] = [];
+    for (const run of pending) {
+      try {
+        const retry = await store.claimRetry(run, now);
+        if (retry) {
+          claimed.push(retry);
+        } else if (await store.failWithdrawnRetry(run.id, now)) {
+          // Paused, deleted, or its retry limit lowered while it waited: its last failure stands.
+          await this.applyInvocationAccounting(store, run.automation_id, run.invocation_id);
+        }
+      } catch (e) {
+        this.log.error("Retry sweep failed to settle a waiting run", {
+          event: "scheduler.retry.settle_error",
+          automation_id: run.automation_id,
+          run_id: run.id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    await forEachConcurrently(claimed, AUTOMATION_LAUNCH_CONCURRENCY, (run) =>
+      this.relaunch(store, run)
+    );
+    return claimed.length;
+  }
+
+  /** Launch a claimed retry, admitted afresh as its scheduled firing would be now. */
+  private async relaunch(store: AutomationStore, run: AutomationRunRow): Promise<void> {
+    this.log.info("Relaunching automation run", {
+      event: "scheduler.retry_launch",
+      automation_id: run.automation_id,
+      invocation_id: run.invocation_id,
+      run_id: run.id,
+      attempt: run.attempt,
+    });
+    try {
+      const { automation, launch } = await this.admitRetry(store, run);
+      await this.launchRun(store, automation, run, launch);
+    } catch (e) {
+      // Admission itself failed, before any session was claimed.
+      await this.recordLaunchFailure(store, run, e, true);
+    }
+    if (run.status === "running" || run.status === "retrying") return;
+    try {
+      await this.applyInvocationAccounting(store, run.automation_id, run.invocation_id);
+    } catch (e) {
+      this.log.error("Failed to apply invocation accounting after a retry", {
+        event: "scheduler.fail_track_error",
+        automation_id: run.automation_id,
+        invocation_id: run.invocation_id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /**
+   * Admit a retry with the checks its scheduled firing's admission made: the owner must still
+   * be authorized for the run's target, a team's grants must still cover it, and provider
+   * routing resolves afresh. A denial throws, recording the run as unauthorized; the next
+   * scheduled firing then pauses the automation if the denial persists.
+   */
+  private async admitRetry(
+    store: AutomationStore,
+    run: AutomationRunRow
+  ): Promise<{ automation: AutomationRow; launch: RunLaunch }> {
+    const stored = await store.getById(run.automation_id);
+    if (!stored) throw new Error("Automation was deleted before its retry launched");
+    const automation = await store.resolveCanonicalOwner(stored);
+    const executionPrincipal = ownerExecutionPrincipal(automation);
+    if (!executionPrincipal) throw new AutomationExecutionUnauthorizedError();
+    const authorization: AutomationExecutionAuthorizationRequest = {
+      automationId: automation.id,
+      executionUserId: executionPrincipal.platformUserId,
+      requiresRepositoryUse: run.repo_owner !== null,
+      requiresEnvironmentUse: run.environment_id !== null,
+    };
+    const team =
+      automation.owner_team_id === null
+        ? null
+        : await new TeamStore(this.db).getById(automation.owner_team_id);
+    if (!(await isAutomationExecutionAuthorized(this.db, authorization))) {
+      throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
+    }
+    let targets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
+    if (automation.owner_team_id !== null) {
+      if (!team) throw new AutomationExecutionUnauthorizedError();
+      const admittedTargets = await this.admitTeamTargets(automation, team.id, [run]);
+      if (!admittedTargets)
+        throw new AutomationExecutionUnauthorizedError("target_team_missing_grant");
+      targets = admittedTargets;
+    }
+    let launchError: unknown;
+    try {
+      executionPrincipal.scmEnrichment = await this.resolveScmEnrichment(
+        executionPrincipal.platformUserId
+      );
+    } catch (error) {
+      launchError = error;
+    }
+    return {
+      automation,
+      launch: {
+        executionPrincipal,
+        authorization,
+        providerAuthSnapshot: await this.resolveProviderAuthSnapshot(automation),
+        targets,
+        launchError,
+        retryable: true,
+      },
+    };
   }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────
@@ -1931,6 +2142,37 @@ export class Scheduler {
       })
     );
     return snapshots;
+  }
+
+  /** A team automation's launch targets, or null when the team's grants do not cover them. */
+  private async admitTeamTargets(
+    automation: AutomationRow,
+    teamId: string,
+    candidates: readonly AutomationRunRow[]
+  ): Promise<ReadonlyMap<string, LaunchTargetSnapshot> | null> {
+    const targets = await this.resolveLaunchTargets(automation, candidates);
+    const covered = await new TeamRepositoryGrantStore(this.db).covers(
+      teamId,
+      launchTargetRepoIds(targets)
+    );
+    return covered ? targets : null;
+  }
+
+  private async resolveProviderAuthSnapshot(
+    automation: AutomationRow
+  ): Promise<ProviderAuthSnapshot> {
+    try {
+      const harness = getValidHarnessOrDefault(automation.harness);
+      const providerAuth = await resolveAutomationProviderAuth(this.db, automation.id, harness);
+      await validateHarnessExecution(
+        this.db,
+        { harness, model: automation.model, reasoningEffort: automation.reasoning_effort },
+        Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
+      );
+      return { providerAuth };
+    } catch (error) {
+      return { error };
+    }
   }
 
   private async createSessionForAutomationRun(

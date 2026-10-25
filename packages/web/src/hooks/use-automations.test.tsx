@@ -30,6 +30,7 @@ function automation(id: string, name: string): AutomationListItem {
     enabled: true,
     nextRunAt: null,
     consecutiveFailures: 0,
+    maxRetries: 0,
     createdBy: "user-1",
     userId: "11111111111111111111111111111111",
     createdAt: 1,

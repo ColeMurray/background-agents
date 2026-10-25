@@ -48,6 +48,7 @@ const automation: AutomationListItem = {
   enabled: true,
   nextRunAt: null,
   consecutiveFailures: 0,
+  maxRetries: 0,
   createdBy: "user-1",
   userId: null,
   ownerTeamId: null,

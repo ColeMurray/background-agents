@@ -560,6 +560,60 @@ describe("automation cron submission", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it("submits the launch retry limit chosen for a scheduled automation", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          maxRetries: 2,
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    const retries = screen.getByRole("combobox", { name: "Retries" });
+    expect(retries).toHaveTextContent("Up to 2");
+    await user.click(retries);
+    await user.click(await screen.findByRole("option", { name: "Up to 3" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ maxRetries: 3 }));
+  });
+
+  it("neither shows nor submits launch retries for an event-triggered automation", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: { conditions: [] },
+          maxRetries: 0,
+        }}
+      />
+    );
+
+    expect(screen.queryByRole("combobox", { name: "Retries" })).not.toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("maxRetries");
+  });
+
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
     const onSubmit = vi.fn();
     const { container } = render(

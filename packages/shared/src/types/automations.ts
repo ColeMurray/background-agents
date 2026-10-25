@@ -15,20 +15,25 @@ import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
 import { isCanonicalUserId } from "../user-id";
 
-/** `unauthorized` is a terminal, sessionless GitHub repository grant denial. */
+/**
+ * `unauthorized` is a terminal, sessionless GitHub repository grant denial. `retrying` is a
+ * scheduled run whose launch failed before its prompt was sent, waiting to launch again.
+ */
 export type AutomationRunStatus =
-  "starting" | "running" | "completed" | "failed" | "skipped" | "unauthorized";
+  "starting" | "running" | "retrying" | "completed" | "failed" | "skipped" | "unauthorized";
 
 export type AutomationInvocationSource = "schedule" | "manual" | "event";
 
 /**
  * Derived from an invocation's child runs — never stored. Zero children ⇔
- * skipped; `partial_failed` means the runs finished terminal with a mix of
- * completed and failed.
+ * skipped; `retrying` means no run is active but one is waiting to launch again;
+ * `partial_failed` means the runs finished terminal with a mix of completed and
+ * failed.
  */
 export const automationInvocationStatusSchema = z.enum([
   "starting",
   "running",
+  "retrying",
   "completed",
   "failed",
   "partial_failed",
@@ -52,6 +57,11 @@ export const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
 
 /** Page size `GET /automations` serves when the client sends no limit. */
 export const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
+
+/** Most times a scheduled run may relaunch after its launch fails before the prompt is sent. */
+export const MAX_AUTOMATION_RETRIES = 5;
+
+const maxRetriesSchema = z.number().int().min(0).max(MAX_AUTOMATION_RETRIES);
 
 /**
  * Validate target-count rules shared by automation clients and the API.
@@ -128,6 +138,8 @@ const automationSchema = z.object({
   enabled: z.boolean(),
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
+  /** Relaunches allowed for a scheduled run whose launch fails before its prompt is sent. */
+  maxRetries: z.number(),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   ownerTeamId: z.string().nullable(),
@@ -222,6 +234,8 @@ export const createAutomationRequestSchema = z.object({
   environmentIds: automationEnvironmentIdsSchema.optional(),
   /** Complete pin set. Omission creates the automation without pins. */
   providerSelections: modelProviderSelectionsSchema.optional(),
+  /** Launch retries for scheduled runs; schedule triggers only. Omission means none. */
+  maxRetries: maxRetriesSchema.optional(),
 });
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
 
@@ -241,6 +255,8 @@ export const updateAutomationRequestSchema = z.object({
   environmentIds: automationEnvironmentIdsSchema.optional(),
   /** Replaces every provider pin when present; an empty map clears all pins. */
   providerSelections: modelProviderSelectionsSchema.optional(),
+  /** Launch retries for scheduled runs; schedule triggers only. */
+  maxRetries: maxRetriesSchema.optional(),
 });
 export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
 
@@ -252,7 +268,12 @@ export interface AutomationRun {
   sessionId: string | null;
   status: AutomationRunStatus;
   skipReason: string | null;
+  /** While `retrying`, why the last attempt failed to launch. */
   failureReason: string | null;
+  /** Launches so far, counting the current one. */
+  attempt: number;
+  /** When a `retrying` run launches again; null otherwise. */
+  retryAt: number | null;
   scheduledAt: number;
   startedAt: number | null;
   completedAt: number | null;

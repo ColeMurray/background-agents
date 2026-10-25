@@ -202,6 +202,7 @@ function createMockStore() {
     advanceNextRunAt: vi.fn().mockResolvedValue(true),
     bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
     bulkFailRunningRuns: vi.fn().mockResolvedValue(undefined),
+    getRetriesToSettle: vi.fn().mockResolvedValue([]),
   };
 }
 

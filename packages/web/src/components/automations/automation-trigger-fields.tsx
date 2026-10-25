@@ -10,6 +10,7 @@ import {
   type AutomationTriggerType,
   type TriggerCondition,
 } from "@open-inspect/shared/triggers";
+import { MAX_AUTOMATION_RETRIES } from "@open-inspect/shared/types/automations";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,6 +44,7 @@ const COMMON_TIMEZONES = [
   "Australia/Sydney",
 ];
 const COMMON_SET = new Set(COMMON_TIMEZONES);
+const RETRY_OPTIONS = Array.from({ length: MAX_AUTOMATION_RETRIES + 1 }, (_, retries) => retries);
 const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
 const TRIGGER_LABELS: Record<AutomationTriggerType, string> = {
   schedule: "Schedule",
@@ -204,6 +206,33 @@ export function AutomationTriggerConfigurationFields({
             <FieldDescription>
               The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
               local time here).
+            </FieldDescription>
+          </div>
+          <div>
+            <label
+              htmlFor="automation-max-retries"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              Retries
+            </label>
+            <Select
+              value={String(value.maxRetries)}
+              onValueChange={(maxRetries) => update({ maxRetries: Number(maxRetries) })}
+            >
+              <SelectTrigger id="automation-max-retries" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RETRY_OPTIONS.map((retries) => (
+                  <SelectItem key={retries} value={String(retries)}>
+                    {retries === 0 ? "No retries" : `Up to ${retries}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              When a scheduled run fails to start, try again after a short wait that doubles each
+              time. Manual runs, and runs that fail after they start, are not retried.
             </FieldDescription>
           </div>
         </>

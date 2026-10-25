@@ -35,6 +35,8 @@ export interface AutomationFormValues {
   reasoningEffort: string | null;
   scheduleCron?: string;
   scheduleTz?: string;
+  /** Launch retries; submitted for schedule triggers only. */
+  maxRetries?: number;
   instructions: string;
   triggerType: AutomationTriggerType;
   eventType?: string;
@@ -47,6 +49,7 @@ export interface AutomationTriggerDraft {
   type: AutomationTriggerType;
   scheduleCron: string;
   scheduleTz: string;
+  maxRetries: number;
   eventType: string;
   conditions: TriggerCondition[];
   sentryClientSecret: string;
@@ -111,6 +114,7 @@ export function createAutomationFormDraft(
       type: initialValues.triggerType ?? "schedule",
       scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+      maxRetries: initialValues.maxRetries ?? 0,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
       sentryClientSecret: "",
@@ -135,6 +139,7 @@ export function automationToFormValues(automation: Automation): InitialAutomatio
     reasoningEffort: automation.reasoningEffort,
     scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
     scheduleTz: automation.scheduleTz,
+    maxRetries: automation.maxRetries,
     instructions: automation.instructions,
     triggerType: automation.triggerType,
     eventType: automation.eventType ?? undefined,
@@ -418,6 +423,7 @@ function buildSubmissionValues({
       ...values,
       scheduleCron: draft.trigger.scheduleCron,
       scheduleTz: draft.trigger.scheduleTz,
+      maxRetries: draft.trigger.maxRetries,
     };
   }
 
