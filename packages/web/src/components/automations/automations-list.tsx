@@ -50,7 +50,10 @@ const GITHUB_EVENT_LABELS: Record<string, string> = Object.fromEntries(
 
 function describeTrigger(automation: Automation): string {
   if (automation.triggerType === "schedule" && automation.scheduleOnceAt != null) {
-    return `Once at ${new Date(automation.scheduleOnceAt).toLocaleString()}`;
+    return `Once at ${new Date(automation.scheduleOnceAt).toLocaleString(undefined, {
+      timeZone: automation.scheduleTz,
+      timeZoneName: "short",
+    })}`;
   }
   if (automation.triggerType === "schedule" && automation.scheduleCron) {
     return describeCron(automation.scheduleCron, automation.scheduleTz);

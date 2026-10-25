@@ -132,7 +132,7 @@ const automationSchema = z.object({
   triggerType: automationTriggerTypeSchema,
   scheduleCron: z.string().nullable(),
   /** Unix timestamp in milliseconds for a one-shot schedule; null for recurring schedules. */
-  scheduleOnceAt: z.number().nullable(),
+  scheduleOnceAt: z.number().nullable().default(null),
   scheduleTz: z.string(),
   harness: harnessIdSchema,
   model: z.string(),

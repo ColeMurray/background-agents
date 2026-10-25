@@ -105,23 +105,30 @@ describe("AutomationsList repository labels", () => {
 });
 
 describe("AutomationsList schedule metadata", () => {
-  it("describes a one-shot by its scheduled time", () => {
-    const at = new Date("2099-01-01T09:00:00Z").getTime();
-    render(
-      <AutomationsList
-        canCreate
-        automations={[makeAutomation({ scheduleCron: null, scheduleOnceAt: at, nextRunAt: at })]}
-        emptyState={{ kind: "no-automations" }}
-        onPause={noop}
-        onResume={noop}
-        onTrigger={noop}
-        onDelete={noop}
-      />
-    );
-    expect(screen.getAllByText(`Once at ${new Date(at).toLocaleString()}`).length).toBeGreaterThan(
-      0
-    );
-  });
+  it.each(["UTC", "America/Los_Angeles"])(
+    "describes a one-shot in its configured %s timezone with a zone label",
+    (scheduleTz) => {
+      const at = new Date("2099-01-01T09:00:00Z").getTime();
+      render(
+        <AutomationsList
+          canCreate
+          automations={[
+            makeAutomation({ scheduleCron: null, scheduleOnceAt: at, nextRunAt: at, scheduleTz }),
+          ]}
+          emptyState={{ kind: "no-automations" }}
+          onPause={noop}
+          onResume={noop}
+          onTrigger={noop}
+          onDelete={noop}
+        />
+      );
+      const expectedTime = new Date(at).toLocaleString(undefined, {
+        timeZone: scheduleTz,
+        timeZoneName: "short",
+      });
+      expect(screen.getAllByText(`Once at ${expectedTime}`).length).toBeGreaterThan(0);
+    }
+  );
 
   it("shows how long remains until the next scheduled run", () => {
     vi.useFakeTimers();

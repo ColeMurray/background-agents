@@ -62,6 +62,28 @@ describe("listAutomationsResponseSchema", () => {
     expect(result.automations[0]!.maxRetries).toBe(0);
   });
 
+  it("reads an automation from a control plane that predates one-shot schedules", () => {
+    const { scheduleOnceAt: _scheduleOnceAt, ...legacy } = automation;
+    const result = listAutomationsResponseSchema.parse({
+      automations: [legacy],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]!.scheduleOnceAt).toBeNull();
+  });
+
+  it.each([null, Date.parse("2027-01-01T09:00:00Z")])(
+    "preserves an explicit scheduleOnceAt=%s",
+    (scheduleOnceAt) => {
+      const result = listAutomationsResponseSchema.parse({
+        automations: [{ ...automation, scheduleOnceAt }],
+        hasMore: false,
+        nextCursor: null,
+      });
+      expect(result.automations[0]!.scheduleOnceAt).toBe(scheduleOnceAt);
+    }
+  );
+
   it("accepts a valid cursor page", () => {
     expect(
       listAutomationsResponseSchema.parse({
