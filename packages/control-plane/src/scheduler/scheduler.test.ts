@@ -197,6 +197,7 @@ function createMockStore() {
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
     getRunsPastExecutionDeadline: vi.fn().mockResolvedValue([]),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
+    disableSettledOneShots: vi.fn().mockResolvedValue(undefined),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),

@@ -54,12 +54,6 @@ function sessionStub() {
 
 const store = () => new AutomationStore(env.DB);
 
-async function createOverdueAutomation(overrides: Partial<AutomationRow>): Promise<void> {
-  await store().create(
-    makeAutomation({ id: AUTOMATION_ID, next_run_at: Date.now() - 60_000, ...overrides })
-  );
-}
-
 async function onlyRun() {
   const runs = await fetchRuns(AUTOMATION_ID);
   expect(runs).toHaveLength(1);
@@ -77,7 +71,19 @@ async function latestInvocation() {
   return invocations[0]!;
 }
 
-describe("scheduled launch retries", () => {
+describe.each(["recurring", "one-shot"] as const)("%s scheduled launch retries", (schedule) => {
+  async function createOverdueAutomation(overrides: Partial<AutomationRow>): Promise<void> {
+    const at = Date.now() - 60_000;
+    await store().create(
+      makeAutomation({
+        id: AUTOMATION_ID,
+        next_run_at: at,
+        ...(schedule === "one-shot" ? { schedule_cron: null, schedule_once_at: at } : {}),
+        ...overrides,
+      })
+    );
+  }
+
   beforeEach(async () => {
     await cleanD1Tables();
     await seedActiveUser("user-1");
@@ -103,6 +109,12 @@ describe("scheduled launch retries", () => {
       started_at: null,
       completed_at: null,
     });
+    if (schedule === "one-shot") {
+      expect(await store().getById(AUTOMATION_ID)).toMatchObject({
+        enabled: 1,
+        next_run_at: null,
+      });
+    }
     expect(run.retry_at).toBeGreaterThanOrEqual(before + FIRST_RETRY_DELAY_MS);
     expect(run.retry_at).toBeLessThanOrEqual(Date.now() + FIRST_RETRY_DELAY_MS);
     expect((await store().getById(AUTOMATION_ID))!.consecutive_failures).toBe(0);
@@ -150,6 +162,15 @@ describe("scheduled launch retries", () => {
       status: "completed",
       runs: [expect.objectContaining({ status: "completed", attempt: 2 })],
     });
+    if (schedule === "one-shot") {
+      expect(await store().getById(AUTOMATION_ID)).toMatchObject({ enabled: 0, next_run_at: null });
+      expect((await store().list({ limit: 10 })).automations).toHaveLength(0);
+      await session.scheduler().tick();
+      expect(await onlyRun()).toMatchObject({ id: waiting.id, status: "completed", attempt: 2 });
+      expect((await store().listInvocations(AUTOMATION_ID, { limit: 10, offset: 0 })).total).toBe(
+        1
+      );
+    }
   });
 
   it("doubles the wait after each failed launch", async () => {
@@ -185,6 +206,10 @@ describe("scheduled launch retries", () => {
     expect(session.calls("/internal/init")).toHaveLength(2);
     expect((await store().getById(AUTOMATION_ID))!.consecutive_failures).toBe(1);
     expect(await latestInvocation()).toMatchObject({ status: "failed" });
+    if (schedule === "one-shot") {
+      expect(await store().getById(AUTOMATION_ID)).toMatchObject({ enabled: 0, next_run_at: null });
+      expect((await store().list({ limit: 10 })).automations).toHaveLength(1);
+    }
   });
 
   it("fails as before when the automation allows no retries", async () => {
@@ -215,7 +240,7 @@ describe("scheduled launch retries", () => {
 
   it("does not retry a manual run", async () => {
     const session = sessionStub();
-    await store().create(makeAutomation({ id: AUTOMATION_ID, max_retries: 2 }));
+    await createOverdueAutomation({ max_retries: 2 });
 
     await expect(session.scheduler().trigger(AUTOMATION_ID, "user-1")).rejects.toThrow(
       "Failed to trigger automation"
@@ -224,21 +249,25 @@ describe("scheduled launch retries", () => {
     expect(await onlyRun()).toMatchObject({ status: "failed", retry_at: null });
   });
 
-  it("holds the automation while a run waits, skipping its next firing", async () => {
+  it("holds the automation while a run waits without admitting another launch", async () => {
     const session = sessionStub();
     await createOverdueAutomation({ max_retries: 2 });
     await session.scheduler().tick();
-    await env.DB.prepare("UPDATE automations SET next_run_at = ? WHERE id = ?")
-      .bind(Date.now() - 1, AUTOMATION_ID)
-      .run();
+    if (schedule === "recurring") {
+      await env.DB.prepare("UPDATE automations SET next_run_at = ? WHERE id = ?")
+        .bind(Date.now() - 1, AUTOMATION_ID)
+        .run();
+    }
 
     await session.scheduler().tick();
 
     expect(await onlyRun()).toMatchObject({ status: "retrying" });
-    expect(await latestInvocation()).toMatchObject({
-      status: "skipped",
-      skipReason: "concurrent_run_active",
-    });
+    expect(await latestInvocation()).toMatchObject(
+      schedule === "recurring"
+        ? { status: "skipped", skipReason: "concurrent_run_active" }
+        : { status: "retrying" }
+    );
+    expect(session.calls("/internal/init")).toHaveLength(1);
   });
 
   it.each([
@@ -414,4 +443,35 @@ describe("scheduled launch retries", () => {
     expect(session.calls("/internal/init")).toHaveLength(1);
     expect((await store().getById(AUTOMATION_ID))!.consecutive_failures).toBe(0);
   });
+  if (schedule === "one-shot") {
+    it("withdraws the old slot's retry when the one-shot is rescheduled", async () => {
+      const session = sessionStub();
+      await createOverdueAutomation({ max_retries: 2 });
+      await session.scheduler().tick();
+      const future = Date.now() + 3_600_000;
+      await store().update(AUTOMATION_ID, { schedule_once_at: future });
+      await session.scheduler().tick();
+      expect(await onlyRun()).toMatchObject({ status: "failed", retry_at: null });
+      expect(await store().getById(AUTOMATION_ID)).toMatchObject({
+        enabled: 1,
+        schedule_once_at: future,
+        next_run_at: future,
+      });
+      expect(session.calls("/internal/init")).toHaveLength(1);
+    });
+
+    it("repairs a missed disable after a terminal transition", async () => {
+      const session = sessionStub();
+      session.behavior.initOk = true;
+      await createOverdueAutomation({ max_retries: 2 });
+      await session.scheduler().tick();
+      const running = await onlyRun();
+      // Simulate a crash after the terminal write, before invocation accounting.
+      await store().updateRun(running.id, { status: "completed", completed_at: Date.now() });
+      expect(await store().getById(AUTOMATION_ID)).toMatchObject({ enabled: 1, next_run_at: null });
+      await session.scheduler().tick();
+      expect(await store().getById(AUTOMATION_ID)).toMatchObject({ enabled: 0, next_run_at: null });
+      expect(session.calls("/internal/init")).toHaveLength(1);
+    });
+  }
 });

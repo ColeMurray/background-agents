@@ -142,7 +142,8 @@ const ACTIVE_RUN_STATUSES_SQL = "('starting', 'running', 'retrying')";
 const RETRY_ALLOWED_SQL = `EXISTS (
   SELECT 1 FROM automations a
   WHERE a.id = automation_runs.automation_id AND a.enabled = 1 AND a.deleted_at IS NULL
-    AND automation_runs.attempt <= a.max_retries)`;
+    AND automation_runs.attempt <= a.max_retries
+    AND (a.schedule_once_at IS NULL OR a.schedule_once_at = automation_runs.scheduled_at))`;
 
 /** A run the orphan sweep may fail; binds the creation cutoff. */
 const ORPHANED_STARTING_RUN_PREDICATE = "status = 'starting' AND created_at < ?";
@@ -322,7 +323,7 @@ export type InvocationOverlapScope =
  * A cron slot handover: move the schedule from the slot this firing claimed
  * (`fromSlot`) to its successor. Carrying the claimed slot lets the UPDATE act
  * as a compare-and-set, so only the firing that still owns the slot advances it.
- * A null successor consumes a one-shot slot and disables its automation.
+ * A null successor consumes a one-shot slot; it stays enabled until its runs settle.
  */
 export interface ScheduleAdvance {
   fromSlot: number;
@@ -895,6 +896,28 @@ export class AutomationStore {
   async pause(id: string): Promise<boolean> {
     const result = await this.bindPause(id).run();
     return (result.meta?.changes ?? 0) > 0;
+  }
+
+  /**
+   * Disable consumed one-shots once all active runs settle. The optional ID scopes live
+   * completion; recovery repairs all missed completions. Live SQL guards protect a reschedule
+   * or an admitted manual run that races finalization.
+   */
+  async disableSettledOneShots(automationId?: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automations SET enabled = 0, updated_at = ?
+         WHERE trigger_type = 'schedule' AND schedule_once_at IS NOT NULL
+           AND enabled = 1 AND deleted_at IS NULL AND next_run_at IS NULL
+           ${automationId === undefined ? "" : "AND id = ?"}
+           AND EXISTS (SELECT 1 FROM automation_invocations i
+             WHERE i.automation_id = automations.id AND i.source = 'schedule'
+               AND i.scheduled_at = automations.schedule_once_at)
+           AND NOT EXISTS (SELECT 1 FROM automation_runs r
+             WHERE r.automation_id = automations.id AND r.status IN ${ACTIVE_RUN_STATUSES_SQL})`
+      )
+      .bind(Date.now(), ...(automationId === undefined ? [] : [automationId]))
+      .run();
   }
 
   /** Resume only the observed one-shot slot, so a concurrent reschedule wins. */
@@ -1547,7 +1570,8 @@ export class AutomationStore {
 
   /**
    * Consume the claimed slot. Recurring overlap skips may advance before their
-   * history is inserted; a one-shot must have durable history before it disables.
+   * history is inserted; a one-shot consumes its slot with durable history and
+   * stays enabled while its invocation has active runs, allowing launch retries.
    */
   private bindScheduleAdvance(
     invocation: AutomationInvocationRow,
@@ -1558,13 +1582,16 @@ export class AutomationStore {
     return this.db
       .prepare(
         `UPDATE automations SET next_run_at = ?, updated_at = ?,
-           enabled = CASE WHEN schedule_once_at IS NOT NULL THEN 0 ELSE enabled END
+           enabled = CASE WHEN schedule_once_at IS NOT NULL AND NOT EXISTS (
+             SELECT 1 FROM automation_runs WHERE invocation_id = ? AND status IN ${ACTIVE_RUN_STATUSES_SQL}
+           ) THEN 0 ELSE enabled END
          WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}
            AND (schedule_once_at IS NULL OR EXISTS (SELECT 1 FROM automation_invocations WHERE id = ?))`
       )
       .bind(
         advance.nextRunAt,
         Date.now(),
+        invocation.id,
         invocation.automation_id,
         advance.fromSlot,
         ...grantsGuard.params,

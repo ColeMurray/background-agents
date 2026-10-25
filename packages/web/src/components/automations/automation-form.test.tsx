@@ -166,7 +166,7 @@ describe("automation cron submission", () => {
     );
     await user.click(screen.getByRole("combobox", { name: "Schedule" }));
     await user.click(await screen.findByRole("option", { name: "Run once" }));
-    expect(screen.queryByRole("combobox", { name: "Retries" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Retries" })).toBeInTheDocument();
     const input = screen.getByLabelText("Run at");
     fireEvent.change(input, { target: { value: "2020-01-01T09:00:42.123" } });
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
@@ -178,7 +178,7 @@ describe("automation cron submission", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         scheduleOnceAt: new Date("2099-01-01T09:00").getTime(),
-        maxRetries: 0,
+        maxRetries: 2,
         triggerType: "schedule",
         repositories: singleRepository,
       })

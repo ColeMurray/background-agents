@@ -79,6 +79,7 @@ function failureHarness(overrides: Partial<InvocationRunAggregate> = {}) {
     tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(3),
     autoPause: vi.fn().mockResolvedValue(undefined),
+    disableSettledOneShots: vi.fn().mockResolvedValue(undefined),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
   };
   return { store, service: new AutomationFailureService(store, log) };
@@ -276,6 +277,7 @@ function recoveryHarness() {
       getRunsPastExecutionDeadline: vi.fn().mockResolvedValue([]),
       bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
       bulkFailRunningRuns: vi.fn().mockResolvedValue(undefined),
+      disableSettledOneShots: vi.fn().mockResolvedValue(undefined),
       getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
       getStaleFailureResetCandidates: vi.fn().mockResolvedValue([]),
     },

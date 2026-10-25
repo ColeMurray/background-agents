@@ -69,7 +69,7 @@ describe("one-shot scheduled automations (real D1)", () => {
       session_id: expect.any(String),
     });
     expect(await store.getById("once")).toMatchObject({
-      enabled: 0,
+      enabled: 1,
       next_run_at: null,
       schedule_once_at: at,
     });
@@ -124,7 +124,7 @@ describe("one-shot scheduled automations (real D1)", () => {
     ).toHaveLength(1);
     expect(await fetchRuns("replay")).toHaveLength(1);
     expect((await store.listInvocations("replay", { limit: 10, offset: 0 })).total).toBe(1);
-    expect(await store.getById("replay")).toMatchObject({ enabled: 0, next_run_at: null });
+    expect(await store.getById("replay")).toMatchObject({ enabled: 1, next_run_at: null });
     const [run] = await fetchRuns("replay");
     await scheduler.runComplete({
       automationId: "replay",

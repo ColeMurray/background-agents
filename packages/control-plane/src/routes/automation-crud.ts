@@ -91,7 +91,6 @@ import {
   resolveEnvironmentSelection,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
-  validateAutomationRetries,
   validateTargetCounts,
   validateTeamExecutor,
 } from "./automation-validation";
@@ -100,6 +99,9 @@ import { authorizeSessionTarget } from "./session-target-authorization";
 import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 const logger = createLogger("router:automations");
+
+/** Launch retries belong to scheduled firings; zero is accepted for all trigger types. */
+const MAX_RETRIES_SCHEDULE_ONLY_ERROR = "maxRetries above 0 is only valid for schedule triggers";
 
 async function handleCreateAutomation(
   request: Request,
@@ -211,8 +213,7 @@ async function handleCreateAutomation(
 
   const isSchedule = triggerType === "schedule";
 
-  const retryError = validateAutomationRetries(triggerType, body.scheduleOnceAt, body.maxRetries);
-  if (retryError) return error(retryError, 400);
+  if (body.maxRetries && !isSchedule) return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
 
   // Schedule-specific validation
   if (isSchedule) {
@@ -503,12 +504,9 @@ async function handleUpdateAutomation(
   if (body.triggerConfig !== undefined && existingTriggerType === "schedule") {
     return error("Cannot set triggerConfig on schedule automations", 400);
   }
-  const retryError = validateAutomationRetries(
-    existingTriggerType,
-    existing.schedule_once_at,
-    body.maxRetries
-  );
-  if (retryError) return error(retryError, 400);
+  if (body.maxRetries && existingTriggerType !== "schedule") {
+    return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
+  }
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
   if (body.providerSelections !== undefined) {

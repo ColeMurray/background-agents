@@ -1,6 +1,7 @@
 import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
 import {
   isDuplicateKeyError,
+  allRunsUnauthorized,
   type AutomationStore,
   type AutomationRow,
   type AutomationRunRow,
@@ -44,7 +45,7 @@ export interface StartInvocationParams {
   executionPrincipal?: ExecutionPrincipal;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
   scheduledAt?: number;
-  /** Next slot, or null to disable a one-shot; advanced atomically with its invocation. */
+  /** Next slot, or null to consume a one-shot; advanced atomically with its invocation. */
   advanceToNextRunAt?: number | null;
   triggerKey?: string | null;
   /** Finalize a webhook follow-up reservation as soon as its invocation is admitted. */
@@ -384,10 +385,7 @@ export class AutomationInvocationService {
       targets: launchTargets,
       instructionsOverride,
       launchError: attributionError,
-      retryable:
-        source === "schedule" &&
-        automation.schedule_once_at == null &&
-        (automation.max_retries ?? 0) > 0,
+      retryable: source === "schedule" && (automation.max_retries ?? 0) > 0,
     };
     await forEachConcurrently(launchCandidates, AUTOMATION_LAUNCH_CONCURRENCY, (child) =>
       this.deps.launcher.launch(automation, child, launch)
@@ -397,7 +395,7 @@ export class AutomationInvocationService {
     // Pre-failed and launch-failed children have no callback coming — apply
     // the failure strike now (CAS-deduped). This is also the born-terminal
     // path: every repo inaccessible → invocation finalizes immediately.
-    if (children.some((child) => child.status === "failed")) {
+    if (children.some((child) => child.status === "failed") || allRunsUnauthorized(children)) {
       try {
         await this.deps.failures.applyInvocationOutcome(automation.id, invocationId);
       } catch (e) {
