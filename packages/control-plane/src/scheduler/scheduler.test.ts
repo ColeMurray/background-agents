@@ -134,6 +134,7 @@ function aggregate(overrides?: Partial<InvocationRunAggregate>): InvocationRunAg
   return {
     total: 1,
     active: 1,
+    retrying: 0,
     failed: 0,
     completed: 0,
     skipped: 0,

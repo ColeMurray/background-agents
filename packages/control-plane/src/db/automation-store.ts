@@ -306,6 +306,8 @@ export interface InvocationRunAggregate {
   total: number;
   /** Starting, running, or waiting to retry. */
   active: number;
+  /** Waiting to retry; also counted in `active`. */
+  retrying: number;
   failed: number;
   completed: number;
   skipped: number;
@@ -1718,6 +1720,7 @@ export class AutomationStore {
         `SELECT
            COUNT(*) AS total,
            COALESCE(SUM(CASE WHEN status IN ${ACTIVE_RUN_STATUSES_SQL} THEN 1 ELSE 0 END), 0) AS active,
+           COALESCE(SUM(CASE WHEN status = 'retrying' THEN 1 ELSE 0 END), 0) AS retrying,
            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
@@ -1728,6 +1731,7 @@ export class AutomationStore {
       .first<{
         total: number;
         active: number;
+        retrying: number;
         failed: number;
         completed: number;
         skipped: number;
@@ -1737,6 +1741,7 @@ export class AutomationStore {
     return {
       total: row?.total ?? 0,
       active: row?.active ?? 0,
+      retrying: row?.retrying ?? 0,
       failed: row?.failed ?? 0,
       completed: row?.completed ?? 0,
       skipped: row?.skipped ?? 0,

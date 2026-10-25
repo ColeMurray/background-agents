@@ -514,7 +514,7 @@ describe("automation read, update, and delete routes", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "maxRetries is only valid for schedule triggers",
+        error: "maxRetries above 0 is only valid for schedule triggers",
       });
       expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
     });

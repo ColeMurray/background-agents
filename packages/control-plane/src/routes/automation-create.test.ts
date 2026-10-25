@@ -744,9 +744,27 @@ describe("automation create route", () => {
 
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({
-        error: "maxRetries is only valid for schedule triggers",
+        error: "maxRetries above 0 is only valid for schedule triggers",
       });
       expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("accepts a zero launch retry limit on a non-schedule trigger", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Inbound",
+          instructions: "Handle the payload.",
+          triggerType: "webhook",
+          maxRetries: 0,
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ max_retries: 0 })
+      );
     });
 
     it("rejects repo-less repo-scoped triggers", async () => {

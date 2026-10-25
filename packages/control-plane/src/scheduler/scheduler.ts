@@ -76,7 +76,7 @@ import { generateId, hashToken } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
-import { validateHarnessExecution } from "../harness-admission";
+import { HarnessAdmissionError, validateHarnessExecution } from "../harness-admission";
 import type { SqlDatabase } from "../db/sql-database";
 import type { BackgroundTasks } from "../platform-ports";
 import { initializeSession } from "../session/initialize";
@@ -509,6 +509,9 @@ export class Scheduler {
     if (aggregate.total === 0) return; // childless skip — never counts
 
     if (aggregate.failed > 0) {
+      // A sibling waiting to retry has yet to finish. This strike could auto-pause the
+      // automation and so withdraw that retry; it lands once the sibling settles instead.
+      if (aggregate.retrying > 0) return;
       const won = await store.tryMarkInvocationFailureCounted(invocationId);
       if (!won) return;
       await this.trackAutomationFailure(store, automationId);
@@ -906,7 +909,8 @@ export class Scheduler {
         : { status: "failed", failure_reason: message };
     try {
       const failedAt = Date.now();
-      if (outcome.status === "failed" && retryable) {
+      // A configuration the harness cannot run fails every attempt alike, so it is not retried.
+      if (outcome.status === "failed" && retryable && !(error instanceof HarnessAdmissionError)) {
         const retryAt = failedAt + launchRetryDelayMs(child.attempt ?? 1);
         if ((await store.failLaunchOrRetry(child.id, message, failedAt, retryAt)) === "retrying") {
           outcome = { ...outcome, status: "retrying", retry_at: retryAt, session_id: null };

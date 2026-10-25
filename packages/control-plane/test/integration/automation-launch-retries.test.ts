@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
+import * as automationRepositories from "../../src/automation/repository";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { Scheduler } from "../../src/scheduler/scheduler";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
-import { seedActiveUser } from "./helpers";
+import { seedActiveUser, sqlDatabase } from "./helpers";
 import { makeAutomation } from "./invocation-fixtures";
 import { fetchRuns } from "./run-helpers";
 
@@ -78,6 +79,10 @@ describe("scheduled launch retries", () => {
   beforeEach(async () => {
     await cleanD1Tables();
     await seedActiveUser("user-1");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("waits to relaunch a run whose session fails to start, without a failure strike", async () => {
@@ -281,6 +286,85 @@ describe("scheduled launch retries", () => {
 
     expect(await store().claimRetry(stale, Date.now())).toBeNull();
     expect(await store().claimRetry(await onlyRun(), Date.now())).toMatchObject({ attempt: 3 });
+  });
+
+  it("counts a sibling's failure only once the run waiting to retry settles", async () => {
+    vi.spyOn(automationRepositories, "resolveAutomationRepositories").mockImplementation(
+      async (_env, repositories) =>
+        repositories.map((requested, index) =>
+          requested.repo_name === "gone"
+            ? { requested, error: "Repository is not accessible", repository: null }
+            : {
+                requested,
+                error: null,
+                repository: {
+                  repoOwner: requested.repo_owner,
+                  repoName: requested.repo_name,
+                  repoId: 100 + index,
+                  baseBranch: "main",
+                },
+              }
+        )
+    );
+    const session = sessionStub();
+    await createOverdueAutomation({ max_retries: 2, consecutive_failures: 2 });
+    await sqlDatabase(env.DB).batch(
+      store().bindRepositoryInserts(
+        AUTOMATION_ID,
+        [
+          { repo_owner: "acme", repo_name: "app", repo_id: null, base_branch: null },
+          { repo_owner: "acme", repo_name: "gone", repo_id: null, base_branch: null },
+        ],
+        Date.now()
+      )
+    );
+
+    await session.scheduler().tick();
+
+    const byRepo = async () =>
+      Object.fromEntries((await fetchRuns(AUTOMATION_ID)).map((run) => [run.repo_name, run]));
+    expect(await byRepo()).toMatchObject({
+      app: { status: "retrying" },
+      gone: { status: "failed" },
+    });
+    expect(await store().getById(AUTOMATION_ID)).toMatchObject({
+      enabled: 1,
+      consecutive_failures: 2,
+    });
+
+    await makeRetryDue((await byRepo()).app!.id);
+    session.behavior.initOk = true;
+    await session.scheduler().tick();
+    const relaunched = (await byRepo()).app!;
+    expect(relaunched).toMatchObject({ status: "running", attempt: 2 });
+    await session.scheduler().runComplete({
+      automationId: AUTOMATION_ID,
+      runId: relaunched.id,
+      sessionId: relaunched.session_id!,
+      messageId: "msg-1",
+      success: true,
+    });
+
+    expect(await store().getById(AUTOMATION_ID)).toMatchObject({
+      enabled: 0,
+      consecutive_failures: 3,
+    });
+    expect(await latestInvocation()).toMatchObject({ status: "partial_failed" });
+  });
+
+  it("does not retry a configuration the harness cannot run", async () => {
+    const session = sessionStub();
+    await createOverdueAutomation({
+      max_retries: 2,
+      harness: "codex",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    await session.scheduler().tick();
+
+    expect(await onlyRun()).toMatchObject({ status: "failed", retry_at: null });
+    expect(session.calls("/internal/init")).toHaveLength(0);
+    expect((await store().getById(AUTOMATION_ID))!.consecutive_failures).toBe(1);
   });
 
   it("re-checks the owner's authorization before relaunching", async () => {

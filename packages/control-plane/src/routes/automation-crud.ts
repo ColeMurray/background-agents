@@ -100,8 +100,11 @@ import { authorizeTeamRepositories } from "./workspace-repository-authorization"
 
 const logger = createLogger("router:automations");
 
-/** Only scheduled firings retry a failed launch, so other triggers cannot store a limit. */
-const MAX_RETRIES_SCHEDULE_ONLY_ERROR = "maxRetries is only valid for schedule triggers";
+/**
+ * Only scheduled firings retry a failed launch, so other triggers cannot allow any. Zero, the
+ * default, stays accepted so a client can send back an automation it read.
+ */
+const MAX_RETRIES_SCHEDULE_ONLY_ERROR = "maxRetries above 0 is only valid for schedule triggers";
 
 async function handleCreateAutomation(
   request: Request,

@@ -237,7 +237,10 @@ export const createAutomationRequestSchema = z.object({
   environmentIds: automationEnvironmentIdsSchema.optional(),
   /** Complete pin set. Omission creates the automation without pins. */
   providerSelections: modelProviderSelectionsSchema.optional(),
-  /** Launch retries for scheduled runs; schedule triggers only. Omission means none. */
+  /**
+   * Launch retries for scheduled runs; only schedule triggers may set above 0. Omission means
+   * none.
+   */
   maxRetries: maxRetriesSchema.optional(),
 });
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
@@ -258,7 +261,7 @@ export const updateAutomationRequestSchema = z.object({
   environmentIds: automationEnvironmentIdsSchema.optional(),
   /** Replaces every provider pin when present; an empty map clears all pins. */
   providerSelections: modelProviderSelectionsSchema.optional(),
-  /** Launch retries for scheduled runs; schedule triggers only. */
+  /** Launch retries for scheduled runs; only schedule triggers may set above 0. */
   maxRetries: maxRetriesSchema.optional(),
 });
 export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
