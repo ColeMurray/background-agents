@@ -10,7 +10,7 @@ import { createLogger } from "../logger";
 import { AutomationEventHandler, type AutomationEventHandlerDeps } from "./event-handler";
 import { SlackContinuationPolicyFactory } from "./slack-continuation-policy";
 import { WebhookContinuationPolicyFactory } from "./webhook-continuation-policy";
-import type { SteeringActor } from "./session-continuity";
+import type { ContinuationPolicy, SteeringActor } from "./session-continuity";
 import { SessionFollowUpRefusedError } from "./contracts";
 import { SlackEventHandler, type SlackEventHandlerDeps } from "./slack-event-handler";
 import { WebhookEventHandler, type WebhookEventHandlerDeps } from "./webhook-event-handler";
@@ -95,6 +95,25 @@ function slackHarness() {
 }
 
 describe("Slack event ownership", () => {
+  it("accepts an injected factory returning only the public policy contract", async () => {
+    const deps = slackHarness();
+    const policy: ContinuationPolicy = {
+      source: "slack",
+      resolveActor: vi.fn(),
+      buildPrompt: vi.fn(),
+    };
+    const policies = { create: vi.fn(() => policy) };
+    const handler = new SlackEventHandler({ ...deps, policies });
+
+    await handler.handle(slackEvent);
+
+    expect(policies.create).toHaveBeenCalledExactlyOnceWith(slackEvent);
+    expect(deps.continuity.continueSession).toHaveBeenCalledTimes(2);
+    for (const call of deps.continuity.continueSession.mock.calls) {
+      expect(call[3]).toBe(policy);
+    }
+  });
+
   it("shares lazy context and settings within a delivery, then reads them again for the next", async () => {
     const deps = slackHarness();
     const handler = new SlackEventHandler(deps);
@@ -188,6 +207,32 @@ const webhookEvent = normalizeWebhookEvent(
 );
 
 describe("Webhook receipt ownership", () => {
+  it("accepts an injected factory returning only the public policy contract", async () => {
+    const deps = webhookHarness();
+    const policy: ContinuationPolicy = {
+      source: "webhook",
+      resolveActor: vi.fn(),
+      buildPrompt: vi.fn(),
+    };
+    const policies = { create: vi.fn(async () => policy) };
+    const handler = new WebhookEventHandler({ ...deps, policies });
+
+    await handler.handle(webhookEvent);
+
+    expect(policies.create).toHaveBeenCalledExactlyOnceWith(
+      webhookEvent,
+      automation,
+      { claimId: "id-1", invocationId: "id-2" },
+      "webhook:hashed-key"
+    );
+    expect(deps.continuity.continueSession).toHaveBeenCalledExactlyOnceWith(
+      automation,
+      webhookEvent.concurrencyKey,
+      100,
+      policy
+    );
+  });
+
   it("reconciles a historical receipt before parsing changed conditions", async () => {
     const deps = webhookHarness();
     const handler = new WebhookEventHandler(deps);
@@ -584,7 +629,7 @@ describe("Webhook continuation policy", () => {
       `automation:webhook-steering:${webhookEvent.triggerKey}`,
       webhookEvent.triggerKey
     );
-    const { body, ctx } = await policy.buildPrompt(continuationRun, actor);
+    const { body, ctx } = await policy.buildPrompt(continuationRun, actor, automation);
     expect(body).toMatchObject({
       clientRequestId: "webhook:reconciled",
       source: "automation",
@@ -603,11 +648,11 @@ describe("Webhook continuation policy", () => {
     const deps = webhookHarness();
     const policy = await deps.policies.create(webhookEvent, automation, null, null);
     expect(deps.crypto.hashToken).toHaveBeenCalledExactlyOnceWith(webhookEvent.triggerKey);
-    await expect(policy.buildPrompt(continuationRun, actor)).resolves.toMatchObject({
+    await expect(policy.buildPrompt(continuationRun, actor, automation)).resolves.toMatchObject({
       body: { clientRequestId: "webhook:hashed-key" },
     });
-    await policy.acceptDelivery(continuationRun);
-    await policy.releaseDelivery();
+    await policy.acceptDelivery!(continuationRun);
+    await policy.releaseDelivery!();
     expect(deps.store.resolveCanonicalOwner).not.toHaveBeenCalled();
     expect(deps.store.acceptFollowUpReceipt).not.toHaveBeenCalled();
     expect(deps.store.releaseFollowUpReceipt).not.toHaveBeenCalled();
@@ -622,7 +667,7 @@ describe("Webhook continuation policy", () => {
       "webhook:reconciled"
     );
     deps.clock.now = () => 200;
-    await policy.acceptDelivery(continuationRun);
+    await policy.acceptDelivery!(continuationRun);
     expect(deps.store.acceptFollowUpReceipt).toHaveBeenCalledExactlyOnceWith(
       automation.id,
       webhookEvent.triggerKey,
@@ -630,7 +675,7 @@ describe("Webhook continuation policy", () => {
       "existing-invocation",
       200
     );
-    await policy.releaseDelivery();
+    await policy.releaseDelivery!();
     expect(deps.store.releaseFollowUpReceipt).toHaveBeenCalledExactlyOnceWith(
       automation.id,
       webhookEvent.triggerKey,

@@ -19,7 +19,7 @@ interface SlackContinuationPolicyDeps {
 export class SlackContinuationPolicyFactory {
   constructor(private readonly deps: SlackContinuationPolicyDeps) {}
 
-  create(event: SlackAutomationEvent): SlackContinuationPolicy {
+  create(event: SlackAutomationEvent): ContinuationPolicy {
     return new SlackContinuationPolicy(this.deps, event);
   }
 }

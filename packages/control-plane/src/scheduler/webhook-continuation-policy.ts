@@ -32,7 +32,7 @@ export class WebhookContinuationPolicyFactory {
     automation: AutomationRow,
     claim: WebhookFollowUpClaim | null,
     requestId: string | null
-  ): Promise<WebhookContinuationPolicy> {
+  ): Promise<ContinuationPolicy> {
     // Hashed so the ID fits clientRequestIdSchema's 128-character limit.
     const clientRequestId =
       requestId ?? `webhook:${await this.deps.crypto.hashToken(event.triggerKey)}`;
