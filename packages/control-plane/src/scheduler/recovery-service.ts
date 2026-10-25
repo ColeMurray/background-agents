@@ -24,6 +24,7 @@ const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
 export interface AutomationRecoveryServiceDeps {
   store: Pick<
     AutomationStore,
+    | "disableSettledOneShots"
     | "bulkFailRunningRuns"
     | "bulkFailStartingRuns"
     | "getOrphanedStartingRuns"
@@ -184,6 +185,7 @@ export class AutomationRecoveryService {
     const store = this.deps.store;
     const since = this.deps.clock.now() - INVOCATION_SWEEP_WINDOW_MS;
     try {
+      await store.disableSettledOneShots();
       const uncounted = await store.getUncountedFailedInvocations(since, RECOVERY_SWEEP_LIMIT);
       for (const invocation of uncounted) {
         await this.deps.failures.applyInvocationOutcome(invocation.automation_id, invocation.id);

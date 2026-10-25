@@ -100,10 +100,7 @@ import { authorizeTeamRepositories } from "./workspace-repository-authorization"
 
 const logger = createLogger("router:automations");
 
-/**
- * Only scheduled firings retry a failed launch, so other triggers cannot allow any. Zero, the
- * default, stays accepted so a client can send back an automation it read.
- */
+/** Launch retries belong to scheduled firings; zero is accepted for all trigger types. */
 const MAX_RETRIES_SCHEDULE_ONLY_ERROR = "maxRetries above 0 is only valid for schedule triggers";
 
 async function handleCreateAutomation(
@@ -216,19 +213,34 @@ async function handleCreateAutomation(
 
   const isSchedule = triggerType === "schedule";
 
+  if (body.maxRetries && !isSchedule) return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
+
   // Schedule-specific validation
   if (isSchedule) {
-    const cronError = validateAutomationCron(body.scheduleCron ?? "");
-    if (cronError) return error(cronError, 400);
-    if (!body.scheduleTz || !isValidTimeZone(body.scheduleTz)) {
+    if (body.scheduleOnceAt !== undefined) {
+      if (body.scheduleCron !== undefined)
+        return error("Choose either scheduleCron or scheduleOnceAt", 400);
+      if (body.scheduleOnceAt <= Date.now())
+        return error("scheduleOnceAt must be in the future", 400);
+    } else {
+      const cronError = validateAutomationCron(body.scheduleCron ?? "");
+      if (cronError) return error(cronError, 400);
+    }
+    if (
+      (body.scheduleOnceAt === undefined && !body.scheduleTz) ||
+      (body.scheduleTz !== undefined && !isValidTimeZone(body.scheduleTz))
+    ) {
       return error("scheduleTz must be a valid IANA timezone", 400);
     }
   } else {
     // Reject schedule fields for non-schedule types
-    if (body.scheduleCron || body.scheduleTz) {
-      return error("scheduleCron and scheduleTz are only valid for schedule triggers", 400);
+    if (
+      body.scheduleCron !== undefined ||
+      body.scheduleTz !== undefined ||
+      body.scheduleOnceAt !== undefined
+    ) {
+      return error("Schedule fields are only valid for schedule triggers", 400);
     }
-    if (body.maxRetries) return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
   }
 
   const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
@@ -332,7 +344,7 @@ async function handleCreateAutomation(
 
   // Compute next run (only for schedule triggers)
   const nextRunAt = isSchedule
-    ? nextCronOccurrence(body.scheduleCron!, body.scheduleTz!).getTime()
+    ? (body.scheduleOnceAt ?? nextCronOccurrence(body.scheduleCron!, body.scheduleTz!).getTime())
     : null;
 
   const id = generateId();
@@ -365,6 +377,7 @@ async function handleCreateAutomation(
     instructions: body.instructions,
     trigger_type: triggerType,
     schedule_cron: body.scheduleCron ?? null,
+    schedule_once_at: body.scheduleOnceAt ?? null,
     schedule_tz: body.scheduleTz ?? "UTC",
     harness,
     model,
@@ -534,6 +547,24 @@ async function handleUpdateAutomation(
     }
   }
 
+  const scheduleChanged =
+    body.scheduleCron !== undefined ||
+    body.scheduleTz !== undefined ||
+    body.scheduleOnceAt !== undefined;
+  if (scheduleChanged && existingTriggerType !== "schedule") {
+    return error("Schedule fields are only valid for schedule triggers", 400);
+  }
+  if (body.scheduleOnceAt !== undefined) {
+    if (existing.schedule_once_at == null)
+      return error("Cannot change a recurring schedule to one-shot", 400);
+    if (body.scheduleOnceAt !== existing.schedule_once_at && body.scheduleOnceAt <= Date.now()) {
+      return error("scheduleOnceAt must be in the future", 400);
+    }
+  }
+  if (body.scheduleCron !== undefined && existing.schedule_once_at != null) {
+    return error("Cannot set scheduleCron on a one-shot automation", 400);
+  }
+
   if (body.scheduleCron !== undefined) {
     const cronError = validateAutomationCron(body.scheduleCron);
     if (cronError) return error(cronError, 400);
@@ -614,6 +645,9 @@ async function handleUpdateAutomation(
   if (body.name !== undefined) updateFields.name = body.name.trim();
   if (body.instructions !== undefined) updateFields.instructions = body.instructions;
   if (body.scheduleCron !== undefined) updateFields.schedule_cron = body.scheduleCron;
+  if (body.scheduleOnceAt !== undefined && body.scheduleOnceAt !== existing.schedule_once_at) {
+    updateFields.schedule_once_at = body.scheduleOnceAt;
+  }
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
   if (body.maxRetries !== undefined) updateFields.max_retries = body.maxRetries;
   if (body.harness !== undefined) updateFields.harness = nextHarness;
@@ -811,15 +845,11 @@ async function handleUpdateAutomation(
   }
 
   // Recompute next_run_at if schedule changed (only for schedule types)
-  if (
-    existingTriggerType === "schedule" &&
-    (body.scheduleCron !== undefined || body.scheduleTz !== undefined)
-  ) {
+  // One-shot transitions are computed atomically by the store from the live enabled state.
+  if (existingTriggerType === "schedule" && scheduleChanged && existing.schedule_once_at == null) {
     const cron = body.scheduleCron ?? existing.schedule_cron;
     const tz = body.scheduleTz ?? existing.schedule_tz;
-    if (!cron) {
-      return error("Cannot compute schedule: no cron expression", 400);
-    }
+    if (!cron) return error("Cannot compute schedule: no cron expression", 400);
     updateFields.next_run_at = nextCronOccurrence(cron, tz).getTime();
   }
 

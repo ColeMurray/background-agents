@@ -54,6 +54,7 @@ const original: AutomationListItem = {
   harness: "opencode",
   triggerType: "schedule",
   scheduleCron: "0 9 * * *",
+  scheduleOnceAt: null,
   scheduleTz: "UTC",
   model: "openai/gpt-5.4",
   reasoningEffort: null,

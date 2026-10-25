@@ -104,10 +104,10 @@ export class Scheduler {
         break;
       }
       try {
-        const nextRunAt = nextCronOccurrence(
-          automation.schedule_cron!,
-          automation.schedule_tz
-        ).getTime();
+        const nextRunAt =
+          automation.schedule_once_at != null
+            ? null
+            : nextCronOccurrence(automation.schedule_cron!, automation.schedule_tz).getTime();
 
         const result = await this.deps.invocations.start({
           automation,

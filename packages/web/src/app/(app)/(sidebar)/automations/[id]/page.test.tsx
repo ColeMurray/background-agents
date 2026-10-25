@@ -34,6 +34,7 @@ const automation = {
   harness: "opencode",
   triggerType: "schedule" as const,
   scheduleCron: "0 9 * * *",
+  scheduleOnceAt: null as number | null,
   scheduleTz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   reasoningEffort: null,
@@ -130,8 +131,34 @@ beforeEach(() => {
   history.requestedLimits = [];
   detail.evicted = false;
   detail.loading = false;
+  automation.scheduleOnceAt = null;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("AutomationDetailPage one-shot time", () => {
+  it("formats the instant in the displayed configuration timezone", async () => {
+    const format = Date.prototype.toLocaleString;
+    // Simulate a Los Angeles viewer without changing the configured UTC zone.
+    vi.spyOn(Date.prototype, "toLocaleString").mockImplementation(function (
+      this: Date,
+      locales,
+      options
+    ) {
+      return format.call(this, locales, { timeZone: "America/Los_Angeles", ...options });
+    });
+    automation.scheduleOnceAt = Date.parse("2027-01-01T09:00:00Z");
+    await renderPage();
+    const expected = format.call(new Date(automation.scheduleOnceAt), undefined, {
+      timeZone: "UTC",
+      timeZoneName: "short",
+    });
+    expect(screen.getByText(`Once at ${expected}`)).toBeInTheDocument();
+    expect(screen.getByText("UTC")).toBeInTheDocument();
+  });
+});
 
 describe("AutomationDetailPage loading", () => {
   it("shows a skeleton instead of the page while the automation loads", async () => {

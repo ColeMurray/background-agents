@@ -365,11 +365,16 @@ Superseded images are deleted by the same reaper as on every other provider.
 
 Things to know:
 
-- **Allowance.** Boat includes a fixed number of named snapshots per account or organization (ten at
-  the time of writing) and bills each one beyond that monthly. The deployment's base snapshot
-  counts, and so does every ready image plus, briefly, the image a rebuild is replacing. A save past
-  the allowance with no credit fails the build with Boat's `credit_required` reason; remove unused
-  named snapshots (old base snapshots included) or add credit, then rebuild.
+- **Allowance.** Boat includes a fixed number of named snapshots per account or organization wallet
+  and bills each one beyond that monthly. The deployed and retained rollback bases count, as does
+  every ready image plus, briefly, the image a rebuild is replacing. After switching the Worker,
+  Terraform [prunes superseded bases](./BOAT_SANDBOX_PROVIDER.md#base-snapshot-pruning), retaining
+  the deployed base and its confirmed deployment predecessor, not the newest artifact. Cleanup skips
+  when history cannot establish a predecessor and leaves `saving` snapshots, manual names and
+  prebuilt images untouched. The `oi-img` namespace is reserved and rejected as a base prefix.
+  Deleting a source base does not affect existing sandboxes or prebuilt images. A save past the
+  allowance with no credit fails the build with Boat's `credit_required` reason. Operators can
+  remove unrelated unused manual snapshots or add credit, then rebuild.
 - **What the image keeps.** A named snapshot follows Boat's snapshot rules: `/home` (the workspace
   with every clone and everything `setup.sh` put there) and changes under `/etc`, `/usr`, `/opt`,
   `/var`, `/root` and `/srv` are saved; `/tmp` and `~/.cache` are not. A setup script that warms a

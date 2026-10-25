@@ -34,6 +34,7 @@ export interface AutomationFormValues {
   model: string;
   reasoningEffort: string | null;
   scheduleCron?: string;
+  scheduleOnceAt?: number;
   scheduleTz?: string;
   /** Launch retries; submitted for schedule triggers only. */
   maxRetries?: number;
@@ -48,6 +49,8 @@ export interface AutomationFormValues {
 export interface AutomationTriggerDraft {
   type: AutomationTriggerType;
   scheduleCron: string;
+  scheduleMode: "recurring" | "once";
+  scheduleOnceAt: string;
   scheduleTz: string;
   maxRetries: number;
   eventType: string;
@@ -99,6 +102,11 @@ type InitialAutomationFormValues = Partial<AutomationFormValues>;
 
 export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 
+function toLocalDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 export function createAutomationFormDraft(
   initialValues: InitialAutomationFormValues = {}
 ): AutomationFormDraft {
@@ -113,6 +121,9 @@ export function createAutomationFormDraft(
     trigger: {
       type: initialValues.triggerType ?? "schedule",
       scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
+      scheduleMode: initialValues.scheduleOnceAt != null ? "once" : "recurring",
+      scheduleOnceAt:
+        initialValues.scheduleOnceAt != null ? toLocalDateTime(initialValues.scheduleOnceAt) : "",
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       maxRetries: initialValues.maxRetries ?? 0,
       eventType: initialValues.eventType ?? "",
@@ -139,6 +150,7 @@ export function automationToFormValues(automation: Automation): InitialAutomatio
     reasoningEffort: automation.reasoningEffort,
     scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
     scheduleTz: automation.scheduleTz,
+    scheduleOnceAt: automation.scheduleOnceAt ?? undefined,
     maxRetries: automation.maxRetries,
     instructions: automation.instructions,
     triggerType: automation.triggerType,
@@ -310,6 +322,8 @@ function findInvalidEvaluation({
   repositoryCount,
   environmentCount,
   originalTrigger,
+  scheduleOnceAt,
+  originalScheduleOnceAt,
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
@@ -317,6 +331,8 @@ function findInvalidEvaluation({
   repositoryCount: number;
   environmentCount: number;
   originalTrigger?: AutomationTriggerDraft;
+  scheduleOnceAt: number;
+  originalScheduleOnceAt?: number;
 }): Exclude<AutomationFormEvaluation, { valid: true }> | null {
   if (modelAvailability.status === "loading") return { valid: false, reason: "models-loading" };
   if (modelAvailability.status === "unavailable") {
@@ -326,12 +342,14 @@ function findInvalidEvaluation({
     return { valid: false, reason: "required-fields" };
   }
   if (draft.trigger.type === "schedule") {
-    if (
-      validateAutomationCron(draft.trigger.scheduleCron) ||
-      !isValidTimeZone(draft.trigger.scheduleTz)
-    ) {
-      return { valid: false, reason: "invalid-schedule" };
-    }
+    const validSchedule =
+      draft.trigger.scheduleMode === "once"
+        ? Number.isFinite(scheduleOnceAt) &&
+          (scheduleOnceAt > Date.now() ||
+            (mode === "edit" && scheduleOnceAt === originalScheduleOnceAt))
+        : !validateAutomationCron(draft.trigger.scheduleCron) &&
+          isValidTimeZone(draft.trigger.scheduleTz);
+    if (!validSchedule) return { valid: false, reason: "invalid-schedule" };
   }
   const targetError = validateAutomationTargetCounts(
     draft.trigger.type,
@@ -395,8 +413,10 @@ function buildSubmissionValues({
   draft,
   resolvedModel,
   targets,
+  scheduleOnceAt,
 }: {
   mode: AutomationFormMode;
+  scheduleOnceAt: number;
   draft: AutomationFormDraft;
   resolvedModel: string;
   targets: {
@@ -421,9 +441,14 @@ function buildSubmissionValues({
   if (draft.trigger.type === "schedule") {
     return {
       ...values,
-      scheduleCron: draft.trigger.scheduleCron,
-      scheduleTz: draft.trigger.scheduleTz,
       maxRetries: draft.trigger.maxRetries,
+      ...(draft.trigger.scheduleMode === "once"
+        ? { scheduleOnceAt }
+        : { scheduleCron: draft.trigger.scheduleCron }),
+      scheduleTz:
+        mode === "create" && draft.trigger.scheduleMode === "once"
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone
+          : draft.trigger.scheduleTz,
     };
   }
 
@@ -442,17 +467,25 @@ export function evaluateAutomationForm({
   resolvedModel,
   targets,
   originalTrigger,
+  originalScheduleOnceAt,
 }: {
   mode: AutomationFormMode;
   draft: AutomationFormDraft;
   modelAvailability: HarnessModelAvailability;
   resolvedModel: string;
   originalTrigger?: AutomationTriggerDraft;
+  originalScheduleOnceAt?: number;
   targets: {
     repositories: AutomationRepositoryInput[];
     environmentIds: string[];
   };
 }): AutomationFormEvaluation {
+  const scheduleOnceAt =
+    mode === "edit" &&
+    originalScheduleOnceAt !== undefined &&
+    draft.trigger.scheduleOnceAt === originalTrigger?.scheduleOnceAt
+      ? originalScheduleOnceAt
+      : new Date(draft.trigger.scheduleOnceAt).getTime();
   const invalidEvaluation = findInvalidEvaluation({
     mode,
     draft,
@@ -460,11 +493,13 @@ export function evaluateAutomationForm({
     repositoryCount: targets.repositories.length,
     environmentCount: targets.environmentIds.length,
     originalTrigger,
+    scheduleOnceAt,
+    originalScheduleOnceAt,
   });
   if (invalidEvaluation) return invalidEvaluation;
 
   return {
     valid: true,
-    values: buildSubmissionValues({ mode, draft, resolvedModel, targets }),
+    values: buildSubmissionValues({ mode, draft, resolvedModel, targets, scheduleOnceAt }),
   };
 }

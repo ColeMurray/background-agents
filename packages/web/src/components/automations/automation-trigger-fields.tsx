@@ -100,8 +100,8 @@ export function AutomationTriggerTypeField({
       {mode === "create" ? (
         <>
           <FieldDescription className="my-1">
-            Scheduled automations run on a repeating timer. Other types run when the connected
-            service sends an event (for example a GitHub webhook or Sentry alert).
+            Scheduled automations run once or on a repeating timer. Other types run when the
+            connected service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
           <TriggerTypeSelector
             value={value.type}
@@ -162,52 +162,98 @@ export function AutomationTriggerConfigurationFields({
     <>
       {isSchedule && (
         <>
-          <fieldset>
-            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
-            <CronPicker
-              value={value.scheduleCron}
-              onChange={(scheduleCron) => update({ scheduleCron })}
-              timezone={value.scheduleTz}
-            />
-            <FieldDescription>
-              How often this automation runs. Use a preset or a five-field cron expression (minute,
-              hour, day of month, month, day of week).
-            </FieldDescription>
-          </fieldset>
           <div>
             <label
-              id="automation-timezone-label"
-              htmlFor="automation-timezone"
+              htmlFor="automation-schedule-mode"
               className="block text-sm font-medium text-foreground mb-1.5"
             >
-              Timezone
+              Schedule
             </label>
-            <Combobox
-              id="automation-timezone"
-              labelId="automation-timezone-label"
-              value={value.scheduleTz}
-              onChange={(scheduleTz) => update({ scheduleTz })}
-              items={TIMEZONE_GROUPS}
-              maxDisplayed={20}
-              searchable
-              searchPlaceholder="Search timezones..."
-              filterFn={(option, query) =>
-                option.label.toLowerCase().includes(query) ||
-                String(option.value).toLowerCase().includes(query)
-              }
-              dropdownWidth="w-64"
-              triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+            <Select
+              value={value.scheduleMode}
+              disabled={mode === "edit"}
+              onValueChange={(scheduleMode: "recurring" | "once") => update({ scheduleMode })}
             >
-              <span className="truncate flex-1 text-left">
-                {value.scheduleTz.replace(/_/g, " ")}
-              </span>
-              <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-            </Combobox>
-            <FieldDescription>
-              The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
-              local time here).
-            </FieldDescription>
+              <SelectTrigger id="automation-schedule-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="recurring">Recurring</SelectItem>
+                <SelectItem value="once">Run once</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+          {value.scheduleMode === "once" ? (
+            <div>
+              <label
+                htmlFor="automation-once-at"
+                className="block text-sm font-medium text-foreground mb-1.5"
+              >
+                Run at
+              </label>
+              <Input
+                id="automation-once-at"
+                type="datetime-local"
+                value={value.scheduleOnceAt}
+                required
+                onChange={(event) => update({ scheduleOnceAt: event.target.value })}
+              />
+              <FieldDescription>
+                Choose a future time in your local timezone (
+                {Intl.DateTimeFormat().resolvedOptions().timeZone}). This automation runs once.
+                Pause or delete it to cancel pending starts, including retries.
+              </FieldDescription>
+            </div>
+          ) : (
+            <>
+              <fieldset>
+                <legend className="block text-sm font-medium text-foreground mb-1.5">Repeat</legend>
+                <CronPicker
+                  value={value.scheduleCron}
+                  onChange={(scheduleCron) => update({ scheduleCron })}
+                  timezone={value.scheduleTz}
+                />
+                <FieldDescription>
+                  How often this automation runs. Use a preset or a five-field cron expression
+                  (minute, hour, day of month, month, day of week).
+                </FieldDescription>
+              </fieldset>
+              <div>
+                <label
+                  id="automation-timezone-label"
+                  htmlFor="automation-timezone"
+                  className="block text-sm font-medium text-foreground mb-1.5"
+                >
+                  Timezone
+                </label>
+                <Combobox
+                  id="automation-timezone"
+                  labelId="automation-timezone-label"
+                  value={value.scheduleTz}
+                  onChange={(scheduleTz) => update({ scheduleTz })}
+                  items={TIMEZONE_GROUPS}
+                  maxDisplayed={20}
+                  searchable
+                  searchPlaceholder="Search timezones..."
+                  filterFn={(option, query) =>
+                    option.label.toLowerCase().includes(query) ||
+                    String(option.value).toLowerCase().includes(query)
+                  }
+                  dropdownWidth="w-64"
+                  triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+                >
+                  <span className="truncate flex-1 text-left">
+                    {value.scheduleTz.replace(/_/g, " ")}
+                  </span>
+                  <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+                </Combobox>
+                <FieldDescription>
+                  The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
+                  local time here).
+                </FieldDescription>
+              </div>
+            </>
+          )}
           <div>
             <label
               htmlFor="automation-max-retries"

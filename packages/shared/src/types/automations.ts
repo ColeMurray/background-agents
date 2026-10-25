@@ -61,6 +61,9 @@ export const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
 /** Most times a scheduled run may relaunch after its launch fails before the prompt is sent. */
 export const MAX_AUTOMATION_RETRIES = 5;
 
+/** A positive Unix timestamp in milliseconds within JavaScript's supported Date range. */
+const scheduleOnceAtSchema = z.number().int().positive().max(8_640_000_000_000_000);
+
 const maxRetriesSchema = z.number().int().min(0).max(MAX_AUTOMATION_RETRIES);
 
 /**
@@ -131,6 +134,8 @@ const automationSchema = z.object({
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema,
   scheduleCron: z.string().nullable(),
+  /** Unix timestamp in milliseconds for a one-shot schedule; null for recurring schedules. */
+  scheduleOnceAt: z.number().nullable().default(null),
   scheduleTz: z.string(),
   harness: harnessIdSchema,
   model: z.string(),
@@ -223,6 +228,7 @@ export const createAutomationRequestSchema = z.object({
   instructions: z.string(),
   triggerType: automationTriggerTypeSchema.optional(),
   scheduleCron: z.string().optional(),
+  scheduleOnceAt: scheduleOnceAtSchema.optional(),
   scheduleTz: z.string().optional(),
   /** Agent harness for the sessions this automation creates. Omission means the built-in harness. */
   harness: harnessIdSchema.optional(),
@@ -249,6 +255,7 @@ export const updateAutomationRequestSchema = z.object({
   name: z.string().optional(),
   instructions: z.string().optional(),
   scheduleCron: z.string().optional(),
+  scheduleOnceAt: scheduleOnceAtSchema.optional(),
   scheduleTz: z.string().optional(),
   harness: harnessIdSchema.optional(),
   model: z.string().optional(),

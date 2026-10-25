@@ -21,8 +21,12 @@ variable "snapshot_name_prefix" {
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.snapshot_name_prefix))
-    error_message = "snapshot_name_prefix must be 1-46 lowercase letters, digits or dashes, starting with a letter or digit."
+    condition = (
+      can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.snapshot_name_prefix)) &&
+      var.snapshot_name_prefix != "oi-img" &&
+      !startswith(var.snapshot_name_prefix, "oi-img-")
+    )
+    error_message = "snapshot_name_prefix must be 1-46 lowercase letters, digits or dashes, starting with a letter or digit. It must not be 'oi-img' or start with 'oi-img-', which is reserved for control-plane prebuilt snapshots."
   }
 }
 

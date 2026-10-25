@@ -151,6 +151,47 @@ describe("automation create route", () => {
       instructions: "Run tests",
     };
 
+    it("creates a one-shot schedule at a future timestamp without a cron expression", async () => {
+      const scheduleOnceAt = Date.now() + 3_600_000;
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", {
+        body: { ...body, scheduleOnceAt },
+      });
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trigger_type: "schedule",
+          schedule_cron: null,
+          schedule_once_at: scheduleOnceAt,
+          next_run_at: scheduleOnceAt,
+          enabled: 1,
+        })
+      );
+    });
+
+    it("accepts launch retries on a one-shot schedule", async () => {
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", {
+        body: { ...body, scheduleOnceAt: Date.now() + 3_600_000, maxRetries: 2 },
+      });
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ max_retries: 2, schedule_once_at: expect.any(Number) })
+      );
+    });
+
+    it.each([
+      { scheduleOnceAt: Date.now() - 1 },
+      { scheduleOnceAt: "tomorrow" },
+      { scheduleOnceAt: Date.now() + 3_600_000, scheduleCron: "0 9 * * *" },
+      { scheduleOnceAt: Date.now() + 3_600_000, triggerType: "webhook" },
+    ])("rejects an invalid one-shot schedule: %j", async (schedule) => {
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", { body: { ...body, ...schedule } });
+      expect(response.status).toBe(400);
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
     it("saves native max and effective OpenAI pins without rollout configuration", async () => {
       const preferences = vi
         .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")

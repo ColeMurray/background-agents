@@ -148,6 +148,67 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("automation cron submission", () => {
+  it("submits a one-shot in local time without cron and rejects past times", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "After deploy",
+          instructions: "Investigate deploy",
+          repositories: singleRepository,
+          maxRetries: 2,
+        }}
+      />
+    );
+    await user.click(screen.getByRole("combobox", { name: "Schedule" }));
+    await user.click(await screen.findByRole("option", { name: "Run once" }));
+    expect(screen.getByRole("combobox", { name: "Retries" })).toBeInTheDocument();
+    const input = screen.getByLabelText("Run at");
+    fireEvent.change(input, { target: { value: "2020-01-01T09:00:42.123" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "2099-01-01T09:00" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduleOnceAt: new Date("2099-01-01T09:00").getTime(),
+        maxRetries: 2,
+        triggerType: "schedule",
+        repositories: singleRepository,
+      })
+    );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("scheduleCron");
+  });
+
+  it("allows editing instructions after a one-shot has fired without changing its time", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "After deploy",
+          instructions: "Investigate deploy",
+          repositories: singleRepository,
+          scheduleOnceAt: new Date("2020-01-01T09:00:42.123").getTime(),
+        }}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Schedule" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleOnceAt: new Date("2020-01-01T09:00:42.123").getTime() })
+    );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("scheduleCron");
+  });
+
   it("scopes creation targets and clears selections when the team changes", async () => {
     const user = userEvent.setup();
     environmentsValue = [

@@ -65,6 +65,7 @@ function automation(id: string, userId: string): AutomationRow {
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     event_type: null,

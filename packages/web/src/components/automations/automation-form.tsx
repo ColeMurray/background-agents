@@ -132,6 +132,7 @@ export function AutomationForm({
   const formEvaluation = evaluateAutomationForm({
     mode,
     originalTrigger: initialDraft.trigger,
+    originalScheduleOnceAt: initialValues?.scheduleOnceAt,
     modelAvailability: modelSelection.availability,
     resolvedModel,
     draft: {

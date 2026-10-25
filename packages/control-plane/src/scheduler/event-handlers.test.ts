@@ -5,9 +5,12 @@ import {
   type SentryAutomationEvent,
   type SlackAutomationEvent,
 } from "@open-inspect/shared/triggers";
-import type { AutomationRow } from "../db/automation-store";
+import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
 import { createLogger } from "../logger";
 import { AutomationEventHandler, type AutomationEventHandlerDeps } from "./event-handler";
+import { SlackContinuationPolicyFactory } from "./slack-continuation-policy";
+import { WebhookContinuationPolicyFactory } from "./webhook-continuation-policy";
+import type { ContinuationPolicy, SteeringActor } from "./session-continuity";
 import { SessionFollowUpRefusedError } from "./contracts";
 import { SlackEventHandler, type SlackEventHandlerDeps } from "./slack-event-handler";
 import { WebhookEventHandler, type WebhookEventHandlerDeps } from "./webhook-event-handler";
@@ -18,6 +21,7 @@ const automation: AutomationRow = {
   instructions: "Run tests",
   trigger_type: "webhook",
   schedule_cron: null,
+  schedule_once_at: null,
   schedule_tz: "UTC",
   harness: "codex",
   model: "openai/gpt-5.4",
@@ -84,11 +88,33 @@ function slackHarness() {
     scmProvider: "github" as const,
     clock: { now: () => 100 },
     log,
+  };
+  return {
+    ...deps,
+    policies: new SlackContinuationPolicyFactory(deps),
   } satisfies SlackEventHandlerDeps;
-  return deps;
 }
 
 describe("Slack event ownership", () => {
+  it("accepts an injected factory returning only the public policy contract", async () => {
+    const deps = slackHarness();
+    const policy: ContinuationPolicy = {
+      source: "slack",
+      resolveActor: vi.fn(),
+      buildPrompt: vi.fn(),
+    };
+    const policies = { create: vi.fn(() => policy) };
+    const handler = new SlackEventHandler({ ...deps, policies });
+
+    await handler.handle(slackEvent);
+
+    expect(policies.create).toHaveBeenCalledExactlyOnceWith(slackEvent);
+    expect(deps.continuity.continueSession).toHaveBeenCalledTimes(2);
+    for (const call of deps.continuity.continueSession.mock.calls) {
+      expect(call[3]).toBe(policy);
+    }
+  });
+
   it("shares lazy context and settings within a delivery, then reads them again for the next", async () => {
     const deps = slackHarness();
     const handler = new SlackEventHandler(deps);
@@ -140,7 +166,7 @@ describe("Slack event ownership", () => {
 
 function webhookHarness() {
   let id = 0;
-  return {
+  const deps = {
     store: {
       getById: vi.fn().mockResolvedValue(automation),
       getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
@@ -166,6 +192,10 @@ function webhookHarness() {
     crypto: { hashToken: vi.fn().mockResolvedValue("hashed-key"), generateId: () => `id-${++id}` },
     clock: { now: () => 100 },
     log,
+  };
+  return {
+    ...deps,
+    policies: new WebhookContinuationPolicyFactory(deps),
   } satisfies WebhookEventHandlerDeps;
 }
 const webhookEvent = normalizeWebhookEvent(
@@ -178,6 +208,32 @@ const webhookEvent = normalizeWebhookEvent(
 );
 
 describe("Webhook receipt ownership", () => {
+  it("accepts an injected factory returning only the public policy contract", async () => {
+    const deps = webhookHarness();
+    const policy: ContinuationPolicy = {
+      source: "webhook",
+      resolveActor: vi.fn(),
+      buildPrompt: vi.fn(),
+    };
+    const policies = { create: vi.fn(async () => policy) };
+    const handler = new WebhookEventHandler({ ...deps, policies });
+
+    await handler.handle(webhookEvent);
+
+    expect(policies.create).toHaveBeenCalledExactlyOnceWith(
+      webhookEvent,
+      automation,
+      { claimId: "id-1", invocationId: "id-2" },
+      "webhook:hashed-key"
+    );
+    expect(deps.continuity.continueSession).toHaveBeenCalledExactlyOnceWith(
+      automation,
+      webhookEvent.concurrencyKey,
+      100,
+      policy
+    );
+  });
+
   it("reconciles a historical receipt before parsing changed conditions", async () => {
     const deps = webhookHarness();
     const handler = new WebhookEventHandler(deps);
@@ -428,5 +484,211 @@ describe("AutomationEventHandler source dispatch", () => {
     } else {
       expect(deps.invocations.start).not.toHaveBeenCalled();
     }
+  });
+});
+
+const actor = {
+  userId: "slack-user",
+  authorId: "slack:U1",
+  context: {} as SteeringActor["context"],
+} satisfies SteeringActor;
+const continuationRun: AutomationRunRow = {
+  id: "run-1",
+  automation_id: automation.id,
+  invocation_id: "existing-invocation",
+  session_id: "session-1",
+  status: "running",
+  skip_reason: null,
+  failure_reason: null,
+  scheduled_at: 0,
+  started_at: 0,
+  completed_at: null,
+  execution_deadline_at: null,
+  created_at: 0,
+  repo_owner: "acme",
+  repo_name: "api",
+  repo_id: 1,
+  base_branch: "main",
+  environment_id: null,
+  first_prompt_pending: 0,
+};
+
+describe("Slack continuation policy", () => {
+  it("defers actor reads and shares concurrent resolution only within the delivery", async () => {
+    const deps = slackHarness();
+    deps.continuity.resolveActor.mockResolvedValue(actor);
+    const policy = deps.policies.create(slackEvent);
+    expect(deps.users.getIdentity).not.toHaveBeenCalled();
+    expect(deps.continuity.resolveActor).not.toHaveBeenCalled();
+    await expect(Promise.all([policy.resolveActor(), policy.resolveActor()])).resolves.toEqual([
+      actor,
+      actor,
+    ]);
+    expect(deps.users.getIdentity).toHaveBeenCalledExactlyOnceWith("slack", "U1");
+    expect(deps.continuity.resolveActor).toHaveBeenCalledExactlyOnceWith(
+      { userId: "slack-user", authorId: "slack:U1" },
+      `automation:slack-steering:${slackEvent.triggerKey}`,
+      slackEvent.triggerKey
+    );
+    await deps.policies.create(slackEvent).resolveActor();
+    expect(deps.users.getIdentity).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches an absent Slack identity without resolving authorization", async () => {
+    const deps = slackHarness();
+    deps.users.getIdentity.mockResolvedValue(null);
+    const policy = deps.policies.create(slackEvent);
+    await expect(policy.resolveActor()).resolves.toBeNull();
+    await expect(policy.resolveActor()).resolves.toBeNull();
+    expect(deps.users.getIdentity).toHaveBeenCalledTimes(1);
+    expect(deps.continuity.resolveActor).not.toHaveBeenCalled();
+  });
+
+  it("retains a rejected actor lookup for the delivery and retries on the next delivery", async () => {
+    const deps = slackHarness();
+    const error = new Error("Authorization unavailable");
+    deps.continuity.resolveActor.mockRejectedValueOnce(error).mockResolvedValue(actor);
+    const policy = deps.policies.create(slackEvent);
+    await expect(policy.resolveActor()).rejects.toBe(error);
+    await expect(policy.resolveActor()).rejects.toBe(error);
+    expect(deps.continuity.resolveActor).toHaveBeenCalledTimes(1);
+    await expect(deps.policies.create(slackEvent).resolveActor()).resolves.toBe(actor);
+    expect(deps.users.getIdentity).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps prompt metadata specific to each automation sharing a delivery", async () => {
+    const deps = slackHarness();
+    const enrichment = {
+      scmUserId: "42",
+      scmLogin: "octo",
+      displayName: "Octo",
+      email: "o@example.com",
+    };
+    deps.attribution.resolve.mockResolvedValue(enrichment);
+    const policy = deps.policies.create(slackEvent);
+    const other = { ...automation, id: "auto-2", model: "other-model", reasoning_effort: "high" };
+    for (const row of [automation, other]) {
+      const prompt = await policy.buildPrompt(continuationRun, actor, row);
+      expect(prompt).toEqual({
+        body: {
+          content: slackEvent.text,
+          authorId: actor.authorId,
+          canonicalUserId: actor.userId,
+          scmEnrichment: { userId: "42", login: "octo", name: "Octo", email: "o@example.com" },
+          source: "slack",
+          callbackContext: {
+            source: "slack",
+            channel: "C1",
+            threadTs: "1",
+            reactionMessageTs: "2",
+            repoFullName: "acme/api",
+            model: row.model,
+            reasoningEffort: row.reasoning_effort ?? undefined,
+            automationId: row.id,
+          },
+        },
+        ctx: { trace_id: `automation:${row.id}`, request_id: "slack:C1:2" },
+      });
+    }
+    expect(deps.attribution.resolve).toHaveBeenCalledTimes(2);
+    expect(deps.users.getIdentity).not.toHaveBeenCalled();
+  });
+
+  it.each(["github", "gitlab"] as const)(
+    "preserves optional attribution for %s",
+    async (scmProvider) => {
+      const deps = slackHarness();
+      const policy = new SlackContinuationPolicyFactory({ ...deps, scmProvider }).create({
+        ...slackEvent,
+        threadTs: undefined,
+      });
+      const { body } = await policy.buildPrompt(continuationRun, actor, automation);
+      expect(body.scmEnrichment).toEqual(
+        scmProvider === "github"
+          ? { userId: null, login: null, name: null, email: null }
+          : undefined
+      );
+      expect(body.callbackContext).toMatchObject({ threadTs: "2" });
+    }
+  );
+});
+
+describe("Webhook continuation policy", () => {
+  it("reuses a reconciled request ID and resolves the current owner only when needed", async () => {
+    const deps = webhookHarness();
+    deps.store.resolveCanonicalOwner.mockResolvedValue({
+      user_id: "current-owner",
+      created_by: "current-author",
+    });
+    deps.continuity.resolveActor.mockResolvedValue(actor);
+    const policy = await deps.policies.create(webhookEvent, automation, null, "webhook:reconciled");
+    expect(deps.crypto.hashToken).not.toHaveBeenCalled();
+    expect(deps.store.resolveCanonicalOwner).not.toHaveBeenCalled();
+    await expect(policy.resolveActor()).resolves.toBe(actor);
+    expect(deps.continuity.resolveActor).toHaveBeenCalledWith(
+      { userId: "current-owner", authorId: "current-author" },
+      `automation:webhook-steering:${webhookEvent.triggerKey}`,
+      webhookEvent.triggerKey
+    );
+    const { body, ctx } = await policy.buildPrompt(continuationRun, actor, automation);
+    expect(body).toMatchObject({
+      clientRequestId: "webhook:reconciled",
+      source: "automation",
+      authorId: actor.authorId,
+      canonicalUserId: actor.userId,
+    });
+    expect(body.content).toContain(webhookEvent.contextBlock);
+    expect(body.callbackContext).toBeUndefined();
+    expect(ctx).toEqual({
+      trace_id: `automation:${automation.id}`,
+      request_id: webhookEvent.triggerKey,
+    });
+  });
+
+  it("hashes a missing request ID without reading the owner or touching a receipt", async () => {
+    const deps = webhookHarness();
+    const policy = await deps.policies.create(webhookEvent, automation, null, null);
+    expect(deps.crypto.hashToken).toHaveBeenCalledExactlyOnceWith(webhookEvent.triggerKey);
+    await expect(policy.buildPrompt(continuationRun, actor, automation)).resolves.toMatchObject({
+      body: { clientRequestId: "webhook:hashed-key" },
+    });
+    await policy.acceptDelivery!(continuationRun);
+    await policy.releaseDelivery!();
+    expect(deps.store.resolveCanonicalOwner).not.toHaveBeenCalled();
+    expect(deps.store.acceptFollowUpReceipt).not.toHaveBeenCalled();
+    expect(deps.store.releaseFollowUpReceipt).not.toHaveBeenCalled();
+  });
+
+  it("settles the bound claim using the continued invocation and current time", async () => {
+    const deps = webhookHarness();
+    const policy = await deps.policies.create(
+      webhookEvent,
+      automation,
+      { claimId: "claim-1", invocationId: "reserved-invocation" },
+      "webhook:reconciled"
+    );
+    deps.clock.now = () => 200;
+    await policy.acceptDelivery!(continuationRun);
+    expect(deps.store.acceptFollowUpReceipt).toHaveBeenCalledExactlyOnceWith(
+      automation.id,
+      webhookEvent.triggerKey,
+      "claim-1",
+      "existing-invocation",
+      200
+    );
+    await policy.releaseDelivery!();
+    expect(deps.store.releaseFollowUpReceipt).toHaveBeenCalledExactlyOnceWith(
+      automation.id,
+      webhookEvent.triggerKey,
+      "claim-1"
+    );
+  });
+
+  it("does not resolve an actor when the automation no longer has a canonical user", async () => {
+    const deps = webhookHarness();
+    deps.store.resolveCanonicalOwner.mockResolvedValue({ user_id: null });
+    const policy = await deps.policies.create(webhookEvent, automation, null, "webhook:reconciled");
+    await expect(policy.resolveActor()).resolves.toBeNull();
+    expect(deps.continuity.resolveActor).not.toHaveBeenCalled();
   });
 });

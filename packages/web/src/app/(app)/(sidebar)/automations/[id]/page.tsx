@@ -4,7 +4,7 @@ import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
-import { describeCron } from "@open-inspect/shared/cron";
+import { describeAutomationSchedule } from "@/lib/automation-schedule";
 import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
@@ -221,9 +221,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dt className="text-muted-foreground">Trigger</dt>
                 <dd className="text-foreground">
                   {automation.triggerType === "schedule"
-                    ? automation.scheduleCron
-                      ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                      : "Schedule (no cron)"
+                    ? describeAutomationSchedule(automation)
                     : {
                         sentry: "Sentry Alert",
                         webhook: "Inbound Webhook",
@@ -313,7 +311,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <div>
                   <dt className="text-muted-foreground">Next Run</dt>
                   <dd className="text-foreground">
-                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
+                    {automation.nextRunAt
+                      ? new Date(automation.nextRunAt).toLocaleString(undefined, {
+                          timeZone: automation.scheduleTz,
+                        })
+                      : "—"}
                   </dd>
                 </div>
               )}

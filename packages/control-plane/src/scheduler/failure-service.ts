@@ -7,13 +7,14 @@ const AUTO_PAUSE_THRESHOLD = 3;
 type FailureStore = Pick<
   AutomationStore,
   | "autoPause"
+  | "disableSettledOneShots"
   | "getInvocationRunAggregate"
   | "incrementConsecutiveFailures"
   | "resetConsecutiveFailures"
   | "tryMarkInvocationFailureCounted"
 >;
 
-/** Apply the failure streak policy once per invocation, or reset it after all children succeed. */
+/** Finalize consumed schedules and apply the failure streak policy once per invocation. */
 export class AutomationFailureService {
   constructor(
     private readonly store: FailureStore,
@@ -47,6 +48,7 @@ export class AutomationFailureService {
   async applyInvocationOutcome(automationId: string, invocationId: string): Promise<void> {
     const aggregate = await this.store.getInvocationRunAggregate(invocationId);
     if (aggregate.total === 0) return; // childless skip — never counts
+    if (aggregate.active === 0) await this.store.disableSettledOneShots(automationId);
 
     if (aggregate.failed > 0) {
       // A sibling waiting to retry has yet to finish. This strike could auto-pause the

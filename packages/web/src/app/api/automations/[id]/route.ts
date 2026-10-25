@@ -1,23 +1,10 @@
+import { updateAutomationRequestSchema } from "@open-inspect/shared/types/automations";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-const UPDATE_FIELDS = [
-  "name",
-  "instructions",
-  "scheduleCron",
-  "scheduleTz",
-  "maxRetries",
-  "model",
-  "reasoningEffort",
-  "harness",
-  "eventType",
-  "triggerConfig",
-  "repositories",
-  "environmentIds",
-  "providerSelections",
-] as const;
+const UPDATE_FIELDS = updateAutomationRequestSchema.keyof().options;
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerAuthSession();

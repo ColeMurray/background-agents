@@ -704,13 +704,17 @@ variable "boat_api_url" {
 }
 
 variable "boat_base_snapshot" {
-  description = "Prefix of the Boat named snapshot built by the boat-infra module and deployed for fresh sandboxes"
+  description = "Prefix of the Boat base snapshots built by Terraform. Older bases under this prefix are pruned after Worker deployment, keeping the deployed base and the actually replaced base confirmed by Cloudflare deployment history. Use a unique prefix per deployment sharing a Boat account or organization wallet."
   type        = string
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "boat" || can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.boat_base_snapshot))
-    error_message = "boat_base_snapshot must be 1-46 lowercase letters, digits or dashes when sandbox_provider = 'boat'."
+    condition = var.sandbox_provider != "boat" || (
+      can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.boat_base_snapshot)) &&
+      var.boat_base_snapshot != "oi-img" &&
+      !startswith(var.boat_base_snapshot, "oi-img-")
+    )
+    error_message = "boat_base_snapshot must be 1-46 lowercase letters, digits or dashes, starting with a letter or digit, when sandbox_provider = 'boat'. It must not be 'oi-img' or start with 'oi-img-', which is reserved for control-plane prebuilt snapshots."
   }
 }
 

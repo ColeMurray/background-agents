@@ -1,3 +1,4 @@
+import { createAutomationRequestSchema } from "@open-inspect/shared/types/automations";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
@@ -46,24 +47,12 @@ export async function POST(request: NextRequest) {
 
     // Explicitly pick allowed fields from the client body. Creator identity
     // and SCM provenance derive from authenticated control-plane state.
-    const automationBody = {
-      name: body.name,
-      instructions: body.instructions,
-      triggerType: body.triggerType,
-      scheduleCron: body.scheduleCron,
-      scheduleTz: body.scheduleTz,
-      maxRetries: body.maxRetries,
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      harness: body.harness,
-      eventType: body.eventType,
-      triggerConfig: body.triggerConfig,
-      sentryClientSecret: body.sentryClientSecret,
-      repositories: body.repositories,
-      environmentIds: body.environmentIds,
-      providerSelections: body.providerSelections,
-      teamId: body.teamId,
-    };
+    const automationBody = Object.fromEntries(
+      createAutomationRequestSchema
+        .keyof()
+        .options.filter((field) => body[field] !== undefined)
+        .map((field) => [field, body[field]])
+    );
 
     const response = await controlPlaneUserFetch("/automations", {
       method: "POST",

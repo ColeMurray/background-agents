@@ -4,26 +4,21 @@ import {
   type WebhookAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
-import {
-  parseAutomationTriggerFields,
-  type AutomationRow,
-  type AutomationStore,
-} from "../db/automation-store";
+import { parseAutomationTriggerFields, type AutomationStore } from "../db/automation-store";
 import type * as Crypto from "../auth/crypto";
 import type { SessionContinuityService } from "./session-continuity-service";
 import type { Logger } from "../logger";
 import { SessionFollowUpRefusedError, type SchedulerEventResult } from "./contracts";
 import type { AutomationInvocationService } from "./invocation-service";
-import type { ContinuationPolicy } from "./session-continuity";
-import { composeAutomationPrompt, AUTOMATION_CONTEXT_GUARDRAIL } from "./event-prompt";
+import type {
+  WebhookContinuationPolicyFactory,
+  WebhookFollowUpClaim,
+} from "./webhook-continuation-policy";
+import { composeAutomationPrompt } from "./event-prompt";
 import { recordEventLaunch, recordContinuation, logEventResult } from "./event-outcome";
 
 /** A crashed follow-up request may be retried after this D1 ownership lease expires. */
 const FOLLOW_UP_RECEIPT_CLAIM_MS = 2 * 60 * 1000;
-interface WebhookFollowUpClaim {
-  claimId: string;
-  invocationId: string;
-}
 
 export interface WebhookEventHandlerDeps {
   store: Pick<
@@ -33,13 +28,10 @@ export interface WebhookEventHandlerDeps {
     | "claimFollowUpReceipt"
     | "acceptFollowUpReceipt"
     | "releaseFollowUpReceipt"
-    | "resolveCanonicalOwner"
   >;
   invocations: Pick<AutomationInvocationService, "start">;
-  continuity: Pick<
-    SessionContinuityService,
-    "continueSession" | "findHistoricalPromptReceipt" | "resolveActor"
-  >;
+  continuity: Pick<SessionContinuityService, "continueSession" | "findHistoricalPromptReceipt">;
+  policies: Pick<WebhookContinuationPolicyFactory, "create">;
   crypto: Pick<typeof Crypto, "hashToken" | "generateId">;
   clock: Pick<DateConstructor, "now">;
   log: Logger;
@@ -153,12 +145,7 @@ export class WebhookEventHandler {
           automation,
           event.concurrencyKey,
           now,
-          await this.createContinuationPolicy(
-            event,
-            automation,
-            webhookClaim,
-            webhookFollowUpRequestId
-          )
+          await deps.policies.create(event, automation, webhookClaim, webhookFollowUpRequestId)
         );
         if (outcome.kind === "refused") throw new SessionFollowUpRefusedError(outcome);
         if (outcome.kind !== "fall_through") {
@@ -195,59 +182,5 @@ export class WebhookEventHandler {
     }
     logEventResult(deps.log, event, summary, candidates.length);
     return summary;
-  }
-
-  /**
-   * Continuity for a webhook delivery with a sessionKey: its context block becomes the
-   * next turn of the session, sent as the automation's executor (whom the run acts as).
-   * No callback context, so the run's own status is untouched.
-   */
-  private async createContinuationPolicy(
-    event: WebhookAutomationEvent,
-    automation: AutomationRow,
-    claim: WebhookFollowUpClaim | null,
-    requestId: string | null
-  ): Promise<ContinuationPolicy> {
-    const deps = this.deps;
-    const { store } = deps;
-    const clientRequestId = requestId ?? `webhook:${await deps.crypto.hashToken(event.triggerKey)}`;
-    return {
-      source: "webhook",
-      acceptDelivery: claim
-        ? async (run) => {
-            await store.acceptFollowUpReceipt(
-              automation.id,
-              event.triggerKey,
-              claim.claimId,
-              run.invocation_id,
-              deps.clock.now()
-            );
-          }
-        : undefined,
-      releaseDelivery: claim
-        ? () => store.releaseFollowUpReceipt(automation.id, event.triggerKey, claim.claimId)
-        : undefined,
-      resolveActor: async () => {
-        const owner = await store.resolveCanonicalOwner(automation);
-        return owner.user_id
-          ? deps.continuity.resolveActor(
-              { userId: owner.user_id, authorId: owner.created_by },
-              `automation:webhook-steering:${event.triggerKey}`,
-              event.triggerKey
-            )
-          : null;
-      },
-      buildPrompt: async (_run, actor) => ({
-        body: {
-          content: `${event.contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`,
-          authorId: actor.authorId,
-          canonicalUserId: actor.userId,
-          source: "automation",
-          // Hashed so the id fits clientRequestIdSchema's 128-character limit.
-          clientRequestId,
-        },
-        ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
-      }),
-    };
   }
 }

@@ -28,6 +28,7 @@ const automation: AutomationRow = {
   instructions: "Run tests",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
+  schedule_once_at: null,
   schedule_tz: "UTC",
   harness: "codex",
   model: "openai/gpt-5.4",

@@ -81,6 +81,7 @@ export interface AutomationRow {
   instructions: string;
   trigger_type: string;
   schedule_cron: string | null;
+  schedule_once_at: number | null;
   schedule_tz: string;
   harness: HarnessId;
   model: string;
@@ -141,7 +142,8 @@ const ACTIVE_RUN_STATUSES_SQL = "('starting', 'running', 'retrying')";
 const RETRY_ALLOWED_SQL = `EXISTS (
   SELECT 1 FROM automations a
   WHERE a.id = automation_runs.automation_id AND a.enabled = 1 AND a.deleted_at IS NULL
-    AND automation_runs.attempt <= a.max_retries)`;
+    AND automation_runs.attempt <= a.max_retries
+    AND (a.schedule_once_at IS NULL OR a.schedule_once_at = automation_runs.scheduled_at))`;
 
 /** A run the orphan sweep may fail; binds the creation cutoff. */
 const ORPHANED_STARTING_RUN_PREDICATE = "status = 'starting' AND created_at < ?";
@@ -321,10 +323,11 @@ export type InvocationOverlapScope =
  * A cron slot handover: move the schedule from the slot this firing claimed
  * (`fromSlot`) to its successor. Carrying the claimed slot lets the UPDATE act
  * as a compare-and-set, so only the firing that still owns the slot advances it.
+ * A null successor consumes a one-shot slot; it stays enabled until its runs settle.
  */
 export interface ScheduleAdvance {
   fromSlot: number;
-  nextRunAt: number;
+  nextRunAt: number | null;
 }
 
 /** Sibling-run aggregate for one invocation (finalization input). */
@@ -366,6 +369,7 @@ export function toAutomation(
     instructions: row.instructions,
     triggerType,
     scheduleCron: row.schedule_cron,
+    scheduleOnceAt: row.schedule_once_at,
     scheduleTz: row.schedule_tz,
     harness: getValidHarnessOrDefault(row.harness),
     model: row.model,
@@ -529,8 +533,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-           event_type, trigger_config, trigger_auth_data, owner_team_id, max_retries)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id, schedule_once_at, max_retries)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -554,6 +558,7 @@ export class AutomationStore {
         row.trigger_config,
         row.trigger_auth_data,
         row.owner_team_id,
+        row.schedule_once_at,
         row.max_retries ?? 0
       );
   }
@@ -628,7 +633,25 @@ export class AutomationStore {
     viewer?: SessionViewer;
     teamId?: string | null;
   }): Promise<AutomationListResult> {
-    const conditions: string[] = ["deleted_at IS NULL"];
+    const conditions: string[] = [
+      "deleted_at IS NULL",
+      // Filter before LIMIT/cursor pagination, using the same status as history.
+      // Denials are childless too, but must remain visible for authorization repair.
+      `NOT (trigger_type = 'schedule' AND schedule_once_at IS NOT NULL AND enabled = 0
+        AND EXISTS (
+          SELECT 1 FROM automation_invocations i
+          LEFT JOIN automation_runs r ON r.invocation_id = i.id
+          WHERE i.automation_id = automations.id AND i.source = 'schedule'
+            AND i.scheduled_at = automations.schedule_once_at
+            AND (i.skip_reason IS NULL OR i.skip_reason = 'concurrent_run_active')
+          GROUP BY i.id
+          HAVING ${DERIVED_INVOCATION_STATUS_SQL} IN ('completed', 'skipped')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM automation_runs active
+          WHERE active.automation_id = automations.id AND active.status IN ${ACTIVE_RUN_STATUSES_SQL}
+        ))`,
+    ];
     const params: unknown[] = [];
 
     const viewer = options.viewer;
@@ -751,6 +774,7 @@ export class AutomationStore {
       "name",
       "instructions",
       "schedule_cron",
+      "schedule_once_at",
       "schedule_tz",
       "harness",
       "model",
@@ -765,10 +789,19 @@ export class AutomationStore {
     ];
 
     for (const field of allowedFields) {
+      if (field === "next_run_at" && fields.schedule_once_at != null) continue;
       if (field in fields) {
         setClauses.push(`${field} = ?`);
         params.push(fields[field] as unknown);
       }
+    }
+
+    if (fields.schedule_once_at != null) {
+      // Compute from the live row: a concurrent resume/pause must not strand or re-arm a slot.
+      setClauses.push(
+        "next_run_at = CASE WHEN schedule_once_at = ? THEN next_run_at WHEN enabled = 1 THEN ? ELSE NULL END"
+      );
+      params.push(fields.schedule_once_at, fields.schedule_once_at);
     }
 
     if (setClauses.length === 0) return null;
@@ -865,13 +898,36 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  /** Build a resume statement for composition in an atomic batch. */
+  /**
+   * Disable consumed one-shots once all active runs settle. The optional ID scopes live
+   * completion; recovery repairs all missed completions. Live SQL guards protect a reschedule
+   * or an admitted manual run that races finalization.
+   */
+  async disableSettledOneShots(automationId?: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE automations SET enabled = 0, updated_at = ?
+         WHERE trigger_type = 'schedule' AND schedule_once_at IS NOT NULL
+           AND enabled = 1 AND deleted_at IS NULL AND next_run_at IS NULL
+           ${automationId === undefined ? "" : "AND id = ?"}
+           AND EXISTS (SELECT 1 FROM automation_invocations i
+             WHERE i.automation_id = automations.id AND i.source = 'schedule'
+               AND i.scheduled_at = automations.schedule_once_at)
+           AND NOT EXISTS (SELECT 1 FROM automation_runs r
+             WHERE r.automation_id = automations.id AND r.status IN ${ACTIVE_RUN_STATUSES_SQL})`
+      )
+      .bind(Date.now(), ...(automationId === undefined ? [] : [automationId]))
+      .run();
+  }
+
+  /** Resume only the observed one-shot slot, so a concurrent reschedule wins. */
   bindResume(id: string, nextRunAt: number | null, now = Date.now()): SqlStatement {
     return this.db
       .prepare(
-        "UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+        `UPDATE automations SET enabled = 1, next_run_at = ?, consecutive_failures = 0, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND (schedule_once_at IS NULL OR schedule_once_at = ?)`
       )
-      .bind(nextRunAt, now, id);
+      .bind(nextRunAt, now, id, nextRunAt);
   }
 
   /** Resume an automation and report whether a live row changed. */
@@ -1396,6 +1452,18 @@ export class AutomationStore {
     };
   }
 
+  private scheduledInvocationGuard(invocation: AutomationInvocationRow): {
+    sql: string;
+    params: unknown[];
+  } {
+    if (invocation.source !== "schedule") return { sql: "", params: [] };
+    return {
+      sql: `AND EXISTS (SELECT 1 FROM automations a WHERE a.id = ? AND a.deleted_at IS NULL
+        AND (a.schedule_once_at IS NULL OR (a.enabled = 1 AND a.next_run_at = ? AND a.schedule_once_at = a.next_run_at)))`,
+      params: [invocation.automation_id, invocation.scheduled_at],
+    };
+  }
+
   /**
    * Atomically create an invocation with its child runs (and optionally
    * advance the schedule) in ONE D1 batch.
@@ -1404,8 +1472,8 @@ export class AutomationStore {
    * statement ERROR — a 0-row INSERT…SELECT is a success and later statements
    * still run. The invocation insert is suppressed when the overlap predicate
    * matches; child inserts are 0-row no-ops when the invocation was
-   * suppressed; the schedule advance still runs for a blocked firing so the
-   * tick does not re-collide forever, but is conditioned on still owning the
+   * suppressed. A recurring schedule still advances for a blocked firing; a
+   * one-shot keeps its slot until the skip is recorded. Advancement is conditioned on owning the
    * slot it claimed. Monotonicity is not enough: two ticks straddling a cron
    * boundary both read slot S, and a "later timestamp wins" predicate lets the
    * loser advance a second time from the winner's successor, skipping a slot
@@ -1428,6 +1496,7 @@ export class AutomationStore {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
     const grantsGuard = teamGrantsGuard(params.teamGrantsVersion);
+    const scheduleGuard = this.scheduledInvocationGuard(invocation);
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -1436,7 +1505,7 @@ export class AutomationStore {
            (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql}`
+           WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql} ${scheduleGuard.sql}`
         )
         .bind(
           invocation.id,
@@ -1451,7 +1520,8 @@ export class AutomationStore {
           invocation.created_at,
           invocation.updated_at,
           ...overlap.params,
-          ...grantsGuard.params
+          ...grantsGuard.params,
+          ...scheduleGuard.params
         )
     );
 
@@ -1490,24 +1560,71 @@ export class AutomationStore {
 
     if (params.advanceSchedule) {
       statements.push(
-        this.db
-          .prepare(
-            // A grants change leaves the slot due, so the next tick re-authorizes it.
-            `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}`
-          )
-          .bind(
-            params.advanceSchedule.nextRunAt,
-            Date.now(),
-            invocation.automation_id,
-            params.advanceSchedule.fromSlot,
-            ...grantsGuard.params
-          )
+        this.bindScheduleAdvance(invocation, params.advanceSchedule, params.teamGrantsVersion)
       );
     }
 
     const results = await this.db.batch(statements);
     return { inserted: (results[0]?.meta?.changes ?? 0) > 0 };
+  }
+
+  /**
+   * Consume the claimed slot. Recurring overlap skips may advance before their
+   * history is inserted; a one-shot consumes its slot with durable history and
+   * stays enabled while its invocation has active runs, allowing launch retries.
+   */
+  private bindScheduleAdvance(
+    invocation: AutomationInvocationRow,
+    advance: ScheduleAdvance,
+    teamGrantsVersion?: TeamGrantsVersion
+  ): SqlStatement {
+    const grantsGuard = teamGrantsGuard(teamGrantsVersion);
+    return this.db
+      .prepare(
+        `UPDATE automations SET next_run_at = ?, updated_at = ?,
+           enabled = CASE WHEN schedule_once_at IS NOT NULL AND NOT EXISTS (
+             SELECT 1 FROM automation_runs WHERE invocation_id = ? AND status IN ${ACTIVE_RUN_STATUSES_SQL}
+           ) THEN 0 ELSE enabled END
+         WHERE id = ? AND deleted_at IS NULL AND next_run_at = ? ${grantsGuard.sql}
+           AND (schedule_once_at IS NULL OR EXISTS (SELECT 1 FROM automation_invocations WHERE id = ?))`
+      )
+      .bind(
+        advance.nextRunAt,
+        Date.now(),
+        invocation.id,
+        invocation.automation_id,
+        advance.fromSlot,
+        ...grantsGuard.params,
+        invocation.id
+      );
+  }
+
+  /** Childless skips and denials use the same live schedule-slot guard. */
+  private bindChildlessInvocation(invocation: AutomationInvocationRow): SqlStatement {
+    const scheduleGuard = this.scheduledInvocationGuard(invocation);
+    return this.db
+      .prepare(
+        `INSERT INTO automation_invocations
+           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE 1 = 1 ${scheduleGuard.sql}
+           ON CONFLICT DO NOTHING`
+      )
+      .bind(
+        invocation.id,
+        invocation.automation_id,
+        invocation.source,
+        invocation.scheduled_at,
+        invocation.trigger_key,
+        invocation.concurrency_key,
+        invocation.trigger_metadata,
+        invocation.skip_reason,
+        invocation.failure_counted_at,
+        invocation.created_at,
+        invocation.updated_at,
+        ...scheduleGuard.params
+      );
   }
 
   /**
@@ -1523,44 +1640,10 @@ export class AutomationStore {
     invocation: AutomationInvocationRow,
     advanceSchedule?: ScheduleAdvance
   ): Promise<{ inserted: boolean }> {
-    const statements: SqlStatement[] = [
-      this.db
-        .prepare(
-          `INSERT INTO automation_invocations
-           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
-            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT DO NOTHING`
-        )
-        .bind(
-          invocation.id,
-          invocation.automation_id,
-          invocation.source,
-          invocation.scheduled_at,
-          invocation.trigger_key,
-          invocation.concurrency_key,
-          invocation.trigger_metadata,
-          invocation.skip_reason,
-          invocation.failure_counted_at,
-          invocation.created_at,
-          invocation.updated_at
-        ),
-    ];
+    const statements: SqlStatement[] = [this.bindChildlessInvocation(invocation)];
 
     if (advanceSchedule) {
-      statements.push(
-        this.db
-          .prepare(
-            `UPDATE automations SET next_run_at = ?, updated_at = ?
-             WHERE id = ? AND deleted_at IS NULL AND next_run_at = ?`
-          )
-          .bind(
-            advanceSchedule.nextRunAt,
-            Date.now(),
-            invocation.automation_id,
-            advanceSchedule.fromSlot
-          )
-      );
+      statements.push(this.bindScheduleAdvance(invocation, advanceSchedule));
     }
 
     const results = await this.db.batch(statements);
@@ -1573,32 +1656,13 @@ export class AutomationStore {
     fromSlot: number
   ): Promise<{ inserted: boolean; paused: boolean }> {
     const results = await this.db.batch([
-      this.db
-        .prepare(
-          `INSERT INTO automation_invocations
-           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
-            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT DO NOTHING`
-        )
-        .bind(
-          invocation.id,
-          invocation.automation_id,
-          invocation.source,
-          invocation.scheduled_at,
-          invocation.trigger_key,
-          invocation.concurrency_key,
-          invocation.trigger_metadata,
-          invocation.skip_reason,
-          invocation.failure_counted_at,
-          invocation.created_at,
-          invocation.updated_at
-        ),
+      this.bindChildlessInvocation(invocation),
       this.db
         .prepare(
           `UPDATE automations
            SET enabled = 0, next_run_at = NULL, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?`
+           WHERE id = ? AND deleted_at IS NULL AND enabled = 1 AND next_run_at = ?
+             AND (schedule_once_at IS NULL OR schedule_once_at = next_run_at)`
         )
         .bind(Date.now(), invocation.automation_id, fromSlot),
     ]);

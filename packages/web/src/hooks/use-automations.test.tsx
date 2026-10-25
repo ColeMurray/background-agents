@@ -24,6 +24,7 @@ function automation(id: string, name: string): AutomationListItem {
     harness: "opencode",
     triggerType: "schedule",
     scheduleCron: "0 9 * * *",
+    scheduleOnceAt: null,
     scheduleTz: "UTC",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
