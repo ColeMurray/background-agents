@@ -56,7 +56,8 @@ export interface ContinuationPolicy {
   resolveActor(): Promise<SteeringActor | null>;
   buildPrompt(
     run: AutomationRunRow,
-    actor: SteeringActor
+    actor: SteeringActor,
+    automation: AutomationRow
   ): Promise<{ body: SchedulerPromptRequest; ctx: CorrelationContext }>;
 }
 
@@ -117,15 +118,15 @@ export async function continueSession(
   const run = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
   if (!run || run.last_activity_at < now - SESSION_CONTINUITY_WINDOW_MS)
     return { kind: "fall_through" };
-  if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy);
+  if (!holdsFollowUps(run)) return continueRunSession(deps, run, policy, automation);
 
-  const held = await holdFollowUp(deps, run, policy);
+  const held = await holdFollowUp(deps, run, policy, automation);
   if (held) return held;
   // The run got past its first prompt, and its held follow-ups were released, while
   // this follow-up was being built.
   const launched = await deps.store.getLatestContinuableRun(automation.id, concurrencyKey);
   return launched && !holdsFollowUps(launched)
-    ? continueRunSession(deps, launched, policy)
+    ? continueRunSession(deps, launched, policy, automation)
     : { kind: "fall_through" };
 }
 
@@ -281,7 +282,8 @@ function holdsFollowUps(run: ContinuableRunRow): boolean {
 async function continueRunSession(
   deps: SessionContinuityDeps,
   run: ContinuableRunRow,
-  policy: ContinuationPolicy
+  policy: ContinuationPolicy,
+  automation: AutomationRow
 ): Promise<ContinuationOutcome> {
   const sessionId = run.session_id;
   if (!sessionId) return { kind: "fall_through" };
@@ -294,7 +296,7 @@ async function continueRunSession(
   }
 
   // Outside the try: a follow-up that cannot be attributed must fail, not fall through to a new run.
-  const { body, ctx } = await policy.buildPrompt(run, actor);
+  const { body, ctx } = await policy.buildPrompt(run, actor, automation);
   let outcome: SessionPromptOutcome;
   try {
     outcome = await enqueueSessionPrompt(deps.env, sessionId, body, ctx);
@@ -347,7 +349,8 @@ async function continueRunSession(
 async function holdFollowUp(
   deps: SessionContinuityDeps,
   run: ContinuableRunRow,
-  policy: ContinuationPolicy
+  policy: ContinuationPolicy,
+  automation: AutomationRow
 ): Promise<ContinuationOutcome | null> {
   const fields = { automation_id: run.automation_id, run_id: run.id, ...policy.logFields };
   let actor: SteeringActor | null;
@@ -362,7 +365,7 @@ async function holdFollowUp(
     return blocked(deps, policy, fields);
   }
 
-  const { body, ctx } = await policy.buildPrompt(run, actor);
+  const { body, ctx } = await policy.buildPrompt(run, actor, automation);
   const id = generateId();
   // A retried delivery is held once, and the sweep may re-send a released prompt after
   // a crash, which the session dedupes by this request id.

@@ -44,6 +44,8 @@ import {
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
 import { AutomationEventHandler } from "./event-handler";
+import { SlackContinuationPolicyFactory } from "./slack-continuation-policy";
+import { WebhookContinuationPolicyFactory } from "./webhook-continuation-policy";
 import { SlackEventHandler } from "./slack-event-handler";
 import { WebhookEventHandler } from "./webhook-event-handler";
 import { SlackChannelStore } from "../db/slack-channel-store";
@@ -157,9 +159,7 @@ export function createScheduler(
     slack,
     invocations,
     continuity,
-    users,
-    attribution,
-    scmProvider,
+    policies: new SlackContinuationPolicyFactory({ users, continuity, attribution, scmProvider }),
     clock: Date,
     log,
   });
@@ -167,6 +167,12 @@ export function createScheduler(
     store,
     invocations,
     continuity,
+    policies: new WebhookContinuationPolicyFactory({
+      store,
+      continuity,
+      clock: Date,
+      crypto: schedulerCrypto,
+    }),
     crypto: schedulerCrypto,
     clock: Date,
     log,
