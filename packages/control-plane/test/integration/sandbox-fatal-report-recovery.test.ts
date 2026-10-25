@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/sandbox/lifecycle/manager";
+import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { cleanD1Tables } from "./cleanup";
 import { runInSessionDO } from "./session-do-access";
@@ -11,10 +12,14 @@ const FATAL_ERROR = "git sync failed for acme/api";
 
 /**
  * Seed a booting sandbox whose earlier attempts already count toward the
- * circuit breaker. modal_object_id stays null, so terminating never calls the
+ * circuit breaker. Without a provider object, terminating never calls the
  * provider.
  */
-async function seedBootingSandbox(stub: DurableObjectStub, spawnFailureCount: number) {
+async function seedBootingSandbox(
+  stub: DurableObjectStub,
+  spawnFailureCount: number,
+  providerObjectId: string | null = null
+) {
   await seedSandboxAuth(stub, {
     authToken: SANDBOX_TOKEN,
     sandboxId: SANDBOX_ID,
@@ -22,8 +27,9 @@ async function seedBootingSandbox(stub: DurableObjectStub, spawnFailureCount: nu
   });
   await runInSessionDO(stub, (_instance: SessionDO, state) => {
     state.storage.sql.exec(
-      `UPDATE sandbox SET modal_object_id = NULL, created_at = ?,
+      `UPDATE sandbox SET modal_object_id = ?, created_at = ?,
          spawn_failure_count = ?, last_spawn_failure = ?`,
+      providerObjectId,
       Date.now(),
       spawnFailureCount,
       spawnFailureCount > 0 ? Date.now() : null
@@ -74,6 +80,7 @@ describe("SessionDO fatal sandbox report recovery", () => {
   beforeEach(async () => {
     await cleanD1Tables();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("leaves a pending prompt queued for a replacement while retries remain", async () => {
     const { stub } = await initSession({ userId: "user-1" });
@@ -95,6 +102,26 @@ describe("SessionDO fatal sandbox report recovery", () => {
 
     await reportFatalError(stub);
 
+    expect(await messageState(stub, "msg-review")).toEqual({
+      status: "failed",
+      error_message: FATAL_ERROR,
+    });
+  });
+
+  it("fails a pending prompt when the failed sandbox cannot be stopped for a replacement", async () => {
+    const stop = vi
+      .spyOn(ModalSandboxProvider.prototype, "stopSandbox")
+      .mockResolvedValue({ success: false, error: "provider unavailable" });
+    const { stub } = await initSession({ userId: "user-1" });
+    await seedBootingSandbox(stub, 0, "modal-obj-booting");
+    await seedPendingPrompt(stub, "msg-review");
+
+    await reportFatalError(stub);
+
+    // Nothing re-drives a failed row, so the prompt must not wait for another message.
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "modal-obj-booting" })
+    );
     expect(await messageState(stub, "msg-review")).toEqual({
       status: "failed",
       error_message: FATAL_ERROR,

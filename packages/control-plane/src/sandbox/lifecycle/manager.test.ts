@@ -724,7 +724,7 @@ describe("fatal runtime report termination", () => {
 
   it.each([
     { stop: stopSucceeds, priorFailures: 0, outcome: "sandbox_terminated" },
-    { stop: stopRejected, priorFailures: 0, outcome: "sandbox_failed" },
+    { stop: stopRejected, priorFailures: 0, outcome: unrecoverable },
     { stop: stopSucceeds, priorFailures: exhaustingFailureCount, outcome: unrecoverable },
     { stop: stopRejected, priorFailures: exhaustingFailureCount, outcome: unrecoverable },
   ])(
@@ -750,7 +750,7 @@ describe("fatal runtime report termination", () => {
   );
 
   it.each([
-    { priorFailures: 0, outcome: "sandbox_failed" },
+    { priorFailures: 0, outcome: unrecoverable },
     { priorFailures: exhaustingFailureCount, outcome: unrecoverable },
   ])(
     "resolves $outcome when cleanup throws after the failure is counted (prior failures: $priorFailures)",

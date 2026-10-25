@@ -2431,7 +2431,7 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
   });
 
-  it("neither fails nor redrives a pending prompt when a retryable stop failed", async () => {
+  it("neither fails nor redrives a pending prompt while the failed boot is held", async () => {
     const h = buildQueue();
     h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("sandbox_failed");
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));

@@ -1830,11 +1830,12 @@ export class SandboxLifecycleManager
   /**
    * Fail the live sandbox after a fatal runtime report and stop it where the
    * provider allows. Resolves `sandbox_terminated` only when this call took
-   * the sandbox down, which is the caller's cue to re-evaluate the queue, and
-   * `sandbox_failed` when it failed the row but did not finish tearing it
-   * down. Either becomes `fatal_report_unrecoverable` when this failure opened
-   * the circuit breaker: no replacement will be admitted, so the prompt the
-   * boot was for fails instead of waiting.
+   * the sandbox down, which is the caller's cue to re-evaluate the queue. When
+   * this failure opened the circuit breaker, or the row was failed but not
+   * torn down, nothing will replace it: it resolves
+   * `fatal_report_unrecoverable`, and the prompt the boot was for fails
+   * instead of waiting with nothing scheduled to retry it, as it does after a
+   * connecting timeout.
    * Serving executions remain fenced by preservation until explicit recovery;
    * only failed boots may automatically get a clean replacement, and a failed
    * boot of the retained source is held instead (`sandbox_failed`). A row that
@@ -1875,8 +1876,8 @@ export class SandboxLifecycleManager
       const exhausted = this.recordSpawnFailure(Date.now(), sandbox.created_at);
       const tornDown = await this.tearDownFailedSandbox(reason, held);
       if (held) return "sandbox_failed";
-      if (exhausted) return { kind: "fatal_report_unrecoverable", reason };
-      return tornDown ? "sandbox_terminated" : "sandbox_failed";
+      if (exhausted || !tornDown) return { kind: "fatal_report_unrecoverable", reason };
+      return "sandbox_terminated";
     } catch (error) {
       this.log.warn("Fatal runtime termination failed", {
         error: error instanceof Error ? error.message : String(error),
