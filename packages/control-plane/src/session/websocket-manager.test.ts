@@ -1407,7 +1407,7 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("getConnectedClientCount", () => {
-    it("treats failed persisted lease reads as unauthenticated and still counts cached clients", () => {
+    it("does not count a client whose persisted lease cannot be read", () => {
       const { manager, sockets, mockRepo, log } = createManager();
       const recoveredWs = createFakeWebSocket();
       const cachedWs = createFakeWebSocket();
@@ -1422,7 +1422,6 @@ describe("SessionWebSocketManagerImpl", () => {
         throw error;
       });
 
-      expect(manager.isClientAuthenticated(recoveredWs)).toBe(false);
       expect(manager.getConnectedClientCount()).toBe(1);
       expect(recoveredWs.close).not.toHaveBeenCalled();
       expect(log.warn).toHaveBeenCalledWith("Client authorization lease lookup failed", {
@@ -1471,8 +1470,9 @@ describe("SessionWebSocketManagerImpl", () => {
           expect(manager.getConnectedClientCount()).toBe(1);
           clock.mockReturnValue(now + 1);
           expect(manager.getConnectedClientCount()).toBe(0);
-          expect(mockRepo.mappings.has("ws-1")).toBe(false);
-          expect(ws.close).toHaveBeenCalledWith(4010, "Authorization expired or changed");
+          // Counting is read-only; the lease sweep retires expired clients.
+          expect(mockRepo.mappings.has("ws-1")).toBe(true);
+          expect(ws.close).not.toHaveBeenCalled();
         } finally {
           clock.mockRestore();
         }

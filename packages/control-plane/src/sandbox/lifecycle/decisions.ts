@@ -441,18 +441,14 @@ export interface InactivityState {
   status: SandboxStatus;
   /** Number of connected client WebSockets */
   connectedClientCount: number;
-  /** Whether the session was started by an unattended source */
-  unattended: boolean;
 }
 
 /**
- * Inactivity timeout configuration.
+ * Inactivity timeout configuration for one session.
  */
 export interface InactivityConfig {
   /** Time in ms before sandbox stops due to inactivity */
   timeoutMs: number;
-  /** Shorter timeout for unattended sessions, capped by timeoutMs */
-  unattendedTimeoutMs: number;
   /** Additional time granted when clients are connected (default: 5 minutes) */
   extensionMs: number;
   /** Minimum interval between alarm checks (default: 30s) */
@@ -460,11 +456,20 @@ export interface InactivityConfig {
 }
 
 /**
+ * Deployment-wide inactivity configuration; `inactivityConfigFor` selects a
+ * session's window from it.
+ */
+export interface InactivityPolicyConfig extends InactivityConfig {
+  /** Time in ms before an unattended session's sandbox stops; never exceeds timeoutMs */
+  unattendedTimeoutMs: number;
+}
+
+/**
  * Default inactivity configuration.
  */
-export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
+export const DEFAULT_INACTIVITY_CONFIG: InactivityPolicyConfig = {
   timeoutMs: 10 * 60 * 1000, // 10 minutes
-  unattendedTimeoutMs: 2 * 60 * 1000,
+  unattendedTimeoutMs: 2 * 60 * 1000, // 2 minutes
   extensionMs: 5 * 60 * 1000, // 5 minutes
   minCheckIntervalMs: 30000, // 30 seconds
 };
@@ -472,36 +477,39 @@ export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
 // Processing heartbeats renew activity every 30s; leave room between renewals.
 export const MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS = 60_000;
 
-const UNATTENDED_SOURCES: ReadonlySet<SpawnSource> = new Set(["automation", "github-bot", "agent"]);
+/**
+ * Whether anyone is waiting on a session's sandbox between prompts. This is
+ * idle policy only: analytics counts GitHub bot sessions as human-initiated,
+ * but nobody keeps the sandbox warm for a follow-up after a bot review.
+ */
+const SPAWN_SOURCE_ATTENDANCE: Record<SpawnSource, "attended" | "unattended"> = {
+  user: "attended",
+  "slack-bot": "attended",
+  "linear-bot": "attended",
+  "github-bot": "unattended",
+  agent: "unattended",
+  automation: "unattended",
+};
 
-export function isUnattendedSessionSource(source: SpawnSource | undefined): boolean {
-  return source !== undefined && UNATTENDED_SOURCES.has(source);
-}
-
-export function getInactivityTimeoutMs(config: InactivityConfig, unattended: boolean): number {
-  return unattended ? Math.min(config.unattendedTimeoutMs, config.timeoutMs) : config.timeoutMs;
-}
-
-/** Reject unsafe or malformed deployment values rather than risking a mid-turn stop. */
-export function resolveUnattendedInactivityTimeoutMs(raw: string | undefined): {
-  timeoutMs: number;
-  rejectedValue: string | null;
-} {
-  if (raw === undefined || raw === "") {
-    return { timeoutMs: DEFAULT_INACTIVITY_CONFIG.unattendedTimeoutMs, rejectedValue: null };
-  }
-  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
-  if (Number.isSafeInteger(parsed) && parsed >= MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS) {
-    return { timeoutMs: parsed, rejectedValue: null };
-  }
-  return { timeoutMs: DEFAULT_INACTIVITY_CONFIG.unattendedTimeoutMs, rejectedValue: raw };
+/**
+ * Select the inactivity window for a session from its spawn source. A session
+ * without a persisted row yet uses the regular window.
+ */
+export function inactivityConfigFor(
+  policy: InactivityPolicyConfig,
+  source: SpawnSource | undefined
+): InactivityConfig {
+  const { unattendedTimeoutMs, ...attended } = policy;
+  return source !== undefined && SPAWN_SOURCE_ATTENDANCE[source] === "unattended"
+    ? { ...attended, timeoutMs: unattendedTimeoutMs }
+    : attended;
 }
 
 /**
  * Possible inactivity actions.
  */
 export type InactivityAction =
-  | { action: "timeout" }
+  | { action: "timeout"; idleMs: number }
   | { action: "extend"; extensionMs: number }
   | { action: "schedule"; nextCheckMs: number };
 
@@ -521,7 +529,7 @@ export type InactivityAction =
  * @example
  * ```typescript
  * const decision = evaluateInactivityTimeout(
- *   { lastActivity: now - 600001, status: "ready", connectedClientCount: 1, unattended: false },
+ *   { lastActivity: now - 600001, status: "ready", connectedClientCount: 1 },
  *   DEFAULT_INACTIVITY_CONFIG,
  *   now
  * );
@@ -552,10 +560,9 @@ export function evaluateInactivityTimeout(
   }
 
   const inactiveTime = now - state.lastActivity;
-  const timeoutMs = getInactivityTimeoutMs(config, state.unattended);
 
   // Check if inactivity threshold exceeded
-  if (inactiveTime >= timeoutMs) {
+  if (inactiveTime >= config.timeoutMs) {
     // If clients are still connected, they may be actively reviewing
     // Grant an extension and warn them
     if (state.connectedClientCount > 0) {
@@ -566,11 +573,11 @@ export function evaluateInactivityTimeout(
     }
 
     // No clients connected - end the idle sandbox.
-    return { action: "timeout" };
+    return { action: "timeout", idleMs: inactiveTime };
   }
 
   // Not yet timed out - schedule next check at remaining time (minimum interval)
-  const remainingTime = Math.max(timeoutMs - inactiveTime, config.minCheckIntervalMs);
+  const remainingTime = Math.max(config.timeoutMs - inactiveTime, config.minCheckIntervalMs);
   return { action: "schedule", nextCheckMs: remainingTime };
 }
 
@@ -778,31 +785,6 @@ export function evaluateBootBudget(
     isExceeded: elapsedMs >= config.timeoutMs,
     elapsedMs,
   };
-}
-
-/**
- * Resolve the boot budget from its deployment knob. The value must be a whole
- * positive integer of milliseconds above the connect watchdog: both are
- * measured from the reservation, and a budget at or below the watchdog would
- * fail a generation that has not yet had its chance to connect. Anything else
- * (including `parseInt`-tolerant forms like `1000junk` or `1.5`) resolves to
- * the default and is reported through `rejectedValue`, so a typo weakens
- * nothing silently. An unset knob is not a rejection.
- *
- * Pure function: no side effects.
- */
-export function resolveBootBudgetTimeoutMs(
-  raw: string | undefined,
-  bounds: { connectingTimeoutMs: number; defaultTimeoutMs: number }
-): { timeoutMs: number; rejectedValue: string | null } {
-  if (raw === undefined || raw === "") {
-    return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: null };
-  }
-  const parsed = /^[1-9]\d*$/.test(raw) ? Number(raw) : Number.NaN;
-  if (Number.isSafeInteger(parsed) && parsed > bounds.connectingTimeoutMs) {
-    return { timeoutMs: parsed, rejectedValue: null };
-  }
-  return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: raw };
 }
 
 // ==================== Warm Decision ====================

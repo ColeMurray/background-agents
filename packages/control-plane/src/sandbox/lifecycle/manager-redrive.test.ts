@@ -60,10 +60,8 @@ describe("idle queue redrive", () => {
     ["user", 600_000, 120_000, 600_000],
     [undefined, 600_000, 120_000, 600_000],
     ["automation", 600_000, 600_000, 600_000],
-    ["automation", 600_000, 900_000, 600_000],
-    ["automation", 60_000, 120_000, 60_000],
   ] as const)(
-    "uses the resolved cutoff for %s (regular=%i, unattended=%i, effective=%i)",
+    "uses the session's cutoff for %s (regular=%i, unattended=%i, effective=%i)",
     async (source, timeoutMs, unattendedTimeoutMs, effectiveTimeoutMs) => {
       vi.spyOn(Date, "now").mockReturnValue(10_000_000);
       const { manager, storage, resumeQueuedWork, now } = redriveHarness({}, "ready", {

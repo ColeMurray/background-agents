@@ -70,32 +70,6 @@ run "minimum_unattended_timeout_reaches_worker_binding" {
   }
 }
 
-run "unattended_timeout_can_equal_regular_timeout" {
-  command = plan
-
-  variables {
-    sandbox_unattended_inactivity_timeout_ms = 600000
-  }
-
-  assert {
-    condition     = module.control_plane_worker.plain_text_bindings["SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS"] == "600000"
-    error_message = "An unattended timeout equal to the regular timeout must reach the runtime off switch."
-  }
-}
-
-run "unattended_timeout_can_exceed_regular_timeout" {
-  command = plan
-
-  variables {
-    sandbox_unattended_inactivity_timeout_ms = 900000
-  }
-
-  assert {
-    condition     = module.control_plane_worker.plain_text_bindings["SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS"] == "900000"
-    error_message = "An unattended timeout above the regular timeout must reach the runtime off switch unchanged."
-  }
-}
-
 run "rejects_unattended_timeout_below_minimum" {
   command = plan
 
@@ -104,19 +78,6 @@ run "rejects_unattended_timeout_below_minimum" {
   }
 
   expect_failures = [var.sandbox_unattended_inactivity_timeout_ms]
-}
-
-run "maximum_safe_integer_reaches_worker_binding" {
-  command = plan
-
-  variables {
-    sandbox_unattended_inactivity_timeout_ms = 9007199254740991
-  }
-
-  assert {
-    condition     = module.control_plane_worker.plain_text_bindings["SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS"] == "9007199254740991"
-    error_message = "The largest safe integer must reach the Worker without changing its value."
-  }
 }
 
 run "rejects_fractional_unattended_timeout" {

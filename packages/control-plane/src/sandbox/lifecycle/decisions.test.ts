@@ -7,64 +7,67 @@ import {
   DEFAULT_HEARTBEAT_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
   DEFAULT_SPAWN_CONFIG,
-  MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS,
   evaluateCircuitBreaker,
   evaluateInactivityTimeout,
   evaluateSpawnDecision,
-  getInactivityTimeoutMs,
-  isUnattendedSessionSource,
-  resolveUnattendedInactivityTimeoutMs,
+  inactivityConfigFor,
 } from "./decisions";
 
 describe("inactivity timeout policy", () => {
   const now = 10_000_000;
-  const config = {
-    connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
-    heartbeat: DEFAULT_HEARTBEAT_CONFIG,
-    bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
-    inactivity: DEFAULT_INACTIVITY_CONFIG,
-  };
+  const policy = DEFAULT_INACTIVITY_CONFIG;
 
   describe.each([
-    { source: "automation", unattended: true, timeoutMs: 120_000 },
-    { source: "github-bot", unattended: true, timeoutMs: 120_000 },
-    { source: "agent", unattended: true, timeoutMs: 120_000 },
-    { source: "user", unattended: false, timeoutMs: 600_000 },
-    { source: "linear-bot", unattended: false, timeoutMs: 600_000 },
-    { source: "slack-bot", unattended: false, timeoutMs: 600_000 },
-    { source: undefined, unattended: false, timeoutMs: 600_000 },
-  ] as const)("$source sessions", ({ source, unattended, timeoutMs }) => {
+    { source: "automation", timeoutMs: 120_000 },
+    { source: "github-bot", timeoutMs: 120_000 },
+    { source: "agent", timeoutMs: 120_000 },
+    { source: "user", timeoutMs: 600_000 },
+    { source: "linear-bot", timeoutMs: 600_000 },
+    { source: "slack-bot", timeoutMs: 600_000 },
+    { source: undefined, timeoutMs: 600_000 },
+  ] as const)("$source sessions", ({ source, timeoutMs }) => {
+    const inactivity = inactivityConfigFor(policy, source);
+    const config = {
+      connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+      heartbeat: DEFAULT_HEARTBEAT_CONFIG,
+      bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
+      inactivity,
+    };
+
     it.each([
       {
         name: "schedules just before the cutoff",
         offsetMs: -1,
         clients: 0,
-        decision: { action: "schedule", nextCheckMs: config.inactivity.minCheckIntervalMs },
-        finding: { outcome: "healthy", nextCheckMs: config.inactivity.minCheckIntervalMs },
+        decision: { action: "schedule", nextCheckMs: policy.minCheckIntervalMs },
+        finding: { outcome: "healthy", nextCheckMs: policy.minCheckIntervalMs },
       },
       {
         name: "times out exactly at the cutoff",
         offsetMs: 0,
         clients: 0,
-        decision: { action: "timeout" },
-        finding: { outcome: "inactivity_timeout" },
+        decision: { action: "timeout", idleMs: timeoutMs },
+        finding: { outcome: "inactivity_timeout", idleMs: timeoutMs, timeoutMs },
       },
       {
         name: "extends at the cutoff with connected clients",
         offsetMs: 0,
         clients: 2,
-        decision: { action: "extend", extensionMs: config.inactivity.extensionMs },
-        finding: { outcome: "inactivity_warning", extensionMs: config.inactivity.extensionMs },
+        decision: { action: "extend", extensionMs: policy.extensionMs },
+        finding: { outcome: "inactivity_warning", extensionMs: policy.extensionMs },
       },
     ] as const)("$name", ({ offsetMs, clients, decision, finding }) => {
-      expect(isUnattendedSessionSource(source)).toBe(unattended);
-      expect(getInactivityTimeoutMs(config.inactivity, unattended)).toBe(timeoutMs);
+      expect(inactivity).toEqual({
+        timeoutMs,
+        extensionMs: policy.extensionMs,
+        minCheckIntervalMs: policy.minCheckIntervalMs,
+      });
       const lastActivity = now - timeoutMs - offsetMs;
 
       expect(
         evaluateInactivityTimeout(
-          { status: "ready", lastActivity, connectedClientCount: clients, unattended },
-          config.inactivity,
+          { status: "ready", lastActivity, connectedClientCount: clients },
+          inactivity,
           now
         )
       ).toEqual(decision);
@@ -73,90 +76,9 @@ describe("inactivity timeout policy", () => {
           { status: "ready", created_at: 0, last_heartbeat: now, last_activity: lastActivity },
           config,
           now,
-          clients,
-          unattended
+          clients
         )
       ).toEqual(finding);
-    });
-  });
-
-  it.each([
-    { timeoutMs: 600_000, unattendedTimeoutMs: 600_000 },
-    { timeoutMs: 600_000, unattendedTimeoutMs: 900_000 },
-    { timeoutMs: 60_000, unattendedTimeoutMs: 120_000 },
-  ])(
-    "caps unattended $unattendedTimeoutMs ms at the regular $timeoutMs ms cutoff",
-    ({ timeoutMs, unattendedTimeoutMs }) => {
-      const cappedConfig = {
-        ...config,
-        inactivity: { ...config.inactivity, timeoutMs, unattendedTimeoutMs },
-      };
-      expect(getInactivityTimeoutMs(cappedConfig.inactivity, false)).toBe(timeoutMs);
-      expect(getInactivityTimeoutMs(cappedConfig.inactivity, true)).toBe(timeoutMs);
-
-      for (const offsetMs of [-1, 0]) {
-        const lastActivity = now - timeoutMs - offsetMs;
-        expect(
-          evaluateInactivityTimeout(
-            { status: "ready", lastActivity, connectedClientCount: 0, unattended: true },
-            cappedConfig.inactivity,
-            now
-          )
-        ).toEqual(
-          offsetMs === -1
-            ? { action: "schedule", nextCheckMs: cappedConfig.inactivity.minCheckIntervalMs }
-            : { action: "timeout" }
-        );
-        expect(
-          evaluateAlarmPolicy(
-            { status: "ready", created_at: 0, last_heartbeat: now, last_activity: lastActivity },
-            cappedConfig,
-            now,
-            0,
-            true
-          )
-        ).toEqual(
-          offsetMs === -1
-            ? { outcome: "healthy", nextCheckMs: cappedConfig.inactivity.minCheckIntervalMs }
-            : { outcome: "inactivity_timeout" }
-        );
-      }
-    }
-  );
-});
-
-describe("resolveUnattendedInactivityTimeoutMs", () => {
-  it.each([
-    [undefined, 120_000],
-    ["", 120_000],
-    [String(MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS), 60_000],
-    ["60001", 60_001],
-    ["120000", 120_000],
-    ["600000", 600_000],
-    ["900000", 900_000],
-    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
-  ] as const)("accepts %j without a rejection", (raw, timeoutMs) => {
-    expect(resolveUnattendedInactivityTimeoutMs(raw)).toEqual({ timeoutMs, rejectedValue: null });
-  });
-
-  it.each([
-    "0",
-    "-1",
-    "59999",
-    "60000.5",
-    "60000ms",
-    "6e4",
-    "0xea60",
-    "NaN",
-    "Infinity",
-    " 60000",
-    "60000 ",
-    " ",
-    "9007199254740992",
-  ])("rejects %j to the default without losing the rejected value", (raw) => {
-    expect(resolveUnattendedInactivityTimeoutMs(raw)).toEqual({
-      timeoutMs: 120_000,
-      rejectedValue: raw,
     });
   });
 });

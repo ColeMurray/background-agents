@@ -11,7 +11,7 @@
  */
 
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SandboxShutdownState,
@@ -38,11 +38,10 @@ import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
   evaluateWarmDecision,
-  getInactivityTimeoutMs,
   heartbeatStaleAt,
+  inactivityConfigFor,
   isDeadSandboxStatus,
   isSnapshotRuntimeCompatible,
-  isUnattendedSessionSource,
   shouldStopSandboxOnSessionCancel,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
@@ -52,6 +51,7 @@ import {
   DEFAULT_BOOT_BUDGET_CONFIG,
   type CircuitBreakerConfig,
   type CircuitBreakerState,
+  type InactivityPolicyConfig,
   type SpawnConfig,
 } from "./decisions";
 import { evaluateAlarmPolicy, type AlarmPolicyConfig } from "./alarm-policy";
@@ -350,6 +350,7 @@ interface AlarmContext extends WatchdogContext {
  * Complete lifecycle configuration.
  */
 export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunchConfig {
+  inactivity: InactivityPolicyConfig;
   /** Persist a user-visible lifecycle warning in the session event stream. */
   recordWarning?: (message: string, eventId: string) => void;
   /** Pump the message queue once a deferred connect-timeout re-drive may proceed. */
@@ -1679,13 +1680,11 @@ export class SandboxLifecycleManager
     });
 
     const spawnSource = this.sessionContext.getSession()?.spawn_source;
-    const unattended = isUnattendedSessionSource(spawnSource);
     const finding = evaluateAlarmPolicy(
       sandbox,
-      this.config,
+      this.alarmPolicyFor(spawnSource),
       now,
-      context.connectedClients,
-      unattended
+      context.connectedClients
     );
     switch (finding.outcome) {
       case "terminal":
@@ -1722,8 +1721,8 @@ export class SandboxLifecycleManager
         this.log.info("Inactivity timeout", {
           event: "sandbox.inactivity_timeout",
           spawn_source: spawnSource ?? null,
-          timeout_ms: getInactivityTimeoutMs(this.config.inactivity, unattended),
-          idle_ms: now - sandbox.last_activity!,
+          timeout_ms: finding.timeoutMs,
+          idle_ms: finding.idleMs,
         });
         return stopForInactivity(this.watchdogEffects, context);
 
@@ -2100,9 +2099,9 @@ export class SandboxLifecycleManager
    * Schedule an inactivity check alarm.
    */
   async scheduleInactivityCheck(): Promise<void> {
-    const timeoutMs = getInactivityTimeoutMs(
+    const { timeoutMs } = inactivityConfigFor(
       this.config.inactivity,
-      isUnattendedSessionSource(this.sessionContext.getSession()?.spawn_source)
+      this.sessionContext.getSession()?.spawn_source
     );
     const alarmTime = Date.now() + timeoutMs;
     this.log.debug("Scheduling inactivity check", { timeout_ms: timeoutMs });
@@ -2119,6 +2118,11 @@ export class SandboxLifecycleManager
     const alarmTime = Date.now() + this.config.heartbeat.timeoutMs;
     this.log.debug("Scheduling disconnect check", { timeout_ms: this.config.heartbeat.timeoutMs });
     await this.alarmScheduler.schedule(alarmTime);
+  }
+
+  /** Watchdog policy for one session; unattended sources idle out sooner. */
+  private alarmPolicyFor(spawnSource: SpawnSource | undefined): AlarmPolicyConfig {
+    return { ...this.config, inactivity: inactivityConfigFor(this.config.inactivity, spawnSource) };
   }
 
   /**
@@ -2179,10 +2183,9 @@ export class SandboxLifecycleManager
     if (sandbox?.status !== "ready" || this.shutdown.admissionDecision() !== "ready") return;
     const finding = evaluateAlarmPolicy(
       sandbox,
-      this.config,
+      this.alarmPolicyFor(this.sessionContext.getSession()?.spawn_source),
       Date.now(),
-      this.getConnectedClientCount(),
-      isUnattendedSessionSource(this.sessionContext.getSession()?.spawn_source)
+      this.getConnectedClientCount()
     );
     if (finding.outcome !== "healthy" && finding.outcome !== "inactivity_warning") return;
     try {
