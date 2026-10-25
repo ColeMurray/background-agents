@@ -704,7 +704,7 @@ variable "boat_api_url" {
 }
 
 variable "boat_base_snapshot" {
-  description = "Prefix of the Boat named snapshot built by the boat-infra module and deployed for fresh sandboxes"
+  description = "Prefix of the Boat base snapshots built by Terraform. Older bases under this prefix are pruned after Worker deployment, keeping the deployed and newest other ready base. Use a unique prefix per deployment sharing a Boat account or organization wallet."
   type        = string
   default     = ""
 

@@ -1,9 +1,9 @@
 # OpenInspect Boat Snapshot Tooling
 
-Builds the Boat **named snapshot** that Open-Inspect Boat sandboxes are deployed from.
+Builds and prunes the Boat **named base snapshots** used to create Open-Inspect Boat sandboxes.
 
-The control plane talks to the Boat REST API directly at runtime — these files are only for building
-the base snapshot, plus the launcher it bakes in.
+The control plane talks to the Boat REST API directly at runtime. These files build and prune base
+snapshots and provide the launcher baked into them.
 
 ## What's here
 
@@ -13,7 +13,8 @@ the base snapshot, plus the launcher it bakes in.
   through the REST API (standard library only, no SDK; HTTPS only, redirects refused, one
   idempotency key per create), saves the sandbox's disk as a named snapshot, and verifies a fresh
   deploy from that name. Its sandboxes are created private, so one billed to an organization is
-  never shared. Used both for manual builds and by the Terraform module.
+  never shared. Used both for manual builds and by the Terraform module. Its `prune` command removes
+  superseded Terraform-built bases after deployment.
 - **`launcher.sh`** — baked at `/home/user/openinspect/launcher.sh`. A create-time setup script that
   Boat starts the moment a new sandbox's machine is up waits for the control plane's launch marker
   (written once the sandbox is known private and its tunnel env file is in the workspace) and execs
@@ -39,7 +40,8 @@ markers alone; its env arrives as `/tmp/openinspect-image-build.env` once the sa
 and the launcher (`IMAGE_BUILD_MODE=true`) sources that file once, removes it, and keeps the build's
 lock, log and runtime state under `/tmp` too, so the saved disk carries the workspace and nothing of
 the build. Those names are the control plane's to create and delete; the base snapshot and the
-images share the account's named-snapshot allowance.
+images share the wallet's named-snapshot allowance. Deleting a source base does not affect existing
+sandboxes or standalone repository and environment images.
 
 ## Auth: one credential
 
@@ -50,15 +52,15 @@ images share the account's named-snapshot allowance.
 ## Manual build
 
 Use the repository-root [build command](../sandbox-images/README.md). Native builds create unique
-names and never overwrite the selected snapshot. Select the verified name before directing traffic
-to it.
+`<prefix>-<12 hex>-<timestamp>` names and never overwrite the selected snapshot. Select the verified
+name before directing traffic to it.
 
 ```bash
 cd packages/boat-infra
 uv sync --frozen
 export BOAT_API_KEY=boat_…             # Boat dashboard → API keys
-export BOAT_BASE_SNAPSHOT=open-inspect # name prefix; the build appends the input hash
-uv run python build-template.py
+export BOAT_BASE_SNAPSHOT=open-inspect # name prefix; the build appends a hash and timestamp
+uv run --frozen python build-template.py
 ```
 
 Optional: `BOAT_API_URL` (default `https://boat.dev/api/v1`), `BOAT_ORG` (organization wallet),
@@ -66,14 +68,55 @@ Optional: `BOAT_API_URL` (default `https://boat.dev/api/v1`), `BOAT_ORG` (organi
 
 Rebuild whenever `packages/sandbox-runtime`, `packages/sandbox-images` or this directory changes.
 
-> Builds are automated via Terraform when `sandbox_provider = "boat"`. The
-> `terraform/modules/boat-infra` module hashes the shared build inputs and builds a new snapshot
-> (under a new name) on `terraform apply` when any of them change. Manual runs are only for initial
-> setup or debugging.
+> Builds are automated via Terraform when `sandbox_provider = "boat"`. The production
+> `terraform/environments/production/boat.tf` hashes the shared build inputs through the
+> `sandbox-images` CLI, then passes the hash to `terraform/modules/boat-infra` to build a new
+> snapshot under a new name when those inputs change. The control-plane Worker switches only after
+> verification; Terraform then prunes superseded bases. Manual builds are only for initial setup or
+> debugging.
 >
 > Boat snapshots save `/home`, new top-level directories and changes under `/etc`, `/usr`, `/opt`,
 > `/var`, `/root` and `/srv`, but not `/tmp` or `~/.cache`. The image therefore keeps `/app` and
 > `/workspace` under `/home/user` behind symlinks the launcher recreates on every boot.
+
+## Prune base snapshots
+
+Terraform runs pruning after the control-plane Worker switches to the selected snapshot, once per
+change to the selected name, including the first apply after the pruning resource is introduced.
+Only names matching exactly `<prefix>-<16 lowercase hex>` are candidates. It retains the deployed
+base and the newest other `ready` candidate as a rollback base, skips `saving` snapshots, and
+deletes all remaining `ready` or `failed` candidates. Manual `<prefix>-<12 hex>-<timestamp>` names,
+`oi-img-*` images, other names and snapshots under other or longer prefixes are untouched.
+
+Use a unique prefix for each deployment sharing a Boat account or organization wallet. Reusing a
+prefix makes another deployment's live base eligible for deletion.
+
+To preview the same selection manually:
+
+```bash
+cd packages/boat-infra
+uv sync --frozen
+export BOAT_API_KEY=boat_...
+export BOAT_BASE_SNAPSHOT=open-inspect
+export BOAT_DEPLOYED_SNAPSHOT="open-inspect-<16 lowercase hex>"
+uv run --frozen python build-template.py prune --dry-run
+```
+
+`BOAT_BASE_SNAPSHOT` is the prefix, not a full name. Set `BOAT_DEPLOYED_SNAPSHOT` to the exact full
+name the Worker currently uses, not an unselected build candidate. It must be a `ready`
+Terraform-built base under that prefix. Optional `BOAT_API_URL` and `BOAT_ORG` must address the same
+Boat account or organization wallet as that deployment. A missing, non-`ready` or nonmatching
+deployed snapshot fails pruning before any deletion.
+
+The command prints names it keeps and why, names it would delete (or deleted), and the wallet's
+snapshot allowance before and after. `--dry-run` previews the selection and deletes nothing; its
+after allowance is unchanged by the command. Only after confirming the selection, rerun
+`uv run --frozen python build-template.py prune` without `--dry-run` to delete the selected names.
+
+Only one rollback base is retained. A Worker rollback across two or more base generations may
+reference a deleted base; sessions without prebuilt images then fail to create until a deployment
+rebuilds that name. Existing sandboxes and prebuilt repository and environment images are unaffected
+by deleting their source base.
 
 ## Verification
 

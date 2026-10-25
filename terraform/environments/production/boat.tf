@@ -22,3 +22,30 @@ module "boat_infra" {
   deploy_path          = "${var.project_root}/packages/boat-infra"
   source_hash          = data.external.boat_source_hash[0].result.hash
 }
+
+# Prune only after the Worker serves the new base. Retain the replaced base for
+# rollback and requests still running on the previous Worker version.
+resource "null_resource" "boat_base_snapshot_prune" {
+  count = local.use_boat_backend ? 1 : 0
+
+  triggers = {
+    snapshot_name = module.boat_infra[0].snapshot_name
+  }
+
+  provisioner "local-exec" {
+    command     = "uv sync --frozen && uv run --frozen python build-template.py prune"
+    working_dir = "${var.project_root}/packages/boat-infra"
+
+    environment = {
+      # Allow the prune summary in apply logs. The key stays in the environment,
+      # never command/triggers; prune must not print it or provider error messages.
+      BOAT_API_KEY           = nonsensitive(var.boat_api_key)
+      BOAT_API_URL           = var.boat_api_url
+      BOAT_ORG               = var.boat_org
+      BOAT_BASE_SNAPSHOT     = var.boat_base_snapshot
+      BOAT_DEPLOYED_SNAPSHOT = module.boat_infra[0].snapshot_name
+    }
+  }
+
+  depends_on = [module.control_plane_worker]
+}

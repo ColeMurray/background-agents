@@ -60,6 +60,14 @@ run "boat_builds_a_named_snapshot_and_binds_the_worker_to_it" {
 
   assert {
     condition = (
+      length(null_resource.boat_base_snapshot_prune) == 1 &&
+      null_resource.boat_base_snapshot_prune[0].triggers.snapshot_name == "open-inspect-test-source-hash"
+    )
+    error_message = "The Boat backend must prune superseded bases once per deployed snapshot name."
+  }
+
+  assert {
+    condition = (
       contains(module.control_plane_worker.plain_text_binding_names, "BOAT_API_URL") &&
       contains(module.control_plane_worker.plain_text_binding_names, "BOAT_BASE_SNAPSHOT") &&
       contains(module.control_plane_worker.plain_text_binding_names, "BOAT_SANDBOX_TYPE") &&
@@ -127,7 +135,7 @@ run "ignores_the_machine_type_on_other_backends" {
   }
 
   assert {
-    condition     = length(module.boat_infra) == 0
+    condition     = length(module.boat_infra) == 0 && length(null_resource.boat_base_snapshot_prune) == 0
     error_message = "A Boat-only setting must not block a deployment on another backend."
   }
 }
@@ -146,8 +154,8 @@ run "other_backends_build_and_bind_nothing_boat" {
   }
 
   assert {
-    condition     = length(module.boat_infra) == 0
-    error_message = "A deployment on another backend must not build a Boat snapshot."
+    condition     = length(module.boat_infra) == 0 && length(null_resource.boat_base_snapshot_prune) == 0
+    error_message = "A deployment on another backend must not build or prune Boat snapshots."
   }
 
   assert {

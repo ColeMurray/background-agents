@@ -2,6 +2,16 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 25, 2026
+
+**Automatic Boat base-snapshot cleanup.** After switching the control-plane Worker to a verified
+base snapshot, Terraform prunes superseded bases under the deployment's prefix, retaining the
+deployed base and the newest other ready base for rollback. Manual snapshots, prebuilt images and
+other prefixes are untouched. A manual dry run previews the selection without deleting anything. Use
+a unique prefix per deployment sharing a Boat wallet; Worker rollbacks across two or more base
+generations may reference a deleted base. See
+[Base Snapshot Pruning](docs/BOAT_SANDBOX_PROVIDER.md#base-snapshot-pruning).
+
 ## October 24, 2026
 
 **Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;
