@@ -25,7 +25,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -386,7 +385,15 @@ def cleanup_command() -> str:
     )
 
 
+def validate_base_prefix(prefix: str) -> None:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,45}", prefix):
+        raise RuntimeError("BOAT_BASE_SNAPSHOT must be 1-46 lowercase letters, digits or dashes")
+    if prefix == "oi-img" or prefix.startswith("oi-img-"):
+        raise RuntimeError("The oi-img namespace is reserved for prebuilt images")
+
+
 def candidate_name(prefix: str, build_hash: str) -> str:
+    validate_base_prefix(prefix)
     name = (
         os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
         or f"{prefix}-{build_hash[:12]}-{time.time_ns()}"
@@ -396,6 +403,8 @@ def candidate_name(prefix: str, build_hash: str) -> str:
             f"Boat named snapshot name {name!r} must be 1-63 lowercase letters, digits or dashes; "
             "shorten BOAT_BASE_SNAPSHOT"
         )
+    if name == "oi-img" or name.startswith("oi-img-"):
+        raise RuntimeError("The oi-img namespace is reserved for prebuilt images")
     return name
 
 
@@ -449,8 +458,11 @@ def print_snapshot_allowance(phase: str, inventory: dict[str, Any]) -> None:
     )
 
 
-def prune_snapshots(api: BoatApi, prefix: str, deployed: str, *, dry_run: bool) -> None:
-    """Retain the deployed Terraform base and the newest other ready base for rollback."""
+def prune_snapshots(
+    api: BoatApi, prefix: str, deployed: str, replaced: str, *, dry_run: bool
+) -> None:
+    """Retain the deployed base and the explicit predecessor supplied by the deployer."""
+    validate_base_prefix(prefix)
     inventory = api.request("GET", "/saved-snapshots")
     pattern = re.compile(rf"{re.escape(prefix)}-[0-9a-f]{{16}}")
     candidates = [
@@ -464,19 +476,17 @@ def prune_snapshots(api: BoatApi, prefix: str, deployed: str, *, dry_run: bool) 
             "check the prefix, wallet and organization. Nothing was deleted."
         )
 
-    # Do not assume the deployed base is newest: a revert reuses an older artifact.
-    previous = max(
-        (
-            snapshot
-            for snapshot in candidates
-            if snapshot["name"] != deployed and snapshot["status"] == "ready"
-        ),
-        key=lambda snapshot: datetime.fromisoformat(snapshot["createdAt"]),
-        default=None,
-    )
     kept = {deployed}
-    if previous is not None:
-        kept.add(previous["name"])
+    if replaced:
+        if not any(
+            snapshot["name"] == replaced and snapshot["status"] == "ready"
+            for snapshot in candidates
+        ):
+            raise RuntimeError(
+                "BOAT_REPLACED_SNAPSHOT must name a ready Terraform base under BOAT_BASE_SNAPSHOT. "
+                "Nothing was deleted."
+            )
+        kept.add(replaced)
 
     print_snapshot_allowance("before", inventory)
     for snapshot in candidates:
@@ -513,6 +523,7 @@ def main(argv: list[str] | None = None) -> None:
     prefix = os.environ.get("BOAT_BASE_SNAPSHOT")
     if not api_key or not prefix:
         raise RuntimeError("BOAT_BASE_SNAPSHOT and BOAT_API_KEY are required")
+    validate_base_prefix(prefix)
     api = BoatApi(
         os.environ.get("BOAT_API_URL") or DEFAULT_API_URL,
         api_key,
@@ -522,8 +533,14 @@ def main(argv: list[str] | None = None) -> None:
         deployed = os.environ.get("BOAT_DEPLOYED_SNAPSHOT")
         if not deployed:
             raise RuntimeError("BOAT_DEPLOYED_SNAPSHOT is required for prune")
+        replaced = os.environ.get("BOAT_REPLACED_SNAPSHOT")
+        if replaced is None:
+            raise RuntimeError(
+                "BOAT_REPLACED_SNAPSHOT is required for prune; "
+                "use an empty value only when there is no previous base in this prefix and wallet"
+            )
         try:
-            prune_snapshots(api, prefix, deployed, dry_run=args.dry_run)
+            prune_snapshots(api, prefix, deployed, replaced, dry_run=args.dry_run)
         except BoatApiError as error:
             # Provider messages may echo credentials; report only the HTTP status.
             raise RuntimeError(f"Boat snapshot prune failed: API {error.status}") from None

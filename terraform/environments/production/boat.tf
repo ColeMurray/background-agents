@@ -29,21 +29,28 @@ resource "null_resource" "boat_base_snapshot_prune" {
   count = local.use_boat_backend ? 1 : 0
 
   triggers = {
+    api_url       = var.boat_api_url
+    org           = var.boat_org
     snapshot_name = module.boat_infra[0].snapshot_name
   }
 
   provisioner "local-exec" {
-    command     = "uv sync --frozen && uv run --frozen python build-template.py prune"
+    command     = "uv sync --frozen && uv run --frozen python prune-deployed-snapshots.py"
     working_dir = "${var.project_root}/packages/boat-infra"
 
     environment = {
-      # Allow the prune summary in apply logs. The key stays in the environment,
-      # never command/triggers; prune must not print it or provider error messages.
-      BOAT_API_KEY           = nonsensitive(var.boat_api_key)
-      BOAT_API_URL           = var.boat_api_url
-      BOAT_ORG               = var.boat_org
-      BOAT_BASE_SNAPSHOT     = var.boat_base_snapshot
-      BOAT_DEPLOYED_SNAPSHOT = module.boat_infra[0].snapshot_name
+      # Allow key-free prune summaries in apply logs. Credentials stay in the
+      # environment, never command/triggers; neither script may print them or
+      # provider error messages.
+      BOAT_API_KEY             = nonsensitive(var.boat_api_key)
+      BOAT_API_URL             = var.boat_api_url
+      BOAT_ORG                 = var.boat_org
+      BOAT_BASE_SNAPSHOT       = var.boat_base_snapshot
+      BOAT_DEPLOYED_SNAPSHOT   = module.boat_infra[0].snapshot_name
+      CLOUDFLARE_API_TOKEN     = nonsensitive(var.cloudflare_api_token)
+      CLOUDFLARE_ACCOUNT_ID    = var.cloudflare_account_id
+      CLOUDFLARE_WORKER_NAME   = module.control_plane_worker.worker_name
+      CLOUDFLARE_DEPLOYMENT_ID = module.control_plane_worker.deployment_id
     }
   }
 

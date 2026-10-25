@@ -369,10 +369,12 @@ Things to know:
   and bills each one beyond that monthly. The deployed and retained rollback bases count, as does
   every ready image plus, briefly, the image a rebuild is replacing. After switching the Worker,
   Terraform [prunes superseded bases](./BOAT_SANDBOX_PROVIDER.md#base-snapshot-pruning), retaining
-  the deployed base and newest other ready candidate; it leaves `saving` snapshots, manual names and
-  `oi-img-*` images untouched. Deleting a source base does not affect existing sandboxes or prebuilt
-  images. A save past the allowance with no credit fails the build with Boat's `credit_required`
-  reason. Operators can remove unrelated unused manual snapshots or add credit, then rebuild.
+  the deployed base and its confirmed deployment predecessor, not the newest artifact. Cleanup skips
+  when history cannot establish a predecessor and leaves `saving` snapshots, manual names and
+  prebuilt images untouched. The `oi-img` namespace is reserved and rejected as a base prefix.
+  Deleting a source base does not affect existing sandboxes or prebuilt images. A save past the
+  allowance with no credit fails the build with Boat's `credit_required` reason. Operators can
+  remove unrelated unused manual snapshots or add credit, then rebuild.
 - **What the image keeps.** A named snapshot follows Boat's snapshot rules: `/home` (the workspace
   with every clone and everything `setup.sh` put there) and changes under `/etc`, `/usr`, `/opt`,
   `/var`, `/root` and `/srv` are saved; `/tmp` and `~/.cache` are not. A setup script that warms a

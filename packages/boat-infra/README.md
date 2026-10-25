@@ -14,7 +14,10 @@ snapshots and provide the launcher baked into them.
   idempotency key per create), saves the sandbox's disk as a named snapshot, and verifies a fresh
   deploy from that name. Its sandboxes are created private, so one billed to an organization is
   never shared. Used both for manual builds and by the Terraform module. Its `prune` command removes
-  superseded Terraform-built bases after deployment.
+  superseded Terraform-built bases after deployment using an explicit deployed/replaced pair.
+- **`prune-deployed-snapshots.py`**: runs after the Worker deployment in Terraform, reads
+  Cloudflare's confirmed deployments and version bindings through the builder's same HTTPS-only,
+  nonredirecting opener, and verifies the active deployment before invoking the Boat pruner.
 - **`launcher.sh`** — baked at `/home/user/openinspect/launcher.sh`. A create-time setup script that
   Boat starts the moment a new sandbox's machine is up waits for the control plane's launch marker
   (written once the sandbox is known private and its tunnel env file is in the workspace) and execs
@@ -43,17 +46,25 @@ the build. Those names are the control plane's to create and delete; the base sn
 images share the wallet's named-snapshot allowance. Deleting a source base does not affect existing
 sandboxes or standalone repository and environment images.
 
-## Auth: one credential
+## Authentication
 
 - **`BOAT_API_KEY`** — the runtime key the control-plane worker uses for the Boat REST API (and the
   code-server/VNC password HMAC), **and** what this build uses. Create it in the Boat dashboard
   under API keys.
+- **Cloudflare deployment token**: the deployment-history wrapper needs Workers Scripts: Read
+  access; the existing Workers Scripts: Edit deployment token is sufficient. Terraform supplies the
+  token, Cloudflare account, Worker name and deployment ID automatically; no extra manual setup is
+  needed. Direct manual builder commands only need the Boat credential.
 
 ## Manual build
 
 Use the repository-root [build command](../sandbox-images/README.md). Native builds create unique
 `<prefix>-<12 hex>-<timestamp>` names and never overwrite the selected snapshot. Select the verified
 name before directing traffic to it.
+
+Base prefixes must be 1-46 lowercase letters, digits or dashes. `oi-img` and every prefix starting
+with `oi-img-` are reserved for prebuilt images and rejected by Terraform, its Boat module, and
+build/prune validation, including manual builds and prune candidates.
 
 ```bash
 cd packages/boat-infra
@@ -81,39 +92,64 @@ Rebuild whenever `packages/sandbox-runtime`, `packages/sandbox-images` or this d
 
 ## Prune base snapshots
 
-Terraform runs pruning after the control-plane Worker switches to the selected snapshot, once per
-change to the selected name, including the first apply after the pruning resource is introduced.
-Only names matching exactly `<prefix>-<16 lowercase hex>` are candidates. It retains the deployed
-base and the newest other `ready` candidate as a rollback base, skips `saving` snapshots, and
-deletes all remaining `ready` or `failed` candidates. Manual `<prefix>-<12 hex>-<timestamp>` names,
-`oi-img-*` images, other names and snapshots under other or longer prefixes are untouched.
+Terraform runs `prune-deployed-snapshots.py` after the control-plane Worker switches to the selected
+snapshot, including the first apply after the pruning resource is introduced. Cleanup is triggered
+by changes to the snapshot name, Boat API URL or organization, even with the same build hash, not by
+credential changes alone.
+
+The wrapper verifies the expected active deployment and desired Boat snapshot against Cloudflare's
+confirmed deployment list and version bindings. It follows actual deployed base transitions,
+skipping same-base redeploys: `A -> B -> A -> C` retains `C` and `A`. Snapshot `createdAt` values
+and newer undeployed snapshots never establish rollback provenance. Missing or inconsistent history
+or split deployments fail without deleting anything. No distinct predecessor in available history (a
+new deployment or truncated history) is a successful skip with no deletions, not a guess.
+
+A provider, Boat API URL, organization or prefix change ends the history search: the old scope is
+untouched and the wrapper passes an explicit empty `BOAT_REPLACED_SNAPSHOT`, with no rollback base
+in the new scope. When pruning proceeds, it retains at most two applicable bases, not necessarily
+two on a first deployment or scope change. Only exact `<prefix>-<16 lowercase hex>` names are
+candidates. It skips `saving` snapshots and deletes remaining `ready` or `failed` candidates. Manual
+`<prefix>-<12 hex>-<timestamp>` names, prebuilt images, other names and snapshots under other or
+longer prefixes are untouched.
 
 Use a unique prefix for each deployment sharing a Boat account or organization wallet. Reusing a
 prefix makes another deployment's live base eligible for deletion.
 
-To preview the same selection manually:
+Serialize deployments, direct Worker rollbacks and pruning. The wrapper rechecks the active
+deployment after reading history and before invoking Boat pruning, aborting without deletion if it
+changed, but cannot atomically lock Cloudflare and Boat.
+
+To preview an explicit pair manually:
 
 ```bash
 cd packages/boat-infra
 uv sync --frozen
 export BOAT_API_KEY=boat_...
 export BOAT_BASE_SNAPSHOT=open-inspect
-export BOAT_DEPLOYED_SNAPSHOT="open-inspect-<16 lowercase hex>"
+export BOAT_DEPLOYED_SNAPSHOT="open-inspect-<current-16-lowercase-hex>"
+export BOAT_REPLACED_SNAPSHOT="open-inspect-<previous-16-lowercase-hex>"
 uv run --frozen python build-template.py prune --dry-run
 ```
 
-`BOAT_BASE_SNAPSHOT` is the prefix, not a full name. Set `BOAT_DEPLOYED_SNAPSHOT` to the exact full
-name the Worker currently uses, not an unselected build candidate. It must be a `ready`
-Terraform-built base under that prefix. Optional `BOAT_API_URL` and `BOAT_ORG` must address the same
-Boat account or organization wallet as that deployment. A missing, non-`ready` or nonmatching
-deployed snapshot fails pruning before any deletion.
+`BOAT_BASE_SNAPSHOT` is the prefix, not a full name. Both `BOAT_DEPLOYED_SNAPSHOT` and
+`BOAT_REPLACED_SNAPSHOT` must be explicitly set. Replace the placeholders with the exact current
+name and the distinct base it actually replaced, taken from the Worker's confirmed deployment
+history, not snapshot timestamps or an unselected build candidate. The deployed value and any
+nonempty replaced value must be `ready` Terraform-built names under the same prefix, with exactly 16
+lowercase hex characters after the prefix. Set `BOAT_REPLACED_SNAPSHOT=""` only when you know there
+was no previous base in the current prefix and wallet, such as a confirmed scope boundary; missing
+or truncated history is not proof. Optional `BOAT_API_URL` and `BOAT_ORG` must address that same
+Boat wallet. A missing, non-`ready` or nonmatching named base fails pruning before any deletion. The
+direct command validates the pair against Boat; unlike the wrapper, it does not read or recheck
+Worker deployment history.
 
 The command prints names it keeps and why, names it would delete (or deleted), and the wallet's
 snapshot allowance before and after. `--dry-run` previews the selection and deletes nothing; its
-after allowance is unchanged by the command. Only after confirming the selection, rerun
+after allowance is unchanged by the command. A dry run against the deployment's live wallet is
+required; only after confirming the selection, rerun
 `uv run --frozen python build-template.py prune` without `--dry-run` to delete the selected names.
 
-Only one rollback base is retained. A Worker rollback across two or more base generations may
+At most one rollback base is retained. A Worker rollback across two or more base generations may
 reference a deleted base; sessions without prebuilt images then fail to create until a deployment
 rebuilds that name. Existing sandboxes and prebuilt repository and environment images are unaffected
 by deleting their source base.

@@ -422,6 +422,7 @@ def boat_prune(monkeypatch):
     monkeypatch.setenv("BOAT_API_KEY", "boat_test")
     monkeypatch.setenv("BOAT_BASE_SNAPSHOT", "prefix")
     monkeypatch.setenv("BOAT_DEPLOYED_SNAPSHOT", "prefix-aaaaaaaaaaaaaaaa")
+    monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "prefix-bbbbbbbbbbbbbbbb")
     return namespace, transport
 
 
@@ -451,8 +452,7 @@ def test_boat_prune_only_deletes_exact_terraform_bases(boat_prune, capsys, dry_r
         "prefix-0123456789abcdeF",
         "prefix-0123456789abcdef\n",
     ]
-    # Deliberately unsorted: createdAt, not list order or status, selects rollback.
-    previous["createdAt"] = "2026-01-01T01:00:00Z"
+    # Artifact order and creation times do not determine deployment history.
     snapshots = [old, failed, deployed, previous, saving] + [
         {**old, "name": name} for name in untouched
     ]
@@ -494,13 +494,11 @@ def test_boat_prune_only_deletes_exact_terraform_bases(boat_prune, capsys, dry_r
     assert all(name not in output for name in untouched)
 
 
-def test_boat_prune_retains_a_reverted_base_and_newest_other_ready_base(boat_prune, capsys):
+def test_boat_prune_retains_the_explicit_replaced_base_not_newer_artifacts(boat_prune, capsys):
     namespace, transport = boat_prune
     deployed = boat_snapshot("a", 1)
-    replaced = boat_snapshot("b", 3)
-    other = boat_snapshot("c", 2)
-    # Timezone offsets must not make an older artifact look newer.
-    other["createdAt"] = "2026-01-03T01:00:00+02:00"
+    replaced = boat_snapshot("b", 2)
+    other = boat_snapshot("c", 3)
     inventory = {"snapshots": [other, deployed, replaced]}
     transport.answers = [inventory, {}, inventory]
 
@@ -550,25 +548,57 @@ def test_boat_prune_requires_an_explicit_deployed_name(monkeypatch, boat_prune):
     assert transport.calls == []
 
 
-def test_boat_prune_rejects_invalid_timestamps_before_deleting(boat_prune):
+@pytest.mark.parametrize("status", [None, "saving", "failed"])
+def test_boat_prune_requires_a_ready_replaced_snapshot(boat_prune, status):
     namespace, transport = boat_prune
-    invalid = {**boat_snapshot("c", 1), "createdAt": "invalid"}
-    transport.answers = [{"snapshots": [boat_snapshot("a", 3), boat_snapshot("b", 2), invalid]}]
+    snapshots = [boat_snapshot("a", 3), boat_snapshot("c", 1)]
+    if status is not None:
+        snapshots.append(boat_snapshot("b", 2, status))
+    transport.answers = [{"snapshots": snapshots}]
 
-    with pytest.raises(ValueError, match="Invalid isoformat"):
+    with pytest.raises(RuntimeError, match="BOAT_REPLACED_SNAPSHOT must name a ready"):
         namespace["main"](["prune"])
 
     assert transport.calls == [("GET", "/saved-snapshots", None, {})]
 
 
-def test_boat_prune_deletes_failed_bases_without_a_rollback_candidate(boat_prune):
+def test_boat_prune_requires_an_explicit_replaced_reference(monkeypatch, boat_prune):
     namespace, transport = boat_prune
+    monkeypatch.delenv("BOAT_REPLACED_SNAPSHOT")
+    with pytest.raises(RuntimeError, match="BOAT_REPLACED_SNAPSHOT is required"):
+        namespace["main"](["prune"])
+    assert transport.calls == []
+
+
+def test_boat_prune_deletes_failed_bases_without_a_rollback_candidate(monkeypatch, boat_prune):
+    namespace, transport = boat_prune
+    monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "")
     inventory = {"snapshots": [boat_snapshot("a", 1), boat_snapshot("b", 2, "failed")]}
     transport.answers = [inventory, {}, inventory]
 
     namespace["main"](["prune"])
 
     assert transport.calls[1] == ("DELETE", "/saved-snapshots/prefix-bbbbbbbbbbbbbbbb", None, {})
+
+
+@pytest.mark.parametrize("command", [[], ["prune"], ["prune", "--dry-run"]])
+@pytest.mark.parametrize("prefix", ["oi-img", "oi-img-group-sub-group-a-very-long"])
+def test_boat_builder_rejects_the_prebuilt_image_namespace(
+    monkeypatch, boat_prune, command, prefix
+):
+    namespace, transport = boat_prune
+    monkeypatch.setenv("BOAT_BASE_SNAPSHOT", prefix)
+    with pytest.raises(RuntimeError, match="reserved for prebuilt images"):
+        namespace["main"](command)
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("candidate", ["oi-img", "oi-img-scope-0123456789abcdef"])
+def test_boat_builder_rejects_a_prebuilt_image_candidate_override(monkeypatch, candidate):
+    namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
+    monkeypatch.setenv("OPENINSPECT_IMAGE_CANDIDATE", candidate)
+    with pytest.raises(RuntimeError, match="reserved for prebuilt images"):
+        namespace["candidate_name"]("prefix", "a" * 64)
 
 
 @pytest.mark.parametrize("status", [404, 409, 403, 500])
