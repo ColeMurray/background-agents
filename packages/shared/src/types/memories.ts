@@ -28,6 +28,8 @@ export const MEMORY_AGENT_WRITE_QUOTAS = {
 /** Management list paging; the control plane fetches one extra row to compute `nextOffset`. */
 export const MEMORY_LIST_PAGE_SIZE = 50;
 export const MEMORY_LIST_MAX_PAGE_SIZE = 100;
+/** Bound candidate accumulation when merging shared management pages across partitions. */
+export const MEMORY_SHARED_LIST_MAX_OFFSET = 1_000;
 
 // ---------------------------------------------------------------------------
 // Scopes
@@ -48,6 +50,9 @@ export const memoryScopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("environment"), environmentId: z.string().min(1).max(200) }).strict(),
 ]);
 export type MemoryScope = z.infer<typeof memoryScopeSchema>;
+
+/** Management lists can aggregate shared scopes; records and writes still name one partition. */
+export type MemoryListScope = MemoryScope | "shared";
 
 /** Exhaustiveness guard for switches over memory unions. */
 function unreachable(value: never): never {
@@ -316,6 +321,8 @@ export const memoryResponseSchema = z.object({ memory: memoryDtoSchema });
 export const memoryListResponseSchema = z.object({
   memories: z.array(memoryDtoSchema),
   nextOffset: z.number().int().nullable(),
+  /** More matches exist past the All view's paging depth (`MEMORY_SHARED_LIST_MAX_OFFSET`). */
+  truncated: z.boolean().default(false),
   canCreate: z.boolean(),
 });
 export type MemoryListResponse = z.infer<typeof memoryListResponseSchema>;

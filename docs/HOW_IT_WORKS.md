@@ -222,11 +222,13 @@ Open-Inspect supports these sandbox backends:
 - **Vercel Sandboxes**: filesystem snapshot restore and prebuilt-image builds via the Vercel Sandbox
   API
 - **E2B**: template-based sandboxes with persistent pause/resume via direct E2B REST API calls
+- **Boat**: full-VM sandboxes deployed from a named snapshot, archived on inactivity and resumed on
+  a new machine via direct Boat REST API calls
 
-Prebuilt-image builds are supported on Modal, Vercel, E2B, and Daytona (opt-in). Saved filesystem
-state can be restored on Modal and Vercel for session resumes; Daytona and E2B use persistent
-sandboxes instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity
-or stale heartbeat, then resumes that same sandbox later.
+Prebuilt-image builds are supported on Modal, Vercel, E2B, and Daytona (opt-in); Boat has none.
+Saved filesystem state can be restored on Modal and Vercel for session resumes; Daytona, E2B, and
+Boat use persistent sandboxes instead. For those three, the control plane stops, pauses, or archives
+the sandbox on inactivity or stale heartbeat, then resumes that same sandbox later.
 
 ### Clients
 

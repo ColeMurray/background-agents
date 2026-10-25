@@ -6,10 +6,14 @@ import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
 import { SwrFetchError } from "@/lib/swr-fetch-error";
-import { useAutomations } from "./use-automations";
+import { useAutomation, useAutomations } from "./use-automations";
 
+let authSession: { data: { user: { id: string } } | null; status: string } = {
+  data: { user: { id: "user-1" } },
+  status: "authenticated",
+};
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+  useAuthSession: () => authSession,
 }));
 
 function automation(id: string, name: string): AutomationListItem {
@@ -256,5 +260,34 @@ describe("useAutomations", () => {
 
     await waitFor(() => expect(result.current.error).toBe(failure));
     expect(result.current.automations).toEqual(expected);
+  });
+});
+
+describe("useAutomation", () => {
+  beforeEach(() => {
+    authSession = { data: { user: { id: "user-1" } }, status: "authenticated" };
+  });
+
+  it("reports a requested automation as loading while the auth session resolves", async () => {
+    authSession = { data: null, status: "loading" };
+    const fetcher = vi.fn(async () => ({ automation: firstAutomation }));
+    const { result, rerender } = renderHook(() => useAutomation("auto-2"), {
+      wrapper: wrapper(fetcher),
+    });
+    expect(result.current).toMatchObject({ automation: null, loading: true });
+    expect(fetcher).not.toHaveBeenCalled();
+
+    authSession = { data: { user: { id: "user-1" } }, status: "authenticated" };
+    rerender();
+    await waitFor(() => expect(result.current.automation?.id).toBe("auto-2"));
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("is not loading without an id", () => {
+    authSession = { data: null, status: "loading" };
+    const { result } = renderHook(() => useAutomation(undefined), {
+      wrapper: wrapper(vi.fn()),
+    });
+    expect(result.current.loading).toBe(false);
   });
 });

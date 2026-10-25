@@ -232,6 +232,39 @@ function FanOutInvocationRow({
   );
 }
 
+const SKELETON_ROW_COUNT = 3;
+
+/**
+ * Placeholder rows sized to match `SingleRunRow`. Rendered inside the history
+ * list, after any rows already shown, so a refetch with rows on screen reads as
+ * the next rows arriving.
+ */
+function RunHistorySkeletonRows() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading run history"
+      className="animate-pulse motion-reduce:animate-none divide-y divide-border-muted"
+    >
+      {Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => (
+        <div key={index} className="px-4 py-3">
+          <div className="flex h-5 items-center justify-between gap-4">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="h-5 w-16 bg-muted rounded" />
+              <div className="h-4 w-48 bg-muted rounded" />
+              <div className="h-3 w-10 bg-muted rounded" />
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="h-3 w-32 bg-muted rounded" />
+              <div className="h-3 w-20 bg-muted rounded" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface RunHistoryProps {
   invocations: AutomationInvocation[];
   total: number;
@@ -283,13 +316,8 @@ export function RunHistory({ invocations, total, loading, onLoadMore, hasMore }:
           }
           return <SkippedInvocationRow key={invocation.id} invocation={invocation} />;
         })}
+        {loading && <RunHistorySkeletonRows />}
       </div>
-
-      {loading && (
-        <div className="flex justify-center py-4">
-          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-        </div>
-      )}
 
       {hasMore && !loading && onLoadMore && (
         <div className="mt-3 text-center">

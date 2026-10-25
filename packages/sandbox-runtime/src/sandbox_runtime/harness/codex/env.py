@@ -12,7 +12,9 @@ from urllib.parse import urlsplit
 from ..base import HarnessStartError
 
 CODEX_VERSION = "0.163.0"
-CODEX_BINARY = "/usr/local/bin/codex"
+# The image's pinned install, never a /usr/local/bin link: a substrate may
+# re-link its own coding agents there at boot (Boat does).
+CODEX_BINARY = "/opt/openinspect/codex/bin/codex"
 
 
 def clean_codex_env(parent: Mapping[str, str], state_dir: Path) -> dict[str, str]:

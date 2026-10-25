@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { MemoryDto, MemoryRevision } from "@open-inspect/shared/types/memories";
+import {
+  MEMORY_SHARED_LIST_MAX_OFFSET,
+  type MemoryDto,
+  type MemoryRevision,
+} from "@open-inspect/shared/types/memories";
 import { MemoriesSettings, SharedMemoriesSettings } from ".";
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   revisions: [] as MemoryRevision[],
   canCreate: true,
   nextOffset: null as number | null,
+  truncated: false,
   collection: vi.fn(),
   canManageOwn: true,
   replaceState: vi.fn(),
@@ -45,6 +50,7 @@ vi.mock("@/hooks/use-memories", () => ({
       memories: mocks.records,
       canCreate: mocks.canCreate,
       nextOffset: mocks.nextOffset,
+      truncated: mocks.truncated,
       loading: false,
       mutate: mocks.mutate,
     };
@@ -136,6 +142,7 @@ describe("memory management", () => {
     mocks.revisions = [];
     mocks.canCreate = true;
     mocks.nextOffset = null;
+    mocks.truncated = false;
     mocks.canManageOwn = true;
     mocks.environments = [];
     for (const mutation of [mocks.createMemory, mocks.reviseMemory, mocks.applyMemoryAction]) {
@@ -296,6 +303,113 @@ describe("memory management", () => {
       0,
       ""
     );
+  });
+
+  it("defaults to all shared memories and reviews proposals from multiple repositories", async () => {
+    const first = {
+      ...record,
+      scope: { type: "repository" as const, repoOwner: "acme", repoName: "web" },
+    };
+    const second = {
+      ...record,
+      id: "mem_other",
+      title: "Use the API fixtures",
+      scope: { type: "repository" as const, repoOwner: "acme", repoName: "api" },
+      capabilities: { canEdit: false, actions: [] },
+    };
+    const environment = {
+      ...record,
+      id: "mem_env",
+      title: "Warm the build cache",
+      scope: { type: "environment" as const, environmentId: "env-1" },
+      capabilities: { canEdit: false, actions: [] },
+    };
+    mocks.records = [first, second, environment];
+    render(<SharedMemoriesSettings />);
+    expect(screen.getByRole("button", { name: "Memory scope All" })).toBeTruthy();
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "active", 0, "");
+    expect(screen.queryByText("New memory")).toBeNull();
+    // Repository links would only reopen All, so their scope is a label; environments link out.
+    expect(screen.getByText("acme/web")).toBeTruthy();
+    expect(screen.getByText("acme/api")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "acme/web" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Environment env-1" }).getAttribute("href")).toBe(
+      "/settings?scope=environment&environmentId=env-1&tab=shared-memories&memoryId=mem_env"
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Proposed" }));
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "proposed", 0, "");
+    expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(mocks.applyMemoryAction).toHaveBeenCalledWith(first, "approve", undefined)
+    );
+    await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(2));
+  });
+
+  it("returns to All from a repository and resets pagination and status", () => {
+    mocks.nextOffset = 50;
+    render(<SharedMemoriesSettings />);
+    fireEvent.click(screen.getByRole("button", { name: /Memory scope/ }));
+    fireEvent.click(screen.getByRole("option", { name: "acme/web" }));
+    fireEvent.click(screen.getByText("Next page"));
+    expect(mocks.collection).toHaveBeenLastCalledWith(
+      { type: "repository", repoOwner: "acme", repoName: "web" },
+      "active",
+      50,
+      ""
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Archived" }));
+    fireEvent.click(screen.getByRole("button", { name: /Memory scope/ }));
+    fireEvent.click(screen.getByRole("option", { name: "All" }));
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "active", 0, "");
+  });
+
+  it("does not include a deep-linked personal memory in All", () => {
+    mocks.params = new URLSearchParams({ memoryId: record.id });
+    mocks.focused = record;
+    render(<SharedMemoriesSettings />);
+    expect(screen.queryByText(record.title)).toBeNull();
+    expect(screen.getByText(/No proposed memories across your accessible/)).toBeTruthy();
+  });
+
+  it("keeps historical repository links in All and loads the focused record by ID", () => {
+    const historical = {
+      ...record,
+      scope: { type: "repository" as const, repoOwner: "old/group", repoName: "reused" },
+      supersedesMemoryId: "mem_old",
+    };
+    setParams({ scope: "shared", tab: "shared-memories", memoryId: historical.id });
+    mocks.focused = historical;
+    render(<SharedMemoriesSettings />);
+    expect(screen.getByRole("button", { name: "Memory scope All" })).toBeTruthy();
+    expect(screen.getByText(historical.title)).toBeTruthy();
+    expect(screen.getByText("old/group/reused")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "mem_old" }).getAttribute("href")).toBe(
+      "/settings?scope=shared&tab=shared-memories&memoryId=mem_old"
+    );
+    expect(mocks.collection).toHaveBeenLastCalledWith("shared", "proposed", 0, "");
+  });
+
+  it("explains the shared browsing cap only when the server truncates the list", async () => {
+    mocks.nextOffset = MEMORY_SHARED_LIST_MAX_OFFSET;
+    const { rerender } = render(<SharedMemoriesSettings />);
+    fireEvent.click(screen.getByText("Next page"));
+    // A final page at the depth limit with nothing past it is not truncated.
+    mocks.nextOffset = null;
+    rerender(<SharedMemoriesSettings />);
+    expect(screen.queryByText(/All-view browsing limit reached/)).toBeNull();
+    mocks.truncated = true;
+    rerender(<SharedMemoriesSettings />);
+    expect(screen.getByText(/All-view browsing limit reached/)).toBeTruthy();
+    expect((screen.getByText("Next page") as HTMLButtonElement).disabled).toBe(true);
+    mocks.truncated = false;
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search memories" }), {
+      target: { value: "docker" },
+    });
+    await waitFor(() =>
+      expect(mocks.collection).toHaveBeenLastCalledWith("shared", "active", 0, "docker")
+    );
+    expect(screen.queryByText(/All-view browsing limit reached/)).toBeNull();
   });
 
   it("filters by a debounced search kept in the URL and returns to the first page", async () => {

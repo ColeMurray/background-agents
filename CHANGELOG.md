@@ -2,6 +2,64 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 24, 2026
+
+**Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;
+Daytona, E2B, Vercel, and Boat deployments can run Codex sessions, automations, and child sessions
+too. The harness now launches the image's pinned Codex CLI rather than whatever `codex` sits in
+`/usr/local/bin`, which Boat replaces at boot. Rebuild your base image or snapshot if it predates
+the Codex CLI, including a pinned `vercel_base_snapshot_id`. Prebuilt repository images older than
+runtime v77 are rebuilt automatically; until then, Codex sessions start without them while other
+harnesses keep using them.
+
+## October 23, 2026
+
+**Faster sandbox boots.** The runtime now fetches managed skills and session memory side by side
+instead of one after the other. On Boat, the control plane re-reads a starting sandbox as soon as
+the previous read has answered rather than every two seconds, watches the launcher for one second
+instead of five after starting it, and names the sandbox while it hosts its ports rather than
+before. Together these take a few seconds off every boot. Boat also now starts the runtime from the
+create request itself, as Modal and Daytona do, instead of through a start command issued once the
+control plane notices the machine is up; a resume still uses the start command.
+
+**Boat tunnel URLs reach the runtime again.** With the create-request launch, the tunnel env file
+was written into the workspace before the machine was up, where Boat's snapshot mount hid it, and
+every boot waited 30 seconds for a file it could not see before running `start.sh` without tunnel
+URLs. The create now stages the file under `/tmp` and the setup script copies it into the workspace
+before the launcher starts.
+
+**One runtime per Boat sandbox after a quick resume.** A resume soon after a stop can get the parked
+machine back with its runtime still running. The launcher's single-instance lock lived under the
+home directory, which Boat remounts when a lazy restore finishes, so the resumed launcher did not
+see the lock the first boot held and started a second runtime. The two then took turns on the
+session's connection every few seconds, and a turn could be reported complete twice. The lock now
+lives in `/tmp`, so the resumed launcher finds the runtime running and leaves it be.
+
+**Fewer steps to start a Boat sandbox.** Boat's create request now takes the sandbox's name, its
+visibility and the ports to route, so the control plane sends them with the create instead of
+renaming, unsharing and hosting each port afterwards. A sandbox billed to an organization is private
+before it has a machine, so it is never shared, not even for a moment. Boat also holds a file write
+to a starting sandbox until the sandbox is ready, so the tunnel env file now goes straight into the
+workspace instead of being staged under `/tmp` for the setup script to copy.
+
+## October 22, 2026
+
+**Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A
+build runs `setup.sh` once in a sandbox deployed from the base snapshot and its disk is saved as a
+Boat named snapshot; sessions deploy from that image and skip setup. The build sandbox receives the
+scope's secrets only after it is private, through a file no snapshot keeps, so an image never
+carries them. Images count toward the account's named-snapshot allowance. See
+[Pre-Built Images](docs/IMAGE_PREBUILD.md#boat-prebuilds).
+
+## October 20, 2026
+
+**Boat sandbox provider.** [Boat](https://boat.dev) joins Modal, Daytona, Vercel, and E2B as a
+selectable sandbox provider (`sandbox_provider = "boat"`). Sessions run in full Ubuntu VMs deployed
+from a Terraform-built named snapshot; idle sessions are stopped (disk snapshotted, machine
+released) and resume on a new machine with their files intact. Sessions pick the smallest Boat
+machine size that fits their CPU and memory settings. See
+[Boat Sandbox Provider](docs/BOAT_SANDBOX_PROVIDER.md).
+
 ## October 19, 2026
 
 **Autofix acts on approvals with inline comments.** An approved pull request review that starts at

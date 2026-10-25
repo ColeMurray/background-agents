@@ -113,6 +113,29 @@ describe("createSessionRuntime", () => {
     expect(error).toMatch(/MODAL_API_SECRET/);
   });
 
+  it("announces the dashboard link of a Boat sandbox once its provider object is known", async () => {
+    const stub = env.SESSION.get(env.SESSION.idFromName(`components-boat-${crypto.randomUUID()}`));
+    await runInSessionDO(stub, (instance, state) => {
+      componentsOf(instance);
+      const runtime = createSessionRuntime(
+        createDurableObjectSessionPlatform(state, env.DB),
+        createCloudflareEnv({
+          ...(instance as unknown as { env: WorkerBindings }).env,
+          SANDBOX_PROVIDER: "boat",
+          BOAT_API_KEY: "boat_test_key",
+          BOAT_BASE_SNAPSHOT: "open-inspect",
+        } as WorkerBindings)
+      );
+      const broadcast = vi.spyOn(SessionMessengerImpl.prototype, "broadcast");
+      try {
+        expect(runtime.internals.access.broadcastSandboxDashboardUrl("sbx_123")).toBe(true);
+        expect(broadcast).toHaveBeenCalledWith({ type: "sandbox_access_changed" });
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   it("fails at graph build on an invalid SCM_PROVIDER", async () => {
     const error = await buildWithEnv({ SCM_PROVIDER: "not-a-real-provider" });
     expect(error).toMatch(/SCM_PROVIDER/i);

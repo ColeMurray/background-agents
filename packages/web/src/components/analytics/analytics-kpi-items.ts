@@ -106,7 +106,7 @@ export function getCostKpis(dashboard: AnalyticsDashboardResponse): AnalyticsKpi
     {
       label: "Billed to subscriptions",
       value: formatAnalyticsRatio(getSubscriptionShare(dashboard.breakdowns.provider.entries)),
-      detail: "Of sessions; they report $0",
+      detail: "Of sessions; costs are price equivalents",
     },
     {
       label: "Tokens",

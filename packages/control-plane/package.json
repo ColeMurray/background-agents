@@ -25,16 +25,16 @@
     "hono": "^4.13.13",
     "ws": "^8.22.0",
     "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.23.0",
     "@types/ws": "^8.18.1",
-    "@vitest/coverage-istanbul": "^4.1.11",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-istanbul": "^4.1.12",
+    "@vitest/coverage-v8": "^4.1.12",
     "esbuild": "^0.28.2",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "wrangler": "^4.149.0"
   }
 }

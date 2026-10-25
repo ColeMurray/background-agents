@@ -15,7 +15,7 @@ import {
   type MemoryContent,
   type MemoryDto,
   type MemoryPreferences,
-  type MemoryScope,
+  type MemoryListScope,
   type MemoryStatus,
 } from "@open-inspect/shared/types/memories";
 import { useAuthSession } from "@/lib/auth-session";
@@ -37,12 +37,15 @@ function apiRequest<T>(path: BrowserApiPath, schema: z.ZodType<T>, init?: Reques
 }
 
 function memoryListKey(
-  scope: MemoryScope,
+  scope: MemoryListScope,
   status: MemoryStatus,
   offset: number,
   search: string
 ): BrowserApiPath {
-  const query = memoryScopeToSearchParams(scope);
+  const query =
+    scope === "shared"
+      ? new URLSearchParams({ scope: "shared" })
+      : memoryScopeToSearchParams(scope);
   query.set("status", status);
   query.set("offset", String(offset));
   query.set("limit", String(MEMORY_LIST_PAGE_SIZE));
@@ -52,7 +55,7 @@ function memoryListKey(
 
 /** Cache each management page independently by scope, status, offset, and search text. */
 export function useMemories(
-  scope: MemoryScope,
+  scope: MemoryListScope,
   status: MemoryStatus,
   offset: number,
   search: string
@@ -65,6 +68,7 @@ export function useMemories(
   return {
     memories: data?.memories ?? [],
     nextOffset: data?.nextOffset ?? null,
+    truncated: data?.truncated ?? false,
     canCreate: data?.canCreate ?? false,
     loading: authStatus === "loading" || isLoading,
     error,

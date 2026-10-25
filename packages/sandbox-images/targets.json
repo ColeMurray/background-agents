@@ -26,5 +26,12 @@
     "node": "24",
     "user": "root",
     "home": "/root"
+  },
+  "boat": {
+    "os": "debian",
+    "base": "ubuntu:24.04",
+    "node": "24",
+    "user": "user",
+    "home": "/home/user"
   }
 }

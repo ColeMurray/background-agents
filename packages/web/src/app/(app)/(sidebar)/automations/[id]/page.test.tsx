@@ -18,11 +18,12 @@ const CURRENT_USER_ID = "11111111111111111111111111111111";
 const OTHER_USER_ID = "22222222222222222222222222222222";
 let permissions: string[] = [];
 let search = "";
+let canCreate = false;
 const push = vi.fn();
 /** How many invocations the automation has, and every limit the page asked for. */
 const history = vi.hoisted(() => ({ total: 0, requestedLimits: [] as number[] }));
-/** Set when a mutation has evicted the cached automation. */
-const detail = vi.hoisted(() => ({ evicted: false }));
+/** Set when a mutation has evicted the cached automation, or while it loads. */
+const detail = vi.hoisted(() => ({ evicted: false, loading: false }));
 
 const NO_CAPABILITIES = { canRead: false, canManage: false, canTrigger: false };
 
@@ -66,8 +67,8 @@ vi.mock("@/components/sidebar-layout", () => ({
 }));
 vi.mock("@/hooks/use-automations", () => ({
   useAutomation: () => ({
-    automation: detail.evicted ? undefined : automation,
-    loading: false,
+    automation: detail.evicted || detail.loading ? undefined : automation,
+    loading: detail.loading,
     mutate: vi.fn(),
   }),
   useAutomationInvocations: (_id: string, limit: number) => {
@@ -91,7 +92,11 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
       userId: CURRENT_USER_ID,
       permissions,
     },
+    hasPermission: (permission: string) => permissions.includes(permission),
   }),
+}));
+vi.mock("@/hooks/use-can-create-automation", () => ({
+  useCanCreateAutomation: () => ({ canCreate, loading: false }),
 }));
 vi.mock("@/components/automations/run-history", () => ({
   RunHistory: ({ hasMore, onLoadMore }: { hasMore: boolean; onLoadMore?: () => void }) =>
@@ -116,6 +121,7 @@ async function renderPage() {
 beforeEach(() => {
   permissions = [];
   search = "";
+  canCreate = false;
   push.mockReset();
   vi.mocked(browserApiFetch).mockReset();
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
@@ -123,8 +129,24 @@ beforeEach(() => {
   history.total = 0;
   history.requestedLimits = [];
   detail.evicted = false;
+  detail.loading = false;
 });
 afterEach(cleanup);
+
+describe("AutomationDetailPage loading", () => {
+  it("shows a skeleton instead of the page while the automation loads", async () => {
+    detail.loading = true;
+    await renderPage();
+
+    expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to automations" })).toHaveAttribute(
+      "href",
+      "/automations"
+    );
+    expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
+  });
+});
 
 describe("AutomationDetailPage run history", () => {
   it("stops offering more history at the largest page the endpoint serves", async () => {
@@ -181,6 +203,7 @@ describe("AutomationDetailPage authorization", () => {
     // The cache eviction re-renders the page before navigation completes.
     rerender(page());
     expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
   });
 
   it("reports a failed delete without leaving its scope", async () => {
@@ -213,5 +236,21 @@ describe("AutomationDetailPage authorization", () => {
     expect(screen.getByRole("button", { name: "Trigger Now" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("links to a duplicate only when the viewer can create automations", async () => {
+    await renderPage();
+    await screen.findByRole("heading", { name: "Nightly review" });
+    expect(screen.queryByRole("link", { name: /duplicate/i })).not.toBeInTheDocument();
+
+    cleanup();
+    canCreate = true;
+    search = "teamId=team-1";
+    await renderPage();
+    await screen.findByRole("heading", { name: "Nightly review" });
+    expect(screen.getByRole("link", { name: /duplicate/i })).toHaveAttribute(
+      "href",
+      "/automations/new?from=auto-1&teamId=team-1"
+    );
   });
 });

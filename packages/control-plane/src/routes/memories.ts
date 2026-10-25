@@ -5,6 +5,7 @@ import {
   MEMORY_ACTIONS,
   MEMORY_LIST_MAX_PAGE_SIZE,
   MEMORY_LIST_PAGE_SIZE,
+  MEMORY_SHARED_LIST_MAX_OFFSET,
   memoryActionBodySchemas,
   memoryPreferencesSchema,
   memoryPreviewSchema,
@@ -25,6 +26,7 @@ import { MemoryRecordStore } from "../db/memory-records";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { toMemoryDto, toSelectionSummary } from "../memory/dto";
 import { MEMORY_NOT_FOUND } from "../memory/errors";
+import { partitionId, type MemoryPartition } from "../memory/partition";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { MemoryActor, MemoryRecord } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
@@ -78,10 +80,10 @@ async function authorizedRecord(
     : { record, canManage: decision.canManage };
 }
 
-/** Authorize one catalog scope before returning a bounded management page. */
+/** Authorize catalog partitions before returning a bounded management page. */
 async function list(request: Request, env: Env, _params: object, ctx: UserRouteContext) {
   const query = new URL(request.url).searchParams;
-  const scope = memoryScopeFromSearchParams(query);
+  const scope = query.get("scope") === "shared" ? "shared" : memoryScopeFromSearchParams(query);
   const status = memoryStatusSchema.safeParse(query.get("status") ?? "active");
   if (!scope || !status.success) return error("Invalid memory scope or status", 400);
   const pagination = paginationSchema.safeParse({
@@ -90,26 +92,52 @@ async function list(request: Request, env: Env, _params: object, ctx: UserRouteC
   });
   if (!pagination.success) return error("Invalid memory pagination", 400);
   const { offset, limit } = pagination.data;
+  if (scope === "shared" && offset > MEMORY_SHARED_LIST_MAX_OFFSET)
+    return error("Shared memory page limit reached; select a scope or narrow your search", 400);
   const search = memoryListSearchSchema.safeParse(query.get("search") ?? "");
   if (!search.success) return error("Invalid memory search", 400);
-  const access = await createMemoryManagementPolicy(ctx, env).authorizeScope(scope, "read");
-  if (access.kind === "denied") return memoryDenialResponse(access.denial);
+  const terms = memorySearchTerms(search.data);
   const store = new MemoryRecordStore(ctx.db);
+  const policy = createMemoryManagementPolicy(ctx, env);
+  const partitions: MemoryPartition[] = [];
+  const canManage = new Map<string, boolean>();
+  let canCreate = false;
+  if (scope === "shared") {
+    const candidates = await store.sharedPartitions(status.data);
+    for (const access of await policy.authorizeSharedCatalog(candidates)) {
+      partitions.push(access.partition);
+      canManage.set(partitionId(access.partition), access.canManage);
+    }
+  } else {
+    const access = await policy.authorizeScope(scope, "read");
+    if (access.kind === "denied") return memoryDenialResponse(access.denial);
+    partitions.push(access.partition);
+    canManage.set(partitionId(access.partition), access.canManage);
+    canCreate = access.canManage;
+  }
   // One extra row tells us whether another page exists.
-  const records = await store.list(access.partition, {
+  const records = await store.listPartitions(partitions, {
     status: status.data,
     offset,
     limit: limit + 1,
-    terms: memorySearchTerms(search.data),
+    terms,
   });
   const page = records.slice(0, limit);
+  const hasMore = records.length > limit;
+  // The All view stops paging at a fixed depth; `truncated` says matches remain past it.
+  const atDepthLimit = scope === "shared" && offset + limit > MEMORY_SHARED_LIST_MAX_OFFSET;
   const supersededBy = await store.supersededByIds(page.map((record) => record.id));
   return json({
     memories: page.map((record) =>
-      toMemoryDto(record, access.canManage, supersededBy.get(record.id) ?? [])
+      toMemoryDto(
+        record,
+        canManage.get(partitionId(record.partition)) ?? false,
+        supersededBy.get(record.id) ?? []
+      )
     ),
-    nextOffset: records.length > limit ? offset + limit : null,
-    canCreate: access.canManage,
+    nextOffset: hasMore && !atDepthLimit ? offset + limit : null,
+    truncated: hasMore && atDepthLimit,
+    canCreate,
   });
 }
 

@@ -16,7 +16,7 @@ from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_en
 from .locks import update_locks
 
 DOCKER_PACKAGES = ("engine", "cli", "containerd", "buildx", "compose")
-PROVIDERS = ("modal", "daytona", "e2b", "vercel")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel", "boat")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -43,6 +43,7 @@ INFRA_MODULES = {
     "daytona": "daytona-infra",
     "e2b": "e2b-infra",
     "vercel": "vercel-sandbox-infra",
+    "boat": "boat-infra",
 }
 
 
@@ -79,6 +80,8 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         raise ValueError("OpenCode is below the image toolchain minimum")
     for name in ("agentBrowser", "pnpm", "bun", "zod", "python"):
         version(tools[name])
+    for pin in tools["npmOverrides"].values():
+        version(pin)
     if not re.fullmatch(r"[a-f0-9]{64}", tools.get("agentBrowserSha256", "")):
         raise ValueError("agent-browser native binary must have a SHA-256 pin")
     archives = [

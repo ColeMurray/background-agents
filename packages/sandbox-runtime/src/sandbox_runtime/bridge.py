@@ -47,6 +47,7 @@ from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, Bo
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
     REPO_MANIFEST_FILE_PATH,
+    runtime_state_dir,
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
@@ -176,11 +177,13 @@ class AgentBridge:
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
 
-        # Vendor session id persistence. The legacy file name is still read so
-        # snapshots taken before the rename keep their conversation history.
-        temp_dir = Path(tempfile.gettempdir())
-        self.session_id_file = temp_dir / "agent-session-id"
-        self.legacy_session_id_file = temp_dir / "opencode-session-id"
+        # Vendor session id persistence, in the runtime state directory so a
+        # resume that lands on a fresh machine still finds it. The legacy file
+        # name is still read so snapshots taken before the rename keep their
+        # conversation history.
+        state_dir = runtime_state_dir(tempfile.gettempdir())
+        self.session_id_file = state_dir / "agent-session-id"
+        self.legacy_session_id_file = state_dir / "opencode-session-id"
         self.repo_path = Path("/workspace")
         # Supervisor-written canonical repo manifest; push targeting resolves
         # member checkout paths through it rather than joining spec-supplied
