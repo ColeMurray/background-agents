@@ -138,8 +138,11 @@ const automationSchema = z.object({
   enabled: z.boolean(),
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
-  /** Relaunches allowed for a scheduled run whose launch fails before its prompt is sent. */
-  maxRetries: z.number(),
+  /**
+   * Relaunches allowed for a scheduled run whose launch fails before its prompt is sent.
+   * Defaulted so a web build that deploys before its control plane still parses responses.
+   */
+  maxRetries: z.number().default(0),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   ownerTeamId: z.string().nullable(),

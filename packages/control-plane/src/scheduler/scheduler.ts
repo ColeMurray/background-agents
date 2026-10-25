@@ -155,8 +155,8 @@ const ORPHAN_THRESHOLD_MS = 5 * 60 * 1000;
  */
 const LAUNCH_RETRY_BASE_DELAY_MS = 2 * 60 * 1000;
 
-/** Most retries relaunched per tick; half the child-launch budget, so due firings still start. */
-const MAX_RETRIES_PER_TICK = TICK_CHILD_LAUNCH_BUDGET / 2;
+/** Most relaunches per tick; half the child-launch budget, so due firings still start. */
+const MAX_RELAUNCHES_PER_TICK = Math.floor(TICK_CHILD_LAUNCH_BUDGET / 2);
 
 /** How long a run waits to relaunch after its `attempt`-th launch failed. */
 function launchRetryDelayMs(attempt: number): number {
@@ -1119,7 +1119,7 @@ export class Scheduler {
   private async retrySweep(store: AutomationStore, now: number): Promise<number> {
     let pending: AutomationRunRow[];
     try {
-      pending = await store.getRetriesToSettle(now, MAX_RETRIES_PER_TICK);
+      pending = await store.getRetriesToSettle(now, MAX_RELAUNCHES_PER_TICK);
     } catch (e) {
       this.log.error("Retry sweep failed to query waiting runs", {
         event: "scheduler.retry.query_error",
@@ -1128,13 +1128,16 @@ export class Scheduler {
       return 0;
     }
 
-    const claimed: AutomationRunRow[] = [];
-    for (const run of pending) {
+    // Claim each run as its launch begins, so one queued behind slower launches is not
+    // already aging toward the orphan sweep.
+    let relaunched = 0;
+    await forEachConcurrently(pending, AUTOMATION_LAUNCH_CONCURRENCY, async (run) => {
       try {
-        const retry = await store.claimRetry(run, now);
+        const retry = await store.claimRetry(run, Date.now());
         if (retry) {
-          claimed.push(retry);
-        } else if (await store.failWithdrawnRetry(run.id, now)) {
+          relaunched++;
+          await this.relaunch(store, retry);
+        } else if (await store.failWithdrawnRetry(run.id, Date.now())) {
           // Paused, deleted, or its retry limit lowered while it waited: its last failure stands.
           await this.applyInvocationAccounting(store, run.automation_id, run.invocation_id);
         }
@@ -1146,12 +1149,8 @@ export class Scheduler {
           error: e instanceof Error ? e.message : String(e),
         });
       }
-    }
-
-    await forEachConcurrently(claimed, AUTOMATION_LAUNCH_CONCURRENCY, (run) =>
-      this.relaunch(store, run)
-    );
-    return claimed.length;
+    });
+    return relaunched;
   }
 
   /** Launch a claimed retry, admitted afresh as its scheduled firing would be now. */
@@ -1184,10 +1183,10 @@ export class Scheduler {
   }
 
   /**
-   * Admit a retry with the checks its scheduled firing's admission made: the owner must still
-   * be authorized for the run's target, a team's grants must still cover it, and provider
-   * routing resolves afresh. A denial throws, recording the run as unauthorized; the next
-   * scheduled firing then pauses the automation if the denial persists.
+   * Admit a retry afresh for the run's own target: the owner must still be authorized to use
+   * it, a team's grants must still cover it, and provider routing resolves again. A denial
+   * throws, recording the run as unauthorized; the next scheduled firing then pauses the
+   * automation if the denial persists.
    */
   private async admitRetry(
     store: AutomationStore,

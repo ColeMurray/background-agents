@@ -126,6 +126,13 @@ type AutomationListResult = { automations: AutomationRow[] } & (
 export const EXECUTION_TIMEOUT_FAILURE_REASON = "execution_timeout";
 
 /**
+ * Statuses of a run that holds its automation, or its event's concurrency key. Inlined as
+ * literal SQL so active-run lookups can use idx_runs_active_lookup, whose partial predicate
+ * lists the same statuses.
+ */
+const ACTIVE_RUN_STATUSES_SQL = "('starting', 'running', 'retrying')";
+
+/**
  * The run's automation is live and allows another launch after the run's current attempt.
  * One predicate decides whether a failed launch waits, whether a waiting run may relaunch, and
  * whether it is withdrawn. Correlated on `automation_runs`: statements using it must not alias
@@ -406,7 +413,7 @@ END`;
 /** Derived completion time: latest child completion once all children are terminal. */
 const DERIVED_INVOCATION_COMPLETED_AT_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN NULL
-  WHEN SUM(CASE WHEN r.status IN ('starting', 'running', 'retrying') THEN 1 ELSE 0 END) > 0 THEN NULL
+  WHEN SUM(CASE WHEN r.status IN ${ACTIVE_RUN_STATUSES_SQL} THEN 1 ELSE 0 END) > 0 THEN NULL
   ELSE MAX(r.completed_at)
 END`;
 
@@ -1275,7 +1282,7 @@ export class AutomationStore {
     return this.db
       .prepare(
         `SELECT * FROM automation_runs
-         WHERE automation_id = ? AND status IN ('starting', 'running', 'retrying')
+         WHERE automation_id = ? AND status IN ${ACTIVE_RUN_STATUSES_SQL}
          ORDER BY created_at DESC LIMIT 1`
       )
       .bind(automationId)
@@ -1305,7 +1312,7 @@ export class AutomationStore {
    * block on ANY active run of the automation, including one waiting to retry
    * (main parity with getActiveRunForAutomation); event firings block per
    * concurrency key only — an automation-wide guard would serialize unrelated
-   * events. Event runs never retry, so that arm has no `retrying` case.
+   * events.
    */
   private overlapPredicate(
     automationId: string,
@@ -1317,13 +1324,13 @@ export class AutomationStore {
               JOIN automation_invocations ai ON ai.id = ar.invocation_id
               WHERE ar.automation_id = ?
                 AND ai.concurrency_key = ?
-                AND ar.status IN ('starting', 'running')`,
+                AND ar.status IN ${ACTIVE_RUN_STATUSES_SQL}`,
         params: [automationId, scope.concurrencyKey],
       };
     }
     return {
       sql: `SELECT 1 FROM automation_runs ar
-            WHERE ar.automation_id = ? AND ar.status IN ('starting', 'running', 'retrying')`,
+            WHERE ar.automation_id = ? AND ar.status IN ${ACTIVE_RUN_STATUSES_SQL}`,
       params: [automationId],
     };
   }
@@ -1708,7 +1715,7 @@ export class AutomationStore {
       .prepare(
         `SELECT
            COUNT(*) AS total,
-           COALESCE(SUM(CASE WHEN status IN ('starting', 'running', 'retrying') THEN 1 ELSE 0 END), 0) AS active,
+           COALESCE(SUM(CASE WHEN status IN ${ACTIVE_RUN_STATUSES_SQL} THEN 1 ELSE 0 END), 0) AS active,
            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
@@ -1824,7 +1831,7 @@ export class AutomationStore {
              WHERE r.invocation_id = i.id AND r.status = 'failed')
            AND NOT EXISTS (
              SELECT 1 FROM automation_runs r
-             WHERE r.invocation_id = i.id AND r.status IN ('starting', 'running', 'retrying'))
+             WHERE r.invocation_id = i.id AND r.status IN ${ACTIVE_RUN_STATUSES_SQL})
          ORDER BY i.created_at ASC
          LIMIT ?`
       )
@@ -1899,7 +1906,7 @@ export class AutomationStore {
          JOIN automation_invocations i ON i.id = r.invocation_id
          WHERE r.automation_id = ?
            AND i.concurrency_key = ?
-           AND r.status IN ('starting', 'running')
+           AND r.status IN ${ACTIVE_RUN_STATUSES_SQL}
          ORDER BY r.created_at DESC LIMIT 1`
       )
       .bind(automationId, concurrencyKey)

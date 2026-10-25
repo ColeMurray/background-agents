@@ -51,6 +51,16 @@ describe("listAutomationsResponseSchema", () => {
     expect(result.automations[0]).toMatchObject({ ownerTeamId: "team_a", capabilities });
   });
 
+  it("reads an automation from a control plane that predates launch retries as allowing none", () => {
+    const { maxRetries: _maxRetries, ...legacy } = automation;
+    const result = listAutomationsResponseSchema.parse({
+      automations: [legacy],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]!.maxRetries).toBe(0);
+  });
+
   it("accepts a valid cursor page", () => {
     expect(
       listAutomationsResponseSchema.parse({

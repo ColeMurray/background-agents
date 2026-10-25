@@ -94,7 +94,7 @@ A transient outage can stop a scheduled run from starting, for example when its 
 - The first retry waits 2 minutes, and the wait doubles for each later attempt. Meanwhile the row shows **Retrying** with the launch error and the time of the next attempt.
 - Each attempt opens a new session under the same run row, which shows the attempt number once the run has relaunched. Access is checked again before each attempt, as at the original firing.
 - A run that relaunches successfully counts as a success. A run that uses up its retries fails with its last error and counts as one failure toward [auto-pause](/automations#auto-pause-after-failures).
-- Pausing or deleting the automation, or lowering its retries, fails a waiting run within a minute.
+- Pausing or deleting the automation, or lowering its retries below the attempts a waiting run has made, fails that run within a minute.
 
 ## Multi-repository schedules
 
