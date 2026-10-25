@@ -52,6 +52,14 @@ updates:
     directories:
       - /packages/modal-infra
       - /packages/sandbox-images
+    # Scanning /packages/sandbox-images also finds locks/*.txt, and Dependabot
+    # edits those exports as plain requirements files without their uv.lock.
+    exclude-paths:
+      - "locks/**"
+    ignore:
+      # Newer Modal releases remove the endpoint introspection modal-infra
+      # tests use (Function.get_raw_f, .spec, .get_build_def). Bump it manually.
+      - dependency-name: modal
     schedule:
       interval: cron
       cronjob: "0 9 1,15 * *"
