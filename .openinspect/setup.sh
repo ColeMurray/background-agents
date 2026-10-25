@@ -116,7 +116,9 @@ fi
 # 6. Verify the setup
 # ---------------------------------------------------------------------------
 info "Running type check…"
-if npm run typecheck; then
+if [ "${OPENINSPECT_BOOT_MODE:-}" = "fresh" ]; then
+  info "Skipping type check on a fresh session boot."
+elif npm run typecheck; then
   info "Type check passed ✓"
 else
   warn "Type check had issues — you may need to build additional packages."

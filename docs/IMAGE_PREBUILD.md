@@ -420,8 +420,10 @@ are some tips:
 - **Install all dependencies** — `npm install`, `pip install -r requirements.txt`, `bundle install`,
   etc.
 - **Run build steps** — `npm run build`, `cargo build`, code generation, compiled assets
-- **Warm caches** — Running your test suite once during setup means cached files are available for
-  subsequent runs in the session
+- **Warm caches** — Run tools that persist reusable caches. For example, `tsc --noEmit` only writes
+  a reusable `.tsbuildinfo` cache when the project enables `incremental`. Since `setup.sh` also runs
+  on fresh session boots, guard heavy cache-warming steps with `OPENINSPECT_BOOT_MODE` so they run
+  during image builds (`build`) rather than delaying fresh boots (`fresh`).
 - **Pre-download large resources** — Models, datasets, or any large files the agent might need
 
 Don't worry about build duration. Builds run in the background and users always get the last
