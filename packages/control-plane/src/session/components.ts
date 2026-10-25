@@ -53,7 +53,11 @@ import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecyc
 // The composition root shares the internal access collaborator with shutdown and lifecycle only.
 // eslint-disable-next-line no-restricted-imports
 import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
-import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
+import {
+  MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS,
+  resolveBootBudgetTimeoutMs,
+  resolveUnattendedInactivityTimeoutMs,
+} from "../sandbox/lifecycle/decisions";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
@@ -1178,6 +1182,20 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
       }
     );
   }
+  const unattendedInactivity = resolveUnattendedInactivityTimeoutMs(
+    env.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS
+  );
+  if (unattendedInactivity.rejectedValue !== null) {
+    createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)).warn(
+      "Ignoring SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS; using the default unattended timeout",
+      {
+        event: "config.invalid",
+        rejected_value: unattendedInactivity.rejectedValue,
+        minimum_ms: MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS,
+        timeout_ms: unattendedInactivity.timeoutMs,
+      }
+    );
+  }
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
@@ -1189,7 +1207,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     getSessionId,
     inactivity: {
       ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
-      timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
+      timeoutMs: parseInt(
+        env.SANDBOX_INACTIVITY_TIMEOUT_MS || String(DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs),
+        10
+      ),
+      unattendedTimeoutMs: unattendedInactivity.timeoutMs,
     },
     bootBudget: { timeoutMs: bootBudget.timeoutMs },
     mcpServerLookup,

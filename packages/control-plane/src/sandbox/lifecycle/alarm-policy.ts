@@ -42,7 +42,8 @@ export function evaluateAlarmPolicy(
   sandbox: AlarmSandbox,
   config: AlarmPolicyConfig,
   now: number,
-  connectedClientCount: number
+  connectedClientCount: number,
+  unattended: boolean
 ): AlarmFinding {
   if (isDeadSandboxStatus(sandbox.status)) return { outcome: "terminal" };
 
@@ -73,7 +74,12 @@ export function evaluateAlarmPolicy(
   }
 
   const inactivity = evaluateInactivityTimeout(
-    { lastActivity: sandbox.last_activity, status: sandbox.status, connectedClientCount },
+    {
+      lastActivity: sandbox.last_activity,
+      status: sandbox.status,
+      connectedClientCount,
+      unattended,
+    },
     config.inactivity,
     now
   );

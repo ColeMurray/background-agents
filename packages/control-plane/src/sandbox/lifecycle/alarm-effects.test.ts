@@ -583,7 +583,7 @@ describe("cross-path alarm effects", () => {
       await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
       expect(sandbox).toEqual(original);
-      expect(h.storage.calls).toEqual(["getSandbox"]);
+      expect(h.storage.calls).toEqual(sandbox ? ["getSandbox", "getSession"] : ["getSandbox"]);
       expect(h.broadcaster.messages).toEqual([]);
       expect(h.alarmScheduler.schedule).not.toHaveBeenCalled();
       expect(h.alarmScheduler.cancel).not.toHaveBeenCalled();

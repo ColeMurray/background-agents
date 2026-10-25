@@ -13,6 +13,7 @@ import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
 import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
 import { componentsOf, runInSessionDO } from "./session-do-access";
+import { initNamedSession, waitForSandboxStatus } from "./helpers";
 
 /**
  * The composition root is fail-fast: both provider factories construct at
@@ -103,6 +104,65 @@ describe("createSessionRuntime", () => {
     const error = await buildWithEnv({ SANDBOX_PROVIDER: "not-a-real-sandbox-provider" });
     expect(error).toMatch(/SANDBOX_PROVIDER/);
   });
+
+  it.each([
+    { raw: undefined, regular: "600000", expectedMs: 120_000, rejected: false },
+    { raw: "60000", regular: "600000", expectedMs: 60_000, rejected: false },
+    { raw: "59999", regular: "600000", expectedMs: 120_000, rejected: true },
+    { raw: "not-a-number", regular: "600000", expectedMs: 120_000, rejected: true },
+    { raw: "900000", regular: "600000", expectedMs: 600_000, rejected: false },
+  ])(
+    "wires unattended timeout $raw into scheduling",
+    async ({ raw, regular, expectedMs, rejected }) => {
+      const { stub } = await initNamedSession(`components-inactivity-${crypto.randomUUID()}`, {
+        spawnSource: "automation",
+      });
+      await waitForSandboxStatus(stub, "failed");
+      await runInSessionDO(stub, async (instance, state) => {
+        // Isolate this arm from the earlier test spawn's persisted watchdog deadline.
+        state.storage.sql.exec("DELETE FROM session_alarm_state");
+        const platform = createDurableObjectSessionPlatform(state, env.DB);
+        const setAlarm = vi.fn(async () => {});
+        platform.alarmStore = {
+          getAlarm: async () => null,
+          setAlarm,
+          deleteAlarm: async () => {},
+        };
+        const output = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const now = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+        try {
+          const runtime = createSessionRuntime(
+            platform,
+            createCloudflareEnv({
+              ...(instance as unknown as { env: WorkerBindings }).env,
+              SANDBOX_INACTIVITY_TIMEOUT_MS: regular,
+              SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS: raw,
+            } as WorkerBindings)
+          );
+          await runtime.internals.lifecycleManager.scheduleInactivityCheck();
+          expect(setAlarm).toHaveBeenCalledExactlyOnceWith(now + expectedMs);
+          const rejections = output.mock.calls
+            .map(([line]) => JSON.parse(String(line)))
+            .filter((entry) => entry.event === "config.invalid");
+          expect(rejections).toEqual(
+            rejected
+              ? [
+                  expect.objectContaining({
+                    rejected_value: raw,
+                    minimum_ms: 60_000,
+                    timeout_ms: 120_000,
+                  }),
+                ]
+              : []
+          );
+        } finally {
+          output.mockRestore();
+          clock.mockRestore();
+        }
+      });
+    }
+  );
 
   it("fails at graph build when the selected sandbox provider's credentials are missing", async () => {
     const error = await buildWithEnv({

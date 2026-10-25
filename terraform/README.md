@@ -233,6 +233,7 @@ MODAL_API_SECRET
 # Sandbox provider
 SANDBOX_PROVIDER
 SANDBOX_INACTIVITY_TIMEOUT_MS # Optional; defaults to 600000
+SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS # Optional; defaults to 120000, minimum 60000
 SANDBOX_BOOT_TIMEOUT_MS       # Optional; defaults to 1800000, must exceed 240000
 
 # Daytona (only if SANDBOX_PROVIDER=daytona)
@@ -313,6 +314,28 @@ ENABLE_SERVICE_BINDINGS # Optional; defaults to true
 APP_NAME # Optional; defaults to Open-Inspect
 APP_ICON_URL
 ```
+
+### Sandbox Inactivity
+
+Set `sandbox_inactivity_timeout_ms` and `sandbox_unattended_inactivity_timeout_ms` in
+`terraform.tfvars`, or use the corresponding uppercase Actions settings above for CI deployments.
+Both plan and apply prefer a non-empty Actions variable, then the same-named secret, then the
+default. Terraform passes them to the control-plane Worker as `SANDBOX_INACTIVITY_TIMEOUT_MS` and
+`SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS`.
+
+Without a connected session-page WebSocket, `automation`, `github-bot`, and `agent` sessions
+(including nested agent children) use
+`min(sandbox_unattended_inactivity_timeout_ms, sandbox_inactivity_timeout_ms)`, defaulting to 2
+minutes. User, Slack, and Linear sessions (`user`, `slack-bot`, and `linear-bot`) keep the regular
+10-minute default (`600000` ms). The unattended setting defaults to `120000` ms and must be at least
+`60000` ms; Terraform and the control plane reject lower values. Set it at or above the regular
+timeout to disable the shorter timeout.
+
+A connected session-page WebSocket keeps the existing timer extensions and warnings for every
+source. Direct terminal, VS Code, or VNC connections alone do not extend the timer. Runtime
+heartbeats renew activity while a prompt is processing, including quiet tool calls. After an
+inactivity stop, a follow-up prompt resumes the existing session and restores or resumes its
+sandbox; it does not create a new session.
 
 ## Module Reference
 

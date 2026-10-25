@@ -9,7 +9,7 @@
  * then executes the appropriate side effects (API calls, broadcasts, etc.)
  */
 
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
@@ -441,14 +441,18 @@ export interface InactivityState {
   status: SandboxStatus;
   /** Number of connected client WebSockets */
   connectedClientCount: number;
+  /** Whether the session was started by an unattended source */
+  unattended: boolean;
 }
 
 /**
  * Inactivity timeout configuration.
  */
 export interface InactivityConfig {
-  /** Time in ms before sandbox stops due to inactivity (default: 10 minutes) */
+  /** Time in ms before sandbox stops due to inactivity */
   timeoutMs: number;
+  /** Shorter timeout for unattended sessions, capped by timeoutMs */
+  unattendedTimeoutMs: number;
   /** Additional time granted when clients are connected (default: 5 minutes) */
   extensionMs: number;
   /** Minimum interval between alarm checks (default: 30s) */
@@ -460,9 +464,38 @@ export interface InactivityConfig {
  */
 export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
   timeoutMs: 10 * 60 * 1000, // 10 minutes
+  unattendedTimeoutMs: 2 * 60 * 1000,
   extensionMs: 5 * 60 * 1000, // 5 minutes
   minCheckIntervalMs: 30000, // 30 seconds
 };
+
+// Processing heartbeats renew activity every 30s; leave room between renewals.
+export const MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS = 60_000;
+
+const UNATTENDED_SOURCES: ReadonlySet<SpawnSource> = new Set(["automation", "github-bot", "agent"]);
+
+export function isUnattendedSessionSource(source: SpawnSource | undefined): boolean {
+  return source !== undefined && UNATTENDED_SOURCES.has(source);
+}
+
+export function getInactivityTimeoutMs(config: InactivityConfig, unattended: boolean): number {
+  return unattended ? Math.min(config.unattendedTimeoutMs, config.timeoutMs) : config.timeoutMs;
+}
+
+/** Reject unsafe or malformed deployment values rather than risking a mid-turn stop. */
+export function resolveUnattendedInactivityTimeoutMs(raw: string | undefined): {
+  timeoutMs: number;
+  rejectedValue: string | null;
+} {
+  if (raw === undefined || raw === "") {
+    return { timeoutMs: DEFAULT_INACTIVITY_CONFIG.unattendedTimeoutMs, rejectedValue: null };
+  }
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (Number.isSafeInteger(parsed) && parsed >= MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS) {
+    return { timeoutMs: parsed, rejectedValue: null };
+  }
+  return { timeoutMs: DEFAULT_INACTIVITY_CONFIG.unattendedTimeoutMs, rejectedValue: raw };
+}
 
 /**
  * Possible inactivity actions.
@@ -488,7 +521,7 @@ export type InactivityAction =
  * @example
  * ```typescript
  * const decision = evaluateInactivityTimeout(
- *   { lastActivity: now - 600001, status: "ready", connectedClientCount: 1 },
+ *   { lastActivity: now - 600001, status: "ready", connectedClientCount: 1, unattended: false },
  *   DEFAULT_INACTIVITY_CONFIG,
  *   now
  * );
@@ -519,9 +552,10 @@ export function evaluateInactivityTimeout(
   }
 
   const inactiveTime = now - state.lastActivity;
+  const timeoutMs = getInactivityTimeoutMs(config, state.unattended);
 
   // Check if inactivity threshold exceeded
-  if (inactiveTime >= config.timeoutMs) {
+  if (inactiveTime >= timeoutMs) {
     // If clients are still connected, they may be actively reviewing
     // Grant an extension and warn them
     if (state.connectedClientCount > 0) {
@@ -536,7 +570,7 @@ export function evaluateInactivityTimeout(
   }
 
   // Not yet timed out - schedule next check at remaining time (minimum interval)
-  const remainingTime = Math.max(config.timeoutMs - inactiveTime, config.minCheckIntervalMs);
+  const remainingTime = Math.max(timeoutMs - inactiveTime, config.minCheckIntervalMs);
   return { action: "schedule", nextCheckMs: remainingTime };
 }
 

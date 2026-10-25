@@ -758,9 +758,20 @@ variable "sandbox_provider" {
 }
 
 variable "sandbox_inactivity_timeout_ms" {
-  description = "Milliseconds of sandbox inactivity before OpenInspect snapshots and stops the sandbox when no clients are connected."
+  description = "Regular sandbox inactivity timeout in milliseconds before OpenInspect preserves and stops the sandbox when no session-page WebSocket clients are connected."
   type        = number
   default     = 600000
+}
+
+variable "sandbox_unattended_inactivity_timeout_ms" {
+  description = "Sandbox inactivity timeout in milliseconds for automation, github-bot, and agent sessions without session-page WebSocket clients. The effective timeout is the minimum of this and sandbox_inactivity_timeout_ms."
+  type        = number
+  default     = 120000
+
+  validation {
+    condition     = var.sandbox_unattended_inactivity_timeout_ms >= 60000
+    error_message = "sandbox_unattended_inactivity_timeout_ms must be at least 60000 ms; the control plane rejects lower values."
+  }
 }
 
 variable "teams_enforcement" {

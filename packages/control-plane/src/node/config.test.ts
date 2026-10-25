@@ -15,10 +15,16 @@ describe("readEnvConfig", () => {
       ...REQUIRED,
       LOG_LEVEL: "debug",
       SANDBOX_PROVIDER: "e2b",
+      SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS: "60000",
       PATH: "/usr/bin",
       DATA_DIR: "/var/lib/oi",
     });
-    expect(config).toEqual({ ...REQUIRED, LOG_LEVEL: "debug", SANDBOX_PROVIDER: "e2b" });
+    expect(config).toEqual({
+      ...REQUIRED,
+      LOG_LEVEL: "debug",
+      SANDBOX_PROVIDER: "e2b",
+      SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS: "60000",
+    });
   });
 
   it("treats an empty variable as unset", () => {

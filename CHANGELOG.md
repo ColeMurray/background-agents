@@ -2,6 +2,15 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 25, 2026
+
+**Shorter idle time for unattended sandboxes.** Automation runs, GitHub bot runs, and agent-created
+child sessions now default to stopping their sandboxes after 2 minutes of inactivity. User, Slack,
+and Linear sessions keep the 10-minute default. Operators can configure the shorter timeout with
+`SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS`. A connected session page keeps the existing timer
+extensions; direct terminal, VS Code, or VNC connections alone do not. Running turns stay active
+through runtime heartbeats, and follow-up prompts resume the existing stopped session.
+
 ## October 24, 2026
 
 **Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;

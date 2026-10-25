@@ -38,9 +38,11 @@ import {
   evaluateCircuitBreaker,
   evaluateSpawnDecision,
   evaluateWarmDecision,
+  getInactivityTimeoutMs,
   heartbeatStaleAt,
   isDeadSandboxStatus,
   isSnapshotRuntimeCompatible,
+  isUnattendedSessionSource,
   shouldStopSandboxOnSessionCancel,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
@@ -1676,7 +1678,15 @@ export class SandboxLifecycleManager
       last_heartbeat: sandbox.last_heartbeat,
     });
 
-    const finding = evaluateAlarmPolicy(sandbox, this.config, now, context.connectedClients);
+    const spawnSource = this.sessionContext.getSession()?.spawn_source;
+    const unattended = isUnattendedSessionSource(spawnSource);
+    const finding = evaluateAlarmPolicy(
+      sandbox,
+      this.config,
+      now,
+      context.connectedClients,
+      unattended
+    );
     switch (finding.outcome) {
       case "terminal":
         this.log.debug("Alarm: sandbox in terminal state, skipping", {
@@ -1709,7 +1719,13 @@ export class SandboxLifecycleManager
         return this.failBootBudget(finding.elapsedMs, context);
 
       case "inactivity_timeout":
-        return stopForInactivity(this.watchdogEffects, this.config.inactivity.timeoutMs, context);
+        this.log.info("Inactivity timeout", {
+          event: "sandbox.inactivity_timeout",
+          spawn_source: spawnSource ?? null,
+          timeout_ms: getInactivityTimeoutMs(this.config.inactivity, unattended),
+          idle_ms: now - sandbox.last_activity!,
+        });
+        return stopForInactivity(this.watchdogEffects, context);
 
       case "inactivity_warning":
         this.log.info("Inactivity extended", {
@@ -2084,8 +2100,12 @@ export class SandboxLifecycleManager
    * Schedule an inactivity check alarm.
    */
   async scheduleInactivityCheck(): Promise<void> {
-    const alarmTime = Date.now() + this.config.inactivity.timeoutMs;
-    this.log.debug("Scheduling inactivity check", { timeout_ms: this.config.inactivity.timeoutMs });
+    const timeoutMs = getInactivityTimeoutMs(
+      this.config.inactivity,
+      isUnattendedSessionSource(this.sessionContext.getSession()?.spawn_source)
+    );
+    const alarmTime = Date.now() + timeoutMs;
+    this.log.debug("Scheduling inactivity check", { timeout_ms: timeoutMs });
     await this.alarmScheduler.schedule(alarmTime);
   }
 
@@ -2161,7 +2181,8 @@ export class SandboxLifecycleManager
       sandbox,
       this.config,
       Date.now(),
-      this.getConnectedClientCount()
+      this.getConnectedClientCount(),
+      isUnattendedSessionSource(this.sessionContext.getSession()?.spawn_source)
     );
     if (finding.outcome !== "healthy" && finding.outcome !== "inactivity_warning") return;
     try {

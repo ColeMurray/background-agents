@@ -248,17 +248,11 @@ export async function stopForInactivity(
     | "stopProviderSandboxSafely"
     | "getLogger"
   >,
-  timeoutMs: number,
   ctx: WatchdogContext
 ): Promise<SandboxAlarmResult> {
   const ownership = await deps.shutdown.requestShutdown("inactivity_timeout");
   if (ownership !== "unmanaged") return "no_action";
 
-  deps.getLogger().info("Inactivity timeout", {
-    event: "sandbox.timeout",
-    last_activity: ctx.sandbox.last_activity,
-    timeout_ms: timeoutMs,
-  });
   // Block reconnect before retiring access or yielding to capture/stop.
   deps.storage.updateSandboxStatus("stopped");
   deps.access.clearAccess();

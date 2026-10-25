@@ -96,7 +96,8 @@ export interface EnvConfig {
   BOAT_SANDBOX_TYPE?: string; // Machine size when a session requests no resources: small, default (default), large, xlarge
 
   // Sandbox lifecycle configuration
-  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms (default: 600000 = 10 min)
+  SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms; defaults to DEFAULT_INACTIVITY_CONFIG.timeoutMs
+  SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS?: string; // Unattended inactivity timeout in ms; defaults to DEFAULT_INACTIVITY_CONFIG.unattendedTimeoutMs
   SANDBOX_BOOT_TIMEOUT_MS?: string; // Longest a connected sandbox may boot before it is failed, in ms; defaults to DEFAULT_BOOT_BUDGET_CONFIG
   EXECUTION_TIMEOUT_MS?: string; // Max processing time for one message before auto-fail, for sessions and for the automation runs watching them; overridden per session by sandboxTimeoutMs, and falls back to DEFAULT_SANDBOX_TIMEOUT_SECONDS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
