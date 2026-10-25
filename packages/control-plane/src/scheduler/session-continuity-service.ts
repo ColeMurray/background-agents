@@ -1,8 +1,10 @@
-import type { AutomationRow } from "../db/automation-store";
+import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
 import {
   continueSession,
   findHistoricalPromptReceipt,
   steeringActor,
+  releaseHeldPrompts,
+  sweepHeldPrompts,
   type ContinuationPolicy,
   type ContinuationOutcome,
   type SteeringActor,
@@ -28,6 +30,14 @@ export class SessionContinuityService {
     requestId: string
   ): Promise<ContinuationOutcome> {
     return findHistoricalPromptReceipt(this.deps, automation, concurrencyKey, requestId);
+  }
+
+  releaseHeldPrompts(run: AutomationRunRow): Promise<boolean> {
+    return releaseHeldPrompts(this.deps, run);
+  }
+
+  sweepHeldPrompts(nowMs: number): Promise<void> {
+    return sweepHeldPrompts(this.deps, nowMs);
   }
 
   resolveActor(

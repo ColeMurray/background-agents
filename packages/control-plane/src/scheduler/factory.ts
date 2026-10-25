@@ -43,7 +43,6 @@ import {
 } from "./launch-admission";
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
-import { releaseHeldPrompts, sweepHeldPrompts } from "./session-continuity";
 import { AutomationEventHandler } from "./event-handler";
 import { SlackEventHandler } from "./slack-event-handler";
 import { WebhookEventHandler } from "./webhook-event-handler";
@@ -76,7 +75,7 @@ export function createScheduler(
     sign: computeHmacHex,
     retryDelivery,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    nowMs: () => Date.now(),
+    clock: Date,
     log,
   });
   const createRequestContext: AutomationSessionServiceDeps["createRequestContext"] = (
@@ -107,16 +106,15 @@ export function createScheduler(
     },
     executionDeadlineMs: resolveDeadlineMs,
   });
-  const continuity = { store, env, log, db, backgroundJobs };
-  const sessionContinuity = new SessionContinuityService(continuity);
+  const continuity = new SessionContinuityService({ store, env, log, db, backgroundJobs });
   const launcher = new AutomationRunLaunchService({
     store,
     sessions,
     enqueueFirstPrompt: (input) => enqueueAutomationFirstPrompt(env, input),
-    releaseHeldPrompts: (run) => releaseHeldPrompts(continuity, run),
+    continuity,
     executionDeadlineMs: resolveDeadlineMs,
-    nowMs: () => Date.now(),
-    newId: schedulerCrypto.generateId,
+    clock: Date,
+    crypto: schedulerCrypto,
     log,
   });
   const admissionDeps: LaunchAdmissionDeps = {
@@ -143,22 +141,22 @@ export function createScheduler(
     attribution,
     isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
     resolveRepositories: (repositories) => resolveAutomationRepositories(env, repositories),
-    nowMs: () => Date.now(),
-    newId: schedulerCrypto.generateId,
+    clock: Date,
+    crypto: schedulerCrypto,
     log,
   });
   const recovery = new AutomationRecoveryService({
     store,
     failures,
     executionDeadlineMs: resolveDeadlineMs,
-    nowMs: () => Date.now(),
+    clock: Date,
     log,
   });
   const slackEvents = new SlackEventHandler({
     channels: new SlackChannelStore(db),
     slack,
     invocations,
-    continuity: sessionContinuity,
+    continuity,
     users,
     attribution,
     scmProvider,
@@ -168,7 +166,7 @@ export function createScheduler(
   const webhookEvents = new WebhookEventHandler({
     store,
     invocations,
-    continuity: sessionContinuity,
+    continuity,
     crypto: schedulerCrypto,
     clock: Date,
     log,
@@ -184,9 +182,9 @@ export function createScheduler(
   return new Scheduler({
     store,
     events,
-    sweepHeldPrompts: (now) => sweepHeldPrompts(continuity, now),
-    nowMs: () => Date.now(),
-    newId: schedulerCrypto.generateId,
+    continuity,
+    clock: Date,
+    crypto: schedulerCrypto,
     slack,
     log,
     invocations,

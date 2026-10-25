@@ -69,7 +69,7 @@ function createSlackCompletionHarness(overrides: Partial<AutomationSlackServiceD
     sign: computeHmacHex,
     retryDelivery,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    nowMs: () => Date.now(),
+    clock: Date,
     log,
     ...overrides,
   });

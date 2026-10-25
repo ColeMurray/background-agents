@@ -126,12 +126,14 @@ function launcherHarness() {
     enqueueFirstPrompt: vi
       .fn<AutomationRunLaunchServiceDeps["enqueueFirstPrompt"]>()
       .mockResolvedValue(undefined),
-    releaseHeldPrompts: vi
-      .fn<AutomationRunLaunchServiceDeps["releaseHeldPrompts"]>()
-      .mockResolvedValue(true),
+    continuity: {
+      releaseHeldPrompts: vi
+        .fn<AutomationRunLaunchServiceDeps["continuity"]["releaseHeldPrompts"]>()
+        .mockResolvedValue(true),
+    },
     executionDeadlineMs: vi.fn(() => 10_000),
-    nowMs: () => 1_000,
-    newId: () => "session-1",
+    clock: { now: () => 1_000 },
+    crypto: { generateId: () => "session-1" },
     log: createLogger("launch-service-test", {}, "error"),
   } satisfies AutomationRunLaunchServiceDeps;
   return { deps, service: new AutomationRunLaunchService(deps), child: run(), input: launch() };
@@ -154,7 +156,7 @@ describe("AutomationRunLaunchService", () => {
       deps.sessions.create,
       deps.enqueueFirstPrompt,
       deps.store.markRunFirstPromptQueued,
-      deps.releaseHeldPrompts,
+      deps.continuity.releaseHeldPrompts,
     ];
     const order = calls.map((fn) => fn.mock.invocationCallOrder[0]);
     expect(order).toEqual([...order].sort((a, b) => a - b));
@@ -194,7 +196,7 @@ describe("AutomationRunLaunchService", () => {
       failure_reason: "connection lost after enqueue",
       completed_at: 1_000,
     });
-    expect(deps.releaseHeldPrompts).not.toHaveBeenCalled();
+    expect(deps.continuity.releaseHeldPrompts).not.toHaveBeenCalled();
   });
 
   it.each(["mark", "release"])(
@@ -203,12 +205,12 @@ describe("AutomationRunLaunchService", () => {
       const { deps, service, child, input } = launcherHarness();
       if (failure === "mark")
         deps.store.markRunFirstPromptQueued.mockRejectedValue(new Error("D1 unavailable"));
-      else deps.releaseHeldPrompts.mockRejectedValue(new Error("session unavailable"));
+      else deps.continuity.releaseHeldPrompts.mockRejectedValue(new Error("session unavailable"));
       await service.launch(automation, child, input);
       expect(child.status).toBe("running");
       expect(deps.store.updateRun).not.toHaveBeenCalled();
       expect(deps.store.failLaunchOrRetry).not.toHaveBeenCalled();
-      if (failure === "mark") expect(deps.releaseHeldPrompts).not.toHaveBeenCalled();
+      if (failure === "mark") expect(deps.continuity.releaseHeldPrompts).not.toHaveBeenCalled();
     }
   );
 

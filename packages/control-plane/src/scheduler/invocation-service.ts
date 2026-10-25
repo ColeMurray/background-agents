@@ -1,3 +1,4 @@
+import type * as Crypto from "../auth/crypto";
 import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
 import {
   isDuplicateKeyError,
@@ -104,8 +105,8 @@ export interface AutomationInvocationServiceDeps {
   attribution: Pick<AutomationAttributionService, "resolve">;
   launcher: Pick<AutomationRunLaunchService, "launch" | "recordFailure">;
   failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
-  nowMs(): number;
-  newId(): string;
+  clock: Pick<DateConstructor, "now">;
+  crypto: Pick<typeof Crypto, "generateId">;
   log: Logger;
 }
 
@@ -126,7 +127,7 @@ export class AutomationInvocationService {
     const automation = await store.resolveCanonicalOwner(params.automation);
     const executionPrincipal = params.executionPrincipal ?? ownerExecutionPrincipal(automation);
     if (!executionPrincipal) return { outcome: "unauthorized" };
-    const now = this.deps.nowMs();
+    const now = this.deps.clock.now();
     const concurrencyKey = params.concurrencyKey ?? null;
     const triggerKey = params.triggerKey ?? null;
 
@@ -187,11 +188,11 @@ export class AutomationInvocationService {
       }
     }
 
-    const invocationId = params.invocationId ?? this.deps.newId();
+    const invocationId = params.invocationId ?? this.deps.crypto.generateId();
     const scheduledAt = params.scheduledAt ?? now;
 
     const childBase = () => ({
-      id: this.deps.newId(),
+      id: this.deps.crypto.generateId(),
       automation_id: automation.id,
       invocation_id: invocationId,
       session_id: null,
@@ -333,7 +334,7 @@ export class AutomationInvocationService {
           triggerKey,
           params.webhookFollowUpClaimId,
           invocationId,
-          this.deps.nowMs()
+          this.deps.clock.now()
         );
       } catch (error) {
         // The invocation's unique trigger key is already the durable owner; receipt repair
@@ -434,8 +435,8 @@ export class AutomationInvocationService {
       if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
     }
 
-    const now = this.deps.nowMs();
-    const invocationId = this.deps.newId();
+    const now = this.deps.clock.now();
+    const invocationId = this.deps.crypto.generateId();
     const { inserted } = await store.insertSkippedInvocation(
       {
         id: invocationId,
@@ -485,7 +486,7 @@ export class AutomationInvocationService {
       try {
         if (await this.relaunch(run)) {
           relaunched++;
-        } else if (await store.failWithdrawnRetry(run.id, this.deps.nowMs())) {
+        } else if (await store.failWithdrawnRetry(run.id, this.deps.clock.now())) {
           // Paused, deleted, or its retry limit lowered while it waited: its last failure stands.
           await this.deps.failures.applyInvocationOutcome(run.automation_id, run.invocation_id);
         }
@@ -517,7 +518,7 @@ export class AutomationInvocationService {
     }
     // Refused when another tick took it, its automation withdrew it, or its team's grants
     // changed after the check; in that last case the next tick admits it again.
-    const claimed = await store.claimRetry(run, this.deps.nowMs(), admitted?.teamGrantsVersion);
+    const claimed = await store.claimRetry(run, this.deps.clock.now(), admitted?.teamGrantsVersion);
     if (!claimed) return false;
 
     this.deps.log.info("Relaunching automation run", {

@@ -11,6 +11,8 @@
 
 import type { AutomationEvent } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
+import type { SessionContinuityService } from "./session-continuity-service";
+import type * as Crypto from "../auth/crypto";
 import { allRunsUnauthorized, toAutomationRun, type AutomationStore } from "../db/automation-store";
 import type { Logger } from "../logger";
 import type { GitHubEnrichment } from "../session/identity";
@@ -47,9 +49,9 @@ export interface SchedulerDeps {
   failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
   recovery: Pick<AutomationRecoveryService, "recoverRuns">;
   events: Pick<AutomationEventHandler, "handle">;
-  sweepHeldPrompts(nowMs: number): Promise<void>;
-  nowMs(): number;
-  newId(): string;
+  continuity: Pick<SessionContinuityService, "sweepHeldPrompts">;
+  clock: Pick<DateConstructor, "now">;
+  crypto: Pick<typeof Crypto, "generateId">;
   log: Logger;
 }
 
@@ -64,7 +66,7 @@ export class Scheduler {
 
   async tick(): Promise<SchedulerTickResult> {
     const store = this.deps.store;
-    const now = this.deps.nowMs();
+    const now = this.deps.clock.now();
     let processed = 0;
     let skipped = 0;
     let failed = 0;
@@ -72,7 +74,7 @@ export class Scheduler {
 
     // 1. Recovery sweeps, then retries whose wait is over
     await this.deps.recovery.recoverRuns();
-    await this.deps.sweepHeldPrompts(now);
+    await this.deps.continuity.sweepHeldPrompts(now);
     launchedChildren += await this.deps.invocations.retryDue(now);
 
     // 2. Process overdue automations, bounded by the per-tick child budget.
@@ -136,10 +138,10 @@ export class Scheduler {
             skipped++;
             break;
           case "unauthorized": {
-            const deniedAt = this.deps.nowMs();
+            const deniedAt = this.deps.clock.now();
             await store.recordAuthorizationDenied(
               {
-                id: this.deps.newId(),
+                id: this.deps.crypto.generateId(),
                 automation_id: automation.id,
                 source: "schedule",
                 scheduled_at: automation.next_run_at,
@@ -275,7 +277,7 @@ export class Scheduler {
     // guard suppresses the write (recovery sweep or a concurrent callback got
     // there first) the callback is acknowledged as ignored — a terminal child
     // must never transition again.
-    const now = this.deps.nowMs();
+    const now = this.deps.clock.now();
     const transitioned = await store.updateRun(
       body.runId,
       body.success

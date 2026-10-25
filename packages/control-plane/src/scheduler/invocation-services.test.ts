@@ -169,8 +169,8 @@ function invocationHarness() {
         }),
     },
     failures: { applyInvocationOutcome: vi.fn().mockResolvedValue(undefined) },
-    nowMs: () => 1_000,
-    newId: () => `id-${++id}`,
+    clock: { now: () => 1_000 },
+    crypto: { generateId: () => `id-${++id}` },
     log,
   } satisfies AutomationInvocationServiceDeps;
   return { deps, service: new AutomationInvocationService(deps) };
@@ -280,7 +280,7 @@ function recoveryHarness() {
     },
     failures: { applyInvocationOutcome: vi.fn().mockResolvedValue(undefined) },
     executionDeadlineMs: () => 10_000,
-    nowMs: () => 1_000,
+    clock: { now: () => 1_000 },
     log,
   } satisfies AutomationRecoveryServiceDeps;
   return { deps, service: new AutomationRecoveryService(deps) };
