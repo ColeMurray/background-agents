@@ -35,13 +35,8 @@ import {
   AutomationSessionService,
   type AutomationSessionServiceDeps,
 } from "./automation-session-service";
-import {
-  resolveAutomationProviderAuth,
-  resolveProviderAuthSnapshot,
-  resolveTeamTargets,
-  type LaunchAdmissionDeps,
-  type LaunchAdmissionOperations,
-} from "./launch-admission";
+import { resolveAutomationProviderAuth } from "./launch-admission";
+import { AutomationLaunchAdmissionService } from "./launch-admission-service";
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
 import { AutomationEventHandler } from "./event-handler";
@@ -129,19 +124,14 @@ export function createScheduler(
     crypto: schedulerCrypto,
     log,
   });
-  const admissionDeps: LaunchAdmissionDeps = {
+  const admission = new AutomationLaunchAdmissionService({
     resolveTarget: (automation, run) =>
       resolveAutomationSessionTarget(env, run, createRequestContext(automation, run), log),
     grants: new TeamRepositoryGrantStore(db),
     resolveProviderAuth: (automationId, harness) =>
       resolveAutomationProviderAuth(db, automationId, harness),
     validateHarness: (input, modes) => validateHarnessExecution(db, input, modes),
-  };
-  const admission: LaunchAdmissionOperations = {
-    resolveTeamTargets: (automation, team, candidates) =>
-      resolveTeamTargets(admissionDeps, automation, team, candidates),
-    resolveProviderAuth: (automation) => resolveProviderAuthSnapshot(admissionDeps, automation),
-  };
+  });
   const attribution = new AutomationAttributionService({ users, scmProvider, db, env, log });
   const failures = new AutomationFailureService(store, log);
   const invocations = new AutomationInvocationService({

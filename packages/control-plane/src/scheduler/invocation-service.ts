@@ -16,17 +16,14 @@ import type { AutomationExecutionAuthorizationRequest } from "../automation/auth
 import type { resolveAutomationRepositories } from "../automation/repository";
 import type { Logger } from "../logger";
 import type { AutomationAttributionService } from "./attribution-service";
-import {
-  executionDenialReason,
-  ownerExecutionPrincipal,
-  type LaunchAdmissionOperations,
-} from "./launch-admission";
+import { executionDenialReason, ownerExecutionPrincipal } from "./launch-admission";
 import type {
   ExecutionPrincipal,
   LaunchTargetSnapshot,
   ProviderAuthSnapshot,
   RunLaunch,
 } from "./launch-contracts";
+import type { LaunchAdmissionOperations } from "./launch-admission-service";
 import {
   AUTOMATION_LAUNCH_CONCURRENCY,
   MAX_RELAUNCHES_PER_TICK,

@@ -15,10 +15,9 @@ import {
   type AutomationSessionServiceDeps,
 } from "./automation-session-service";
 import {
-  resolveProviderAuthSnapshot,
-  resolveTeamTargets,
-  type LaunchAdmissionDeps,
-} from "./launch-admission";
+  AutomationLaunchAdmissionService,
+  type AutomationLaunchAdmissionServiceDeps,
+} from "./launch-admission-service";
 import type { CreateAutomationSessionInput, RunLaunch } from "./launch-contracts";
 import type { AutomationSessionTarget } from "../automation/session-target";
 
@@ -383,60 +382,116 @@ describe("AutomationSessionService", () => {
   });
 });
 
-describe("launch admission", () => {
+function admissionHarness() {
+  type Deps = AutomationLaunchAdmissionServiceDeps;
+  const deps = {
+    resolveTarget: vi.fn<Deps["resolveTarget"]>().mockResolvedValue(target),
+    grants: { covers: vi.fn<Deps["grants"]["covers"]>().mockResolvedValue(true) },
+    resolveProviderAuth: vi
+      .fn<Deps["resolveProviderAuth"]>()
+      .mockResolvedValue([
+        { provider: "openai", authMode: "api_key", selectionSource: "unattended_policy" },
+      ]),
+    validateHarness: vi.fn<Deps["validateHarness"]>().mockResolvedValue(undefined),
+  } satisfies Deps;
+  return { deps, service: new AutomationLaunchAdmissionService(deps) };
+}
+
+describe("AutomationLaunchAdmissionService", () => {
   it("checks every resolved repository against grants while preserving target errors and the original grants version", async () => {
+    const { deps, service } = admissionHarness();
     const error = new Error("environment missing");
-    const deps = {
-      resolveTarget: vi
-        .fn<LaunchAdmissionDeps["resolveTarget"]>()
-        .mockImplementationOnce(async () => {
-          currentTeam.grantsVersion = 8;
-          return {
-            ...target,
-            repositories: [
-              { repoOwner: "acme", repoName: "app", repoId: 42, baseBranch: "main" },
-              { repoOwner: "acme", repoName: "lib", repoId: 43, baseBranch: "main" },
-            ],
-          };
-        })
-        .mockRejectedValueOnce(error),
-      grants: { covers: vi.fn<LaunchAdmissionDeps["grants"]["covers"]>().mockResolvedValue(true) },
-    };
     const currentTeam = { ...team };
-    const result = await resolveTeamTargets(deps, automation, currentTeam, [
+    deps.resolveTarget
+      .mockImplementationOnce(async () => {
+        currentTeam.grantsVersion = 8;
+        return {
+          ...target,
+          repositories: [
+            { repoOwner: "acme", repoName: "app", repoId: 42, baseBranch: "main" },
+            { repoOwner: "acme", repoName: "lib", repoId: 43, baseBranch: "main" },
+          ],
+        };
+      })
+      .mockRejectedValueOnce(error);
+
+    const result = await service.resolveTeamTargets(automation, currentTeam, [
       run(),
       { ...run(), id: "run-2" },
     ]);
+
     expect(result?.teamGrantsVersion).toEqual({ teamId: team.id, version: 7 });
     expect(deps.grants.covers).toHaveBeenCalledWith(team.id, [42, 43]);
     expect(result?.targets.get("run-2")).toEqual({ error });
   });
 
   it("denies admission when grants no longer cover a target", async () => {
-    const result = await resolveTeamTargets(
-      { resolveTarget: async () => target, grants: { covers: async () => false } },
-      automation,
-      team,
-      [run()]
+    const { deps, service } = admissionHarness();
+    deps.grants.covers.mockResolvedValue(false);
+
+    expect(await service.resolveTeamTargets(automation, team, [run()])).toBeNull();
+    expect(deps.resolveTarget).toHaveBeenCalledWith(automation, run());
+    expect(deps.grants.covers).toHaveBeenCalledWith(team.id, [42]);
+  });
+
+  it("resolves and validates fresh provider routing for each admission", async () => {
+    const { deps, service } = admissionHarness();
+    expect(await service.resolveProviderAuth(automation)).toEqual({
+      providerAuth: [
+        { provider: "openai", authMode: "api_key", selectionSource: "unattended_policy" },
+      ],
+    });
+    deps.resolveProviderAuth.mockResolvedValue([
+      {
+        provider: "openai",
+        authMode: "provider_account",
+        providerAccountId: "account-2",
+        selectionSource: "automation_pin",
+      },
+    ]);
+
+    expect(await service.resolveProviderAuth(automation)).toEqual({
+      providerAuth: [
+        {
+          provider: "openai",
+          authMode: "provider_account",
+          providerAccountId: "account-2",
+          selectionSource: "automation_pin",
+        },
+      ],
+    });
+    expect(deps.resolveProviderAuth).toHaveBeenCalledTimes(2);
+    expect(deps.validateHarness).toHaveBeenNthCalledWith(
+      1,
+      { harness: "codex", model: automation.model, reasoningEffort: null },
+      { openai: "api_key" }
     );
-    expect(result).toBeNull();
+    expect(deps.validateHarness).toHaveBeenNthCalledWith(
+      2,
+      { harness: "codex", model: automation.model, reasoningEffort: null },
+      { openai: "provider_account" }
+    );
   });
 
   it("validates the resolved provider routing and retains the original configuration error", async () => {
+    const { deps, service } = admissionHarness();
     const error = new HarnessAdmissionError("account incompatible");
-    const deps = {
-      resolveProviderAuth: vi
-        .fn<LaunchAdmissionDeps["resolveProviderAuth"]>()
-        .mockResolvedValue([
-          { provider: "openai", authMode: "api_key", selectionSource: "unattended_policy" },
-        ]),
-      validateHarness: vi.fn<LaunchAdmissionDeps["validateHarness"]>().mockRejectedValue(error),
-    };
-    expect(await resolveProviderAuthSnapshot(deps, automation)).toEqual({ error });
+    deps.validateHarness.mockRejectedValue(error);
+
+    expect(await service.resolveProviderAuth(automation)).toEqual({ error });
     expect(deps.resolveProviderAuth).toHaveBeenCalledWith(automation.id, "codex");
     expect(deps.validateHarness).toHaveBeenCalledWith(
       { harness: "codex", model: automation.model, reasoningEffort: null },
       { openai: "api_key" }
     );
+  });
+
+  it("retains a provider resolution error without attempting harness validation", async () => {
+    const { deps, service } = admissionHarness();
+    const error = new Error("provider unavailable");
+    deps.resolveProviderAuth.mockRejectedValue(error);
+
+    expect(await service.resolveProviderAuth(automation)).toEqual({ error });
+    expect(deps.validateHarness).not.toHaveBeenCalled();
   });
 });
