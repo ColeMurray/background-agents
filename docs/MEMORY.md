@@ -43,7 +43,8 @@ revisions with HTTP 409.
 The management pages can select records on the current page and approve, reject, archive or restore
 them together. Each selected record is still fenced by the revision shown and authorized against its
 own scope, so a record that changed or that the caller cannot manage fails alone while the rest
-apply. Archiving is the bulk equivalent of deleting.
+apply. Each request is bounded to stay within D1's per-invocation query limit, so the page sends
+larger selections as sequential requests. Archiving is the bulk equivalent of deleting.
 
 Sandbox tools currently authenticate a session, not an immutable prompt author. For this reason,
 automatic personal facts are disabled permanently once a session is shared or gains a collaborator,

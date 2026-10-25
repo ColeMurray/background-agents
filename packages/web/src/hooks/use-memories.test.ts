@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { MemoryDto } from "@open-inspect/shared/types/memories";
+import {
+  MEMORY_BULK_ACTION_MAX_RECORDS,
+  type MemoryDto,
+} from "@open-inspect/shared/types/memories";
 import {
   applyBulkMemoryAction,
   applyMemoryAction,
@@ -138,6 +141,37 @@ describe("memory mutations", () => {
       action: "approve",
       memories: [{ id: "mem/a", revisionId: "rev_a" }],
     });
+  });
+
+  it("splits large selections into bounded requests and stops at a failed one", async () => {
+    const records = Array.from({ length: 2 * MEMORY_BULK_ACTION_MAX_RECORDS + 1 }, (_, index) => ({
+      id: `mem_${index}`,
+      currentRevisionId: `rev_${index}`,
+    }));
+    fetchMock
+      .mockImplementationOnce(async (_path: string, init: RequestInit) =>
+        Response.json({
+          results: (JSON.parse(String(init.body)) as { memories: { id: string }[] }).memories.map(
+            ({ id }) => ({ id, ok: true, memory: { ...record, id } })
+          ),
+        })
+      )
+      .mockImplementationOnce(async () =>
+        Response.json({ error: "Rate limited" }, { status: 429 })
+      );
+    const results = await applyBulkMemoryAction(records, "approve");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const sent = fetchMock.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse(String((init as RequestInit).body)) as { memories: unknown[] }).memories
+    );
+    expect(sent.map((memories) => memories.length)).toEqual([
+      MEMORY_BULK_ACTION_MAX_RECORDS,
+      MEMORY_BULK_ACTION_MAX_RECORDS,
+    ]);
+    expect(results.map((result) => result.id)).toEqual(records.map(({ id }) => id));
+    expect(results.filter((result) => result.ok)).toHaveLength(MEMORY_BULK_ACTION_MAX_RECORDS);
+    expect(results.at(-1)).toEqual({ id: records.at(-1)!.id, ok: false, error: "Rate limited" });
   });
 
   it("saves preferences", async () => {

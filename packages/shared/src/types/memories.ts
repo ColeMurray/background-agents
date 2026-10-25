@@ -30,8 +30,13 @@ export const MEMORY_LIST_PAGE_SIZE = 50;
 export const MEMORY_LIST_MAX_PAGE_SIZE = 100;
 /** Bound candidate accumulation when merging shared management pages across partitions. */
 export const MEMORY_SHARED_LIST_MAX_OFFSET = 1_000;
-/** Records one bulk lifecycle request may decide: at most one full management page. */
-export const MEMORY_BULK_ACTION_MAX_RECORDS = MEMORY_LIST_MAX_PAGE_SIZE;
+/**
+ * Records one bulk lifecycle request may decide. Each record costs up to four D1 queries (load,
+ * predecessor, guarded batch, reload) on top of a fixed request overhead, so a full request stays
+ * inside the Workers Free plan's 50 queries per invocation. Clients split larger selections into
+ * sequential requests.
+ */
+export const MEMORY_BULK_ACTION_MAX_RECORDS = 8;
 
 // ---------------------------------------------------------------------------
 // Scopes

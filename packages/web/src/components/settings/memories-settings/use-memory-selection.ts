@@ -16,6 +16,8 @@ export function useMemorySelection(records: readonly MemoryDto[], view: string) 
   return {
     selectable,
     selected,
+    /** This exact selection in this view; changes whenever a record joins or leaves it. */
+    key: `${view}|${selected.map((record) => record.id).join(",")}`,
     /** Actions every selected record allows, in lifecycle order. */
     actions: selected.length
       ? MEMORY_ACTIONS.filter((action) =>

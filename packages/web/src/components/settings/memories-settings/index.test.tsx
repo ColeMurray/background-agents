@@ -275,6 +275,40 @@ describe("memory management", () => {
     expect(screen.queryByText("Archive 2 memories")).toBeNull();
   });
 
+  it("closes a bulk confirmation when its selection changes", () => {
+    const second = { ...record, id: "mem_b", title: "Use the API fixtures" };
+    mocks.records = [record, second];
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    fireEvent.click(screen.getByText("Archive selected"));
+    fireEvent.change(screen.getByLabelText(/Archive note for all selected/), {
+      target: { value: "Reviewed for both" },
+    });
+    const first = screen.getByRole("checkbox", { name: `Select “${record.title}”` });
+    fireEvent.click(first);
+    expect(screen.queryByLabelText(/Archive note for all selected/)).toBeNull();
+    // Restoring the same selection does not bring back the old note and action.
+    fireEvent.click(first);
+    expect(screen.queryByLabelText(/Archive note for all selected/)).toBeNull();
+    expect(mocks.applyBulkMemoryAction).not.toHaveBeenCalled();
+  });
+
+  it("locks a submitted bulk confirmation until the request finishes", async () => {
+    mocks.records = [record];
+    let finish: (results: unknown) => void = () => {};
+    mocks.applyBulkMemoryAction.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    render(<MemoriesSettings />);
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    fireEvent.click(screen.getByText("Archive selected"));
+    fireEvent.click(screen.getByText("Archive 1 memory"));
+    expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByLabelText(/Archive note for all selected/) as HTMLInputElement).disabled
+    ).toBe(true);
+    await act(async () => finish([{ id: record.id, ok: true, memory: record }]));
+    await waitFor(() => expect(screen.queryByText("Cancel")).toBeNull());
+  });
+
   it("starts a new selection when the status tab changes", () => {
     mocks.records = [record];
     render(<MemoriesSettings />);

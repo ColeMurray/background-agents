@@ -37,7 +37,7 @@ export type MemoryPanel =
   | { kind: "edit"; record: MemoryDto }
   | { kind: "archive"; memoryId: string; archiveNote: string }
   | { kind: "history"; memoryId: string }
-  | { kind: "bulk"; action: MemoryAction; archiveNote: string };
+  | { kind: "bulk"; action: MemoryAction; archiveNote: string; selectionKey: string };
 
 const NO_PANEL: MemoryPanel = { kind: "none" };
 const STATUS_OPTIONS = MEMORY_STATUSES.map((value) => ({
@@ -61,6 +61,8 @@ export function MemoryCollection({ scope }: { scope: MemoryListScope }) {
     collection.records,
     `${collection.status}:${collection.offset}:${search.search}`
   );
+  // A bulk confirmation was reviewed for one selection; any change to it closes the panel.
+  if (panel.kind === "bulk" && panel.selectionKey !== selection.key) setPanel(NO_PANEL);
 
   /** Serialize mutations: one in flight, one error channel, one refresh. */
   async function run(mutation: () => Promise<unknown>, nextPanel: MemoryPanel = NO_PANEL) {

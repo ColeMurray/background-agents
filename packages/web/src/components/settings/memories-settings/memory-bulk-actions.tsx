@@ -33,7 +33,7 @@ export function MemoryBulkActions({
   const selectAllId = useId();
   const count = selection.selected.length;
   if (!selection.selectable.length) return null;
-  const confirming = panel.kind === "bulk" && count > 0 ? panel : null;
+  const confirming = panel.kind === "bulk" ? panel : null;
   return (
     <div className="space-y-3 rounded-sm border border-border p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -59,7 +59,12 @@ export function MemoryBulkActions({
               disabled={busy}
               onClick={() =>
                 memoryActionAcceptsNote(action)
-                  ? onPanelChange({ kind: "bulk", action, archiveNote: "" })
+                  ? onPanelChange({
+                      kind: "bulk",
+                      action,
+                      archiveNote: "",
+                      selectionKey: selection.key,
+                    })
                   : onAction(action)
               }
             >
@@ -74,6 +79,7 @@ export function MemoryBulkActions({
             Archive note for all selected (optional)
             <Input
               value={confirming.archiveNote}
+              disabled={busy}
               maxLength={MEMORY_CONTENT_LIMITS.archiveNote}
               onChange={(event) =>
                 onPanelChange({ ...confirming, archiveNote: event.target.value })
@@ -96,6 +102,7 @@ export function MemoryBulkActions({
             type="button"
             variant="ghost"
             size="sm"
+            disabled={busy}
             onClick={() => onPanelChange({ kind: "none" })}
           >
             Cancel

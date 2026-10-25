@@ -2,6 +2,7 @@ import useSWR from "swr";
 import type { z } from "zod";
 import {
   bulkMemoryActionResponseSchema,
+  MEMORY_BULK_ACTION_MAX_RECORDS,
   MEMORY_LIST_PAGE_SIZE,
   memoryActionAcceptsNote,
   memoryListResponseSchema,
@@ -180,23 +181,38 @@ export async function applyMemoryAction(
   ).memory;
 }
 
-/** Apply one action to several reviewed records; the server decides each independently. */
+/**
+ * Apply one action to several reviewed records; the server decides each independently. Selections
+ * larger than one request allows go in sequential requests. A failed request stops the rest, and
+ * its records and the unsent ones are reported as failed so earlier results still count.
+ */
 export async function applyBulkMemoryAction(
   records: readonly ReviewedMemory[],
   action: MemoryAction,
   archiveNote?: string
 ): Promise<BulkMemoryActionResponse["results"]> {
-  const body: BulkMemoryActionInput = {
-    action,
-    memories: records.map((record) => ({ id: record.id, revisionId: record.currentRevisionId })),
-    ...actionNote(action, archiveNote),
-  };
-  return (
-    await apiRequest(`${MEMORIES_KEY}/bulk`, bulkMemoryActionResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
-  ).results;
+  const results: BulkMemoryActionResponse["results"] = [];
+  for (let start = 0; start < records.length; start += MEMORY_BULK_ACTION_MAX_RECORDS) {
+    const body: BulkMemoryActionInput = {
+      action,
+      memories: records
+        .slice(start, start + MEMORY_BULK_ACTION_MAX_RECORDS)
+        .map((record) => ({ id: record.id, revisionId: record.currentRevisionId })),
+      ...actionNote(action, archiveNote),
+    };
+    try {
+      const response = await apiRequest(`${MEMORIES_KEY}/bulk`, bulkMemoryActionResponseSchema, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      results.push(...response.results);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : "Memory request failed";
+      results.push(...records.slice(start).map(({ id }) => ({ id, ok: false as const, error })));
+      break;
+    }
+  }
+  return results;
 }
 
 export async function setMemoryPreferences(input: MemoryPreferences): Promise<MemoryPreferences> {
