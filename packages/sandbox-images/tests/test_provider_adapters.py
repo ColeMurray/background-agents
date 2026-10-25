@@ -570,6 +570,17 @@ def test_boat_prune_requires_an_explicit_replaced_reference(monkeypatch, boat_pr
     assert transport.calls == []
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_boat_prune_rejects_identical_deployed_and_replaced_names(monkeypatch, boat_prune, dry_run):
+    namespace, transport = boat_prune
+    monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "prefix-aaaaaaaaaaaaaaaa")
+
+    with pytest.raises(RuntimeError, match="BOAT_REPLACED_SNAPSHOT must differ"):
+        namespace["main"](["prune", "--dry-run"] if dry_run else ["prune"])
+
+    assert transport.calls == []
+
+
 def test_boat_prune_deletes_failed_bases_without_a_rollback_candidate(monkeypatch, boat_prune):
     namespace, transport = boat_prune
     monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "")

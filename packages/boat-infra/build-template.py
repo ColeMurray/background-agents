@@ -463,6 +463,10 @@ def prune_snapshots(
 ) -> None:
     """Retain the deployed base and the explicit predecessor supplied by the deployer."""
     validate_base_prefix(prefix)
+    if replaced and replaced == deployed:
+        raise RuntimeError(
+            "BOAT_REPLACED_SNAPSHOT must differ from BOAT_DEPLOYED_SNAPSHOT. Nothing was deleted."
+        )
     inventory = api.request("GET", "/saved-snapshots")
     pattern = re.compile(rf"{re.escape(prefix)}-[0-9a-f]{{16}}")
     candidates = [
