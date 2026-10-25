@@ -28,7 +28,8 @@ import {
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
 } from "../routes/shared";
 import type { Env } from "../types";
-import { Scheduler, SessionFollowUpRefusedError } from "../scheduler/scheduler";
+import { createScheduler } from "../scheduler/factory";
+import { SessionFollowUpRefusedError } from "../scheduler/contracts";
 
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
@@ -148,7 +149,7 @@ async function handleAutomationWebhook(
   const event = normalizeWebhookEvent(automationId, body, delivery.fields);
   let result;
   try {
-    result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+    result = await createScheduler(ctx.db, env, ctx.executionCtx).event(event);
   } catch (e) {
     if (e instanceof SessionFollowUpRefusedError) return followUpRefusedResponse(e);
     throw e;

@@ -1,12 +1,14 @@
 """Shared sandbox tool definitions and vendor-neutral handlers."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
+from sandbox_runtime.event_size import MAX_EVENT_BYTES, event_size_bytes
 from sandbox_runtime.harness.tool_results import ToolResult
 from sandbox_runtime.harness.tools import (
     PULL_REQUEST_TIMEOUT_SECONDS,
@@ -15,6 +17,7 @@ from sandbox_runtime.harness.tools import (
     ToolServerConfig,
     build_tools,
 )
+from tests.event_forwarder_fakes import make_forwarder, open_ws, sent_events
 
 
 def _tools(tmp_path: Path, handler, **config_overrides):
@@ -84,7 +87,11 @@ async def test_get_child_status_lists_children(tmp_path: Path) -> None:
             },
         ),
     )
-    text = _text(await tools.get_child_status({}))
+    envelope = json.loads(_text(await tools.get_child_status({})))
+    assert envelope["version"] == 1
+    assert envelope["kind"] == "list"
+    assert [child["id"] for child in envelope["children"]] == ["c1", "c2"]
+    text = envelope["agentMessage"]
     assert text.startswith("2 child session(s): 1 running, 0 pending, 1 done, 0 failed")
     assert "[RUNNING] c1" in text
     assert "(untitled)" in text
@@ -129,6 +136,13 @@ async def test_get_child_status_detail_builds_the_include_query(tmp_path: Path) 
             }
         )
     )
+    envelope = json.loads(text)
+    assert envelope["version"] == 1
+    assert envelope["kind"] == "detail"
+    assert envelope["session"]["repoOwner"] == "acme"
+    assert envelope["finalResponse"] == {"success": True, "textContent": "done"}
+    assert envelope["hasUnfinishedPrompt"] is False
+    text = envelope["agentMessage"]
     assert seen[0].url.raw_path.startswith(b"/sessions/s1/children/c%201")
     assert seen[0].url.params["include"] == "result,trajectory"
     assert seen[0].url.params["trajectoryLimit"] == "5"
@@ -138,7 +152,7 @@ async def test_get_child_status_detail_builds_the_include_query(tmp_path: Path) 
     assert "  Sandbox: stopped" in text
     assert "PR: https://gh/pr/7" in text
     assert "Final response:" in text
-    assert "done" in text
+    assert "(see finalResponse.textContent)" in text
     assert "Recent events:" in text and "token: hello" in text
     assert 'Re-run with trajectoryCursor="abc"' in text
 
@@ -165,7 +179,7 @@ async def test_get_child_status_detail_forwards_the_cursor_and_ends_when_none_re
         )
     )
     assert seen[0].url.params["trajectoryCursor"] == "abc"
-    assert "Trajectory (1 events):" in text
+    assert "Trajectory (1 events):" in json.loads(text)["agentMessage"]
     assert "trajectoryCursor=" not in text
 
 
@@ -464,3 +478,138 @@ def test_child_formatter_renders_ordinary_output_summary():
     )
     for text in ["shot-1", "screenshot", "Dashboard", "csv-1", "report.csv"]:
         assert text in output
+
+
+@pytest.mark.asyncio
+async def test_child_status_envelope_omits_private_metadata(tmp_path: Path) -> None:
+    detail = {
+        "session": {"id": "c1", "status": "active", "secret": "private"},
+        "hasUnfinishedPrompt": True,
+        "finalResponse": {
+            "success": False,
+            "textContent": "## Result",
+            "error": "Tests failed",
+            "eventCount": 1000,
+            "eventLimitReached": True,
+            "fileArtifacts": [
+                {
+                    "id": "f1",
+                    "type": "file",
+                    "available": True,
+                    "metadata": {"filename": "result.csv", "objectKey": "sessions/private/output"},
+                }
+            ],
+        },
+    }
+    tools, _ = _tools(tmp_path, lambda _r: httpx.Response(200, json=detail))
+    raw = _text(await tools.get_child_status({"childId": "c1", "includeResponse": True}))
+    envelope = json.loads(raw)
+    assert envelope["hasUnfinishedPrompt"] is True
+    assert envelope["finalResponse"] == {
+        "success": False,
+        "textContent": "## Result",
+        "error": "Tests failed",
+        "eventCount": 1000,
+        "eventLimitReached": True,
+    }
+    assert "Latest completed response" in envelope["agentMessage"]
+    assert "result.csv" in envelope["agentMessage"]
+    assert "objectKey" not in raw and "sessions/private" not in raw and "secret" not in raw
+
+
+@pytest.mark.asyncio
+async def test_child_status_empty_list_and_error_fallback(tmp_path: Path) -> None:
+    tools, _ = _tools(tmp_path, lambda _r: httpx.Response(200, json={"children": []}))
+    assert json.loads(_text(await tools.get_child_status({}))) == {
+        "version": 1,
+        "kind": "list",
+        "children": [],
+        "agentMessage": "No child sessions found.",
+    }
+    tools, _ = _tools(tmp_path, lambda _r: httpx.Response(404, json={"error": "not found"}))
+    result = await tools.get_child_status({"childId": "missing"})
+    assert result.is_error
+    assert 'Child "missing" not found' in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("producer", ["python", "opencode"])
+@pytest.mark.parametrize(
+    ("response_char", "response_chars"),
+    [("x", MAX_EVENT_BYTES // 2), ("x", MAX_EVENT_BYTES - 20_000), ("🚀", 75_000)],
+)
+async def test_child_status_near_limit_response_survives_forwarding(
+    tmp_path: Path, producer: str, response_char: str, response_chars: int
+) -> None:
+    text = response_char * response_chars
+    detail = {
+        "session": {"id": "c1", "title": "Large response", "status": "completed"},
+        "finalResponse": {"success": True, "textContent": text},
+    }
+    args = {"childId": "c1", "includeResponse": True}
+    if producer == "python":
+        tools, _ = _tools(tmp_path, lambda _r: httpx.Response(200, json=detail))
+        output = _text(await tools.get_child_status(args))
+        legacy_output = tools._format_child_detail(detail, "c1", args)
+    else:
+        formatter = (
+            Path(__file__).parents[1] / "src/sandbox_runtime/tools/get-child-status-format.js"
+        ).as_uri()
+        result = subprocess.run(
+            [
+                "node",
+                "--input-type=module",
+                "-e",
+                f"""
+                import {{ readFileSync }} from 'node:fs';
+                import {{ childStatusDetailOutput, formatChildDetail }} from {json.dumps(formatter)};
+                const detail = JSON.parse(readFileSync(0, 'utf8'));
+                process.stdout.write(JSON.stringify([
+                    childStatusDetailOutput(detail, 'c1', {{ includeResponse: true }}),
+                    formatChildDetail(detail, 'c1', {{ includeResponse: true }}),
+                ]));
+            """,
+            ],
+            input=json.dumps(detail),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        output, legacy_output = json.loads(result.stdout)
+
+    event = {
+        "type": "tool_call",
+        "tool": "get-child-status",
+        "args": args,
+        "messageId": "m1",
+        "callId": "call-1",
+        "status": "completed",
+        "output": output,
+    }
+    assert event_size_bytes({**event, "output": legacy_output}) < MAX_EVENT_BYTES
+    assert event_size_bytes(event) < MAX_EVENT_BYTES
+    envelope = json.loads(output)
+    assert envelope["finalResponse"]["textContent"] == text
+    assert text not in envelope["agentMessage"]
+
+    forwarder = make_forwarder()
+    ws = open_ws()
+    await forwarder.bind(ws)
+    assert await forwarder.send(event)
+    forwarded = sent_events(ws)[0]
+    assert "truncated" not in forwarded
+    assert json.loads(forwarded["output"])["finalResponse"]["textContent"] == text
+
+
+@pytest.mark.asyncio
+async def test_child_status_list_keeps_unicode_unescaped(tmp_path: Path) -> None:
+    title = "日本語 🧪"
+    tools, _ = _tools(
+        tmp_path,
+        lambda _r: httpx.Response(
+            200, json={"children": [{"id": "c1", "title": title, "status": "active"}]}
+        ),
+    )
+    output = _text(await tools.get_child_status({}))
+    assert title in output
+    assert json.loads(output)["children"][0]["title"] == title

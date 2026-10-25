@@ -314,8 +314,8 @@ export const SANDBOX_PROVIDER_NAMES = [
   "modal-vm",
   "daytona",
   "vercel",
-  "opencomputer",
   "e2b",
+  "boat",
 ] as const;
 
 export type SandboxProviderName = (typeof SANDBOX_PROVIDER_NAMES)[number];
@@ -330,8 +330,9 @@ const SANDBOX_SETTING_CAPABILITIES = {
   "modal-vm": { ...DEFAULT_SANDBOX_SETTING_CAPABILITIES, resourceLimits: true },
   daytona: { resources: false, resourceLimits: false, timeout: false },
   vercel: DEFAULT_SANDBOX_SETTING_CAPABILITIES,
-  opencomputer: { resources: false, resourceLimits: false, timeout: true },
   e2b: { resources: false, resourceLimits: false, timeout: true },
+  // Resource requests select the smallest Boat machine type that fits them.
+  boat: { resources: true, resourceLimits: false, timeout: true },
 } satisfies Record<
   SandboxProviderName,
   { resources: boolean; resourceLimits: boolean; timeout: boolean }

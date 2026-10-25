@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore, type AutomationRunRow } from "../../src/db/automation-store";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser } from "./helpers";
 import { makeAutomation, makeChild, makeInvocation } from "./invocation-fixtures";
@@ -23,7 +23,7 @@ function createScheduler() {
     throw new Error(`Unexpected session runtime call: ${path}`);
   });
   schedulerEnv.SESSION = runtime;
-  return { scheduler: new Scheduler(env.DB, schedulerEnv, { submit() {} }), runtime };
+  return { scheduler: createAutomationScheduler(env.DB, schedulerEnv, { submit() {} }), runtime };
 }
 
 async function createOneShot(id: string, at: number, createdAt = Date.now()) {

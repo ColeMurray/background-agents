@@ -69,19 +69,19 @@ Below them, **Sessions per day** and **Pull requests opened and merged** chart t
 
 The numbers across the top:
 
-| Number                      | Value                                                                                                                   |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Spend**                   | The sum of every counted session's recorded cost, with the average per session.                                         |
-| **Cache hit ratio**         | Cache reads divided by cache reads plus input tokens.                                                                   |
-| **Billed to subscriptions** | The share of sessions billed through a connected subscription. Those sessions report $0.                                |
-| **Tokens**                  | Input plus output tokens, split into each.                                                                              |
-| **Private sessions**        | The cost of private sessions in the same window and scope, which Spend excludes. Only Owners and Administrators see it. |
+| Number                      | Value                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Spend**                   | The sum of every counted session's recorded cost, with the average per session.                                            |
+| **Cache hit ratio**         | Cache reads divided by cache reads plus input tokens.                                                                      |
+| **Billed to subscriptions** | The share of sessions billed through a connected subscription. Those sessions report model-price equivalents, not charges. |
+| **Tokens**                  | Input plus output tokens, split into each.                                                                                 |
+| **Private sessions**        | The cost of private sessions in the same window and scope, which Spend excludes. Only Owners and Administrators see it.    |
 
 **By model**, **By provider**, and **By harness** list sessions, cost, and cost per session for each, sorted by cost. The provider table also shows how many sessions ran **On subscription**; the harness table shows the completion rate. Narrow screens hide secondary columns such as PRs and cache hit ratio.
 
 **Most expensive runs** lists the costliest runs in the window, up to 20. A run is a root session plus every sub-session it spawned, so its cost and session count include the whole family. Each run links to its root session.
 
-**Tokens** gives the totals for input, output, cache read, cache write, and reasoning tokens. Reasoning tokens are reported by OpenCode only. Token totals cover sessions created since token capture was enabled; older sessions count as zero.
+**Tokens** gives the totals for input, output, cache read, cache write, and reasoning tokens. Reasoning tokens are reported by OpenCode and Codex. Token totals cover sessions created since token capture was enabled; older sessions count as zero.
 
 ## Pull requests
 
@@ -127,6 +127,7 @@ Cost figures are sums of each session's recorded cost. A session's cost is a run
 
 - **OpenCode** reports the priced cost of each step, and the session total accumulates those values.
 - **Claude Agent** reports a cumulative cost per turn, and the session records the increase over the previous turn. When the harness reports no cost for a turn, the turn is recorded as $0 and the session timeline shows a warning saying so. The next turn's cost cannot then be separated from the missing one, so it is also recorded as $0 before accounting resumes.
+- **Codex** reports the cumulative cost of each turn, priced at the model's published rates using each request's context tier from the sandbox's cached price list. Under a ChatGPT subscription the figure is informational. Unavailable model prices (for example a model newer than the sandbox's price list) result in $0 reported cost. Partial or estimated costs can be nonzero, contribute to analytics totals, and still count toward spend limits. The session timeline shows a warning explaining missing, partial, or estimated pricing.
 
 Nothing on this page estimates cost independently of what the harness reported. Amounts show cents below $1,000 and whole dollars above; amounts under one cent show as `<$0.01`. Per-session cost caps are covered in [Spend limits](/sessions/spend-limits).
 

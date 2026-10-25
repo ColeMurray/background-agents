@@ -14,7 +14,7 @@ import { GitHubAutomationStore } from "../db/github-automation-store";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { SchedulerEventResult } from "../scheduler/scheduler";
+import type { SchedulerEventResult } from "../scheduler/contracts";
 import { firingInvocationId, type StartInvocationResult } from "../scheduler/invocation-outcome";
 
 export const MAX_GITHUB_ADMISSION_ATTEMPTS = 3;

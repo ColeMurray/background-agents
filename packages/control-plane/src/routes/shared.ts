@@ -141,6 +141,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "memories.manage_own",
   "skills.manage",
   "workspace.members.manage",
+  "workspace.members.merge",
   "workspace.transfer_ownership",
 ]);
 

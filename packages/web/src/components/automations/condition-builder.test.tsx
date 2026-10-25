@@ -131,6 +131,47 @@ describe("ConditionBuilder — GitHub pull request editors", () => {
 
     expect(screen.getAllByRole("combobox")[0]).toHaveTextContent("Not draft");
   });
+
+  it("switches a label condition to none of", () => {
+    const onChange = renderBuilder(
+      [{ type: "label", operator: "any_of", value: ["translations"] }],
+      "github",
+      "pull_request.opened"
+    );
+
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(screen.getByRole("option", { name: "none of" }));
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { type: "label", operator: "none_of", value: ["translations"] },
+    ]);
+  });
+
+  it("renders a persisted none of label condition", () => {
+    renderBuilder(
+      [{ type: "label", operator: "none_of", value: ["translations"] }],
+      "github",
+      "pull_request.opened"
+    );
+
+    expect(screen.getAllByRole("combobox")[0]).toHaveTextContent("none of");
+    expect(screen.getByText("translations")).toBeInTheDocument();
+  });
+
+  it("switches an actor condition to exclude", () => {
+    const onChange = renderBuilder(
+      [{ type: "actor", operator: "include", value: ["translation-bot"] }],
+      "github",
+      "pull_request.opened"
+    );
+
+    fireEvent.click(screen.getAllByRole("combobox")[0]);
+    fireEvent.click(screen.getByRole("option", { name: "exclude" }));
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { type: "actor", operator: "exclude", value: ["translation-bot"] },
+    ]);
+  });
 });
 
 describe("ConditionBuilder — GitHub workflow editors", () => {

@@ -315,7 +315,7 @@ describe("cross-path alarm effects", () => {
         expect(h.shutdown.isHolding()).toBe(true);
         await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
         await expect(h.manager.terminateFailedSandbox("competing fatal report")).resolves.toBe(
-          false
+          "no_action"
         );
         await h.manager.terminateUnresponsiveSandbox("stop_send_failed");
       } finally {
@@ -323,7 +323,13 @@ describe("cross-path alarm effects", () => {
         await pending;
       }
 
-      await expect(pending).resolves.toBe("no_action");
+      // The heartbeat path names the runtime it lost, so the alarm handler
+      // fails the prompt that runtime was serving instead of waiting on the hold.
+      await expect(pending).resolves.toEqual(
+        trigger === "heartbeat"
+          ? { kind: "heartbeat_lost", reason: "The sandbox stopped responding." }
+          : "no_action"
+      );
       expect(h.shutdown.isHolding()).toBe(true);
       await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
       expect(takeSnapshot).toHaveBeenCalledOnce();

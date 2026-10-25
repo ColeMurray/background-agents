@@ -217,8 +217,13 @@ history. See [docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.
 decisions.
 
 An invocation's status is **derived from its child runs, never stored**: no children → `skipped`;
-any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
-`failed` (none completed), `partial_failed` (a mix), or `skipped` (all skipped).
+any child starting/running → `starting`/`running`; otherwise any child waiting to relaunch →
+`retrying`; all terminal → `completed` (none failed), `failed` (none completed), `partial_failed` (a
+mix), or `skipped` (all skipped).
+
+A scheduled automation's `maxRetries` (0–5, default 0) lets a run whose launch fails before its
+prompt is sent wait as `retrying` and relaunch in place, with exponential backoff; manual and event
+runs are never retried.
 
 #### Webhook triggers
 

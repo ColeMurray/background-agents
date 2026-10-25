@@ -17,7 +17,6 @@ on:
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
-      - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -31,6 +30,9 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Keep README translation checks active for documentation-only changes.
+      - "README.md"
+      - "README.zh-CN.md"
       - "packages/sandbox-runtime/src/**"
       - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
@@ -54,7 +56,6 @@ on:
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
-      - "packages/opencomputer-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -68,6 +69,9 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Keep README translation checks active for documentation-only changes.
+      - "README.md"
+      - "README.zh-CN.md"
       - "packages/sandbox-runtime/src/**"
       - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
@@ -139,6 +143,9 @@ jobs:
       - name: Test Node version workflow contract
         run: npm run test:node-version-workflow-contract
 
+      - name: Check README translations
+        run: npm run test:readme-translations
+
       - name: Check Prettier formatting
         run: npm run format:check
 
@@ -194,6 +201,9 @@ jobs:
 
       - name: Build web package
         run: npm run build -w @open-inspect/web
+
+      - name: Verify Mermaid browser isolation
+        run: npm run test:mermaid-browser -w @open-inspect/web
 
   build-docs:
     name: Build (Docs)

@@ -73,7 +73,7 @@ describe("SessionDO lifecycle alarm recovery", () => {
     await cleanD1Tables();
   });
 
-  it("fails a stuck processing message when an alarm fails the sandbox", async () => {
+  it("reports a sandbox interruption when an alarm fails the sandbox", async () => {
     const { stub } = await initSession({ userId: "user-1" });
     await parkSandboxPastConnectingTimeout(stub);
     await seedMessage(stub, {
@@ -90,7 +90,48 @@ describe("SessionDO lifecycle alarm recovery", () => {
 
     const message = await messageState(stub, "msg-stuck");
     expect(message?.status).toBe("failed");
-    expect(message?.error_message).toContain("stuck processing");
+    expect(message?.error_message).toBe(
+      "Execution interrupted because the sandbox stopped or became unavailable."
+    );
+  });
+
+  it("fails the running prompt when a heartbeat timeout's save cannot be confirmed", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    await waitForSandboxStatus(stub, "failed");
+    await runInSessionDO(stub, (_instance, state) => {
+      // A pre-preservation generation takes the ordinary checkpoint path. Its
+      // provider handle is set so the watchdog attempts the save, whose answer
+      // the unavailable provider never gives.
+      state.storage.sql.exec("DELETE FROM sandbox_preservation");
+      state.storage.sql.exec(
+        `UPDATE sandbox SET status = 'ready', modal_object_id = 'sb-unresponsive',
+           last_heartbeat = ?, last_activity = ?`,
+        Date.now() - DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs - 1_000,
+        Date.now()
+      );
+    });
+    await seedMessage(stub, {
+      id: "msg-running",
+      authorId: await ownerParticipantId(stub),
+      content: "Keep working on the review",
+      source: "github",
+      status: "processing",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 500,
+    });
+
+    await runInSessionDO(stub, (instance: SessionDO) => instance.alarm());
+
+    // The save is held for recovery; the prompt does not wait on that hold.
+    expect(await messageState(stub, "msg-running")).toEqual({
+      status: "failed",
+      error_message: "The sandbox stopped responding.",
+    });
+    const [preservation] = await queryDO<{ state: string }>(
+      stub,
+      "SELECT state FROM sandbox_preservation"
+    );
+    expect(JSON.parse(preservation.state)).toMatchObject({ phase: "unknown" });
   });
 
   it("re-drives a pending bot prompt onto a replacement after a connecting timeout", async () => {

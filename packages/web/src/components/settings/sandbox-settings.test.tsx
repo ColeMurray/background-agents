@@ -836,7 +836,7 @@ describe("SandboxSettingsPage — resource reservations editor", () => {
     }
   });
 
-  it.each(["vercel", "daytona", "opencomputer", "e2b"])("hides caps for %s", (provider) => {
+  it.each(["vercel", "daytona", "e2b"])("hides caps for %s", (provider) => {
     vi.stubEnv("NEXT_PUBLIC_SANDBOX_PROVIDER", provider);
     renderWithSWR(globalSettings([]));
     expect(screen.queryByLabelText("CPU limit (cores)")).not.toBeInTheDocument();

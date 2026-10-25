@@ -12,8 +12,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
-      - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -32,8 +32,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
-      - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -281,13 +281,6 @@ jobs:
           TF_VAR_vercel_base_snapshot_id: ${{ vars.VERCEL_BASE_SNAPSHOT_ID || secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ vars.VERCEL_SANDBOX_RUNTIME || secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ vars.VERCEL_SNAPSHOT_EXPIRATION_MS || secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
-          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
-          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
-          TF_VAR_opencomputer_api_url: ${{ vars.OPENCOMPUTER_API_URL || secrets.OPENCOMPUTER_API_URL }}
-          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
-          TF_VAR_opencomputer_template: ${{ vars.OPENCOMPUTER_TEMPLATE || secrets.OPENCOMPUTER_TEMPLATE }}
-          TF_VAR_opencomputer_project_id: ${{ vars.OPENCOMPUTER_PROJECT_ID || secrets.OPENCOMPUTER_PROJECT_ID }}
-          TF_VAR_opencomputer_target: ${{ vars.OPENCOMPUTER_TARGET || secrets.OPENCOMPUTER_TARGET }}
           TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
           TF_VAR_e2b_template_id: ${{ vars.E2B_TEMPLATE_ID || secrets.E2B_TEMPLATE_ID }}
           TF_VAR_e2b_api_url: "${{ vars.E2B_API_URL || secrets.E2B_API_URL || 'https://api.e2b.app' }}"
@@ -295,6 +288,11 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
           # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
@@ -565,13 +563,6 @@ jobs:
           TF_VAR_vercel_base_snapshot_id: ${{ vars.VERCEL_BASE_SNAPSHOT_ID || secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ vars.VERCEL_SANDBOX_RUNTIME || secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ vars.VERCEL_SNAPSHOT_EXPIRATION_MS || secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
-          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
-          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
-          TF_VAR_opencomputer_api_url: ${{ vars.OPENCOMPUTER_API_URL || secrets.OPENCOMPUTER_API_URL }}
-          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
-          TF_VAR_opencomputer_template: ${{ vars.OPENCOMPUTER_TEMPLATE || secrets.OPENCOMPUTER_TEMPLATE }}
-          TF_VAR_opencomputer_project_id: ${{ vars.OPENCOMPUTER_PROJECT_ID || secrets.OPENCOMPUTER_PROJECT_ID }}
-          TF_VAR_opencomputer_target: ${{ vars.OPENCOMPUTER_TARGET || secrets.OPENCOMPUTER_TARGET }}
           TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
           TF_VAR_e2b_template_id: ${{ vars.E2B_TEMPLATE_ID || secrets.E2B_TEMPLATE_ID }}
           TF_VAR_e2b_api_url: "${{ vars.E2B_API_URL || secrets.E2B_API_URL || 'https://api.e2b.app' }}"
@@ -579,6 +570,11 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
           # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"

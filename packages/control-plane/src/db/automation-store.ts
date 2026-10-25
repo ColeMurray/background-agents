@@ -89,6 +89,11 @@ export interface AutomationRow {
   enabled: number; // SQLite integer boolean
   next_run_at: number | null;
   consecutive_failures: number;
+  /**
+   * Relaunches allowed for a scheduled run whose launch fails before its prompt is sent.
+   * Optional so rows built for insert may omit it; the column defaults to no retries.
+   */
+  max_retries?: number;
   created_by: string;
   user_id: string | null;
   owner_team_id: string | null;
@@ -120,6 +125,50 @@ type AutomationListResult = { automations: AutomationRow[] } & (
  * to overturn it.
  */
 export const EXECUTION_TIMEOUT_FAILURE_REASON = "execution_timeout";
+
+/**
+ * Statuses of a run that holds its automation, or its event's concurrency key. Inlined as
+ * literal SQL so active-run lookups can use idx_runs_active_lookup, whose partial predicate
+ * lists the same statuses.
+ */
+const ACTIVE_RUN_STATUSES_SQL = "('starting', 'running', 'retrying')";
+
+/**
+ * The run's automation is live and allows another launch after the run's current attempt.
+ * One predicate decides whether a failed launch waits, whether a waiting run may relaunch, and
+ * whether it is withdrawn. Correlated on `automation_runs`: statements using it must not alias
+ * that table.
+ */
+const RETRY_ALLOWED_SQL = `EXISTS (
+  SELECT 1 FROM automations a
+  WHERE a.id = automation_runs.automation_id AND a.enabled = 1 AND a.deleted_at IS NULL
+    AND automation_runs.attempt <= a.max_retries)`;
+
+/** A run the orphan sweep may fail; binds the creation cutoff. */
+const ORPHANED_STARTING_RUN_PREDICATE = "status = 'starting' AND created_at < ?";
+
+/** A run the deadline sweep may fail; binds `now`, then `now` less the default deadline. */
+const RUN_PAST_EXECUTION_DEADLINE_PREDICATE =
+  "status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
+
+/** Team grants version a launch's targets were authorized against. */
+export interface TeamGrantsVersion {
+  teamId: string;
+  version: number;
+}
+
+/** Refuses an admission write once the team's grants changed from the version checked. */
+function teamGrantsGuard(grants: TeamGrantsVersion | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  return grants
+    ? {
+        sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
+        params: [grants.teamId, grants.version],
+      }
+    : { sql: "", params: [] };
+}
 
 export interface AutomationRunRow {
   id: string;
@@ -153,6 +202,10 @@ export interface AutomationRunRow {
    * rows that predate the column.
    */
   first_prompt_pending: number;
+  /** Launches so far, counting the current one. Optional on rows built for insert (default 1). */
+  attempt?: number;
+  /** When a `retrying` run launches again; null otherwise. */
+  retry_at?: number | null;
 }
 
 export interface ContinuableRunRow extends AutomationRunRow {
@@ -279,7 +332,10 @@ export interface ScheduleAdvance {
 /** Sibling-run aggregate for one invocation (finalization input). */
 export interface InvocationRunAggregate {
   total: number;
+  /** Starting, running, or waiting to retry. */
   active: number;
+  /** Waiting to retry; also counted in `active`. */
+  retrying: number;
   failed: number;
   completed: number;
   skipped: number;
@@ -320,6 +376,7 @@ export function toAutomation(
     enabled: row.enabled === 1,
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
+    maxRetries: row.max_retries ?? 0,
     createdBy: row.created_by,
     userId: row.user_id,
     ownerTeamId: row.owner_team_id,
@@ -343,6 +400,8 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
     status: row.status,
     skipReason: row.skip_reason,
     failureReason: row.failure_reason,
+    attempt: row.attempt ?? 1,
+    retryAt: row.retry_at ?? null,
     scheduledAt: row.scheduled_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -362,9 +421,10 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // `r`) with a TS twin below — integration tests assert the two agree. Arms, in
 // order: childless ⇒ skipped (new skips are childless; the app enforces
 // skip_reason on them); any active child ⇒ starting until any child has left
-// 'starting', then running; all-terminal: all skipped ⇒ skipped (legacy
-// backfilled skip rows), any denied child ⇒ unauthorized, no failure ⇒ completed, no success ⇒ failed,
-// otherwise partial_failed.
+// 'starting', then running; else any child waiting to relaunch ⇒ retrying;
+// all-terminal: all skipped ⇒ skipped (legacy backfilled skip rows), any denied
+// child ⇒ unauthorized, no failure ⇒ completed, no success ⇒ failed, otherwise
+// partial_failed.
 
 const DERIVED_INVOCATION_STATUS_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN 'skipped'
@@ -373,6 +433,7 @@ const DERIVED_INVOCATION_STATUS_SQL = `CASE
       WHEN SUM(CASE WHEN r.status <> 'starting' THEN 1 ELSE 0 END) = 0 THEN 'starting'
       ELSE 'running'
     END
+  WHEN SUM(CASE WHEN r.status = 'retrying' THEN 1 ELSE 0 END) > 0 THEN 'retrying'
   WHEN SUM(CASE WHEN r.status = 'skipped' THEN 1 ELSE 0 END) = COUNT(r.id) THEN 'skipped'
   WHEN SUM(CASE WHEN r.status = 'unauthorized' THEN 1 ELSE 0 END) > 0 THEN 'unauthorized'
   WHEN SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) = 0 THEN 'completed'
@@ -383,7 +444,7 @@ END`;
 /** Derived completion time: latest child completion once all children are terminal. */
 const DERIVED_INVOCATION_COMPLETED_AT_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN NULL
-  WHEN SUM(CASE WHEN r.status IN ('starting', 'running') THEN 1 ELSE 0 END) > 0 THEN NULL
+  WHEN SUM(CASE WHEN r.status IN ${ACTIVE_RUN_STATUSES_SQL} THEN 1 ELSE 0 END) > 0 THEN NULL
   ELSE MAX(r.completed_at)
 END`;
 
@@ -418,11 +479,14 @@ export function deriveInvocationStatus(counts: {
   // Required: distinguishes "starting" from "running". InvocationRunAggregate
   // folds both into `active` and has no `starting`, so it must not be passed here.
   starting: number;
+  /** Runs waiting to relaunch, which `active` includes as InvocationRunAggregate's does. */
+  retrying: number;
 }): AutomationInvocationStatus {
   if (counts.total === 0) return "skipped";
-  if (counts.active > 0) {
+  if (counts.active > counts.retrying) {
     return counts.starting === counts.total ? "starting" : "running";
   }
+  if (counts.retrying > 0) return "retrying";
   if (counts.skipped === counts.total) return "skipped";
   if (counts.unauthorized > 0) return "unauthorized";
   if (counts.failed === 0) return "completed";
@@ -468,8 +532,8 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-           event_type, trigger_config, trigger_auth_data, owner_team_id, schedule_once_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id, schedule_once_at, max_retries)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -493,7 +557,8 @@ export class AutomationStore {
         row.trigger_config,
         row.trigger_auth_data,
         row.owner_team_id,
-        row.schedule_once_at
+        row.schedule_once_at,
+        row.max_retries ?? 0
       );
   }
 
@@ -716,6 +781,7 @@ export class AutomationStore {
       "next_run_at",
       "enabled",
       "consecutive_failures",
+      "max_retries",
       "event_type",
       "trigger_config",
       "trigger_auth_data",
@@ -1158,19 +1224,44 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async bulkFailStartingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
-    await this.bulkFailRunsInStatus(runIds, "starting", reason, completedAt);
-  }
-
-  async bulkFailRunningRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
-    await this.bulkFailRunsInStatus(runIds, "running", reason, completedAt);
-  }
-
-  private async bulkFailRunsInStatus(
+  /**
+   * Fail runs the orphan sweep read, if each is still the stuck attempt it read: still
+   * `starting` and created before `createdBefore`. A retry relaunched since then restamped
+   * created_at, so it is left alone.
+   */
+  async bulkFailStartingRuns(
     runIds: string[],
-    status: "starting" | "running",
     reason: string,
-    completedAt: number
+    completedAt: number,
+    createdBefore: number
+  ): Promise<void> {
+    await this.bulkFailRuns(runIds, reason, completedAt, ORPHANED_STARTING_RUN_PREDICATE, [
+      createdBefore,
+    ]);
+  }
+
+  /**
+   * Fail runs the deadline sweep read, if each is still past its deadline as of `completedAt`
+   * (see {@link getRunsPastExecutionDeadline}); a retry relaunched since then has a new one.
+   */
+  async bulkFailRunningRuns(
+    runIds: string[],
+    reason: string,
+    completedAt: number,
+    defaultDeadlineMs: number
+  ): Promise<void> {
+    await this.bulkFailRuns(runIds, reason, completedAt, RUN_PAST_EXECUTION_DEADLINE_PREDICATE, [
+      completedAt,
+      completedAt - defaultDeadlineMs,
+    ]);
+  }
+
+  private async bulkFailRuns(
+    runIds: string[],
+    reason: string,
+    completedAt: number,
+    predicate: string,
+    predicateParams: unknown[]
   ): Promise<void> {
     if (runIds.length === 0) return;
     const placeholders = runIds.map(() => "?").join(", ");
@@ -1178,17 +1269,114 @@ export class AutomationStore {
       .prepare(
         `UPDATE automation_runs
          SET status = 'failed', failure_reason = ?, completed_at = ?
-         WHERE id IN (${placeholders}) AND status = ?`
+         WHERE id IN (${placeholders}) AND ${predicate}`
       )
-      .bind(reason, completedAt, ...runIds, status)
+      .bind(reason, completedAt, ...runIds, ...predicateParams)
       .run();
+  }
+
+  // --- Launch retries ---
+
+  /**
+   * Record a launch that failed before its prompt was sent. While the automation allows
+   * another attempt, the run waits as `retrying` until `retryAt` and keeps holding its
+   * automation; otherwise it fails like any launch failure. Guarded like {@link updateRun};
+   * null when the guard suppressed both writes.
+   */
+  async failLaunchOrRetry(
+    id: string,
+    reason: string,
+    failedAt: number,
+    retryAt: number
+  ): Promise<"retrying" | "failed" | null> {
+    const [retry, fail] = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE automation_runs
+           SET status = 'retrying', failure_reason = ?, retry_at = ?, session_id = NULL,
+               started_at = NULL, execution_deadline_at = NULL, first_prompt_pending = 0
+           WHERE id = ? AND status IN ('starting', 'running') AND ${RETRY_ALLOWED_SQL}`
+        )
+        .bind(reason, retryAt, id),
+      this.db
+        .prepare(
+          `UPDATE automation_runs SET status = 'failed', failure_reason = ?, completed_at = ?
+           WHERE id = ? AND status IN ('starting', 'running')`
+        )
+        .bind(reason, failedAt, id),
+    ]);
+    if ((retry?.meta?.changes ?? 0) > 0) return "retrying";
+    return (fail?.meta?.changes ?? 0) > 0 ? "failed" : null;
+  }
+
+  /**
+   * Waiting runs the retry sweep must settle, soonest first: those due to relaunch, and those
+   * their automation no longer allows (paused, deleted, or its limit lowered) so they stop
+   * holding it.
+   */
+  async getRetriesToSettle(now: number, limit: number): Promise<AutomationRunRow[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automation_runs
+         WHERE status = 'retrying' AND (retry_at <= ? OR NOT ${RETRY_ALLOWED_SQL})
+         ORDER BY retry_at ASC LIMIT ?`
+      )
+      .bind(now, limit)
+      .all<AutomationRunRow>();
+    return result.results || [];
+  }
+
+  /**
+   * Take a due retry for relaunch. One claim wins across concurrent ticks, none once the
+   * automation no longer allows it, none from a copy of `run` read before another tick
+   * relaunched it, and none once the team's grants changed from `teamGrantsVersion`, as for a
+   * first launch's admission. Restamps created_at so the orphan sweep times this attempt rather
+   * than the original firing.
+   */
+  async claimRetry(
+    run: AutomationRunRow,
+    now: number,
+    teamGrantsVersion?: TeamGrantsVersion
+  ): Promise<AutomationRunRow | null> {
+    const grantsGuard = teamGrantsGuard(teamGrantsVersion);
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs
+         SET status = 'starting', attempt = attempt + 1, retry_at = NULL, failure_reason = NULL,
+             created_at = ?
+         WHERE id = ? AND status = 'retrying' AND attempt = ? AND retry_at <= ?
+           AND ${RETRY_ALLOWED_SQL} ${grantsGuard.sql}`
+      )
+      .bind(now, run.id, run.attempt ?? 1, now, ...grantsGuard.params)
+      .run();
+    if ((result.meta?.changes ?? 0) === 0) return null;
+    return {
+      ...run,
+      status: "starting",
+      attempt: (run.attempt ?? 1) + 1,
+      retry_at: null,
+      failure_reason: null,
+      created_at: now,
+    };
+  }
+
+  /** Fail a waiting run its automation no longer allows to relaunch; its last failure stands. */
+  async failWithdrawnRetry(id: string, completedAt: number): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE automation_runs SET status = 'failed', retry_at = NULL, completed_at = ?
+         WHERE id = ? AND status = 'retrying' AND NOT ${RETRY_ALLOWED_SQL}`
+      )
+      .bind(completedAt, id)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async getActiveRunForAutomation(automationId: string): Promise<AutomationRunRow | null> {
     return this.db
       .prepare(
         `SELECT * FROM automation_runs
-         WHERE automation_id = ? AND status IN ('starting', 'running')
+         WHERE automation_id = ? AND status IN ${ACTIVE_RUN_STATUSES_SQL}
          ORDER BY created_at DESC LIMIT 1`
       )
       .bind(automationId)
@@ -1215,9 +1403,10 @@ export class AutomationStore {
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
    * the conditional insert (same SQL, one definition). Schedule/manual firings
-   * block on ANY active run of the automation (main parity with
-   * getActiveRunForAutomation); event firings block per concurrency key only —
-   * an automation-wide guard would serialize unrelated events.
+   * block on ANY active run of the automation, including one waiting to retry
+   * (main parity with getActiveRunForAutomation); event firings block per
+   * concurrency key only — an automation-wide guard would serialize unrelated
+   * events.
    */
   private overlapPredicate(
     automationId: string,
@@ -1229,13 +1418,13 @@ export class AutomationStore {
               JOIN automation_invocations ai ON ai.id = ar.invocation_id
               WHERE ar.automation_id = ?
                 AND ai.concurrency_key = ?
-                AND ar.status IN ('starting', 'running')`,
+                AND ar.status IN ${ACTIVE_RUN_STATUSES_SQL}`,
         params: [automationId, scope.concurrencyKey],
       };
     }
     return {
       sql: `SELECT 1 FROM automation_runs ar
-            WHERE ar.automation_id = ? AND ar.status IN ('starting', 'running')`,
+            WHERE ar.automation_id = ? AND ar.status IN ${ACTIVE_RUN_STATUSES_SQL}`,
       params: [automationId],
     };
   }
@@ -1279,17 +1468,11 @@ export class AutomationStore {
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
     /** Team grants version the targets were authorized against; a change refuses admission. */
-    teamGrantsVersion?: { teamId: string; version: number };
+    teamGrantsVersion?: TeamGrantsVersion;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
-    const grants = params.teamGrantsVersion;
-    const grantsGuard = grants
-      ? {
-          sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
-          params: [grants.teamId, grants.version],
-        }
-      : { sql: "", params: [] };
+    const grantsGuard = teamGrantsGuard(params.teamGrantsVersion);
     const scheduleGuard = this.scheduledInvocationGuard(invocation);
     const statements: SqlStatement[] = [];
     statements.push(
@@ -1647,7 +1830,8 @@ export class AutomationStore {
       .prepare(
         `SELECT
            COUNT(*) AS total,
-           COALESCE(SUM(CASE WHEN status IN ('starting', 'running') THEN 1 ELSE 0 END), 0) AS active,
+           COALESCE(SUM(CASE WHEN status IN ${ACTIVE_RUN_STATUSES_SQL} THEN 1 ELSE 0 END), 0) AS active,
+           COALESCE(SUM(CASE WHEN status = 'retrying' THEN 1 ELSE 0 END), 0) AS retrying,
            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
            COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
            COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped,
@@ -1658,6 +1842,7 @@ export class AutomationStore {
       .first<{
         total: number;
         active: number;
+        retrying: number;
         failed: number;
         completed: number;
         skipped: number;
@@ -1667,6 +1852,7 @@ export class AutomationStore {
     return {
       total: row?.total ?? 0,
       active: row?.active ?? 0,
+      retrying: row?.retrying ?? 0,
       failed: row?.failed ?? 0,
       completed: row?.completed ?? 0,
       skipped: row?.skipped ?? 0,
@@ -1763,7 +1949,7 @@ export class AutomationStore {
              WHERE r.invocation_id = i.id AND r.status = 'failed')
            AND NOT EXISTS (
              SELECT 1 FROM automation_runs r
-             WHERE r.invocation_id = i.id AND r.status IN ('starting', 'running'))
+             WHERE r.invocation_id = i.id AND r.status IN ${ACTIVE_RUN_STATUSES_SQL})
          ORDER BY i.created_at ASC
          LIMIT ?`
       )
@@ -1790,7 +1976,7 @@ export class AutomationStore {
                    AND EXISTS (
                      SELECT 1 FROM automation_runs r
                      WHERE r.invocation_id = i.id
-                       AND r.status IN ('starting', 'running', 'completed', 'failed'))
+                       AND r.status IN ('starting', 'running', 'retrying', 'completed', 'failed'))
                  ORDER BY i.created_at DESC LIMIT 1) AS invocation_id
          FROM automations a
          WHERE a.consecutive_failures > 0 AND a.deleted_at IS NULL
@@ -1838,7 +2024,7 @@ export class AutomationStore {
          JOIN automation_invocations i ON i.id = r.invocation_id
          WHERE r.automation_id = ?
            AND i.concurrency_key = ?
-           AND r.status IN ('starting', 'running')
+           AND r.status IN ${ACTIVE_RUN_STATUSES_SQL}
          ORDER BY r.created_at DESC LIMIT 1`
       )
       .bind(automationId, concurrencyKey)
@@ -1998,15 +2184,13 @@ export class AutomationStore {
   // Backed by partial indexes (migrations 0024 and 0079); `status` must stay a
   // literal, not a bound param, or the planner skips the index and full-scans
   // automation_runs.
-  static readonly ORPHANED_STARTING_RUNS_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
+  static readonly ORPHANED_STARTING_RUNS_SQL = `SELECT * FROM automation_runs WHERE ${ORPHANED_STARTING_RUN_PREDICATE}`;
   // A 'running' row without a deadline predates migration 0079, or was claimed
   // by a worker that does (the migration applies before that worker is
   // replaced). Those rows are held to the deployment-default deadline measured
   // from started_at; leaving them out would let one lost callback keep the run
   // 'running', and its automation blocked, forever.
-  static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
+  static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL = `SELECT * FROM automation_runs WHERE ${RUN_PAST_EXECUTION_DEADLINE_PREDICATE}`;
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;

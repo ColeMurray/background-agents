@@ -15,6 +15,7 @@ expect.extend(matchers);
 
 const CURRENT_USER_ID = "11111111111111111111111111111111";
 let permissions: string[] = [];
+let loading = false;
 const replace = vi.fn();
 const push = vi.fn();
 let search = "";
@@ -61,7 +62,7 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: false }),
 }));
 vi.mock("@/hooks/use-automations", () => ({
-  useAutomation: () => ({ automation, loading: false }),
+  useAutomation: () => ({ automation: loading ? undefined : automation, loading }),
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
@@ -114,6 +115,7 @@ async function renderPage() {
 
 beforeEach(() => {
   permissions = [];
+  loading = false;
   search = "";
   formProps.mockClear();
   automation.capabilities = NO_CAPABILITIES;
@@ -128,6 +130,22 @@ beforeEach(() => {
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
 });
 afterEach(cleanup);
+
+describe("EditAutomationPage loading", () => {
+  it("shows the form skeleton while the automation loads", async () => {
+    loading = true;
+    await renderPage();
+
+    expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to automation" })).toHaveAttribute(
+      "href",
+      "/automations/auto-1"
+    );
+    expect(screen.queryByText("Automation edit form")).not.toBeInTheDocument();
+    expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+});
 
 describe("EditAutomationPage authorization", () => {
   it.each([

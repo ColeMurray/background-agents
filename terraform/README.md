@@ -13,6 +13,7 @@ The infrastructure spans multiple cloud providers:
 | **Vercel**     | Next.js Web App, optional sandbox sessions           | Native provider + Sandbox API calls |
 | **Modal**      | Optional sandbox infrastructure                      | CLI wrapper (no provider exists)    |
 | **Daytona**    | Optional sandbox snapshots                           | REST API wrapper                    |
+| **Boat**       | Optional sandbox snapshots                           | REST API wrapper                    |
 
 ## Directory Structure
 
@@ -248,6 +249,13 @@ VERCEL_SANDBOX_TEAM_ID # Optional
 VERCEL_BASE_SNAPSHOT_ID # Optional manual fallback; skips Terraform-managed snapshot builds
 VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
+
+# Boat (only if SANDBOX_PROVIDER=boat)
+BOAT_API_KEY
+BOAT_BASE_SNAPSHOT # Prefix for the Terraform-managed named snapshot
+BOAT_API_URL       # Optional; defaults to https://boat.dev/api/v1
+BOAT_ORG           # Optional organization wallet
+BOAT_SANDBOX_TYPE  # Optional; defaults to default
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
 # Optional GitHub sign-in pair (set both or neither)
@@ -281,7 +289,7 @@ LINEAR_WEBHOOK_SECRET
 LINEAR_API_KEY # Optional; fallback comment posting
 
 # API Keys
-ANTHROPIC_API_KEY # Optional; injected into Modal/OpenComputer sandboxes and used by an Anthropic classifier when CLASSIFICATION_ANTHROPIC_API_KEY is unset
+ANTHROPIC_API_KEY # Optional; injected into Modal sandboxes and used by an Anthropic classifier when CLASSIFICATION_ANTHROPIC_API_KEY is unset
 CLASSIFICATION_ANTHROPIC_API_KEY # Optional; classifier-only Anthropic key that never reaches sandboxes
 CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model and the Slack or Linear bot is enabled
 CLASSIFICATION_BEDROCK_API_KEY # Required when classification_model is a Bedrock model and the Slack or Linear bot is enabled; see "Classify on Amazon Bedrock (Optional)" in docs/GETTING_STARTED.md
@@ -364,9 +372,9 @@ not add keys to Terraform-managed Modal secrets by hand. A failed replacement fa
 
 Clearing `anthropic_api_key` (for example, after moving the classifier to
 `classification_anthropic_api_key`) keeps `ANTHROPIC_API_KEY=""` in Modal's `llm-api-keys` secret,
-so the next apply overwrites the old value, and drops the OpenComputer control-plane binding. New
-and restored sandboxes stop receiving the key, but sandboxes that are already running keep it until
-they terminate. Rotate the key if it must be revoked immediately.
+so the next apply overwrites the old value. New and restored sandboxes stop receiving the key, but
+sandboxes that are already running keep it until they terminate. Rotate the key if it must be
+revoked immediately.
 
 ## Verification
 
@@ -386,7 +394,7 @@ curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/health
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suffix>"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
+# Daytona, Vercel, E2B and Boat use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Verify the web deployment
 curl -I "$(terraform output -raw web_app_url)"

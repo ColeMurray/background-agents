@@ -230,6 +230,31 @@ class BootEventLog:
             elapsed_ms=_elapsed_ms(started_at),
         )
 
+    def republish_failure(self, error: BootPhaseError) -> None:
+        """Make ``error`` the newest phase line again.
+
+        Phases that run side by side can outrun a failure with their own
+        lines, and the control plane keeps only the newest sequence. The
+        failure the boot dies of is therefore written once more, at the end,
+        and the error's sequence number follows it, so the fatal HTTP report
+        and the socket copy name the same line. Best-effort, like the
+        ``failed`` line itself; a failure that is already the newest line is
+        left alone.
+        """
+        if error.boot_seq is not None and error.boot_seq == self._seq:
+            return
+        entry: dict[str, Any] = {
+            "kind": "phase",
+            "phase": error.phase,
+            "status": "failed",
+            "detail": bounded_detail(str(error)),
+        }
+        if error.repo_owner is not None and error.repo_name is not None:
+            entry["repoOwner"] = error.repo_owner
+            entry["repoName"] = error.repo_name
+        with contextlib.suppress(BootEventWriteError):
+            error.boot_seq = self._append(entry, required=True)
+
     def _append(self, entry: dict[str, Any], *, required: bool) -> int:
         self._seq += 1
         line = {"seq": self._seq, **entry, "at": time.time()}

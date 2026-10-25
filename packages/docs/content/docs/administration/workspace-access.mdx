@@ -15,6 +15,8 @@ relatedCode:
   - packages/control-plane/src/routes/session-target-authorization.ts
   - packages/web/src/components/settings/workspace-settings.tsx
   - packages/control-plane/src/db/authorization-store.ts
+  - packages/control-plane/src/authorization/member-merge.ts
+  - packages/web/src/components/settings/merge-members-dialog.tsx
 ---
 
 This page explains who can get into your workspace, what each role permits, and how to change or suspend a member from Settings › Workspace access.
@@ -78,6 +80,7 @@ OpenInspect has four built-in roles. This table describes workspace feature perm
 | Manage and trigger automations as executor or team lead |  Yes  |      Yes      |  Yes   |   No   |
 | Manage and trigger any automation                       |  Yes  |      Yes      |   No   |   No   |
 | View and manage workspace members                       |  Yes  |      Yes      |   No   |   No   |
+| Merge duplicate member accounts                         |  Yes  |      Yes      |   No   |   No   |
 | View the audit log                                      |  Yes  |      Yes      |   No   |   No   |
 | Transfer workspace ownership                            |  Yes  |      No       |   No   |   No   |
 | View analytics                                          |  Yes  |      Yes      |  Yes   |  Yes   |
@@ -87,7 +90,7 @@ OpenInspect has four built-in roles. This table describes workspace feature perm
 
 **Owner.** All workspace feature permissions, subject to resource-specific checks. Owners have audited break-glass read access to private sessions by session ID, but do not automatically gain collaboration or sandbox access. Only Owners can grant or remove the Owner role or suspend and restore another Owner. The final active Owner cannot be suspended or demoted, so the workspace cannot lose all ownership by accident.
 
-**Administrator.** Runs the workspace day to day: members, permitted sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators need session ownership or an explicit collaborator grant to access a private session. They cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
+**Administrator.** Runs the workspace day to day: members (including merging duplicate accounts), permitted sessions, automations, repositories, environments, provider accounts, integrations, secrets, and the audit log. Administrators need session ownership or an explicit collaborator grant to access a private session. They cannot transfer ownership, change who holds the Owner role, or suspend and restore an Owner.
 
 **Member.** Creates and uses eligible sessions, repositories, environments, and automations. Members manage and manually trigger automations for which they are the executor or an owning-team lead. Team leads also have team-specific administration capabilities; that does not grant workspace-wide configuration access. Members can view [analytics](/administration/analytics).
 
@@ -180,6 +183,48 @@ Rules that apply regardless of who is signed in:
 - Only an Owner can assign or remove the Owner role or suspend and restore another Owner.
 - The last active Owner cannot be suspended or demoted. Promote a second Owner first.
 
+## Merging duplicate accounts
+
+One person can end up with two member accounts. The most common case is a Slack account and a GitHub account that use different email addresses: the Slack integration creates an account for the Slack user, and GitHub sign-in creates another. Merging folds one account into the other so the person has a single identity, history, and set of settings.
+
+Owners and Administrators merge accounts from Settings › Workspace access by clicking **Merge accounts** above the members list. The permission (`workspace.members.merge`) belongs to the built-in Owner and Administrator roles and can also be granted to a custom role. A custom role also needs `workspace.members.read` to review a merge, because the review shows both members' details and linked sign-ins. Grant it carefully: a merge moves sign-in identities between accounts, so whoever signs in with the merged-in account's identities signs in as the kept account. Merging Owner accounts always requires an Owner.
+
+<Steps>
+<Step>
+### Choose the accounts
+
+Pick the **account to keep** and the **account to merge in**. Keep the account the person signs in with; its role, email, and sign-in stay as they are. Use **Swap** if you picked them the wrong way round.
+
+</Step>
+<Step>
+### Review the merge
+
+Click **Review merge**. Nothing changes yet. The review shows both accounts with their linked sign-ins (for example, `GitHub · octocat` and `Slack`) and what moves to the kept account: linked sign-ins, sessions, automations, team memberships, memories, skill profiles, and source-control and model-provider connections. The review also spells out what changes besides moving records:
+
+- **Access changes.** If the merged-in account leads a team where the kept account is only a member, the kept account becomes a lead of that team.
+- **Combined skill profiles.** A skill profile with the same name as one on the kept account is combined into it.
+- **Discarded settings.** Where both accounts have memory preferences or keyboard shortcuts, the kept account's stay and the merged-in account's are discarded.
+- **Duplicates.** Records identical to ones the kept account already has, such as membership of the same team or read markers for the same session, are dropped rather than duplicated.
+
+</Step>
+<Step>
+### Confirm
+
+Tick the confirmation and click **Merge accounts**. The merge is applied in one step: either everything moves or nothing does. The merged-in account is deleted and signed out of the browser, its Slack or other linked identities now resolve to the kept account, and a `workspace.user_merged` event naming you as the actor is written to the [audit log](/administration/audit-log). A merge cannot be undone.
+
+</Step>
+</Steps>
+
+The review blocks a merge until these conditions hold:
+
+- **Both accounts have the same role.** If they differ, close the dialog, change one account's role in the members list, and review the merge again.
+- **Both accounts are active, or both are suspended.**
+- **You are not merging away the account you are signed in with.** Keep your own account and merge the other one into it.
+- **Only an Owner can merge Owner accounts**, and the kept Owner account must be active. Without that right, the review also hides the linked sign-ins of Owner accounts.
+- **At most one account has a GitHub sign-in.** An account can have only one GitHub identity, so two accounts that each sign in with GitHub can't be merged.
+
+If either account or your own access changes while you review (a role, suspension, the merged-in account's email, or a new GitHub sign-in), the merge is refused, nothing changes, and the refusal is recorded in the audit log. Review it again. If a merge succeeded but your browser lost the response, merging the same two accounts again reports success without changing anything.
+
 ### Initial Owner bootstrap
 
 The first person to sign in receives the Member role and is not promoted automatically. On a new deployment, the intended Owner signs in once, and a deployment operator runs the Owner bootstrap command with that person's user ID. This is an operator step; see the [self-hosting guide](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md) and [Deployment overview](/administration/deployment).
@@ -196,6 +241,12 @@ The first person to sign in receives the Member role and is not promoted automat
   <Accordion title="The role drop-down or Suspend button is disabled for a member">
     The member is an Owner and you are an Administrator, or the member is the last active Owner. Ask
     an Owner to make the change, or promote another Owner first.
+
+</Accordion>
+  <Accordion title="A person has two accounts, such as one from Slack and one from GitHub">
+    Their Slack and GitHub emails differ, so each created its own account. Use **Merge accounts** in
+    Settings › Workspace access to keep the GitHub sign-in account and merge the Slack account into
+    it. See [Merging duplicate accounts](#merging-duplicate-accounts).
 
 </Accordion>
   <Accordion title="A scheduled automation stopped running after a role change">

@@ -98,13 +98,6 @@ vercel_sandbox_project_id = "" # e.g., "prj_xxxxxxxxxxxxxxxxxxxx"
 # vercel_sandbox_runtime  = "node24"
 # vercel_snapshot_expiration_ms = 0
 
-# OpenComputer REST API
-# Only required when sandbox_provider = "opencomputer"
-# The template must include the OpenInspect sandbox runtime entrypoint.
-opencomputer_api_url = "https://app.opencomputer.dev/api"
-opencomputer_api_key = ""
-opencomputer_template = ""
-
 # E2B
 # Only required when sandbox_provider = "e2b"
 # - e2b_api_key: runtime key (control-plane → E2B API) AND template-build auth
@@ -119,6 +112,22 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # Auto-pause makes a lapsed TTL recoverable (pause, not kill) and auto-resumes the
 # sandbox on inbound activity. Default true; set false to kill on timeout.
 # e2b_auto_pause = true
+
+# Boat
+# Only required when sandbox_provider = "boat"
+# - boat_api_key: runtime key (control-plane → Boat API, sandbox access password HMAC)
+#                 AND snapshot-build auth. Dashboard → API keys.
+# The boat-infra Terraform module builds the named snapshot automatically;
+# boat_base_snapshot is the prefix of the name it saves (and the one fresh
+# sandboxes deploy from). 1-46 lowercase letters, digits or dashes.
+boat_api_key = ""              # sensitive — runtime REST API key (also auths the build)
+boat_base_snapshot = ""        # e.g., "open-inspect"
+# boat_api_url = "https://boat.dev/api/v1"
+# boat_org = ""                # Optional organization wallet; empty uses the active one.
+#                              # Sandboxes are created private, whatever its default.
+# Machine size for sessions that request no CPU or memory; a request picks the
+# smallest size that fits it. One of small, default, large, xlarge.
+# boat_sandbox_type = "default"
 
 # =============================================================================
 # GitHub App Credentials
@@ -237,9 +246,8 @@ linear_webhook_secret = ""   # Webhook Signing Secret from the application confi
 # API Keys
 # =============================================================================
 
-# Anthropic API key for Claude. Injected into Modal session sandboxes and
-# OpenComputer sandboxes; Daytona, E2B and Vercel read model keys only from the
-# secret store in the web app, which overrides this value everywhere. Optional:
+# Anthropic API key for Claude. Injected into Modal session sandboxes; Daytona,
+# E2B and Vercel read model keys only from the secret store in the web app, which overrides this value everywhere. Optional:
 # leave it blank to supply model credentials as secrets instead. Required only
 # when classification_model names an Anthropic model AND at least one of the
 # Slack or Linear bots is enabled. Both of those are the defaults, so a stock
@@ -311,8 +319,8 @@ nextauth_secret = ""
 # - "modal": existing Modal-based sandboxes with filesystem snapshot restore
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
-# - "opencomputer": OpenComputer declarative-template sandboxes with hibernate/resume
 # - "e2b": direct E2B REST API integration with pause/resume
+# - "boat": direct Boat REST API integration with stop/resume (archived snapshot)
 # Select "modal-vm" for Docker-capable VMs (deployment-wide; see docs/MODAL_DOCKER.md).
 sandbox_provider = "modal"
 

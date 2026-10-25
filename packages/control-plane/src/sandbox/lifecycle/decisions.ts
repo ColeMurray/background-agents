@@ -96,9 +96,9 @@ export interface CircuitBreakerConfig {
 /**
  * Default circuit breaker configuration.
  *
- * The window must outlast one connect-watchdog cycle plus the spawn cooldown:
- * that is the slowest cadence at which consecutive failures can arrive, and a
- * shorter window would let every watchdog timeout start a fresh count.
+ * The window must outlast one connect-watchdog cycle. Failed attempts bypass
+ * the spawn cooldown, so consecutive watchdog timeouts can arrive one cycle
+ * apart; a shorter window would let every timeout start a fresh count.
  */
 export const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
   threshold: 3,

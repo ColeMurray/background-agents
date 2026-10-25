@@ -11,8 +11,10 @@ from urllib.parse import urlsplit
 
 from ..base import HarnessStartError
 
-CODEX_VERSION = "0.160.0"
-CODEX_BINARY = "/usr/local/bin/codex"
+CODEX_VERSION = "0.163.0"
+# The image's pinned install, never a /usr/local/bin link: a substrate may
+# re-link its own coding agents there at boot (Boat does).
+CODEX_BINARY = "/opt/openinspect/codex/bin/codex"
 
 
 def clean_codex_env(parent: Mapping[str, str], state_dir: Path) -> dict[str, str]:
@@ -107,6 +109,9 @@ def launch_arguments(state_dir: Path) -> tuple[str, ...]:
         # authority. Native history must never persist that state.
         "features.shell_snapshot": "false",
         "features.shell_snapshot_v2": "false",
+        # API-key model discovery sends the API key to the ChatGPT backend's
+        # model catalog. API keys stay on the OpenAI API.
+        "features.api_key_model_discovery": "false",
         "analytics.enabled": "false",
         "feedback.enabled": "false",
         "check_for_update_on_startup": "false",

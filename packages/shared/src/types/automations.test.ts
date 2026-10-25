@@ -4,6 +4,7 @@ import {
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
+  MAX_AUTOMATION_RETRIES,
   updateAutomationRequestSchema,
 } from "./automations";
 
@@ -24,6 +25,7 @@ const automation = {
   enabled: true,
   nextRunAt: 123,
   consecutiveFailures: 0,
+  maxRetries: 0,
   createdBy: "user-1",
   userId: USER_ID,
   ownerTeamId: null,
@@ -48,6 +50,16 @@ describe("listAutomationsResponseSchema", () => {
       nextCursor: null,
     });
     expect(result.automations[0]).toMatchObject({ ownerTeamId: "team_a", capabilities });
+  });
+
+  it("reads an automation from a control plane that predates launch retries as allowing none", () => {
+    const { maxRetries: _maxRetries, ...legacy } = automation;
+    const result = listAutomationsResponseSchema.parse({
+      automations: [legacy],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]!.maxRetries).toBe(0);
   });
 
   it("accepts a valid cursor page", () => {
@@ -150,6 +162,7 @@ describe("automation grant-denial statuses", () => {
     expect(automationInvocationStatusSchema.options).toEqual([
       "starting",
       "running",
+      "retrying",
       "completed",
       "failed",
       "partial_failed",
@@ -264,6 +277,19 @@ describe("automation request boundary contracts", () => {
           environmentIds: ["env_a", "env_a"],
         }).success
       ).toBe(false);
+    }
+  );
+
+  it.each([createAutomationRequestSchema, updateAutomationRequestSchema])(
+    "bounds maxRetries to whole numbers up to MAX_AUTOMATION_RETRIES",
+    (schema) => {
+      const parse = (maxRetries: unknown) =>
+        schema.safeParse({ name: "Daily sync", instructions: "Run", maxRetries });
+      expect(parse(0).success).toBe(true);
+      expect(parse(MAX_AUTOMATION_RETRIES).success).toBe(true);
+      expect(parse(MAX_AUTOMATION_RETRIES + 1).success).toBe(false);
+      expect(parse(-1).success).toBe(false);
+      expect(parse(1.5).success).toBe(false);
     }
   );
 

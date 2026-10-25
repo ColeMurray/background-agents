@@ -771,8 +771,8 @@ failures and incomplete snapshots fail closed rather than falling back to API-ke
 
 Suppression happens before `CreateSandboxConfig` reaches a sandbox provider, but provider-specific
 environment layering must obey the same result. Add cross-provider create and restore conformance
-tests for Modal's Python assembly and the TypeScript paths used by Daytona, E2B, Vercel, and
-OpenComputer; later provider layering must not reintroduce a suppressed key.
+tests for Modal's Python assembly and the TypeScript paths used by Daytona, E2B, and Vercel; later
+provider layering must not reintroduce a suppressed key.
 
 ### Cache behavior
 
@@ -1318,7 +1318,7 @@ Build `@open-inspect/shared` before dependent packages.
 - Provider plugins consume only their own broker response metadata.
 - Refresh tokens never appear in environment variables or auth files.
 - Account mode suppresses registry-owned API-key names across create and restore for Modal, Daytona,
-  E2B, Vercel, and OpenComputer.
+  E2B, and Vercel.
 - Legacy mode suppresses the API key only when its matching scoped refresh token is present and
   keeps the API-key fallback otherwise.
 - Snapshot restore continues to use the session's pinned provider auth.
@@ -1349,7 +1349,7 @@ Executable migrations, schemas, and code are authoritative when implementation d
 document describes stable boundaries and invariants; Git history and pull requests describe rollout
 sequence. Do not duplicate a file-by-file implementation checklist here. All sandbox providers use
 the same control-plane broker contract through the shared runtime; provider-specific credential
-selection does not belong in Modal, Daytona, E2B, Vercel, or OpenComputer.
+selection does not belong in Modal, Daytona, E2B, or Vercel.
 
 ## Alternatives Considered
 
@@ -1488,4 +1488,3 @@ selection, billing disclosure, and failure behavior.
 - [Session Snapshot Handoff ADR](docs/adr/0003-session-snapshot-handoff.md)
 - [E2B Sandbox Provider](docs/E2B_SANDBOX_PROVIDER.md)
 - [Vercel Sandbox Provider](docs/VERCEL_SANDBOX_PROVIDER.md)
-- [OpenComputer Provider](docs/OPENCOMPUTER_PROVIDER.md)
