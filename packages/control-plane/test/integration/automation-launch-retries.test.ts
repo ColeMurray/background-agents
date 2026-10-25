@@ -270,6 +270,19 @@ describe("scheduled launch retries", () => {
     expect(session.calls("/internal/prompt")).toHaveLength(1);
   });
 
+  it("does not claim a retry from a copy read before another tick relaunched it", async () => {
+    const session = sessionStub();
+    await createOverdueAutomation({ max_retries: 3 });
+    await session.scheduler().tick();
+    const stale = await onlyRun();
+    await makeRetryDue(stale.id);
+    await session.scheduler().tick();
+    await makeRetryDue(stale.id);
+
+    expect(await store().claimRetry(stale, Date.now())).toBeNull();
+    expect(await store().claimRetry(await onlyRun(), Date.now())).toMatchObject({ attempt: 3 });
+  });
+
   it("re-checks the owner's authorization before relaunching", async () => {
     const session = sessionStub();
     await createOverdueAutomation({ max_retries: 2 });

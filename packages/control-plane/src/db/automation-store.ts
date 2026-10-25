@@ -1241,9 +1241,10 @@ export class AutomationStore {
   }
 
   /**
-   * Take a due retry for relaunch. One claim wins across concurrent ticks, and none once the
-   * automation no longer allows it. Restamps created_at so the orphan sweep times this attempt
-   * rather than the original firing.
+   * Take a due retry for relaunch. One claim wins across concurrent ticks, none once the
+   * automation no longer allows it, and none from a copy of `run` read before another tick
+   * relaunched it. Restamps created_at so the orphan sweep times this attempt rather than the
+   * original firing.
    */
   async claimRetry(run: AutomationRunRow, now: number): Promise<AutomationRunRow | null> {
     const result = await this.db
@@ -1251,9 +1252,10 @@ export class AutomationStore {
         `UPDATE automation_runs
          SET status = 'starting', attempt = attempt + 1, retry_at = NULL, failure_reason = NULL,
              created_at = ?
-         WHERE id = ? AND status = 'retrying' AND retry_at <= ? AND ${RETRY_ALLOWED_SQL}`
+         WHERE id = ? AND status = 'retrying' AND attempt = ? AND retry_at <= ?
+           AND ${RETRY_ALLOWED_SQL}`
       )
-      .bind(now, run.id, now)
+      .bind(now, run.id, run.attempt ?? 1, now)
       .run();
     if ((result.meta?.changes ?? 0) === 0) return null;
     return {
