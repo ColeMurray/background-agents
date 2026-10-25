@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
 import { format, resolveConfig } from "prettier";
 
@@ -20,10 +20,17 @@ const result = await build({
 const { default: schema } = await import(
   `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`
 );
-writeFileSync(
-  target,
-  await format(JSON.stringify(schema), {
-    ...(await resolveConfig(target.pathname)),
-    parser: "json",
-  })
-);
+const generated = await format(JSON.stringify(schema), {
+  ...(await resolveConfig(target.pathname)),
+  parser: "json",
+});
+if (process.argv.includes("--check")) {
+  if (readFileSync(target, "utf8") !== generated) {
+    console.error(
+      "Trace export schema is stale. Run node packages/control-plane/scripts/generate-trace-export-schema.mjs"
+    );
+    process.exitCode = 1;
+  }
+} else {
+  writeFileSync(target, generated);
+}

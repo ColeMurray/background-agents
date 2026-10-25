@@ -66,6 +66,7 @@ jobs:
             ':(exclude)packages/slack-bot'
             ':(exclude)packages/github-bot'
             ':(exclude)packages/linear-bot'
+            ':(exclude)packages/discord-bot'
             ':(exclude)packages/modal-infra'
             ':(exclude)packages/daytona-infra'
             ':(exclude)packages/e2b-infra'

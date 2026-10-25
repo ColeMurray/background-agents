@@ -72,7 +72,7 @@ describe("team repository grants", () => {
     await cleanD1Tables();
     await seedActiveUser(MEMBER);
     await seedActiveUser(OTHER);
-    for (const provider of ["slack", "linear"] as const) {
+    for (const provider of ["slack", "linear", "discord", "github"] as const) {
       await new UserStore(env.DB).createIdentity({
         userId: MEMBER,
         provider,
@@ -122,6 +122,55 @@ describe("team repository grants", () => {
       teamHasRepositoryGrants: true,
     });
     expect(await (await request("/repos")).json()).toMatchObject({ repos });
+  });
+
+  it.each(["slack-bot", "linear-bot", "discord-bot"] as const)(
+    "refuses explicit team catalogs for %s, with or without a member actor",
+    async (service) => {
+      await request("/me/authorization", "GET", undefined, MEMBER);
+      await new TeamRepositoryGrantStore(env.DB).add(teamId, { kind: "installation" });
+      for (const actor of [undefined, `${service.replace("-bot", "")}:U-CATALOG`]) {
+        for (const [query, status] of [
+          [`teamId=${teamId}`, 404],
+          ["teamId=", 404],
+          [`teamId=${teamId}&teamId=${teamId}`, 400],
+          [`teamId=&teamId=${teamId}`, 400],
+          ["", 200],
+        ] as const) {
+          const url = `https://test.local/repos${query ? `?${query}` : ""}`;
+          const response = await routeRequest(
+            new Request(url, { headers: await serviceRequestHeaders(url, { service, actor }) }),
+            env,
+            createExecutionContext()
+          );
+          expect(response.status, `${service} actor=${actor} query=${query}`).toBe(status);
+          if (status === 200) expect(await response.json()).toMatchObject({ repos });
+        }
+      }
+    }
+  );
+
+  it("preserves the GitHub service's member-scoped catalog access", async () => {
+    await request("/me/authorization", "GET", undefined, MEMBER);
+    await new TeamRepositoryGrantStore(env.DB).add(teamId, {
+      kind: "repository",
+      repoExternalId: 1,
+      owner: "acme",
+      name: "repo-1",
+    });
+    const url = `https://test.local/repos?teamId=${teamId}`;
+    const response = await routeRequest(
+      new Request(url, {
+        headers: await serviceRequestHeaders(url, {
+          service: "github-bot",
+          actor: "github:U-CATALOG",
+        }),
+      }),
+      env,
+      createExecutionContext()
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ repos: [repos[0]] });
   });
 
   it("serves the full installation catalog for an installation grant", async () => {

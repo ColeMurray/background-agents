@@ -406,7 +406,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const callbackService = new CallbackNotificationService({
     repository: sessionCoreRepository,
     messageRepository,
-    slackPostScope: {
+    publicationScope: {
       getSession: (sessionId) => sessionIndexStore.get(sessionId),
       getChannelBinding: (channelId) => teamChannelBindingStore.get("slack", channelId),
     },

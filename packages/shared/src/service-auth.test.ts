@@ -14,6 +14,7 @@ import {
   parseServiceSignatureHeader,
   resolveOutboundCredential,
   SERVICE_HEADER,
+  SERVICE_NAMES,
   SERVICE_SIGNATURE_HEADER,
   sha256Hex,
   verifyServiceSignature,
@@ -349,7 +350,7 @@ describe("isSignedCallbackPayload", () => {
 
 describe("isServiceName", () => {
   it("accepts exactly the registered services", () => {
-    for (const name of ["web", "slack-bot", "github-bot", "linear-bot"]) {
+    for (const name of SERVICE_NAMES) {
       expect(isServiceName(name)).toBe(true);
     }
     for (const name of ["", "WEB", "modal", "sandbox", "slackbot", "unknown"]) {

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UserStore } from "../db/user-store";
 import {
-  parseAuthorId,
   resolveCurrentGitHubAccessToken,
   resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
@@ -75,45 +74,6 @@ describe("resolveGitAuthorIdentity", () => {
       name: "Grace Hopper",
       email: "open-inspect@noreply.github.com",
     });
-  });
-});
-
-describe("parseAuthorId", () => {
-  it("parses github authorId", () => {
-    expect(parseAuthorId("github:1001")).toEqual({
-      provider: "github",
-      providerUserId: "1001",
-    });
-  });
-
-  it("parses slack authorId", () => {
-    expect(parseAuthorId("slack:U123ABC")).toEqual({
-      provider: "slack",
-      providerUserId: "U123ABC",
-    });
-  });
-
-  it("parses linear authorId", () => {
-    expect(parseAuthorId("linear:abc-def")).toEqual({
-      provider: "linear",
-      providerUserId: "abc-def",
-    });
-  });
-
-  it("returns null for plain user ID (web client)", () => {
-    expect(parseAuthorId("user-id-123")).toBeNull();
-  });
-
-  it("returns null for 'anonymous'", () => {
-    expect(parseAuthorId("anonymous")).toBeNull();
-  });
-
-  it("returns null for unknown provider prefix", () => {
-    expect(parseAuthorId("unknown:12345")).toBeNull();
-  });
-
-  it("returns null for empty string", () => {
-    expect(parseAuthorId("")).toBeNull();
   });
 });
 

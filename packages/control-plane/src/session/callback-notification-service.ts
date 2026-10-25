@@ -1,8 +1,8 @@
 /**
- * CallbackNotificationService - Slack/Linear bot callback notifications.
+ * CallbackNotificationService - Slack/Linear/Discord bot callback notifications.
  *
  * Extracted from SessionDO to reduce its size. Handles:
- * - Notifying originating clients (Slack, Linear) on execution completion
+ * - Notifying originating clients (Slack, Linear, Discord) on execution completion
  * - Throttled tool-call progress callbacks
  * - HMAC payload signing for callback authentication
  */
@@ -10,12 +10,11 @@
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import {
   automationCallbackContextSchema,
-  linearCompletionCallbackPayloadSchema,
-  linearToolCallCallbackPayloadSchema,
   SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
-import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
-import { slackPostGate, type SlackPostScope } from "../authorization/slack-post-gate";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
+import type { CallbackPublicationScope } from "../authorization/callback-publication-scope";
+import { resolveCallbackRoute, type CallbackRoute } from "./callback-routes";
 import type { Logger } from "../logger";
 import { deliverWithRetry, retryDelivery } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
@@ -40,8 +39,10 @@ export interface CallbackServiceEnv {
   // destination's own.
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_DISCORD_BOT?: string;
   SLACK_BOT?: FetchClient;
   LINEAR_BOT?: FetchClient;
+  DISCORD_BOT?: FetchClient;
 }
 
 export type AutomationRunCompletionHandler = (completion: AutomationRunCompletion) => Promise<void>;
@@ -52,7 +53,7 @@ export type AutomationRunCompletionHandler = (completion: AutomationRunCompletio
 export interface CallbackServiceDeps {
   repository: CallbackRepository;
   messageRepository: MessageRepository;
-  slackPostScope: SlackPostScope;
+  publicationScope: CallbackPublicationScope;
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
@@ -67,23 +68,9 @@ export interface CallbackServiceDeps {
  * single duplicate Linear/Slack activity, not data loss.
  */
 const NOTIFIED_CALL_IDS_CAP = 500;
-const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function hasSlackThreadCoordinates(context: unknown): context is {
-  channel: string;
-  threadTs: string;
-} {
-  return (
-    isRecord(context) &&
-    typeof context.channel === "string" &&
-    !!context.channel &&
-    typeof context.threadTs === "string" &&
-    !!context.threadTs
-  );
 }
 
 /**
@@ -122,7 +109,7 @@ interface CallbackDeliveryResult {
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
   private readonly messageRepository: MessageRepository;
-  private readonly slackPostScope: SlackPostScope;
+  private readonly publicationScope: CallbackPublicationScope;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
@@ -142,7 +129,7 @@ export class CallbackNotificationService {
   constructor(deps: CallbackServiceDeps) {
     this.repository = deps.repository;
     this.messageRepository = deps.messageRepository;
-    this.slackPostScope = deps.slackPostScope;
+    this.publicationScope = deps.publicationScope;
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
@@ -161,44 +148,36 @@ export class CallbackNotificationService {
   /**
    * Generate HMAC signature for callback payload.
    */
-  private async signPayload(data: object, secret: string): Promise<string> {
+  private async signPayload(data: Record<string, unknown>, secret: string): Promise<string> {
     return computeHmacHex(JSON.stringify(data), secret);
   }
 
-  private async slackPostDenial(sessionId: string, context: unknown): Promise<string | null> {
-    if (!isRecord(context) || typeof context.channel !== "string" || !context.channel) {
-      return "invalid_callback_context";
-    }
-    const [session, binding] = await Promise.all([
-      this.slackPostScope.getSession(sessionId),
-      this.slackPostScope.getChannelBinding(context.channel),
-    ]);
-    return slackPostGate(session, binding);
-  }
-
-  /** Closure carries coordinates only, never session content or tool arguments. */
-  private async notifySlackThreadClosed(
+  /** Denials carry coordinates only, never session content or tool arguments. */
+  private async notifyDenied(
+    route: CallbackRoute,
     sessionId: string,
     context: unknown,
     binding: FetchClient,
     secret: string,
     cancellationSignal?: AbortSignal
   ): Promise<CallbackDeliveryResult> {
-    if (!hasSlackThreadCoordinates(context)) {
-      return { delivered: false, attempts: 0 };
-    }
+    const denial = route.denial;
+    if (!denial) return { delivered: false, attempts: 0 };
+    const notification = denial.notification(sessionId, context, Date.now());
+    if (!notification) return { delivered: false, attempts: 0 };
+    // The denial is latched for every retry; no later scope change may publish content.
     return deliverWithRetry(
       (signal) =>
-        this.sendSlackThreadClosed(
-          sessionId,
-          context,
+        this.sendCallback(
+          notification.path,
+          notification.payload,
           binding,
           secret,
           cancellationSignal ? AbortSignal.any([signal, cancellationSignal]) : signal
         ),
       this.sleep,
       ({ attempt, response, error }) => {
-        this.log.warn("callback.thread_closed_delivery_attempt_failed", {
+        this.log.warn(denial.failureEvent, {
           session_id: sessionId,
           attempt,
           ...(response ? { http_status: response.status } : {}),
@@ -208,26 +187,20 @@ export class CallbackNotificationService {
     );
   }
 
-  private async sendSlackThreadClosed(
-    sessionId: string,
-    context: { channel: string; threadTs: string },
+  private async sendCallback(
+    path: string,
+    payload: Record<string, unknown>,
     binding: FetchClient,
     secret: string,
-    signal: AbortSignal
+    signal?: AbortSignal
   ): Promise<Response> {
-    const unsigned = {
-      kind: "slack.thread_closed",
-      sessionId,
-      timestamp: Date.now(),
-      context: { channel: context.channel, threadTs: context.threadTs },
-    };
-    const signature = await this.signPayload(unsigned, secret);
-    signal.throwIfAborted();
-    return binding.fetch("https://internal/callbacks/thread_closed", {
+    const signature = await this.signPayload(payload, secret);
+    signal?.throwIfAborted();
+    return binding.fetch(`https://internal${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...unsigned, signature }),
-      signal,
+      body: JSON.stringify({ ...payload, signature }),
+      ...(signal ? { signal } : {}),
     });
   }
 
@@ -235,18 +208,20 @@ export class CallbackNotificationService {
    * Where a non-automation callback goes and which key signs it — one
    * decision, so destination and signing key cannot diverge (the CP signs
    * with the DESTINATION bot's secret). Automation callbacks
-   * are routed to the automation scheduler before this is consulted. Non-linear
-   * sources default to the slack bot for backward compatibility (web
-   * sources, etc.).
+   * are routed to the automation scheduler before this is consulted. Sources
+   * missing from the table default to the slack bot for backward compatibility
+   * (web sources, etc.).
    */
   private resolveCallbackRoute(source: string | null): {
+    route: CallbackRoute;
     binding: FetchClient | undefined;
     secret: string | undefined;
   } {
-    const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";
+    const route = resolveCallbackRoute(source);
     return {
-      binding: destination === "linear-bot" ? this.env.LINEAR_BOT : this.env.SLACK_BOT,
-      secret: callbackSigningSecret(this.env, destination),
+      route,
+      binding: this.env[route.binding],
+      secret: callbackSigningSecret(this.env, route.destination),
     };
   }
 
@@ -344,7 +319,7 @@ export class CallbackNotificationService {
         return;
       }
 
-      const { binding, secret } = this.resolveCallbackRoute(source);
+      const { route, binding, secret } = this.resolveCallbackRoute(source);
       if (!secret) {
         result.rejectReason = "no_secret";
         return;
@@ -363,10 +338,7 @@ export class CallbackNotificationService {
         timestamp,
         context: rawContext,
       };
-      const parsedCallback =
-        source === "linear"
-          ? linearCompletionCallbackPayloadSchema.safeParse(callbackData)
-          : undefined;
+      const parsedCallback = route.completionSchema?.safeParse(callbackData);
       if (parsedCallback && !parsedCallback.success) {
         result.rejectReason = "invalid_payload";
         return;
@@ -377,34 +349,34 @@ export class CallbackNotificationService {
         async (signal) => {
           const denial =
             rejectReason ??
-            (source === "linear"
-              ? null
-              : await this.slackPostDenial(callbackSessionId, rawContext));
+            (await route.postGate(this.publicationScope, callbackSessionId, rawContext));
           // D1 reads cannot be canceled; an expired attempt must not reach the wire.
           signal.throwIfAborted();
-          // The bot can tombstone the thread even when closure delivery fails.
+          // The bot can stop publication even when the denial callback fails.
           rejectReason = denial ?? undefined;
           let response: Response;
           if (denial) {
-            if (!hasSlackThreadCoordinates(rawContext)) {
-              return { outcome: "delivered", value: null };
-            }
-            response = await this.sendSlackThreadClosed(
+            const notification = route.denial?.notification(
               callbackSessionId,
               rawContext,
+              Date.now()
+            );
+            if (!notification) return { outcome: "delivered", value: null };
+            response = await this.sendCallback(
+              notification.path,
+              notification.payload,
               binding,
               secret,
               signal
             );
           } else {
-            const signature = await this.signPayload(payloadData, secret);
-            signal.throwIfAborted();
-            response = await binding.fetch("https://internal/callbacks/complete", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...payloadData, signature }),
-              signal,
-            });
+            response = await this.sendCallback(
+              "/callbacks/complete",
+              payloadData,
+              binding,
+              secret,
+              signal
+            );
           }
           return response.ok
             ? { outcome: "delivered", value: response }
@@ -414,7 +386,7 @@ export class CallbackNotificationService {
         ({ attempt, failure: response, error: deliveryError }) => {
           this.log.warn(
             rejectReason
-              ? "callback.thread_closed_delivery_attempt_failed"
+              ? (route.denial?.failureEvent ?? "callback.denied_delivery_attempt_failed")
               : "callback.complete_delivery_attempt_failed",
             {
               ...(!rejectReason ? { message_id: messageId, source } : {}),
@@ -577,7 +549,7 @@ export class CallbackNotificationService {
     const message = this.messageRepository.getMessageCallbackContext(messageId);
     if (!message?.callback_context || message.source !== "slack") return;
 
-    const { binding, secret } = this.resolveCallbackRoute("slack");
+    const { route, binding, secret } = this.resolveCallbackRoute("slack");
     if (!secret || !binding) {
       this.log.debug("callback.activity_refresh", {
         message_id: messageId,
@@ -604,10 +576,10 @@ export class CallbackNotificationService {
 
     const sessionId = this.getSessionId();
     try {
-      const denial = await this.slackPostDenial(sessionId, context);
+      const denial = await route.postGate(this.publicationScope, sessionId, context);
       signal.throwIfAborted();
       if (denial) {
-        await this.notifySlackThreadClosed(sessionId, context, binding, secret, signal);
+        await this.notifyDenied(route, sessionId, context, binding, secret, signal);
         this.log.info("callback.activity_refresh", {
           message_id: messageId,
           session_id: sessionId,
@@ -742,7 +714,7 @@ export class CallbackNotificationService {
       return;
     }
 
-    const { binding, secret } = this.resolveCallbackRoute(source);
+    const { route, binding, secret } = this.resolveCallbackRoute(source);
     if (!secret) {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -764,19 +736,32 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
-    const rawContext: unknown = JSON.parse(message.callback_context);
+    let rawContext: unknown;
+    try {
+      rawContext = JSON.parse(message.callback_context);
+    } catch {
+      // Parser errors can include context contents; log only controlled metadata.
+      this.log.warn("callback.tool_call", {
+        message_id: messageId,
+        session_id: sessionId,
+        source,
+        outcome: "skipped",
+        skip_reason: "invalid_callback_context",
+      });
+      return;
+    }
 
     const callbackData = {
       sessionId,
       tool,
-      args: source === "linear" ? event.args : (event.args ?? EMPTY_TOOL_ARGS),
+      // Only routes that explicitly opt into the legacy contract substitute arguments.
+      args: event.args ?? route.defaultArgs,
       callId,
       status: event.status,
       timestamp: now,
       context: rawContext,
     };
-    const parsedPayload =
-      source === "linear" ? linearToolCallCallbackPayloadSchema.safeParse(callbackData) : undefined;
+    const parsedPayload = route.toolCallSchema?.safeParse(callbackData);
     if (parsedPayload && !parsedPayload.success) {
       this.log.warn("callback.tool_call", {
         message_id: messageId,
@@ -793,40 +778,37 @@ export class CallbackNotificationService {
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
 
-    if (source !== "linear") {
-      try {
-        const denial = await this.slackPostDenial(sessionId, rawContext);
-        if (denial) {
-          await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret);
-          this.log.info("callback.tool_call", {
-            message_id: messageId,
-            session_id: sessionId,
-            outcome: "rejected",
-            reject_reason: denial,
-          });
-          return;
-        }
-      } catch (error) {
-        this.log.warn("callback.tool_call", {
+    try {
+      const denial = await route.postGate(this.publicationScope, sessionId, rawContext);
+      if (denial) {
+        await this.notifyDenied(route, sessionId, rawContext, binding, secret);
+        this.log.info("callback.tool_call", {
           message_id: messageId,
           session_id: sessionId,
-          outcome: "error",
-          error: error instanceof Error ? error : new Error(String(error)),
+          outcome: "rejected",
+          reject_reason: denial,
         });
         return;
       }
+    } catch (error) {
+      this.log.warn("callback.tool_call", {
+        message_id: messageId,
+        session_id: sessionId,
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return;
     }
 
     const payloadData = parsedPayload?.data ?? callbackData;
-    const signature = await this.signPayload(payloadData, secret);
-    const payload = { ...payloadData, signature };
 
     try {
-      const response = await binding.fetch("https://internal/callbacks/tool_call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const response = await this.sendCallback(
+        "/callbacks/tool_call",
+        payloadData,
+        binding,
+        secret
+      );
 
       if (response.ok) {
         // Mark only on success so a transient failure doesn't dedupe the next

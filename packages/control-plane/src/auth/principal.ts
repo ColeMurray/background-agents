@@ -10,15 +10,30 @@
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 
 /** Actor namespaces bots may assert (`slack:U123` etc.). */
-const ACTOR_NAMESPACES = ["slack", "github", "linear"] as const;
+const ACTOR_NAMESPACES = ["slack", "github", "linear", "discord"] as const;
 export type ActorNamespace = (typeof ACTOR_NAMESPACES)[number];
 
 export function isActorNamespace(value: string): value is ActorNamespace {
   return (ACTOR_NAMESPACES as readonly string[]).includes(value);
 }
 
+/** Every provider an identity can come from: bot actor namespaces plus browser sign-in. */
+export type IdentityProvider = ActorNamespace | "google";
+
+/** Parse `<namespace>:<id>` into a typed actor reference; null when malformed. */
+export function parseActor(
+  actor: string
+): { provider: ActorNamespace; providerUserId: string } | null {
+  const separator = actor.indexOf(":");
+  if (separator <= 0) return null;
+  const namespace = actor.slice(0, separator);
+  const providerUserId = actor.slice(separator + 1);
+  if (providerUserId === "" || !isActorNamespace(namespace)) return null;
+  return { provider: namespace, providerUserId };
+}
+
 export interface ResolvedIdentity {
-  provider: "github" | "google" | "slack" | "linear";
+  provider: IdentityProvider;
   providerUserId: string;
   /** Canonical D1 `users.id`. Always set for user principals; null for actors the CP has never seen. */
   canonicalUserId: string | null;
@@ -51,4 +66,5 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "slack-bot": "slack",
   "github-bot": "github",
   "linear-bot": "linear",
+  "discord-bot": "discord",
 };

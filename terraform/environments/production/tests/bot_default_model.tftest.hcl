@@ -34,7 +34,7 @@ variables {
   web_platform = "cloudflare"
   project_root = "../../../"
 
-  # All three bots are deployed so every DEFAULT_MODEL binding can be asserted.
+  # All bots are deployed so every DEFAULT_MODEL binding can be asserted.
   enable_github_bot     = true
   github_webhook_secret = "test-github-webhook-secret"
   github_bot_username   = "test-bot[bot]"
@@ -48,6 +48,12 @@ variables {
   linear_client_secret  = "test-linear-client-secret"
   linear_webhook_secret = "test-linear-webhook-secret"
   linear_api_key        = "test-linear-api-key"
+
+  enable_discord_bot       = true
+  discord_application_id   = "123456789012345678"
+  discord_public_key       = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  discord_bot_token        = "test-discord-token"
+  discord_allowed_role_ids = "456"
 
   github_client_id     = "github-id"
   github_client_secret = "github-secret"
@@ -74,6 +80,11 @@ run "defaults_preserve_the_previously_hardcoded_models" {
     condition     = module.linear_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] == "claude-sonnet-4-6"
     error_message = "The Linear bot's default model binding must stay claude-sonnet-4-6."
   }
+
+  assert {
+    condition     = module.discord_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] == "anthropic/claude-opus-5"
+    error_message = "The Discord bot's default model binding must stay anthropic/claude-opus-5."
+  }
 }
 
 # The point of the variables: a deployment picks its models in tfvars, and the
@@ -82,9 +93,10 @@ run "overrides_reach_each_bot_binding" {
   command = plan
 
   variables {
-    github_bot_default_model = "anthropic/claude-opus-4-5"
-    slack_bot_default_model  = "openai/gpt-5.4"
-    linear_bot_default_model = "claude-sonnet-5"
+    github_bot_default_model  = "anthropic/claude-opus-4-5"
+    slack_bot_default_model   = "openai/gpt-5.4"
+    linear_bot_default_model  = "claude-sonnet-5"
+    discord_bot_default_model = "anthropic/claude-opus-4-6"
   }
 
   assert {
@@ -102,14 +114,19 @@ run "overrides_reach_each_bot_binding" {
     error_message = "An overridden linear_bot_default_model must reach the Linear bot's DEFAULT_MODEL binding."
   }
 
+  assert {
+    condition     = module.discord_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] == "anthropic/claude-opus-4-6"
+    error_message = "An overridden discord_bot_default_model must reach the Discord bot's DEFAULT_MODEL binding."
+  }
+
   # One bot's override must not leak into another's binding.
   assert {
-    condition = (
-      module.github_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] !=
-      module.slack_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] &&
-      module.slack_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"] !=
-      module.linear_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"]
-    )
+    condition = length(distinct([
+      module.github_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"],
+      module.slack_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"],
+      module.linear_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"],
+      module.discord_bot_worker[0].plain_text_bindings["DEFAULT_MODEL"],
+    ])) == 4
     error_message = "Each bot's default model must be sourced from its own variable."
   }
 }
@@ -145,6 +162,46 @@ run "rejects_a_blank_linear_model" {
   }
 
   expect_failures = [var.linear_bot_default_model]
+}
+
+run "rejects_a_blank_discord_model" {
+  command = plan
+
+  variables {
+    discord_bot_default_model = ""
+  }
+
+  expect_failures = [var.discord_bot_default_model]
+}
+
+run "rejects_a_bare_discord_provider_namespace" {
+  command = plan
+
+  variables {
+    discord_bot_default_model = "anthropic/"
+  }
+
+  expect_failures = [var.discord_bot_default_model]
+}
+
+run "rejects_whitespace_in_a_discord_model" {
+  command = plan
+
+  variables {
+    discord_bot_default_model = "anthropic/ claude-opus-5"
+  }
+
+  expect_failures = [var.discord_bot_default_model]
+}
+
+run "rejects_multiple_slashes_in_a_discord_model" {
+  command = plan
+
+  variables {
+    discord_bot_default_model = "anthropic/claude-opus-5/beta"
+  }
+
+  expect_failures = [var.discord_bot_default_model]
 }
 
 # A provider namespace with no model after it satisfies a prefix check but names

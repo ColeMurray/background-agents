@@ -4,7 +4,7 @@ import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { isValidModel } from "@open-inspect/shared/models";
 import { HarnessAdmissionError, resolveHarnessInitialization } from "../../../harness-admission";
-import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import { spawnSourceSchema } from "@open-inspect/shared/types/sessions";
 import { normalizeSandboxSettings } from "../../../sandbox/settings";
 import { DEFAULT_BASE_BRANCH } from "../../../repos/default-branch";
 import { validateReasoningEffort } from "../../reasoning-effort";
@@ -18,15 +18,6 @@ const repositoryRefSchema = z.object({
   repoId: z.number(),
   baseBranch: z.string(),
 }) satisfies z.ZodType<RepositoryRef>;
-
-const spawnSourceSchema = z.enum([
-  "user",
-  "agent",
-  "automation",
-  "github-bot",
-  "linear-bot",
-  "slack-bot",
-] satisfies [SpawnSource, ...SpawnSource[]]);
 
 /**
  * Request body for the /internal/init endpoint.

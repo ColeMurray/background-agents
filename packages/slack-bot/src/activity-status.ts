@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { formatToolStatus as formatSharedToolStatus } from "@open-inspect/shared/completion/tool-status";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
 import { isThreadSessionClosed, lookupThreadSession } from "./sessions/thread-session-store";
@@ -7,7 +8,6 @@ const SLACK_SET_STATUS_URL = "https://slack.com/api/assistant.threads.setStatus"
 const DEFAULT_STATUS_PART_MAX_LENGTH = 80;
 const DEFAULT_STATUS_TEXT_MAX_LENGTH = 80;
 const LOADING_MESSAGE_MAX_LENGTH = 50;
-const FILE_ARG_KEYS = ["filePath", "file_path", "filepath", "path", "file"];
 /** The indicator Slack shows while a turn is in flight, whatever the turn is doing. */
 export const ASSISTANT_WORKING_STATUS = "Working...";
 
@@ -92,65 +92,12 @@ function prepareLoadingMessageText(value: unknown): string {
   return truncateStatusPart(value, LOADING_MESSAGE_MAX_LENGTH);
 }
 
-function firstArg(args: Record<string, unknown>, keys: string[], fallback: string): string {
-  for (const key of keys) {
-    const value = args[key];
-    const text = truncateStatusPart(value);
-    if (text) return text;
-  }
-  return fallback;
-}
-
-function compactPathPart(value: unknown, maxLength: number): string {
-  const text = normalizeStatusText(value);
-  if (!text) return "";
-
-  const normalized = text.replace(/\\/g, "/").replace(/^\/workspace\/[^/]+\//, "");
-  if (normalized.length <= maxLength) return normalized;
-
-  const parts = normalized.split("/").filter(Boolean);
-  for (let count = Math.min(3, parts.length); count > 0; count -= 1) {
-    const tail = parts.slice(-count).join("/");
-    if (tail.length <= maxLength) return tail;
-  }
-
-  return truncateStatusPart(parts.at(-1) ?? normalized, maxLength);
-}
-
-function fileArg(args: Record<string, unknown>, prefix: string, fallback: string): string {
-  const maxLength = LOADING_MESSAGE_MAX_LENGTH - prefix.length - 1;
-  for (const key of FILE_ARG_KEYS) {
-    const text = compactPathPart(args[key], maxLength);
-    if (text) return text;
-  }
-  return fallback;
-}
-
 export function formatToolStatus(tool: string, args: Record<string, unknown> = {}): string {
-  const normalizedTool = normalizeStatusText(tool);
-  const toolKey = normalizedTool.toLowerCase();
-
-  switch (toolKey) {
-    case "read":
-    case "read_file":
-      return `Reading ${fileArg(args, "Reading", "file")}`;
-    case "edit":
-    case "edit_file":
-      return `Editing ${fileArg(args, "Editing", "file")}`;
-    case "write":
-    case "write_file":
-      return `Writing ${fileArg(args, "Writing", "file")}`;
-    case "bash":
-    case "execute_command":
-      return `Running ${firstArg(args, ["command", "cmd"], "command")}`;
-    case "grep":
-    case "search_files":
-      return `Searching for ${firstArg(args, ["pattern", "query"], "query")}`;
-    case "glob":
-      return `Finding ${firstArg(args, ["pattern", "query"], "files")}`;
-    default:
-      return `Using tool: ${truncateStatusPart(normalizedTool || "unknown")}`;
-  }
+  return formatSharedToolStatus(tool, args, {
+    normalizeText: normalizeStatusText,
+    argumentMaxLength: DEFAULT_STATUS_PART_MAX_LENGTH,
+    fileStatusMaxLength: LOADING_MESSAGE_MAX_LENGTH,
+  });
 }
 
 export async function setAssistantThreadStatus(

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  discordPublicationStoppedCallbackPayloadSchema,
+  discordPublicationStoppedCallbackSchema,
+  DISCORD_PUBLICATION_STOPPED_KIND,
   linearCallbackContextSchema,
   linearCompletionCallbackSchema,
   linearStartCallbackSchema,
@@ -77,6 +80,93 @@ describe("Linear callback channel context", () => {
   it("does not accept an internal owner teamId as callback channel context", () => {
     expect(
       linearCallbackContextSchema.safeParse({ ...legacyContext, teamId: "internal-team-1" }).success
+    ).toBe(false);
+  });
+});
+
+describe("Discord publication-stopped callbacks", () => {
+  const payload = {
+    kind: DISCORD_PUBLICATION_STOPPED_KIND,
+    sessionId: "session-1",
+    timestamp: 1_700_000_000_000,
+    context: {
+      channelId: "channel-1",
+      threadId: "thread-1",
+      statusMessage: { id: "status-1", startedAt: 1_699_999_999_000 },
+    },
+  };
+
+  it("accepts only the dedicated unsigned and signed shapes", () => {
+    expect(discordPublicationStoppedCallbackPayloadSchema.parse(payload)).toEqual(payload);
+    const signed = { ...payload, signature: "signature" };
+    expect(discordPublicationStoppedCallbackSchema.parse(signed)).toEqual(signed);
+    expect(discordPublicationStoppedCallbackSchema.safeParse(payload).success).toBe(false);
+    expect(discordPublicationStoppedCallbackPayloadSchema.safeParse(signed).success).toBe(false);
+  });
+
+  it.each([
+    { channelId: "channel-1" },
+    { channelId: "channel-1", threadId: "thread-1" },
+    { channelId: "channel-1", statusMessage: payload.context.statusMessage },
+  ])("allows absent thread/status coordinates: %j", (context) => {
+    expect(
+      discordPublicationStoppedCallbackPayloadSchema.parse({ ...payload, context }).context
+    ).toEqual(context);
+  });
+
+  it.each(["source", "repoFullName", "model", "userId", "result", "error", "tool", "args"])(
+    "rejects extra %s content at every nesting level",
+    (field) => {
+      for (const candidate of [
+        { ...payload, [field]: "private" },
+        { ...payload, context: { ...payload.context, [field]: "private" } },
+        {
+          ...payload,
+          context: {
+            ...payload.context,
+            statusMessage: { ...payload.context.statusMessage, [field]: "private" },
+          },
+        },
+      ]) {
+        expect(discordPublicationStoppedCallbackPayloadSchema.safeParse(candidate).success).toBe(
+          false
+        );
+        expect(
+          discordPublicationStoppedCallbackSchema.safeParse({ ...candidate, signature: "sig" })
+            .success
+        ).toBe(false);
+      }
+    }
+  );
+
+  it.each(["slack.thread_closed", "discord.complete", undefined])(
+    "rejects the wrong signed domain: %s",
+    (kind) => {
+      expect(
+        discordPublicationStoppedCallbackSchema.safeParse({ ...payload, kind, signature: "sig" })
+          .success
+      ).toBe(false);
+    }
+  );
+
+  it.each([NaN, Infinity, -Infinity, "1700000000000"])(
+    "rejects an invalid timestamp: %s",
+    (timestamp) => {
+      expect(
+        discordPublicationStoppedCallbackPayloadSchema.safeParse({ ...payload, timestamp }).success
+      ).toBe(false);
+    }
+  );
+
+  it.each([
+    { channelId: " " },
+    { ...payload.context, threadId: " " },
+    { ...payload.context, statusMessage: { id: " ", startedAt: 1 } },
+    { ...payload.context, statusMessage: { id: "status-1", startedAt: Infinity } },
+    { ...payload.context, statusMessage: { id: "status-1" } },
+  ])("rejects malformed coordinates: %j", (context) => {
+    expect(
+      discordPublicationStoppedCallbackPayloadSchema.safeParse({ ...payload, context }).success
     ).toBe(false);
   });
 });

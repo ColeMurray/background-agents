@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "docs/schemas/trace-export.v2.schema.json"
       - ".env.example"
       - ".github/workflows/ci.yml"
       - ".github/workflows/terraform.yml"
@@ -15,6 +16,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/discord-bot/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/sandbox-runtime/**"
@@ -43,6 +45,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "docs/schemas/trace-export.v2.schema.json"
       - ".env.example"
       - ".github/workflows/ci.yml"
       - ".github/workflows/terraform.yml"
@@ -54,6 +57,7 @@ on:
       - "package-lock.json"
       - "package.json"
       - "packages/control-plane/**"
+      - "packages/discord-bot/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
       - "packages/sandbox-runtime/**"
@@ -145,6 +149,11 @@ jobs:
 
       - name: Check README translations
         run: npm run test:readme-translations
+
+      - name: Check trace export schema drift
+        run: >-
+          node packages/control-plane/scripts/generate-trace-export-schema.mjs
+          --check
 
       - name: Check Prettier formatting
         run: npm run format:check
@@ -368,3 +377,6 @@ jobs:
 
       - name: Run linear-bot tests
         run: npm test -w @open-inspect/linear-bot
+
+      - name: Run discord-bot tests
+        run: npm test -w @open-inspect/discord-bot

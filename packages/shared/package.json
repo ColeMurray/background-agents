@@ -14,6 +14,10 @@
       "import": "./dist/auth.js",
       "types": "./dist/auth.d.ts"
     },
+    "./callback-auth": {
+      "import": "./dist/callback-auth.js",
+      "types": "./dist/callback-auth.d.ts"
+    },
     "./service-auth": {
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
@@ -133,6 +137,10 @@
     "./completion/extractor": {
       "import": "./dist/completion/extractor.js",
       "types": "./dist/completion/extractor.d.ts"
+    },
+    "./completion/tool-status": {
+      "import": "./dist/completion/tool-status.js",
+      "types": "./dist/completion/tool-status.d.ts"
     },
     "./types/repositories": {
       "import": "./dist/types/repositories.js",

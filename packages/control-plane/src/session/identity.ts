@@ -158,18 +158,6 @@ export async function resolveCurrentGitHubAccessToken(
 }
 
 /**
- * Parse a bot-format authorId into provider + providerUserId.
- * Returns null for web client authorIds (plain user IDs without a prefix).
- */
-export function parseAuthorId(
-  authorId: string
-): { provider: string; providerUserId: string } | null {
-  const match = authorId.match(/^(github|slack|linear):(.+)$/);
-  if (!match) return null;
-  return { provider: match[1], providerUserId: match[2] };
-}
-
-/**
  * Given a resolved D1 user, return attribution for their one linked GitHub
  * identity. Better Auth remains the sole credential authority.
  */

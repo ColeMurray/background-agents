@@ -55,6 +55,15 @@
         "lines": { "covered": 851, "total": 969 }
       }
     },
+    "discord-bot": {
+      "provider": "v8",
+      "metrics": {
+        "statements": { "covered": 343, "total": 359 },
+        "branches": { "covered": 159, "total": 173 },
+        "functions": { "covered": 72, "total": 77 },
+        "lines": { "covered": 316, "total": 325 }
+      }
+    },
     "github-bot": {
       "provider": "v8",
       "metrics": {

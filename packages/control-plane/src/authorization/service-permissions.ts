@@ -43,6 +43,13 @@ const SERVICE_PERMISSION_CEILINGS: Record<ServiceName, readonly PermissionId[]> 
     "sessions.lifecycle",
     "skills.read",
   ],
+  "discord-bot": [
+    "repositories.read",
+    "repositories.use",
+    "sessions.create",
+    "sessions.read",
+    "sessions.collaborate",
+  ],
 };
 
 /** Checks the hard permission ceiling for a trusted service, independent of user grants. */

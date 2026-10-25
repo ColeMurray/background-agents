@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SERVICE_NAMES } from "@open-inspect/shared/service-auth";
 import { serviceAllowsPermission } from "./service-permissions";
 
 describe("serviceAllowsPermission", () => {
@@ -10,7 +11,7 @@ describe("serviceAllowsPermission", () => {
   });
 
   it("does not grant bulk export to bot services", () => {
-    for (const service of ["github-bot", "slack-bot", "linear-bot"] as const) {
+    for (const service of SERVICE_NAMES.filter((service) => service !== "web")) {
       expect(serviceAllowsPermission(service, "sessions.export")).toBe(false);
     }
   });
