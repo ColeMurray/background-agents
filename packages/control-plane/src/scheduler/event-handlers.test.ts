@@ -73,13 +73,16 @@ function slackHarness() {
           return { outcome: "started", invocationId: input.automation.id, runs: [], launched: 1 };
         }),
     },
-    continueSession: vi
-      .fn<SlackEventHandlerDeps["continueSession"]>()
-      .mockResolvedValue({ kind: "fall_through" }),
-    resolveActor: vi.fn().mockResolvedValue(null),
-    resolveScmEnrichment: vi.fn().mockResolvedValue(null),
-    scmProvider: () => "github" as const,
-    nowMs: () => 100,
+    continuity: {
+      continueSession: vi
+        .fn<SlackEventHandlerDeps["continuity"]["continueSession"]>()
+        .mockResolvedValue({ kind: "fall_through" }),
+      resolveActor: vi.fn().mockResolvedValue(null),
+    },
+    users: { getIdentity: vi.fn().mockResolvedValue({ userId: "slack-user" }) },
+    attribution: { resolve: vi.fn().mockResolvedValue(null) },
+    scmProvider: "github" as const,
+    clock: { now: () => 100 },
     log,
   } satisfies SlackEventHandlerDeps;
   return deps;
@@ -100,7 +103,7 @@ describe("Slack event ownership", () => {
   it("shares actor lookup within a delivery while checking continuation separately for every target", async () => {
     const deps = slackHarness();
     const handler = new SlackEventHandler(deps);
-    deps.continueSession.mockImplementation(async (row, _key, _now, policy) => {
+    deps.continuity.continueSession.mockImplementation(async (row, _key, _now, policy) => {
       await policy.resolveActor();
       return { kind: "steered", invocationId: row.id };
     });
@@ -115,12 +118,14 @@ describe("Slack event ownership", () => {
       steered: 2,
       invocationIds: ["auto-1", "auto-2"],
     });
-    expect(deps.continueSession).toHaveBeenCalledTimes(2);
-    expect(deps.resolveActor).toHaveBeenCalledTimes(1);
+    expect(deps.continuity.continueSession).toHaveBeenCalledTimes(2);
+    expect(deps.continuity.resolveActor).toHaveBeenCalledTimes(1);
+    expect(deps.users.getIdentity).toHaveBeenCalledTimes(1);
     expect(deps.invocations.start).not.toHaveBeenCalled();
     expect(deps.slack.getSessionInstructions).not.toHaveBeenCalled();
     await handler.handle(slackEvent);
-    expect(deps.resolveActor).toHaveBeenCalledTimes(2);
+    expect(deps.continuity.resolveActor).toHaveBeenCalledTimes(2);
+    expect(deps.users.getIdentity).toHaveBeenCalledTimes(2);
   });
 
   it("publishes one concurrency notice without reading context when all admissions skip", async () => {
@@ -149,16 +154,17 @@ function webhookHarness() {
         .fn<WebhookEventHandlerDeps["invocations"]["start"]>()
         .mockResolvedValue({ outcome: "blocked", reason: "concurrent_run_active" }),
     },
-    continueSession: vi
-      .fn<WebhookEventHandlerDeps["continueSession"]>()
-      .mockResolvedValue({ kind: "fall_through" }),
-    findHistoricalPromptReceipt: vi
-      .fn<WebhookEventHandlerDeps["findHistoricalPromptReceipt"]>()
-      .mockResolvedValue({ kind: "fall_through" }),
-    resolveActor: vi.fn().mockResolvedValue(null),
-    hashToken: vi.fn().mockResolvedValue("hashed-key"),
-    nowMs: () => 100,
-    newId: () => `id-${++id}`,
+    continuity: {
+      continueSession: vi
+        .fn<WebhookEventHandlerDeps["continuity"]["continueSession"]>()
+        .mockResolvedValue({ kind: "fall_through" }),
+      findHistoricalPromptReceipt: vi
+        .fn<WebhookEventHandlerDeps["continuity"]["findHistoricalPromptReceipt"]>()
+        .mockResolvedValue({ kind: "fall_through" }),
+      resolveActor: vi.fn().mockResolvedValue(null),
+    },
+    crypto: { hashToken: vi.fn().mockResolvedValue("hashed-key"), generateId: () => `id-${++id}` },
+    clock: { now: () => 100 },
     log,
   } satisfies WebhookEventHandlerDeps;
 }
@@ -176,7 +182,7 @@ describe("Webhook receipt ownership", () => {
     const deps = webhookHarness();
     const handler = new WebhookEventHandler(deps);
     deps.store.getById.mockResolvedValue({ ...automation, trigger_config: "invalid" });
-    deps.findHistoricalPromptReceipt.mockResolvedValue({
+    deps.continuity.findHistoricalPromptReceipt.mockResolvedValue({
       kind: "skipped",
       invocationId: "original",
     });
@@ -194,7 +200,7 @@ describe("Webhook receipt ownership", () => {
       100
     );
     expect(deps.store.releaseFollowUpReceipt).not.toHaveBeenCalled();
-    expect(deps.continueSession).not.toHaveBeenCalled();
+    expect(deps.continuity.continueSession).not.toHaveBeenCalled();
     expect(deps.invocations.start).not.toHaveBeenCalled();
   });
 
@@ -223,7 +229,7 @@ describe("Webhook receipt ownership", () => {
       webhookEvent.triggerKey,
       "id-1"
     );
-    expect(deps.continueSession).not.toHaveBeenCalled();
+    expect(deps.continuity.continueSession).not.toHaveBeenCalled();
     expect(deps.invocations.start).not.toHaveBeenCalled();
   });
 
@@ -238,8 +244,9 @@ describe("Webhook receipt ownership", () => {
         status: null,
         code: null,
       };
-      if (stage === "history") deps.findHistoricalPromptReceipt.mockResolvedValue(refused);
-      else deps.continueSession.mockResolvedValue(refused);
+      if (stage === "history")
+        deps.continuity.findHistoricalPromptReceipt.mockResolvedValue(refused);
+      else deps.continuity.continueSession.mockResolvedValue(refused);
       await expect(handler.handle(webhookEvent)).rejects.toBeInstanceOf(
         SessionFollowUpRefusedError
       );

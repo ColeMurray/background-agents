@@ -1,11 +1,7 @@
-import { getUserAuth } from "../auth/user/runtime";
-import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
-import {
-  AmbiguousGitHubIdentityError,
-  resolveGitHubEnrichmentForCanonicalUser,
-  type GitHubEnrichment,
-} from "../session/identity";
+import { AutomationAttributionService } from "./attribution-service";
+import { SessionContinuityService } from "./session-continuity-service";
+import * as schedulerCrypto from "../auth/crypto";
 import { resolveScmProviderFromEnv } from "../source-control/config";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { AutomationInvocationService } from "./invocation-service";
@@ -24,7 +20,6 @@ import { retryDelivery } from "../session/callback-delivery";
 import type { Env } from "../types";
 import { Scheduler } from "./scheduler";
 import { AutomationSlackService } from "./slack-service";
-import { generateId, hashToken } from "../auth/crypto";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
@@ -48,13 +43,7 @@ import {
 } from "./launch-admission";
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
-import {
-  releaseHeldPrompts,
-  continueSession,
-  findHistoricalPromptReceipt,
-  steeringActor,
-  sweepHeldPrompts,
-} from "./session-continuity";
+import { releaseHeldPrompts, sweepHeldPrompts } from "./session-continuity";
 import { AutomationEventHandler } from "./event-handler";
 import { SlackEventHandler } from "./slack-event-handler";
 import { WebhookEventHandler } from "./webhook-event-handler";
@@ -72,6 +61,8 @@ export function createScheduler(
   const sessionIndex = new SessionIndexStore(db);
   const store = new AutomationStore(db);
   const teams = new TeamStore(db);
+  const users = new UserStore(db);
+  const scmProvider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
   const channels = new TeamChannelBindingStore(db);
   const slack = new AutomationSlackService({
     bot: env.SLACK_BOT,
@@ -117,6 +108,7 @@ export function createScheduler(
     executionDeadlineMs: resolveDeadlineMs,
   });
   const continuity = { store, env, log, db, backgroundJobs };
+  const sessionContinuity = new SessionContinuityService(continuity);
   const launcher = new AutomationRunLaunchService({
     store,
     sessions,
@@ -124,7 +116,7 @@ export function createScheduler(
     releaseHeldPrompts: (run) => releaseHeldPrompts(continuity, run),
     executionDeadlineMs: resolveDeadlineMs,
     nowMs: () => Date.now(),
-    newId: generateId,
+    newId: schedulerCrypto.generateId,
     log,
   });
   const admissionDeps: LaunchAdmissionDeps = {
@@ -140,28 +132,7 @@ export function createScheduler(
       resolveTeamTargets(admissionDeps, automation, team, candidates),
     resolveProviderAuth: (automation) => resolveProviderAuthSnapshot(admissionDeps, automation),
   };
-  const resolveScmEnrichment = async (userId: string): Promise<GitHubEnrichment | null> => {
-    if (resolveScmProviderFromEnv(env.SCM_PROVIDER) !== "github") return null;
-    try {
-      return await resolveGitHubEnrichmentForCanonicalUser(
-        new UserStore(db),
-        userId,
-        () => getUserAuth(env, db).api
-      );
-    } catch (error) {
-      if (
-        !(error instanceof AmbiguousGitHubIdentityError) &&
-        !(error instanceof GitHubAttributionUnavailableError)
-      )
-        throw error;
-      log.warn("GitHub attribution unavailable; continuing without it", {
-        event: "scheduler.github_enrichment_unavailable",
-        user_id: userId,
-        error,
-      });
-      return null;
-    }
-  };
+  const attribution = new AutomationAttributionService({ users, scmProvider, db, env, log });
   const failures = new AutomationFailureService(store, log);
   const invocations = new AutomationInvocationService({
     store,
@@ -169,11 +140,11 @@ export function createScheduler(
     admission,
     launcher,
     failures,
-    resolveScmEnrichment,
+    attribution,
     isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
     resolveRepositories: (repositories) => resolveAutomationRepositories(env, repositories),
     nowMs: () => Date.now(),
-    newId: generateId,
+    newId: schedulerCrypto.generateId,
     log,
   });
   const recovery = new AutomationRecoveryService({
@@ -187,32 +158,19 @@ export function createScheduler(
     channels: new SlackChannelStore(db),
     slack,
     invocations,
-    continueSession: (...args) => continueSession(continuity, ...args),
-    resolveActor: async (event) => {
-      const identity = await new UserStore(db).getIdentity("slack", event.actorUserId);
-      if (!identity) return null;
-      return steeringActor(
-        db,
-        backgroundJobs,
-        { userId: identity.userId, authorId: `slack:${event.actorUserId}` },
-        `automation:slack-steering:${event.triggerKey}`,
-        event.triggerKey
-      );
-    },
-    resolveScmEnrichment,
-    scmProvider: () => resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    nowMs: () => Date.now(),
+    continuity: sessionContinuity,
+    users,
+    attribution,
+    scmProvider,
+    clock: Date,
     log,
   });
   const webhookEvents = new WebhookEventHandler({
     store,
     invocations,
-    continueSession: (...args) => continueSession(continuity, ...args),
-    findHistoricalPromptReceipt: (...args) => findHistoricalPromptReceipt(continuity, ...args),
-    resolveActor: (...args) => steeringActor(db, backgroundJobs, ...args),
-    hashToken,
-    nowMs: () => Date.now(),
-    newId: generateId,
+    continuity: sessionContinuity,
+    crypto: schedulerCrypto,
+    clock: Date,
     log,
   });
   const events = new AutomationEventHandler({
@@ -228,7 +186,7 @@ export function createScheduler(
     events,
     sweepHeldPrompts: (now) => sweepHeldPrompts(continuity, now),
     nowMs: () => Date.now(),
-    newId: generateId,
+    newId: schedulerCrypto.generateId,
     slack,
     log,
     invocations,

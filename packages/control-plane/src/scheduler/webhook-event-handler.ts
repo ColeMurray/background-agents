@@ -9,10 +9,12 @@ import {
   type AutomationRow,
   type AutomationStore,
 } from "../db/automation-store";
+import type * as Crypto from "../auth/crypto";
+import type { SessionContinuityService } from "./session-continuity-service";
 import type { Logger } from "../logger";
 import { SessionFollowUpRefusedError, type SchedulerEventResult } from "./contracts";
 import type { AutomationInvocationService } from "./invocation-service";
-import type { ContinuationOutcome, ContinuationPolicy, SteeringActor } from "./session-continuity";
+import type { ContinuationPolicy } from "./session-continuity";
 import { composeAutomationPrompt, AUTOMATION_CONTEXT_GUARDRAIL } from "./event-prompt";
 import { recordEventLaunch, recordContinuation, logEventResult } from "./event-outcome";
 
@@ -34,25 +36,12 @@ export interface WebhookEventHandlerDeps {
     | "resolveCanonicalOwner"
   >;
   invocations: Pick<AutomationInvocationService, "start">;
-  continueSession(
-    automation: AutomationRow,
-    concurrencyKey: string,
-    now: number,
-    policy: ContinuationPolicy
-  ): Promise<ContinuationOutcome>;
-  findHistoricalPromptReceipt(
-    automation: AutomationRow,
-    concurrencyKey: string,
-    requestId: string
-  ): Promise<ContinuationOutcome>;
-  resolveActor(
-    user: { userId: string; authorId: string },
-    traceId: string,
-    requestId: string
-  ): Promise<SteeringActor | null>;
-  hashToken(token: string): Promise<string>;
-  nowMs(): number;
-  newId(): string;
+  continuity: Pick<
+    SessionContinuityService,
+    "continueSession" | "findHistoricalPromptReceipt" | "resolveActor"
+  >;
+  crypto: Pick<typeof Crypto, "hashToken" | "generateId">;
+  clock: Pick<DateConstructor, "now">;
   log: Logger;
 }
 
@@ -75,10 +64,10 @@ export class WebhookEventHandler {
     const webhookFollowUpTriggerKey =
       event.sessionKey && event.triggerKey.startsWith("webhook:idem:") ? event.triggerKey : null;
     const webhookFollowUpRequestId = webhookFollowUpTriggerKey
-      ? `webhook:${await deps.hashToken(webhookFollowUpTriggerKey)}`
+      ? `webhook:${await deps.crypto.hashToken(webhookFollowUpTriggerKey)}`
       : null;
     for (const automation of candidates) {
-      const now = deps.nowMs();
+      const now = deps.clock.now();
       let webhookClaim: WebhookFollowUpClaim | null = null;
       const releaseWebhookClaim = async (): Promise<void> => {
         if (webhookClaim) {
@@ -97,8 +86,8 @@ export class WebhookEventHandler {
           continue;
         }
 
-        const claimId = deps.newId();
-        const invocationId = deps.newId();
+        const claimId = deps.crypto.generateId();
+        const invocationId = deps.crypto.generateId();
         const claim = await store.claimFollowUpReceipt({
           automationId: automation.id,
           triggerKey: webhookFollowUpTriggerKey,
@@ -122,7 +111,7 @@ export class WebhookEventHandler {
         }
         webhookClaim = { claimId, invocationId };
 
-        const historical = await deps.findHistoricalPromptReceipt(
+        const historical = await deps.continuity.findHistoricalPromptReceipt(
           automation,
           event.concurrencyKey,
           webhookFollowUpRequestId!
@@ -160,7 +149,7 @@ export class WebhookEventHandler {
       }
 
       if (event.sessionKey) {
-        const outcome = await deps.continueSession(
+        const outcome = await deps.continuity.continueSession(
           automation,
           event.concurrencyKey,
           now,
@@ -195,7 +184,7 @@ export class WebhookEventHandler {
             event.triggerKey,
             webhookClaim.claimId,
             result.invocationId,
-            deps.nowMs()
+            deps.clock.now()
           );
         } else if (result.outcome !== "started") {
           await releaseWebhookClaim();
@@ -221,7 +210,7 @@ export class WebhookEventHandler {
   ): Promise<ContinuationPolicy> {
     const deps = this.deps;
     const { store } = deps;
-    const clientRequestId = requestId ?? `webhook:${await deps.hashToken(event.triggerKey)}`;
+    const clientRequestId = requestId ?? `webhook:${await deps.crypto.hashToken(event.triggerKey)}`;
     return {
       source: "webhook",
       acceptDelivery: claim
@@ -231,7 +220,7 @@ export class WebhookEventHandler {
               event.triggerKey,
               claim.claimId,
               run.invocation_id,
-              deps.nowMs()
+              deps.clock.now()
             );
           }
         : undefined,
@@ -241,7 +230,7 @@ export class WebhookEventHandler {
       resolveActor: async () => {
         const owner = await store.resolveCanonicalOwner(automation);
         return owner.user_id
-          ? deps.resolveActor(
+          ? deps.continuity.resolveActor(
               { userId: owner.user_id, authorId: owner.created_by },
               `automation:webhook-steering:${event.triggerKey}`,
               event.triggerKey

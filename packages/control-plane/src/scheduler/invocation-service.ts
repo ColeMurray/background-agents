@@ -13,8 +13,8 @@ import {
 import type { TeamStore } from "../db/teams";
 import type { AutomationExecutionAuthorizationRequest } from "../automation/authorization-guard";
 import type { resolveAutomationRepositories } from "../automation/repository";
-import type { GitHubEnrichment } from "../session/identity";
 import type { Logger } from "../logger";
+import type { AutomationAttributionService } from "./attribution-service";
 import {
   executionDenialReason,
   ownerExecutionPrincipal,
@@ -101,7 +101,7 @@ export interface AutomationInvocationServiceDeps {
     repositories: AutomationRepositoryInsert[]
   ): ReturnType<typeof resolveAutomationRepositories>;
   admission: LaunchAdmissionOperations;
-  resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null>;
+  attribution: Pick<AutomationAttributionService, "resolve">;
   launcher: Pick<AutomationRunLaunchService, "launch" | "recordFailure">;
   failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
   nowMs(): number;
@@ -350,7 +350,7 @@ export class AutomationInvocationService {
     let attributionError: unknown;
     if (!params.executionPrincipal && launchCandidates.length > 0) {
       try {
-        executionPrincipal.scmEnrichment = await this.deps.resolveScmEnrichment(
+        executionPrincipal.scmEnrichment = await this.deps.attribution.resolve(
           executionPrincipal.platformUserId
         );
       } catch (error) {
@@ -583,7 +583,7 @@ export class AutomationInvocationService {
     }
     let launchError: unknown;
     try {
-      executionPrincipal.scmEnrichment = await this.deps.resolveScmEnrichment(
+      executionPrincipal.scmEnrichment = await this.deps.attribution.resolve(
         executionPrincipal.platformUserId
       );
     } catch (error) {

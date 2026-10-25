@@ -155,7 +155,7 @@ function invocationHarness() {
       }),
       resolveProviderAuth: vi.fn().mockResolvedValue({ providerAuth: [] }),
     },
-    resolveScmEnrichment: vi.fn().mockResolvedValue(null),
+    attribution: { resolve: vi.fn().mockResolvedValue(null) },
     launcher: {
       launch: vi
         .fn<AutomationInvocationServiceDeps["launcher"]["launch"]>()
@@ -201,7 +201,7 @@ describe("AutomationInvocationService", () => {
       deps.admission.resolveProviderAuth,
       deps.store.insertInvocationGuarded,
       deps.store.acceptFollowUpReceipt,
-      deps.resolveScmEnrichment,
+      deps.attribution.resolve,
       instructions,
       deps.launcher.launch,
     ].map((fn) => fn.mock.invocationCallOrder[0]);
@@ -230,7 +230,7 @@ describe("AutomationInvocationService", () => {
     );
     expect(deps.store.insertSkippedInvocation).not.toHaveBeenCalled();
     expect(deps.store.advanceNextRunAt).not.toHaveBeenCalled();
-    expect(deps.resolveScmEnrichment).not.toHaveBeenCalled();
+    expect(deps.attribution.resolve).not.toHaveBeenCalled();
     expect(deps.launcher.launch).not.toHaveBeenCalled();
   });
 
@@ -334,7 +334,7 @@ describe("AutomationInvocationService retries", () => {
     });
     const order = [
       deps.admission.resolveTeamTargets,
-      deps.resolveScmEnrichment,
+      deps.attribution.resolve,
       deps.admission.resolveProviderAuth,
       deps.store.claimRetry,
       deps.launcher.launch,

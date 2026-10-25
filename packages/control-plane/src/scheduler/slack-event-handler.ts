@@ -7,13 +7,15 @@ import {
 import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 import { parseAutomationTriggerFields, type AutomationRow } from "../db/automation-store";
 import type { SlackChannelStore } from "../db/slack-channel-store";
-import type { GitHubEnrichment } from "../session/identity";
+import type { UserStore } from "../db/user-store";
+import type { AutomationAttributionService } from "./attribution-service";
+import type { SessionContinuityService } from "./session-continuity-service";
 import type { SourceControlProviderName } from "../source-control/types";
 import type { Logger } from "../logger";
 import type { SchedulerEventResult } from "./contracts";
 import type { AutomationInvocationService } from "./invocation-service";
 import type { AutomationSlackService } from "./slack-service";
-import type { ContinuationOutcome, ContinuationPolicy, SteeringActor } from "./session-continuity";
+import type { ContinuationPolicy, SteeringActor } from "./session-continuity";
 import { formatRunRepositoryLabel, type SlackRunMetadata } from "./slack-completion";
 import { composeAutomationPrompt } from "./event-prompt";
 import { recordEventLaunch, recordContinuation, logEventResult } from "./event-outcome";
@@ -25,16 +27,11 @@ export interface SlackEventHandlerDeps {
     "getSessionInstructions" | "contextWithThread" | "notifySkip"
   >;
   invocations: Pick<AutomationInvocationService, "start">;
-  continueSession(
-    automation: AutomationRow,
-    concurrencyKey: string,
-    now: number,
-    policy: ContinuationPolicy
-  ): Promise<ContinuationOutcome>;
-  resolveActor(event: SlackAutomationEvent): Promise<SteeringActor | null>;
-  resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null>;
-  scmProvider(): SourceControlProviderName;
-  nowMs(): number;
+  continuity: Pick<SessionContinuityService, "continueSession" | "resolveActor">;
+  users: Pick<UserStore, "getIdentity">;
+  attribution: Pick<AutomationAttributionService, "resolve">;
+  scmProvider: SourceControlProviderName;
+  clock: Pick<DateConstructor, "now">;
   log: Logger;
 }
 
@@ -49,7 +46,7 @@ export class SlackEventHandler {
     let contextPromise: Promise<string> | undefined;
     const contextBlock = () => (contextPromise ??= deps.slack.contextWithThread(event));
     let actorPromise: Promise<SteeringActor | null> | undefined;
-    const resolveActor = () => (actorPromise ??= deps.resolveActor(event));
+    const resolveActor = () => (actorPromise ??= this.resolveActor(event));
     let sessionInstructions: string | undefined;
     let settingsLoaded = false;
     let concurrencySkipped = false;
@@ -61,10 +58,10 @@ export class SlackEventHandler {
     };
 
     for (const automation of candidates) {
-      const now = deps.nowMs();
+      const now = deps.clock.now();
       // A reply need not repeat the keyword that started the original session.
       // A missing or refusing session falls through to new-trigger evaluation.
-      const outcome = await deps.continueSession(
+      const outcome = await deps.continuity.continueSession(
         automation,
         event.concurrencyKey,
         now,
@@ -115,6 +112,16 @@ export class SlackEventHandler {
     return summary;
   }
 
+  private async resolveActor(event: SlackAutomationEvent): Promise<SteeringActor | null> {
+    const identity = await this.deps.users.getIdentity("slack", event.actorUserId);
+    if (!identity) return null;
+    return this.deps.continuity.resolveActor(
+      { userId: identity.userId, authorId: `slack:${event.actorUserId}` },
+      `automation:slack-steering:${event.triggerKey}`,
+      event.triggerKey
+    );
+  }
+
   /**
    * Continuity for a follow-up slack message in a thread: it becomes the next turn
    * of its run's existing session — whether that run is still in flight, completed,
@@ -148,14 +155,14 @@ export class SlackEventHandler {
           // interactive callback, which would otherwise treat it as a user request.
           automationId: automation.id,
         };
-        const enrichment = await deps.resolveScmEnrichment(actor.userId);
+        const enrichment = await deps.attribution.resolve(actor.userId);
         return {
           body: {
             content: event.text,
             authorId: actor.authorId,
             canonicalUserId: actor.userId,
             scmEnrichment:
-              deps.scmProvider() === "github"
+              deps.scmProvider === "github"
                 ? {
                     userId: enrichment?.scmUserId ?? null,
                     login: enrichment?.scmLogin ?? null,
