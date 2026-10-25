@@ -7,7 +7,7 @@ mock_provider "external" {
   mock_data "external" {
     defaults = {
       result = {
-        hash = "test-source-hash"
+        hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       }
     }
   }
@@ -54,14 +54,14 @@ run "boat_builds_a_named_snapshot_and_binds_the_worker_to_it" {
   }
 
   assert {
-    condition     = module.boat_infra[0].snapshot_name == "open-inspect-test-source-hash"
+    condition     = module.boat_infra[0].snapshot_name == "open-inspect-0123456789abcdef"
     error_message = "The named snapshot must be the prefix plus the first 16 characters of the source hash."
   }
 
   assert {
     condition = (
       length(null_resource.boat_base_snapshot_prune) == 1 &&
-      null_resource.boat_base_snapshot_prune[0].triggers.snapshot_name == "open-inspect-test-source-hash"
+      null_resource.boat_base_snapshot_prune[0].triggers.snapshot_name == "open-inspect-0123456789abcdef"
     )
     error_message = "The Boat backend must prune superseded bases once per deployed snapshot name."
   }
