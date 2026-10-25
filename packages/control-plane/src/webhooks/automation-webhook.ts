@@ -37,6 +37,7 @@ const MAX_PAYLOAD_SIZE = 64 * 1024;
 const webhookDeliveryFieldsSchema = z.object({
   idempotencyKey: z.string().optional().catch(undefined),
   sessionKey: webhookSessionKeySchema.optional(),
+  steer: z.boolean().optional().catch(undefined),
 });
 
 type ParsedWebhookDeliveryFields =

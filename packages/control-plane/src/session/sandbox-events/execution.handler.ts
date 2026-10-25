@@ -42,8 +42,17 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly offerFallbackTitle: (title: string) => void
+    private readonly offerFallbackTitle: (title: string) => void,
+    private readonly settleSteer: (messageId: string, now: number) => void
   ) {}
+
+  handleSteerResult(
+    event: Extract<SandboxEvent, { type: "steer_result" }>,
+    context: SandboxEventContext
+  ): void {
+    this.log.info("prompt.steer", { message_id: event.messageId, accepted: event.accepted });
+    if (event.accepted) this.settleSteer(event.messageId, context.now);
+  }
 
   /**
    * A harness that never suggests a title (the Claude harness emits no

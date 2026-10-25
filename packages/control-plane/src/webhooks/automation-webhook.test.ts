@@ -34,6 +34,17 @@ describe("parseWebhookDeliveryFields", () => {
     }
   );
 
+  it("reads steer and ignores one that is not a boolean", () => {
+    expect(parseWebhookDeliveryFields({ sessionKey: "card-42", steer: true })).toEqual({
+      ok: true,
+      fields: { sessionKey: "card-42", steer: true },
+    });
+    expect(parseWebhookDeliveryFields({ sessionKey: "card-42", steer: "yes" })).toEqual({
+      ok: true,
+      fields: { sessionKey: "card-42" },
+    });
+  });
+
   it("accepts a sessionKey at the length limit", () => {
     const sessionKey = "k".repeat(WEBHOOK_SESSION_KEY_MAX_LENGTH);
     expect(parseWebhookDeliveryFields({ sessionKey })).toEqual({

@@ -3585,6 +3585,26 @@ describe("Scheduler", () => {
         expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
       });
 
+      it("asks the session to steer a follow-up that carries steer", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", status: "completed", session_id: "sess-card" })
+        );
+        const promptBody = async (steer?: boolean) => {
+          const stub = createMockSessionStub();
+          await createScheduler(createEnv(undefined, stub)).event(
+            normalizeWebhookEvent(
+              "auto-hook",
+              { mode: "iterate" },
+              { sessionKey: "card-42", steer }
+            )
+          );
+          return getPromptBody(vi.mocked(stub.fetch));
+        };
+
+        expect((await promptBody(true)).steer).toBe(true);
+        expect(await promptBody()).not.toHaveProperty("steer");
+      });
+
       it("resolves a retry of the delivery that started the session to its invocation", async () => {
         mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
         mockStore.getLatestContinuableRun.mockResolvedValue(

@@ -153,6 +153,7 @@ To send several deliveries to one session, include a top-level `sessionKey` stri
 - Two deliveries with a new key that arrive at the same moment do not start two runs: one starts the run and the other is skipped for concurrency.
 - If the session will not take the follow-up, for example because it was archived or ran out of budget, the request fails with an [error response](#error-responses) instead of starting over in a new session.
 - After 7 days without activity in the session, the next delivery starts a new run, and later deliveries continue that one.
+- Add `"steer": true` to [steer the running turn](/sessions/follow-ups-and-stopping#steering-the-running-turn) with the follow-up instead of queueing it behind that turn, on a Claude Agent session. The response is the same either way, since the follow-up stays queued until the running turn takes it.
 
 ## Responses
 
