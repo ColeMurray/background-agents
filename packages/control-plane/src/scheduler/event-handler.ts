@@ -15,8 +15,8 @@ import type { SchedulerEventResult } from "./contracts";
 import type { AutomationInvocationService } from "./invocation-service";
 import { composeAutomationPrompt } from "./event-prompt";
 import { recordEventLaunch, logEventResult } from "./event-outcome";
-import { handleSlackEvent, type SlackEventDeps } from "./slack-events";
-import { handleWebhookEvent, type WebhookEventDeps } from "./webhook-events";
+import type { SlackEventHandler } from "./slack-event-handler";
+import type { WebhookEventHandler } from "./webhook-event-handler";
 
 export interface AutomationEventHandlerDeps {
   store: Pick<AutomationStore, "getById" | "getAutomationsForEvent">;
@@ -25,8 +25,8 @@ export interface AutomationEventHandlerDeps {
     event: Parameters<typeof admitGitHubEvent>[1],
     fire: Parameters<typeof admitGitHubEvent>[2]
   ): Promise<SchedulerEventResult>;
-  slack: SlackEventDeps;
-  webhook: WebhookEventDeps;
+  slack: Pick<SlackEventHandler, "handle">;
+  webhook: Pick<WebhookEventHandler, "handle">;
   log: Logger;
 }
 
@@ -53,9 +53,9 @@ export class AutomationEventHandler {
           })
         );
       case "slack":
-        return handleSlackEvent(event, this.deps.slack);
+        return this.deps.slack.handle(event);
       case "webhook":
-        return handleWebhookEvent(event, this.deps.webhook);
+        return this.deps.webhook.handle(event);
     }
 
     let candidates: AutomationRow[];

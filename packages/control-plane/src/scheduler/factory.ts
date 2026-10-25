@@ -56,6 +56,8 @@ import {
   sweepHeldPrompts,
 } from "./session-continuity";
 import { AutomationEventHandler } from "./event-handler";
+import { SlackEventHandler } from "./slack-event-handler";
+import { WebhookEventHandler } from "./webhook-event-handler";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { admitGitHubEvent } from "../automation/github-event-admission";
 import { enqueueAutomationFirstPrompt } from "./session-prompt";
@@ -181,42 +183,44 @@ export function createScheduler(
     nowMs: () => Date.now(),
     log,
   });
+  const slackEvents = new SlackEventHandler({
+    channels: new SlackChannelStore(db),
+    slack,
+    invocations,
+    continueSession: (...args) => continueSession(continuity, ...args),
+    resolveActor: async (event) => {
+      const identity = await new UserStore(db).getIdentity("slack", event.actorUserId);
+      if (!identity) return null;
+      return steeringActor(
+        db,
+        backgroundJobs,
+        { userId: identity.userId, authorId: `slack:${event.actorUserId}` },
+        `automation:slack-steering:${event.triggerKey}`,
+        event.triggerKey
+      );
+    },
+    resolveScmEnrichment,
+    scmProvider: () => resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    nowMs: () => Date.now(),
+    log,
+  });
+  const webhookEvents = new WebhookEventHandler({
+    store,
+    invocations,
+    continueSession: (...args) => continueSession(continuity, ...args),
+    findHistoricalPromptReceipt: (...args) => findHistoricalPromptReceipt(continuity, ...args),
+    resolveActor: (...args) => steeringActor(db, backgroundJobs, ...args),
+    hashToken,
+    nowMs: () => Date.now(),
+    newId: generateId,
+    log,
+  });
   const events = new AutomationEventHandler({
     store,
     invocations,
     admitGitHubEvent: (event, fire) => admitGitHubEvent(db, event, fire, log),
-    slack: {
-      channels: new SlackChannelStore(db),
-      slack,
-      invocations,
-      continueSession: (...args) => continueSession(continuity, ...args),
-      resolveActor: async (event) => {
-        const identity = await new UserStore(db).getIdentity("slack", event.actorUserId);
-        if (!identity) return null;
-        return steeringActor(
-          db,
-          backgroundJobs,
-          { userId: identity.userId, authorId: `slack:${event.actorUserId}` },
-          `automation:slack-steering:${event.triggerKey}`,
-          event.triggerKey
-        );
-      },
-      resolveScmEnrichment,
-      scmProvider: () => resolveScmProviderFromEnv(env.SCM_PROVIDER),
-      nowMs: () => Date.now(),
-      log,
-    },
-    webhook: {
-      store,
-      invocations,
-      continueSession: (...args) => continueSession(continuity, ...args),
-      findHistoricalPromptReceipt: (...args) => findHistoricalPromptReceipt(continuity, ...args),
-      resolveActor: (...args) => steeringActor(db, backgroundJobs, ...args),
-      hashToken,
-      nowMs: () => Date.now(),
-      newId: generateId,
-      log,
-    },
+    slack: slackEvents,
+    webhook: webhookEvents,
     log,
   });
   return new Scheduler({
