@@ -1,4 +1,6 @@
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import type { SessionContinuityService } from "./session-continuity-service";
+import type * as Crypto from "../auth/crypto";
 import type { AutomationRow, AutomationRunRow, AutomationStore } from "../db/automation-store";
 import { HarnessAdmissionError } from "../harness-admission";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
@@ -15,10 +17,10 @@ export interface AutomationRunLaunchServiceDeps {
   >;
   sessions: Pick<AutomationSessionService, "create">;
   enqueueFirstPrompt(input: FirstPromptInput): Promise<void>;
-  releaseHeldPrompts(run: AutomationRunRow): Promise<boolean>;
+  continuity: Pick<SessionContinuityService, "releaseHeldPrompts">;
   executionDeadlineMs(settings: SandboxSettings): number;
-  nowMs(): number;
-  newId(): string;
+  clock: Pick<DateConstructor, "now">;
+  crypto: Pick<typeof Crypto, "generateId">;
   log: Logger;
 }
 
@@ -41,14 +43,14 @@ export class AutomationRunLaunchService {
       if ("error" in launch.providerAuthSnapshot) throw launch.providerAuthSnapshot.error;
       const targetSnapshot = launch.targets.get(child.id);
       if (targetSnapshot && "error" in targetSnapshot) throw targetSnapshot.error;
-      const sessionId = this.deps.newId();
+      const sessionId = this.deps.crypto.generateId();
       // Claim the generated session before initialization. Otherwise the orphan sweep can
       // terminalize an old `starting` row while initialization is still creating its session.
       // The deadline claimed here is the deployment-wide one; session creation replaces it
       // with the budget this session's own settings resolve to. If the worker dies in
       // between, the run stays covered by the shorter of the two, which is what a launch
       // that never finished deserves.
-      const claimedAt = this.deps.nowMs();
+      const claimedAt = this.deps.clock.now();
       const claimed = await this.deps.store.claimRunSession(
         child.id,
         sessionId,
@@ -110,7 +112,7 @@ export class AutomationRunLaunchService {
         ? { status: "unauthorized", failure_reason: error.reason, session_id: null }
         : { status: "failed", failure_reason: message };
     try {
-      const failedAt = this.deps.nowMs();
+      const failedAt = this.deps.clock.now();
       // A harness or provider-account configuration that cannot run fails every attempt alike,
       // so it is not retried.
       const configurationError =
@@ -155,7 +157,7 @@ export class AutomationRunLaunchService {
   private async releaseFollowUpsHeldDuringLaunch(run: AutomationRunRow): Promise<void> {
     try {
       await this.deps.store.markRunFirstPromptQueued(run.id);
-      await this.deps.releaseHeldPrompts(run);
+      await this.deps.continuity.releaseHeldPrompts(run);
     } catch (error) {
       this.deps.log.error("Failed to release follow-ups held during launch", {
         event: "scheduler.held_prompt_release_failed",

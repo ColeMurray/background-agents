@@ -1,11 +1,7 @@
-import { getUserAuth } from "../auth/user/runtime";
-import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
 import { UserStore } from "../db/user-store";
-import {
-  AmbiguousGitHubIdentityError,
-  resolveGitHubEnrichmentForCanonicalUser,
-  type GitHubEnrichment,
-} from "../session/identity";
+import { AutomationAttributionService } from "./attribution-service";
+import { SessionContinuityService } from "./session-continuity-service";
+import * as schedulerCrypto from "../auth/crypto";
 import { resolveScmProviderFromEnv } from "../source-control/config";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { AutomationInvocationService } from "./invocation-service";
@@ -24,7 +20,6 @@ import { retryDelivery } from "../session/callback-delivery";
 import type { Env } from "../types";
 import { Scheduler } from "./scheduler";
 import { AutomationSlackService } from "./slack-service";
-import { generateId } from "../auth/crypto";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
@@ -48,7 +43,11 @@ import {
 } from "./launch-admission";
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
-import { releaseHeldPrompts } from "./session-continuity";
+import { AutomationEventHandler } from "./event-handler";
+import { SlackEventHandler } from "./slack-event-handler";
+import { WebhookEventHandler } from "./webhook-event-handler";
+import { SlackChannelStore } from "../db/slack-channel-store";
+import { admitGitHubEvent } from "../automation/github-event-admission";
 import { enqueueAutomationFirstPrompt } from "./session-prompt";
 
 /** Assemble scheduler collaborators without starting database or network work. */
@@ -61,6 +60,8 @@ export function createScheduler(
   const sessionIndex = new SessionIndexStore(db);
   const store = new AutomationStore(db);
   const teams = new TeamStore(db);
+  const users = new UserStore(db);
+  const scmProvider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
   const channels = new TeamChannelBindingStore(db);
   const slack = new AutomationSlackService({
     bot: env.SLACK_BOT,
@@ -74,7 +75,7 @@ export function createScheduler(
     sign: computeHmacHex,
     retryDelivery,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    nowMs: () => Date.now(),
+    clock: Date,
     log,
   });
   const createRequestContext: AutomationSessionServiceDeps["createRequestContext"] = (
@@ -105,14 +106,15 @@ export function createScheduler(
     },
     executionDeadlineMs: resolveDeadlineMs,
   });
+  const continuity = new SessionContinuityService({ store, env, log, db, backgroundJobs });
   const launcher = new AutomationRunLaunchService({
     store,
     sessions,
     enqueueFirstPrompt: (input) => enqueueAutomationFirstPrompt(env, input),
-    releaseHeldPrompts: (run) => releaseHeldPrompts({ store, env, log, db, backgroundJobs }, run),
+    continuity,
     executionDeadlineMs: resolveDeadlineMs,
-    nowMs: () => Date.now(),
-    newId: generateId,
+    clock: Date,
+    crypto: schedulerCrypto,
     log,
   });
   const admissionDeps: LaunchAdmissionDeps = {
@@ -128,28 +130,7 @@ export function createScheduler(
       resolveTeamTargets(admissionDeps, automation, team, candidates),
     resolveProviderAuth: (automation) => resolveProviderAuthSnapshot(admissionDeps, automation),
   };
-  const resolveScmEnrichment = async (userId: string): Promise<GitHubEnrichment | null> => {
-    if (resolveScmProviderFromEnv(env.SCM_PROVIDER) !== "github") return null;
-    try {
-      return await resolveGitHubEnrichmentForCanonicalUser(
-        new UserStore(db),
-        userId,
-        () => getUserAuth(env, db).api
-      );
-    } catch (error) {
-      if (
-        !(error instanceof AmbiguousGitHubIdentityError) &&
-        !(error instanceof GitHubAttributionUnavailableError)
-      )
-        throw error;
-      log.warn("GitHub attribution unavailable; continuing without it", {
-        event: "scheduler.github_enrichment_unavailable",
-        user_id: userId,
-        error,
-      });
-      return null;
-    }
-  };
+  const attribution = new AutomationAttributionService({ users, scmProvider, db, env, log });
   const failures = new AutomationFailureService(store, log);
   const invocations = new AutomationInvocationService({
     store,
@@ -157,29 +138,57 @@ export function createScheduler(
     admission,
     launcher,
     failures,
-    resolveScmEnrichment,
+    attribution,
     isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
     resolveRepositories: (repositories) => resolveAutomationRepositories(env, repositories),
-    nowMs: () => Date.now(),
-    newId: generateId,
+    clock: Date,
+    crypto: schedulerCrypto,
     log,
   });
   const recovery = new AutomationRecoveryService({
     store,
     failures,
     executionDeadlineMs: resolveDeadlineMs,
-    nowMs: () => Date.now(),
+    clock: Date,
+    log,
+  });
+  const slackEvents = new SlackEventHandler({
+    channels: new SlackChannelStore(db),
+    slack,
+    invocations,
+    continuity,
+    users,
+    attribution,
+    scmProvider,
+    clock: Date,
+    log,
+  });
+  const webhookEvents = new WebhookEventHandler({
+    store,
+    invocations,
+    continuity,
+    crypto: schedulerCrypto,
+    clock: Date,
+    log,
+  });
+  const events = new AutomationEventHandler({
+    store,
+    invocations,
+    admitGitHubEvent: (event, fire) => admitGitHubEvent(db, event, fire, log),
+    slack: slackEvents,
+    webhook: webhookEvents,
     log,
   });
   return new Scheduler({
-    db,
-    env,
-    backgroundJobs,
+    store,
+    events,
+    continuity,
+    clock: Date,
+    crypto: schedulerCrypto,
     slack,
     log,
     invocations,
     failures,
     recovery,
-    resolveScmEnrichment,
   });
 }

@@ -28,7 +28,7 @@ export interface AutomationSlackServiceDeps {
   sign: typeof computeHmacHex;
   retryDelivery: typeof retryDelivery;
   sleep(ms: number): Promise<void>;
-  nowMs(): number;
+  clock: Pick<DateConstructor, "now">;
   log: Logger;
 }
 
@@ -93,7 +93,7 @@ export class AutomationSlackService {
           ? {
               kind: "slack.thread_closed",
               sessionId: completion.sessionId,
-              timestamp: this.deps.nowMs(),
+              timestamp: this.deps.clock.now(),
               context: { channel: meta.channel, threadTs: meta.messageTs },
             }
           : buildSlackCompletionNotification(meta, {

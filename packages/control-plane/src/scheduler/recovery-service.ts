@@ -34,7 +34,7 @@ export interface AutomationRecoveryServiceDeps {
   >;
   failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
   executionDeadlineMs(settings: SandboxSettings): number;
-  nowMs(): number;
+  clock: Pick<DateConstructor, "now">;
   log: Logger;
 }
 
@@ -46,7 +46,7 @@ export class AutomationRecoveryService {
 
   async recoverRuns(): Promise<void> {
     const store = this.deps.store;
-    const now = this.deps.nowMs();
+    const now = this.deps.clock.now();
     const [orphanedResult, timedOutResult] = await Promise.allSettled([
       store.getOrphanedStartingRuns(ORPHAN_THRESHOLD_MS, RECOVERY_SWEEP_LIMIT),
       // A run claimed by a worker that predates the deadline column carries
@@ -183,7 +183,7 @@ export class AutomationRecoveryService {
    */
   private async finalizationSweep(): Promise<void> {
     const store = this.deps.store;
-    const since = this.deps.nowMs() - INVOCATION_SWEEP_WINDOW_MS;
+    const since = this.deps.clock.now() - INVOCATION_SWEEP_WINDOW_MS;
     try {
       await store.disableSettledOneShots();
       const uncounted = await store.getUncountedFailedInvocations(since, RECOVERY_SWEEP_LIMIT);

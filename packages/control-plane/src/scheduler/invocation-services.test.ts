@@ -157,7 +157,7 @@ function invocationHarness() {
       }),
       resolveProviderAuth: vi.fn().mockResolvedValue({ providerAuth: [] }),
     },
-    resolveScmEnrichment: vi.fn().mockResolvedValue(null),
+    attribution: { resolve: vi.fn().mockResolvedValue(null) },
     launcher: {
       launch: vi
         .fn<AutomationInvocationServiceDeps["launcher"]["launch"]>()
@@ -171,8 +171,8 @@ function invocationHarness() {
         }),
     },
     failures: { applyInvocationOutcome: vi.fn().mockResolvedValue(undefined) },
-    nowMs: () => 1_000,
-    newId: () => `id-${++id}`,
+    clock: { now: () => 1_000 },
+    crypto: { generateId: () => `id-${++id}` },
     log,
   } satisfies AutomationInvocationServiceDeps;
   return { deps, service: new AutomationInvocationService(deps) };
@@ -203,7 +203,7 @@ describe("AutomationInvocationService", () => {
       deps.admission.resolveProviderAuth,
       deps.store.insertInvocationGuarded,
       deps.store.acceptFollowUpReceipt,
-      deps.resolveScmEnrichment,
+      deps.attribution.resolve,
       instructions,
       deps.launcher.launch,
     ].map((fn) => fn.mock.invocationCallOrder[0]);
@@ -232,7 +232,7 @@ describe("AutomationInvocationService", () => {
     );
     expect(deps.store.insertSkippedInvocation).not.toHaveBeenCalled();
     expect(deps.store.advanceNextRunAt).not.toHaveBeenCalled();
-    expect(deps.resolveScmEnrichment).not.toHaveBeenCalled();
+    expect(deps.attribution.resolve).not.toHaveBeenCalled();
     expect(deps.launcher.launch).not.toHaveBeenCalled();
   });
 
@@ -283,7 +283,7 @@ function recoveryHarness() {
     },
     failures: { applyInvocationOutcome: vi.fn().mockResolvedValue(undefined) },
     executionDeadlineMs: () => 10_000,
-    nowMs: () => 1_000,
+    clock: { now: () => 1_000 },
     log,
   } satisfies AutomationRecoveryServiceDeps;
   return { deps, service: new AutomationRecoveryService(deps) };
@@ -337,7 +337,7 @@ describe("AutomationInvocationService retries", () => {
     });
     const order = [
       deps.admission.resolveTeamTargets,
-      deps.resolveScmEnrichment,
+      deps.attribution.resolve,
       deps.admission.resolveProviderAuth,
       deps.store.claimRetry,
       deps.launcher.launch,
