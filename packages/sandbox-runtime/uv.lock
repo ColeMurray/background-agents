@@ -175,7 +175,7 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.2.161"
+version = "0.2.168"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -183,12 +183,13 @@ dependencies = [
     { name = "mcp" },
     { name = "sniffio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/e1/8c94ff7f200eabcee9a9e57825dfac596bb6fbdeeafa594f49bc7e7f89b5/claude_agent_sdk-0.2.161.tar.gz", hash = "sha256:284a1372ec3af133578009ab2b821a238272dbf17d687a58be9df918d7b3ae89", size = 365168, upload-time = "2026-09-28T18:53:39.197Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/ee/31e159daf956f0c5503eac67d02743da692c0999fef046cdde3cc52702b9/claude_agent_sdk-0.2.168.tar.gz", hash = "sha256:80388054a09c137d76fc29caa6e46bc90d2ae2ef09fac5ee1c38fc36d2762fda", size = 371591, upload-time = "2026-10-15T20:20:43.683Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/be/528e3ec2bb30deff4fcc9484dd47d1022786ad3659d31110bd0ea66ea548/claude_agent_sdk-0.2.161-py3-none-macosx_11_0_arm64.whl", hash = "sha256:127c18a790dc9f77cc2d648f932e11b06cd3325c4b3de7a73d3bcf3d3b74b8bc", size = 93872213, upload-time = "2026-09-28T18:53:42.956Z" },
-    { url = "https://files.pythonhosted.org/packages/17/1c/a0dcb628ac2f25bc92d858857a399202723098057828a909ca4f9893b721/claude_agent_sdk-0.2.161-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:599e1c8ccb4d48ed57999b48e80937d6a6aefbc52b0c0cda1291aea21df29e3e", size = 98316495, upload-time = "2026-09-28T18:53:47.239Z" },
-    { url = "https://files.pythonhosted.org/packages/73/04/3c0caee46c27eee75642b52ee11857c0d3b9d6917ecfd916da2ffc2c2d3f/claude_agent_sdk-0.2.161-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:18081d3277c07a71891bd15d1496387d9efc5f04a6b482ae3a03e7a0b8067069", size = 103331951, upload-time = "2026-09-28T18:53:51.367Z" },
-    { url = "https://files.pythonhosted.org/packages/09/70/2c7c4160a19c6edd42e317bdc9cf810e91b6a535c04377fb09d4ee090769/claude_agent_sdk-0.2.161-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:b854e46d2889a51e1a77978711a05c757e63064bd5d8f89bcf74bb507babfc2c", size = 103684983, upload-time = "2026-09-28T18:53:55.496Z" },
+    { url = "https://files.pythonhosted.org/packages/15/31/9a205fc0b7ae1b66d5964774bb534ab378047c9bf87578f443bd1fb2205e/claude_agent_sdk-0.2.168-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2ef1e7fc442c5abdc1e698027bf1b5faa8ea2130134a14364e2ae3c53bf31fdd", size = 104355641, upload-time = "2026-10-15T20:20:48.105Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/ba/12bbe92d5e9145c7aaa94aa349a0859b77a9b58ccc40ae9e69cf7f078e5b/claude_agent_sdk-0.2.168-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:653fc7bbe56630e6ddd9601a7cfe50586667e74102da3fb90571456c63655a62", size = 109438860, upload-time = "2026-10-15T20:20:52.274Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/5a/26e587846f14f67f3353f96811b86931263a9c7e264d17a691d9577e4da5/claude_agent_sdk-0.2.168-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:77ae66b10edfd07b6ea3dec2af106ad47a9d616f8eb52d4f9b385e1b00bb2a27", size = 114030032, upload-time = "2026-10-15T20:20:56.813Z" },
+    { url = "https://files.pythonhosted.org/packages/00/03/09d347dcddbbab4becd41fef3a811967eddf24135b2d62dac9e321c81537/claude_agent_sdk-0.2.168-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:be197be92549909ec62a2cee04c27f4b0a38c80f723735538a3efc352507f81d", size = 114443626, upload-time = "2026-10-15T20:21:01.794Z" },
+    { url = "https://files.pythonhosted.org/packages/48/93/520a18ab853b688afcc31d504344e541a7dc68bc2b515ea8a5fef1c868a1/claude_agent_sdk-0.2.168-py3-none-win_amd64.whl", hash = "sha256:ed1814b0dd1c113bdaf3e51e6a67aa5b96b8f5c5839a43aeb6ae1e6ed23a5b35", size = 117292475, upload-time = "2026-10-15T20:21:07.053Z" },
 ]
 
 [[package]]
@@ -670,7 +671,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-agent-sdk", specifier = "==0.2.161" },
+    { name = "claude-agent-sdk", specifier = "==0.2.168" },
     { name = "cryptography", specifier = ">=44.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jsonschema", specifier = ">=4.0" },
