@@ -4,12 +4,18 @@ import {
   bulkMemoryActionResponseSchema,
   MEMORY_BULK_ACTION_MAX_RECORDS,
 } from "@open-inspect/shared/types/memories";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
 import { EnvironmentStore } from "../../src/db/environments";
+import {
+  createRequestMetrics,
+  instrumentSqlDatabase,
+} from "../../src/db/instrumented-sql-database";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import { seedSearchFacts } from "../conformance/memory-search-fixtures";
 import { cleanD1Tables } from "./cleanup";
-import { routeRequest, seedActiveUser, serviceRequestHeaders } from "./helpers";
+import { seedActiveUser, serviceRequestHeaders } from "./helpers";
 import {
   assignCustomRole,
   ownershipRequest,
@@ -42,41 +48,6 @@ async function bulkResults(body: object) {
 }
 /** Cloudflare's D1 query limit per Worker invocation on the Free plan; a batch counts once. */
 const D1_FREE_QUERIES_PER_INVOCATION = 50;
-
-/** Wrap a D1 binding to count the queries a request runs, including authentication's. */
-function countingD1(db: D1Database) {
-  let count = 0;
-  // `batch` must receive the binding's own statements, so remember what each wrapper wraps.
-  const originals = new WeakMap<object, D1PreparedStatement>();
-  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
-    const wrapper = new Proxy(statement, {
-      get(target, property) {
-        const value = Reflect.get(target, property, target);
-        if (property === "bind") return (...values: unknown[]) => wrap(target.bind(...values));
-        if (typeof value !== "function") return value;
-        return (...args: unknown[]) => {
-          if (["first", "run", "all", "raw"].includes(String(property))) count++;
-          return value.apply(target, args);
-        };
-      },
-    });
-    originals.set(wrapper, statement);
-    return wrapper;
-  };
-  const counted = new Proxy(db, {
-    get(target, property) {
-      if (property === "prepare") return (query: string) => wrap(target.prepare(query));
-      if (property === "batch")
-        return (statements: D1PreparedStatement[]) => {
-          count++;
-          return target.batch(statements.map((statement) => originals.get(statement) ?? statement));
-        };
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  return { db: counted, count: () => count };
-}
 
 const auditedIds = async () =>
   (
@@ -163,29 +134,59 @@ describe("bulk memory lifecycle actions", () => {
     expect(await auditedIds()).toEqual(["env-managed", "personal-own", "repo-managed"]);
   });
 
-  it("archives with one shared note, then restores the same records", async () => {
-    await seedSearchFacts(env.DB, USER, [
-      { id: "first", partition: managedRepo },
-      { id: "second", partition: managedEnv },
-    ]);
-    const results = await bulkResults({
+  it("archives approved records with one shared note, then restores them as active", async () => {
+    // Human creation approves records, so restoring them returns them to active, not review.
+    const store = new MemoryRecordStore(env.DB);
+    const actor = { kind: "user" as const, userId: USER, requestId: "test" };
+    const content = {
+      memoryType: "fact" as const,
+      title: "Run migrations first",
+      description: "Apply database migrations before starting the API",
+      content: "npm run migrate",
+    };
+    const records = [
+      await store.create(
+        {
+          partition: managedRepo,
+          scope: { type: "repository", repoOwner: "acme", repoName: "managed" },
+          content,
+        },
+        actor
+      ),
+      await store.create(
+        {
+          partition: managedEnv,
+          scope: { type: "environment", environmentId: "managed" },
+          content,
+        },
+        actor
+      ),
+    ];
+    const targets = records.map((record) => ({
+      id: record.id,
+      revisionId: record.currentRevisionId,
+    }));
+    const archived = await bulkResults({
       action: "archive",
-      memories: [reviewed("first"), reviewed("second")],
+      memories: targets,
       archiveNote: " Outdated after the migration ",
     });
-    expect(results.every((result) => result.ok)).toBe(true);
-    const store = new MemoryRecordStore(env.DB);
-    for (const id of ["first", "second"])
+    expect(archived.every((result) => result.ok)).toBe(true);
+    for (const { id } of targets)
       expect(await store.get(id)).toMatchObject({
         status: "archived",
         archiveKind: "manual",
         archiveNote: "Outdated after the migration",
       });
-    const restored = await bulkResults({
-      action: "restore",
-      memories: [reviewed("first"), reviewed("second")],
-    });
-    expect(restored.map((result) => result.ok)).toEqual([true, true]);
+    const restored = await bulkResults({ action: "restore", memories: targets });
+    expect(restored).toEqual(
+      targets.map(({ id }) => ({
+        id,
+        ok: true,
+        memory: expect.objectContaining({ status: "active", archiveKind: null }),
+      }))
+    );
+    for (const { id } of targets) expect((await store.get(id))?.status).toBe("active");
   });
 
   it("stays within the Workers Free D1 query budget at the largest request", async () => {
@@ -202,7 +203,9 @@ describe("bulk memory lifecycle actions", () => {
       `UPDATE memories SET supersedes_memory_id = 'old-' || substr(id, 5),
         supersedes_revision_id = 'rev_old-' || substr(id, 5) WHERE id LIKE 'new-%'`
     ).run();
-    const counter = countingD1(env.DB);
+    // Instrument the application's database, so authentication's queries are counted too.
+    const metrics = createRequestMetrics();
+    const runtime = createCloudflareEnv(env);
     const url = "https://test.local/memories/bulk";
     const init = {
       method: "POST",
@@ -214,14 +217,14 @@ describe("bulk memory lifecycle actions", () => {
       }),
       as: { userId: USER, role: "member" as const },
     };
-    const response = await routeRequest(
+    const response = await handleControlPlaneHttp(
       new Request(url, { ...init, headers: await serviceRequestHeaders(url, init) }),
-      { ...env, DB: counter.db },
+      { ...runtime, DB: instrumentSqlDatabase(runtime.DB, metrics) },
       createExecutionContext()
     );
     const { results } = bulkMemoryActionResponseSchema.parse(await response.json());
     expect(results.filter((result) => result.ok)).toHaveLength(MEMORY_BULK_ACTION_MAX_RECORDS);
-    expect(counter.count()).toBeLessThanOrEqual(D1_FREE_QUERIES_PER_INVOCATION);
+    expect(metrics.sqlQueries.length).toBeLessThanOrEqual(D1_FREE_QUERIES_PER_INVOCATION);
   });
 
   it("rejects malformed requests before touching any record", async () => {
