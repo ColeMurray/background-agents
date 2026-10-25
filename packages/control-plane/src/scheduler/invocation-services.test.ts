@@ -87,6 +87,7 @@ describe("AutomationFailureService", () => {
   it.each([
     { total: 0, failed: 0 },
     { total: 2, failed: 1, retrying: 1 },
+    { total: 2, active: 1, failed: 0, completed: 1 },
     { total: 2, failed: 0, completed: 1 }, // An unauthorized sibling is not a success.
   ])("does not count or reset an unsettled/unsuccessful invocation: %j", async (aggregate) => {
     const { store, service } = failureHarness(aggregate);
@@ -103,6 +104,18 @@ describe("AutomationFailureService", () => {
     await service.applyInvocationOutcome("auto-1", "inv-1");
     expect(store.incrementConsecutiveFailures).toHaveBeenCalledExactlyOnceWith("auto-1");
     expect(store.autoPause).toHaveBeenCalledExactlyOnceWith("auto-1");
+  });
+
+  it("does not reset or recount a partial failure when the last sibling completes", async () => {
+    const { store, service } = failureHarness({ total: 2, failed: 1, completed: 1 });
+    store.tryMarkInvocationFailureCounted.mockResolvedValue(false);
+
+    await service.applyInvocationOutcome("auto-1", "inv-1");
+
+    expect(store.getInvocationRunAggregate).toHaveBeenCalledWith("inv-1");
+    expect(store.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-1");
+    expect(store.resetConsecutiveFailures).not.toHaveBeenCalled();
+    expect(store.incrementConsecutiveFailures).not.toHaveBeenCalled();
   });
 
   it("resets only after all children complete successfully", async () => {

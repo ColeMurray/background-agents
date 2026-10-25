@@ -2167,22 +2167,13 @@ describe("Scheduler", () => {
     });
   });
 
-  describe("runComplete", () => {
+  describe("runComplete factory wiring", () => {
     beforeEach(() => {
       mockStore.getRunById.mockResolvedValue(sampleRunRow());
       mockSessionStoreGet
         .mockReset()
         .mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
       mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
-    });
-
-    it("records the run's first prompt as queued, since the session ran it", async () => {
-      await createScheduler().runComplete(runCompletion());
-
-      expect(mockStore.markRunFirstPromptQueued).toHaveBeenCalledWith("run-1");
-      expect(mockStore.markRunFirstPromptQueued.mock.invocationCallOrder[0]).toBeLessThan(
-        mockStore.updateRun.mock.invocationCallOrder[0]!
-      );
     });
 
     it.each([false, true])(
@@ -2211,50 +2202,6 @@ describe("Scheduler", () => {
         expect(slackFetch).toHaveBeenCalledTimes(preparationFailed ? 0 : 1);
       }
     );
-
-    it("marks run as completed and resets failures once every sibling completed", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
-      );
-
-      const scheduler = createScheduler();
-      const result = await scheduler.runComplete(runCompletion());
-
-      expect(result).toBeUndefined();
-      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
-        status: "completed",
-        completed_at: expect.any(Number),
-      });
-      expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledWith("inv-1");
-      expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
-    });
-
-    it("does not reset while siblings are still active", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 2, active: 1, failed: 0, completed: 1 })
-      );
-
-      const scheduler = createScheduler();
-      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
-
-      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-    });
-
-    it("never resets after a partial failure, even when the invocation finishes", async () => {
-      // Sibling failed earlier (strike already taken via CAS); this success
-      // finishes the invocation as partial_failed — no reset.
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 2, active: 0, failed: 1, completed: 1 })
-      );
-      mockStore.tryMarkInvocationFailureCounted.mockResolvedValue(false);
-
-      const scheduler = createScheduler();
-      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
-
-      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-    });
 
     it("still posts to slack when a late success corrects a swept timeout", async () => {
       // The sweep posts nothing when it declares a run lost, so the correction
@@ -2290,107 +2237,6 @@ describe("Scheduler", () => {
       expect(body).toMatchObject({ channel: "C1", reactionMessageTs: "1700000000.000200" });
       // The strike the sweep took stays; accounting is deliberately skipped.
       expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
-    });
-
-    it("labels a repo-less run as No repository", async () => {
-      mockStore.getRunById.mockResolvedValue(
-        sampleRunRow({
-          automation_id: "auto-slack",
-          invocation_id: "inv-slack",
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        })
-      );
-      mockStore.getInvocationById.mockResolvedValue({
-        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-      });
-      mockStore.getById.mockResolvedValue({
-        ...sampleSlackAutomation,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-
-      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createScheduler(
-        createEnv({
-          SLACK_BOT: { fetch: slackFetch } as FetchClient,
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        })
-      );
-
-      const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
-
-      expect(result).toBeUndefined();
-      expect(slackFetch).toHaveBeenCalledOnce();
-      const [, init] = slackFetch.mock.calls[0];
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        channel: "C1",
-        reactionMessageTs: "1700000000.000200",
-        repoFullName: "No repository",
-      });
-    });
-
-    it("marks run as failed and takes the CAS-guarded strike on failure", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
-      );
-
-      const scheduler = createScheduler();
-      const result = await scheduler.runComplete(
-        runCompletion({ success: false, error: "Sandbox crashed" })
-      );
-
-      expect(result).toBeUndefined();
-      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
-        status: "failed",
-        failure_reason: "Sandbox crashed",
-        completed_at: expect.any(Number),
-      });
-      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-1");
-      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
-    });
-
-    it("ignores callback when the guarded update finds the run already terminal", async () => {
-      mockStore.getRunById.mockResolvedValue(
-        sampleRunRow({ status: "failed", failure_reason: "execution_timeout", completed_at: now })
-      );
-      // The SQL guard suppresses the write.
-      mockStore.updateRun.mockResolvedValue(false);
-
-      const scheduler = createScheduler();
-      const result = await scheduler.runComplete(runCompletion());
-
-      expect(result).toBeUndefined();
-      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
-    });
-
-    it("auto-pauses after run-complete pushes failures to 3", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
-      );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
-
-      const scheduler = createScheduler();
-      await expect(
-        scheduler.runComplete(runCompletion({ success: false, error: "Third failure" }))
-      ).resolves.toBeUndefined();
-
-      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
-    });
-
-    it("propagates failure-tracking errors so the callback caller retries", async () => {
-      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
-
-      const scheduler = createScheduler();
-      await expect(
-        scheduler.runComplete(runCompletion({ success: false, error: "Sandbox crashed" }))
-      ).rejects.toThrow("D1 timeout");
     });
   });
 

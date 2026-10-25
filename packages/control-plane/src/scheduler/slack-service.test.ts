@@ -90,6 +90,21 @@ describe("AutomationSlackService completion publication", () => {
     mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     getGlobal.mockReset().mockResolvedValue(null);
   });
+  it("labels a repo-less run as No repository", async () => {
+    const { service, slackFetch } = createSlackCompletionHarness();
+    run = sampleRunRow({ repo_owner: null, repo_name: null, repo_id: null, base_branch: null });
+
+    await service.notifyCompletion(run, runCompletion());
+
+    expect(slackFetch).toHaveBeenCalledOnce();
+    const body = JSON.parse(String(slackFetch.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({
+      channel: "C1",
+      reactionMessageTs: "1700000000.000200",
+      repoFullName: "No repository",
+    });
+  });
+
   it.each(["none", "invocation", "automation", "session", "channel"] as const)(
     "reads invocation coordinates and run-snapshot labels after %s preparation failure",
     async (lookup) => {
