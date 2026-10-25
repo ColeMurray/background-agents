@@ -36,7 +36,7 @@ few minutes of changes.
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
 `sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "e2b"`,
 `sandbox_provider = "daytona"`, or `sandbox_provider = "boat"`. The artifact is stored per provider
-as a Modal image, Vercel snapshot, E2B/Daytona snapshot, or Boat named snapshot. With `modal-vm`,
+as a Modal image, Vercel snapshot, E2B/Daytona snapshot, or Boat saved snapshot. With `modal-vm`,
 the artifact is a Modal image built on the VM backend. Images built under `modal` are not used by
 `modal-vm` sessions. Boat's artifact has its own allowance and snapshot rules — see
 [Boat prebuilds](#boat-prebuilds).
@@ -215,7 +215,7 @@ workspace environment build has no team layer, even when a team session later la
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
-snapshot, E2B/Daytona snapshot, or Boat named snapshot (on Boat, caches under `/tmp` and `~/.cache`
+snapshot, E2B/Daytona snapshot, or Boat saved snapshot (on Boat, caches under `/tmp` and `~/.cache`
 are the exception; see [Boat prebuilds](#boat-prebuilds)).
 
 The configured build timeout covers clone and setup execution. Build sandboxes receive an additional
@@ -352,7 +352,7 @@ own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
 
 ## Boat prebuilds
 
-On Boat a prebuilt image is a **named snapshot**: a standalone copy of the build sandbox's disk,
+On Boat a prebuilt image is a **saved snapshot**: a standalone copy of the build sandbox's disk,
 saved under a name derived from the build (`oi-img-<scope>-<digest>`). A session deploys from it
 exactly as it deploys from the deployment's base snapshot, with its own env, and the runtime syncs
 the checkout and skips `setup.sh`.
@@ -365,7 +365,7 @@ Superseded images are deleted by the same reaper as on every other provider.
 
 Things to know:
 
-- **Allowance.** Boat includes a fixed number of named snapshots per account or organization wallet
+- **Allowance.** Boat includes a fixed number of saved snapshots per account or organization wallet
   and bills each one beyond that monthly. The deployed and retained rollback bases count, as does
   every ready image plus, briefly, the image a rebuild is replacing. After switching the Worker,
   Terraform [prunes superseded bases](./BOAT_SANDBOX_PROVIDER.md#base-snapshot-pruning), retaining
@@ -375,7 +375,7 @@ Things to know:
   Deleting a source base does not affect existing sandboxes or prebuilt images. A save past the
   allowance with no credit fails the build with Boat's `credit_required` reason. Operators can
   remove unrelated unused manual snapshots or add credit, then rebuild.
-- **What the image keeps.** A named snapshot follows Boat's snapshot rules: `/home` (the workspace
+- **What the image keeps.** A saved snapshot follows Boat's snapshot rules: `/home` (the workspace
   with every clone and everything `setup.sh` put there) and changes under `/etc`, `/usr`, `/opt`,
   `/var`, `/root` and `/srv` are saved; `/tmp` and `~/.cache` are not. A setup script that warms a
   cache under `~/.cache` (pip, uv, Playwright browsers) does not carry it into the image — point
@@ -410,7 +410,7 @@ Things to know:
 
 | Symptom                                                 | What it means                                                  | What to do                                                                                                                                 |
 | ------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Build fails with `credit_required`                      | The account is at its named-snapshot allowance with no credit. | Delete named snapshots nothing deploys from (`DELETE /named-snapshots/{name}` or the Boat CLI), or add credit, then rebuild.               |
+| Build fails with `credit_required`                      | The account is at its saved-snapshot allowance with no credit. | Delete saved snapshots nothing deploys from (`DELETE /saved-snapshots/{name}` or the Boat CLI), or add credit, then rebuild.               |
 | Callback accepted, build stays `building` for minutes   | The save is still `saving`, or the source is still archiving.  | Nothing; finalization re-polls the reserved name. It fails the build only past the save's fixed deadline, and then reclaims the name.      |
 | `image_build.operation_unresolved` naming an `oi-img-*` | A reserved save never settled and maintenance keeps asking.    | Check the name in the Boat dashboard; a `failed` or `ready` snapshot under it is deleted by maintenance on its next pass.                  |
 | Cleanup backlog after a provider switch                 | Rows dispatch cleanup from their own recorded provider.        | Keep `boat_api_key` (with `boat_api_url` and `boat_org`) configured until the backlog drains. The base snapshot is not needed for cleanup. |

@@ -4,7 +4,7 @@ output "snapshot_build_id" {
 }
 
 output "snapshot_name" {
-  description = "Verified named snapshot; only switch traffic after the build succeeds"
+  description = "Verified saved snapshot; only switch traffic after the build succeeds"
   value       = local.snapshot_name
   depends_on  = [null_resource.boat_snapshot]
 }

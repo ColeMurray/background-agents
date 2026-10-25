@@ -20,7 +20,7 @@ Set these values in `terraform/environments/production/terraform.tfvars`:
 sandbox_provider = "boat"
 
 boat_api_key       = "boat_..."      # from the Boat dashboard → API keys
-boat_base_snapshot = "open-inspect"  # prefix of the named snapshot to build/use
+boat_base_snapshot = "open-inspect"  # prefix of the saved snapshot to build/use
 
 # Optional
 # boat_api_url      = "https://boat.dev/api/v1" # REST API base URL
@@ -79,7 +79,7 @@ Personal accounts need nothing: their sandboxes are visible to the owner only.
 
 ## Snapshot Build
 
-Boat sandboxes deploy from a **named snapshot** that contains:
+Boat sandboxes deploy from a **saved snapshot** that contains:
 
 - the Open-Inspect sandbox runtime (`packages/sandbox-runtime`, reachable as `/app`)
 - OpenCode and the OpenCode plugin dependencies
@@ -128,7 +128,7 @@ the image is installed on, which does not change the saved disk). Manual builds 
 that name as `BOAT_BASE_SNAPSHOT` on the control plane. See
 [`packages/boat-infra/README.md`](../packages/boat-infra/README.md) for details.
 
-A build uses two sandbox starts and keeps one named snapshot. Boat includes a fixed number of named
+A build uses two sandbox starts and keeps one saved snapshot. Boat includes a fixed number of saved
 snapshots per account or organization wallet and bills each one beyond that; base snapshots and
 prebuilt images share the allowance.
 
@@ -181,7 +181,7 @@ repository and environment images.
 
 ## Runtime Behavior
 
-The Boat provider creates fresh sandboxes from the named snapshot, delivering env and starting the
+The Boat provider creates fresh sandboxes from the saved snapshot, delivering env and starting the
 runtime the same way Open-Inspect does on every other provider:
 
 1. the sandbox is created with `noEnv` (none of the Boat account's own secrets or logins) and the
@@ -244,16 +244,16 @@ works as on every other provider ([IMAGE_PREBUILD.md](./IMAGE_PREBUILD.md)). On 
   file under `/tmp`, which the launcher reads once and removes, and starts the launcher in
   image-build mode; the runtime clones the repositories, runs each `.openinspect/setup.sh` and
   reports back to the control plane
-- finalization archives the build sandbox and saves its disk as a **named snapshot** called
+- finalization archives the build sandbox and saves its disk as a **saved snapshot** called
   `oi-img-<scope>-<digest>`, then deletes the build sandbox. The image is a standalone copy: it
   keeps deploying after its source is gone and never expires until the control plane deletes it
 - a session with a ready image deploys from that name instead of the base snapshot, with its own env
   and a fresh boot; the runtime syncs the checkout and skips `setup.sh`
 
-Every image counts toward the wallet's named-snapshot allowance together with the deployed and
+Every image counts toward the wallet's saved-snapshot allowance together with the deployed and
 rollback base snapshots. Superseded images are deleted automatically, and Terraform prunes
 superseded bases after switching the Worker (see [Base Snapshot Pruning](#base-snapshot-pruning)).
-The [Boat prebuilds](./IMAGE_PREBUILD.md#boat-prebuilds) section covers the allowance, what a named
+The [Boat prebuilds](./IMAGE_PREBUILD.md#boat-prebuilds) section covers the allowance, what a saved
 snapshot keeps (`/tmp` and `~/.cache` are not saved), why the build's env never reaches the image,
 and the runbook.
 
@@ -320,7 +320,7 @@ After `terraform apply`, verify:
    curl https://open-inspect-control-plane-<deployment_name>.<workers-subdomain>.workers.dev/health
    ```
 
-2. The Boat dashboard (or `GET /named-snapshots`) lists the Open-Inspect snapshot as `ready`.
+2. The Boat dashboard (or `GET /saved-snapshots`) lists the Open-Inspect snapshot as `ready`.
 
 3. Starting a session in the web app creates a Boat sandbox and reaches `Connected`.
 
@@ -372,6 +372,6 @@ inherits, and that the model is available for that account.
 
 - [Boat API v1](https://docs.boat.dev/api/v1)
 - [Boat snapshots: stop and resume](https://docs.boat.dev/snapshots/stop)
-- [Boat named snapshots](https://docs.boat.dev/snapshots/templates)
+- [Boat saved snapshots](https://docs.boat.dev/snapshots/templates)
 - [Boat public URLs](https://docs.boat.dev/hosting)
 - [Boat limits and errors](https://docs.boat.dev/limits)

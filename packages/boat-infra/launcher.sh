@@ -35,7 +35,7 @@
 #   5. in image-build mode, loads the build's env — the repository set, the
 #      clone token, the scope's secrets, the callback contract — from the file
 #      the control plane wrote once the sandbox was private, and removes it.
-#      Nothing of the build rides the create-time env, which a named snapshot
+#      Nothing of the build rides the create-time env, which a saved snapshot
 #      saved from the sandbox would inherit;
 #   6. decides the boot mode from the completed-boot marker: the runtime
 #      creates it (OI_BOOT_COMPLETE_MARKER) once a boot has synced the

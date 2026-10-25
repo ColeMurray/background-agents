@@ -68,7 +68,7 @@ const TIMEOUT_COMMAND_STATUS_MS = 15_000;
 // the file lands on the disk the sandbox keeps.
 const TIMEOUT_WRITE_FILE_MS = BOAT_START_WAIT_MS + 15_000;
 const TIMEOUT_HOST_PORT_MS = 30_000;
-const TIMEOUT_NAMED_SNAPSHOT_MS = 30_000;
+const TIMEOUT_SAVED_SNAPSHOT_MS = 30_000;
 /** Headroom over a synchronous command's own timeout for transport and queueing. */
 const COMMAND_TRANSPORT_HEADROOM_MS = 15_000;
 /** Longest tail of each log a status poll returns; enough for a diagnostic, never a transcript. */
@@ -188,13 +188,13 @@ const fileWrittenSchema = z.object({
 });
 
 /**
- * The subset of Boat's `NamedSnapshot` the control plane acts on. A named
+ * The subset of Boat's `SavedSnapshot` the control plane acts on. A saved
  * snapshot is a full, standalone copy of a sandbox's disk under a name of the
  * caller's choosing; it outlives its source sandbox and never expires. Boat
  * reports `status` as `saving`, `ready` or `failed`; it stays a plain string
  * here for the same reason the sandbox state does.
  */
-const boatNamedSnapshotSchema = z.object({
+const boatSavedSnapshotSchema = z.object({
   name: z.string(),
   status: z.string(),
   /** Why the save failed; present only when `status` is `failed`. */
@@ -207,12 +207,12 @@ const boatNamedSnapshotSchema = z.object({
   createdAt: z.string().optional(),
 });
 
-export type BoatNamedSnapshot = z.infer<typeof boatNamedSnapshotSchema>;
+export type BoatSavedSnapshot = z.infer<typeof boatSavedSnapshotSchema>;
 
-const namedSnapshotEnvelopeSchema = z.object({ snapshot: boatNamedSnapshotSchema });
+const savedSnapshotEnvelopeSchema = z.object({ snapshot: boatSavedSnapshotSchema });
 
-/** Boat's rule for a named snapshot's name, which `POST /named-snapshots` enforces. */
-export const BOAT_NAMED_SNAPSHOT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+/** Boat's rule for a saved snapshot's name, which `POST /saved-snapshots` enforces. */
+export const BOAT_SAVED_SNAPSHOT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 /** Boat's error envelope: `{ ok: false, status, code, message, requestId, ... }`. */
 const boatErrorBodySchema = z.object({
@@ -232,7 +232,7 @@ export interface BoatCreateSandboxParams {
    * included). Boat applies it to every process the sandbox starts.
    */
   env: Record<string, string>;
-  /** Named snapshot the sandbox deploys from. */
+  /** Saved snapshot the sandbox deploys from. */
   from: string;
   /**
    * Account-unique key that makes the create safe to retry after a lost
@@ -378,7 +378,7 @@ export class BoatRestClient {
   }
 
   /**
-   * `POST /sandboxes`: deploy a sandbox from a named snapshot with its own env
+   * `POST /sandboxes`: deploy a sandbox from a saved snapshot with its own env
    * and none of the account's secrets (`noEnv`). The 202 answer carries the
    * sandbox while it provisions; poll {@link getSandbox} for readiness.
    */
@@ -612,52 +612,52 @@ export class BoatRestClient {
   }
 
   /**
-   * `POST /named-snapshots`: freeze a sandbox's disk under `name`. Answers 202
+   * `POST /saved-snapshots`: freeze a sandbox's disk under `name`. Answers 202
    * with the snapshot in `saving`; a running source takes a fresh capture
    * first, a stopped one is saved from its last automatic snapshot. Poll
-   * {@link getNamedSnapshot} until the status settles. Saving under an
+   * {@link getSavedSnapshot} until the status settles. Saving under an
    * existing name replaces that artifact once the new save is ready, so a
    * repeat of the same request can never add a second snapshot; one that
    * overlaps a running save answers 409 `save_in_progress`, and an account at
-   * its allowance with no credit answers 402 `credit_required`.
+   * its allowance with no money in the wallet answers 402 `credit_required`.
    */
-  async saveNamedSnapshot(
+  async saveSavedSnapshot(
     sandboxId: string,
     name: string,
     signal?: AbortSignal
-  ): Promise<BoatNamedSnapshot> {
+  ): Promise<BoatSavedSnapshot> {
     const response = await this.requestJson(
       "POST",
-      "/named-snapshots",
-      TIMEOUT_NAMED_SNAPSHOT_MS,
-      namedSnapshotEnvelopeSchema,
+      "/saved-snapshots",
+      TIMEOUT_SAVED_SNAPSHOT_MS,
+      savedSnapshotEnvelopeSchema,
       { body: { sandboxId, name }, signal }
     );
     return response.snapshot;
   }
 
-  /** `GET /named-snapshots/{name}`; 404 surfaces as BoatNotFoundError. */
-  async getNamedSnapshot(name: string, signal?: AbortSignal): Promise<BoatNamedSnapshot> {
+  /** `GET /saved-snapshots/{name}`; 404 surfaces as BoatNotFoundError. */
+  async getSavedSnapshot(name: string, signal?: AbortSignal): Promise<BoatSavedSnapshot> {
     const response = await this.requestJson(
       "GET",
-      `/named-snapshots/${encodeURIComponent(name)}`,
-      TIMEOUT_NAMED_SNAPSHOT_MS,
-      namedSnapshotEnvelopeSchema,
+      `/saved-snapshots/${encodeURIComponent(name)}`,
+      TIMEOUT_SAVED_SNAPSHOT_MS,
+      savedSnapshotEnvelopeSchema,
       { signal }
     );
     return response.snapshot;
   }
 
   /**
-   * `DELETE /named-snapshots/{name}`: release the snapshot and its storage.
+   * `DELETE /saved-snapshots/{name}`: release the snapshot and its storage.
    * Sandboxes already deployed from it are unaffected. Refused with 409
    * `save_in_progress` while a save under the name is still running.
    */
-  async deleteNamedSnapshot(name: string, signal?: AbortSignal): Promise<void> {
+  async deleteSavedSnapshot(name: string, signal?: AbortSignal): Promise<void> {
     await this.requestVoid(
       "DELETE",
-      `/named-snapshots/${encodeURIComponent(name)}`,
-      TIMEOUT_NAMED_SNAPSHOT_MS,
+      `/saved-snapshots/${encodeURIComponent(name)}`,
+      TIMEOUT_SAVED_SNAPSHOT_MS,
       { signal }
     );
   }

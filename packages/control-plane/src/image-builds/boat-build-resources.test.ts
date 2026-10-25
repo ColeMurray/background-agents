@@ -6,7 +6,7 @@ import {
   boatIdempotencyKey,
 } from "../sandbox/boat-lifecycle";
 import {
-  BOAT_NAMED_SNAPSHOT_NAME_PATTERN,
+  BOAT_SAVED_SNAPSHOT_NAME_PATTERN,
   BoatApiError,
   BoatNotFoundError,
   type BoatCreateSandboxParams,
@@ -114,8 +114,8 @@ describe("BoatImageBuildResources triggerImageBuild", () => {
       name: expect.stringMatching(/^openinspect-test-build-env-acme\/repo-\d+$/),
       visibility: "private",
     });
-    // Nothing of the build rides the create request: a named snapshot saved
-    // from this sandbox inherits these markers and nothing else.
+    // Nothing of the build rides the create request: a saved snapshot of
+    // this sandbox inherits these markers and nothing else.
     expect(params.env).toEqual({
       IMAGE_BUILD_MODE: "true",
       OI_DEFERRED_START: "false",
@@ -403,15 +403,15 @@ describe("BoatImageBuildResources image snapshots", () => {
     await expect(
       resources.saveImageSnapshot("bx_abcdefgh", "oi-img-x", signal)
     ).resolves.toMatchObject({ status: "saving" });
-    expect(client.saveNamedSnapshot).toHaveBeenCalledWith("bx_abcdefgh", "oi-img-x", signal);
+    expect(client.saveSavedSnapshot).toHaveBeenCalledWith("bx_abcdefgh", "oi-img-x", signal);
     await expect(resources.getImageSnapshot("oi-img-x")).resolves.toMatchObject({
       name: "oi-img-x",
     });
-    vi.mocked(client.getNamedSnapshot).mockRejectedValueOnce(new BoatNotFoundError("gone"));
+    vi.mocked(client.getSavedSnapshot).mockRejectedValueOnce(new BoatNotFoundError("gone"));
     await expect(resources.getImageSnapshot("oi-img-gone")).resolves.toBeNull();
     await resources.deleteProviderImage("oi-img-x", signal);
-    expect(client.deleteNamedSnapshot).toHaveBeenCalledWith("oi-img-x", signal);
-    vi.mocked(client.deleteNamedSnapshot).mockRejectedValueOnce(new BoatNotFoundError("gone"));
+    expect(client.deleteSavedSnapshot).toHaveBeenCalledWith("oi-img-x", signal);
+    vi.mocked(client.deleteSavedSnapshot).mockRejectedValueOnce(new BoatNotFoundError("gone"));
     await expect(resources.deleteProviderImage("oi-img-gone")).resolves.toBeUndefined();
     await resources.deleteBuildSandbox("bx_abcdefgh", signal);
     expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh", signal);
@@ -421,7 +421,7 @@ describe("BoatImageBuildResources image snapshots", () => {
 
   it("keeps Boat's code on a refused save, and refuses to delete the base snapshot", async () => {
     const client = mockClient({
-      saveNamedSnapshot: vi.fn(async () => {
+      saveSavedSnapshot: vi.fn(async () => {
         throw new BoatApiError("credit", 402, "credit_required");
       }),
     });
@@ -433,7 +433,7 @@ describe("BoatImageBuildResources image snapshots", () => {
     await expect(resources.deleteProviderImage("open-inspect-abc123")).rejects.toThrow(
       "Refusing to delete the configured Boat base snapshot"
     );
-    expect(client.deleteNamedSnapshot).not.toHaveBeenCalled();
+    expect(client.deleteSavedSnapshot).not.toHaveBeenCalled();
   });
 
   it("derives the image name for the deployment", async () => {
@@ -446,7 +446,7 @@ describe("BoatImageBuildResources image snapshots", () => {
 describe("boatImageSnapshotName", () => {
   it("is a valid Boat name that leads with the build's scope and ends with a deployment digest", async () => {
     const name = await boatImageSnapshotName("prod", "imgb-acme-repo-1757000000000-ab12");
-    expect(name).toMatch(BOAT_NAMED_SNAPSHOT_NAME_PATTERN);
+    expect(name).toMatch(BOAT_SAVED_SNAPSHOT_NAME_PATTERN);
     expect(name).toMatch(/^oi-img-acme-repo-1757000000000-ab12-[0-9a-f]{16}$/);
     expect(name).toBe(await boatImageSnapshotName("prod", "imgb-acme-repo-1757000000000-ab12"));
     expect(name).not.toBe(
@@ -460,7 +460,7 @@ describe("boatImageSnapshotName", () => {
       "Prod_EU",
       "imgb-Group/Sub.group/a_very_long_repository_name-1757000000000-ab12"
     );
-    expect(name).toMatch(BOAT_NAMED_SNAPSHOT_NAME_PATTERN);
+    expect(name).toMatch(BOAT_SAVED_SNAPSHOT_NAME_PATTERN);
     expect(name.length).toBeLessThanOrEqual(63);
     expect(name).toMatch(/^oi-img-group-sub-group-a-very-long-[0-9a-f]{16}$/);
   });

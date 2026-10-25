@@ -1,9 +1,9 @@
 /**
  * The Boat resources one image build owns: the build sandbox its setup hooks
- * run in, and the named snapshot saved from that sandbox's disk.
+ * run in, and the saved snapshot of that sandbox's disk.
  *
  * Boat applies a sandbox's create-time env to every process it starts, and a
- * named snapshot deploys with its source's env by default, so nothing the
+ * saved snapshot deploys with its source's env by default, so nothing the
  * build needs rides the create request: the sandbox is created with the boot
  * markers alone, made private, bound to the build, and only then handed its
  * env — the repository set, the clone token, the scope's secrets, the
@@ -38,7 +38,7 @@ import {
 import {
   BoatNotFoundError,
   type BoatMachineType,
-  type BoatNamedSnapshot,
+  type BoatSavedSnapshot,
   type BoatRestClient,
   type BoatSandbox,
 } from "../sandbox/boat-rest-client";
@@ -64,7 +64,7 @@ const log = createLogger("image-builds:boat");
 export const BOAT_IMAGE_BUILD_ENV_FILE_PATH = "/tmp/openinspect-image-build.env";
 
 /**
- * Prefix of the named snapshot an image build is saved under; the rest is a
+ * Prefix of the saved snapshot an image build is saved under; the rest is a
  * legible slug of the build id and a digest (see boatImageSnapshotName).
  */
 const BOAT_IMAGE_SNAPSHOT_NAME_PREFIX = "oi-img-";
@@ -76,7 +76,7 @@ export interface BoatImageBuildResourcesConfig {
   deploymentName: string;
   /** Machine size when the scope requests no CPU or memory. */
   defaultMachineType: BoatMachineType;
-  /** Named snapshot a build sandbox deploys from. Needed to start a build, not to finish or reclaim one. */
+  /** Saved snapshot a build sandbox deploys from. Needed to start a build, not to finish or reclaim one. */
   baseSnapshot?: string;
 }
 
@@ -125,7 +125,7 @@ export class BoatImageBuildResources {
         type: resolveBoatMachineType(config.resources, this.config.defaultMachineType),
         ttlSeconds: resolveBoatTtlSeconds(config.providerSessionTimeoutSeconds),
         // The boot markers alone: the env itself follows once the sandbox is
-        // private, and a named snapshot inherits only this from its source.
+        // private, and a saved snapshot inherits only this from its source.
         env: bootMarkers(),
         from: this.requireBaseSnapshot(),
         idempotencyKey: await boatIdempotencyKey(
@@ -219,14 +219,14 @@ export class BoatImageBuildResources {
     providerSessionId: string,
     name: string,
     signal?: AbortSignal
-  ): Promise<BoatNamedSnapshot> {
-    return this.client.saveNamedSnapshot(providerSessionId, name, signal);
+  ): Promise<BoatSavedSnapshot> {
+    return this.client.saveSavedSnapshot(providerSessionId, name, signal);
   }
 
-  /** The named snapshot under `name`, or null when Boat has none. */
-  async getImageSnapshot(name: string, signal?: AbortSignal): Promise<BoatNamedSnapshot | null> {
+  /** The saved snapshot under `name`, or null when Boat has none. */
+  async getImageSnapshot(name: string, signal?: AbortSignal): Promise<BoatSavedSnapshot | null> {
     try {
-      return await this.client.getNamedSnapshot(name, signal);
+      return await this.client.getSavedSnapshot(name, signal);
     } catch (error) {
       if (error instanceof BoatNotFoundError) return null;
       throw error;
@@ -234,7 +234,7 @@ export class BoatImageBuildResources {
   }
 
   /**
-   * Delete a prebuilt image's named snapshot; one already gone counts as
+   * Delete a prebuilt image's saved snapshot; one already gone counts as
    * deleted. Refuses the deployment's base snapshot outright: an image
    * reference that somehow named it would otherwise take the deployment's
    * ability to start any sandbox with it.
@@ -247,7 +247,7 @@ export class BoatImageBuildResources {
       );
     }
     try {
-      await this.client.deleteNamedSnapshot(providerImageId, signal);
+      await this.client.deleteSavedSnapshot(providerImageId, signal);
     } catch (error) {
       if (error instanceof BoatNotFoundError) return;
       throw error;
@@ -312,7 +312,7 @@ export class BoatImageBuildResources {
 }
 
 /**
- * The named snapshot a build's image is saved under. Fixed by the deployment
+ * The saved snapshot a build's image is saved under. Fixed by the deployment
  * and the build id: a save repeated under it replaces the artifact rather
  * than adding one, so the name doubles as the save's idempotency key, and two
  * deployments sharing a Boat account cannot collide. The build id's own text

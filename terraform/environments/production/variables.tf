@@ -719,7 +719,7 @@ variable "boat_base_snapshot" {
 }
 
 variable "boat_org" {
-  description = "Optional Boat organization sandboxes and the named snapshot are billed to; empty uses the account's active wallet"
+  description = "Optional Boat organization sandboxes and the saved snapshot are billed to; empty uses the account's active wallet"
   type        = string
   default     = ""
 }

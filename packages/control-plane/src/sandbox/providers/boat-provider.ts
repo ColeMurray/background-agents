@@ -1,7 +1,7 @@
 /**
  * Boat sandbox provider — calls the Boat REST API directly.
  *
- * A Boat sandbox is a full Ubuntu VM deployed from a named snapshot the
+ * A Boat sandbox is a full Ubuntu VM deployed from a saved snapshot the
  * `boat-infra` build saved (the sandbox image with the runtime baked in). The
  * per-sandbox env (secrets included) rides `POST /sandboxes` `env`, which Boat
  * applies to every process the sandbox starts, and the baked launcher rides
@@ -22,7 +22,7 @@
  * here: `evaluateSpawnDecision` consults `supportsPersistentResume` before
  * any snapshot id, so a stopped sandbox always resumes in place.
  *
- * Prebuilt images are named snapshots too, saved by the image-build resources
+ * Prebuilt images are saved snapshots too, saved by the image-build resources
  * (image-builds/boat-build-resources.ts) from a build sandbox that deployed
  * from the base snapshot. A prebuilt spawn is a create with that name in place
  * of the base snapshot and `FROM_REPO_IMAGE` set, so the runtime syncs the
@@ -134,7 +134,7 @@ export interface BoatProviderConfig {
   scmProvider: SourceControlProviderName;
   /** Secret used for domain-separated sandbox access password derivation. */
   sandboxAccessPasswordSecret: string;
-  /** Named snapshot every fresh sandbox deploys from (built by boat-infra). */
+  /** Saved snapshot every fresh sandbox deploys from (built by boat-infra). */
   baseSnapshot: string;
   /** Machine size when the session requests no CPU or memory. */
   defaultMachineType: BoatMachineType;
@@ -204,7 +204,7 @@ export class BoatSandboxProvider implements SandboxProvider {
           type: machineType,
           ttlSeconds,
           env: envVars,
-          // A prebuilt image is a named snapshot too: the session deploys
+          // A prebuilt image is a saved snapshot too: the session deploys
           // from it exactly as from the base snapshot, with its own env.
           from: config.prebuiltImageId || this.providerConfig.baseSnapshot,
           idempotencyKey: await boatIdempotencyKey(

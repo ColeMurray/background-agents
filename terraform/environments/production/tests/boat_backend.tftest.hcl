@@ -1,4 +1,4 @@
-# The Boat backend builds a named snapshot and binds the control plane to it,
+# The Boat backend builds a saved snapshot and binds the control plane to it,
 # and only to it: a deployment on another backend neither builds nor binds
 # anything Boat.
 
@@ -45,17 +45,17 @@ variables {
   allowed_users        = "octocat"
 }
 
-run "boat_builds_a_named_snapshot_and_binds_the_worker_to_it" {
+run "boat_builds_a_saved_snapshot_and_binds_the_worker_to_it" {
   command = plan
 
   assert {
     condition     = local.use_boat_backend && length(module.boat_infra) == 1 && length(data.external.boat_source_hash) == 1
-    error_message = "The Boat backend must hash its build inputs and build the named snapshot."
+    error_message = "The Boat backend must hash its build inputs and build the saved snapshot."
   }
 
   assert {
     condition     = module.boat_infra[0].snapshot_name == "open-inspect-0123456789abcdef"
-    error_message = "The named snapshot must be the prefix plus the first 16 characters of the source hash."
+    error_message = "The saved snapshot must be the prefix plus the first 16 characters of the source hash."
   }
 
   assert {

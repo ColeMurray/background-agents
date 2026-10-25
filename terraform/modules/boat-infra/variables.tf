@@ -11,13 +11,13 @@ variable "api_url" {
 }
 
 variable "org" {
-  description = "Optional Boat organization the build sandboxes and the named snapshot are billed to"
+  description = "Optional Boat organization the build sandboxes and the saved snapshot are billed to"
   type        = string
   default     = ""
 }
 
 variable "snapshot_name_prefix" {
-  description = "Prefix for the immutable Boat named snapshot (lowercase letters, digits, dashes)"
+  description = "Prefix for the immutable Boat saved snapshot (lowercase letters, digits, dashes)"
   type        = string
 
   validation {

@@ -3,7 +3,7 @@
 # =============================================================================
 
 # Shared build-input hash: the runtime, the image package, the Boat builder and
-# this module. A change to any of them builds a new named snapshot under a new
+# this module. A change to any of them builds a new saved snapshot under a new
 # name; the Worker switches to it only after the build has verified it.
 data "external" "boat_source_hash" {
   count = local.use_boat_backend ? 1 : 0

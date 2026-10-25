@@ -471,7 +471,7 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 
 # Boat (only required when sandbox_provider = "boat")
 # boat_api_key              = "boat_..."               # runtime REST API key (also auths the build)
-# boat_base_snapshot        = "open-inspect"           # prefix of the Terraform-managed named snapshot
+# boat_base_snapshot        = "open-inspect"           # prefix of the Terraform-managed saved snapshot
 
 # GitHub App repository access (required in every deployment)
 github_app_id              = "123456"
@@ -940,7 +940,7 @@ Create it in the [Boat dashboard](https://boat.dev) under API keys.
 
 1. Set `sandbox_provider = "boat"` in `terraform.tfvars`.
 2. Set `boat_api_key` and `boat_base_snapshot` (a name prefix such as `open-inspect`).
-3. Terraform's `boat-infra` module builds the named snapshot automatically on `terraform apply`, and
+3. Terraform's `boat-infra` module builds the saved snapshot automatically on `terraform apply`, and
    builds a new one when `packages/boat-infra`, `packages/sandbox-images` or
    `packages/sandbox-runtime` change. To build manually:
    ```bash

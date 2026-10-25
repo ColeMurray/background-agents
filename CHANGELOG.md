@@ -4,6 +4,11 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## October 25, 2026
 
+**Boat saved snapshot API.** Base builds, prebuilt image builds, and image cleanup now use Boat's
+`/saved-snapshots` endpoints. Existing snapshots work without migration, and snapshot names and
+Terraform bindings are unchanged. The next deployment rebuilds the base snapshot once because its
+build inputs changed.
+
 **Shorter idle time for unattended sandboxes.** Automation runs, GitHub bot runs, and agent-created
 child sessions now default to stopping their sandboxes after 2 minutes of inactivity. User, Slack,
 and Linear sessions keep the 10-minute default. Operators can configure the shorter timeout with

@@ -253,7 +253,7 @@ VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 
 # Boat (only if SANDBOX_PROVIDER=boat)
 BOAT_API_KEY
-BOAT_BASE_SNAPSHOT # Prefix for the Terraform-managed named snapshot
+BOAT_BASE_SNAPSHOT # Prefix for the Terraform-managed saved snapshot
 BOAT_API_URL       # Optional; defaults to https://boat.dev/api/v1
 BOAT_ORG           # Optional organization wallet
 BOAT_SANDBOX_TYPE  # Optional; defaults to default

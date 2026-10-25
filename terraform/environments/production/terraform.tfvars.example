@@ -117,7 +117,7 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # Only required when sandbox_provider = "boat"
 # - boat_api_key: runtime key (control-plane → Boat API, sandbox access password HMAC)
 #                 AND snapshot-build auth. Dashboard → API keys.
-# The boat-infra Terraform module builds the named snapshot automatically;
+# The boat-infra Terraform module builds the saved snapshot automatically;
 # boat_base_snapshot is the prefix of the name it saves (and the one fresh
 # sandboxes deploy from). 1-46 lowercase letters, digits or dashes.
 # Base prefixes oi-img and oi-img-* are reserved for prebuilt images and rejected.

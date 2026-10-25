@@ -248,12 +248,12 @@ class FakeBoatApi:
         self.calls: list[tuple] = []
         self.created: list[tuple[str, dict]] = []
 
-    def get_named_snapshot(self, name):
-        self.calls.append(("get_named_snapshot", name))
+    def get_saved_snapshot(self, name):
+        self.calls.append(("get_saved_snapshot", name))
         return {"name": name, "status": self.retained_status} if self.retained else None
 
-    def wait_named_snapshot(self, name, timeout=0):
-        self.calls.append(("wait_named_snapshot", name))
+    def wait_saved_snapshot(self, name, timeout=0):
+        self.calls.append(("wait_saved_snapshot", name))
         return {"name": name, "status": "ready"}
 
     def create_sandbox(self, purpose, body):
@@ -281,8 +281,8 @@ class FakeBoatApi:
     def stop_and_wait(self, sandbox_id, timeout=0):
         self.calls.append(("stop_and_wait", sandbox_id))
 
-    def save_named_snapshot(self, sandbox_id, name, timeout=0):
-        self.calls.append(("save_named_snapshot", sandbox_id, name))
+    def save_saved_snapshot(self, sandbox_id, name, timeout=0):
+        self.calls.append(("save_saved_snapshot", sandbox_id, name))
         return {"name": name, "status": "ready"}
 
     def delete_sandbox(self, sandbox_id):
@@ -302,7 +302,7 @@ def load_boat_builder(monkeypatch, api: FakeBoatApi):
 
 @pytest.mark.parametrize("failed", [False, True])
 @pytest.mark.parametrize("retained", [False, True])
-def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed, retained):
+def test_boat_retry_reuses_ready_saved_snapshot(monkeypatch, build_mocks, failed, retained):
     api = FakeBoatApi(retained=retained, verify_fails=failed)
     main = load_boat_builder(monkeypatch, api)["main"]
     if failed:
@@ -318,7 +318,7 @@ def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed
     verifies = [body for _, body in api.created if body.get("from") == EXPECTED_NAME]
     assert len(builds) == (0 if retained else 1)
     assert len(verifies) == 1
-    assert names.count("save_named_snapshot") == (0 if retained else 1)
+    assert names.count("save_saved_snapshot") == (0 if retained else 1)
     # Every sandbox the build started is deleted, on success and on failure.
     assert names.count("delete_sandbox") == len(api.created)
     # A fresh deploy prepares the boot-time links before the image verification.
@@ -333,7 +333,7 @@ def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed
     assert verification[2].endswith("/app/verify/smoke_test.py verify")
 
 
-def test_boat_refuses_to_rebuild_over_a_failed_named_snapshot(monkeypatch, build_mocks):
+def test_boat_refuses_to_rebuild_over_a_failed_saved_snapshot(monkeypatch, build_mocks):
     api = FakeBoatApi(retained=True, retained_status="failed")
     main = load_boat_builder(monkeypatch, api)["main"]
 
@@ -342,7 +342,7 @@ def test_boat_refuses_to_rebuild_over_a_failed_named_snapshot(monkeypatch, build
 
     # Nothing was started or published: no build sandbox, no save, no result.
     assert api.created == []
-    assert [call[0] for call in api.calls] == ["get_named_snapshot"]
+    assert [call[0] for call in api.calls] == ["get_saved_snapshot"]
     build_mocks.assert_not_called()
 
 
@@ -372,12 +372,12 @@ def test_boat_build_installs_the_bundle_under_the_home_directory(monkeypatch, bu
     order = [call[0] for call in api.calls if len(call) > 1 and call[1] == build_id]
     assert (
         order.index("stop_and_wait")
-        < order.index("save_named_snapshot")
+        < order.index("save_saved_snapshot")
         < order.index("delete_sandbox")
     )
 
 
-def test_boat_candidate_name_must_be_a_valid_named_snapshot(monkeypatch):
+def test_boat_candidate_name_must_be_a_valid_saved_snapshot(monkeypatch):
     namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
     monkeypatch.delenv("OPENINSPECT_IMAGE_CANDIDATE", raising=False)
     with pytest.raises(RuntimeError, match="lowercase"):
@@ -408,6 +408,52 @@ def boat_api(monkeypatch, answers):
     transport = RecordingTransport(answers)
     api.request = transport
     return namespace, api, transport
+
+
+def test_boat_builder_saves_and_polls_saved_snapshots(monkeypatch):
+    namespace, api, transport = boat_api(monkeypatch, [])
+    saving = {"name": EXPECTED_NAME, "status": "saving"}
+    ready = {**saving, "status": "ready"}
+    transport.answers = [
+        namespace["BoatApiError"](404, "not_found", "gone"),
+        {"ok": True, "type": "snapshot.saved.saving", "snapshot": saving},
+        {"ok": True, "type": "snapshot.saved.info", "snapshot": saving},
+        {"ok": True, "type": "snapshot.saved.info", "snapshot": ready},
+    ]
+
+    assert api.get_saved_snapshot(EXPECTED_NAME) is None
+    assert api.save_saved_snapshot("bx_00000001", EXPECTED_NAME) == ready
+    assert transport.calls == [
+        ("GET", f"/saved-snapshots/{EXPECTED_NAME}", None, {}),
+        (
+            "POST",
+            "/saved-snapshots",
+            {"sandboxId": "bx_00000001", "name": EXPECTED_NAME},
+            {},
+        ),
+        ("GET", f"/saved-snapshots/{EXPECTED_NAME}", None, {}),
+        ("GET", f"/saved-snapshots/{EXPECTED_NAME}", None, {}),
+    ]
+
+
+@pytest.mark.parametrize("status,code", [(402, "credit_required"), (409, "save_in_progress")])
+def test_boat_builder_preserves_saved_snapshot_errors(monkeypatch, status, code):
+    namespace, api, transport = boat_api(monkeypatch, [])
+    error = namespace["BoatApiError"](status, code, "refused")
+    transport.answers = [error]
+
+    with pytest.raises(namespace["BoatApiError"]) as raised:
+        api.save_saved_snapshot("bx_00000001", EXPECTED_NAME)
+
+    assert raised.value is error
+    assert transport.calls == [
+        (
+            "POST",
+            "/saved-snapshots",
+            {"sandboxId": "bx_00000001", "name": EXPECTED_NAME},
+            {},
+        )
+    ]
 
 
 @pytest.fixture

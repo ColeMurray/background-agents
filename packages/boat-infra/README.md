@@ -1,6 +1,6 @@
 # OpenInspect Boat Snapshot Tooling
 
-Builds and prunes the Boat **named base snapshots** used to create Open-Inspect Boat sandboxes.
+Builds and prunes the Boat **saved base snapshots** used to create Open-Inspect Boat sandboxes.
 
 The control plane talks to the Boat REST API directly at runtime. These files build and prune base
 snapshots and provide the launcher baked into them.
@@ -11,7 +11,7 @@ snapshots and provide the launcher baked into them.
   frozen installation bundle, runtime wheel, and verification.
 - **`build-template.py`** — stages the shared bundle, installs it in a throwaway Boat sandbox
   through the REST API (standard library only, no SDK; HTTPS only, redirects refused, one
-  idempotency key per create), saves the sandbox's disk as a named snapshot, and verifies a fresh
+  idempotency key per create), saves the sandbox's disk as a saved snapshot, and verifies a fresh
   deploy from that name. Its sandboxes are created private, so one billed to an organization is
   never shared. Used both for manual builds and by the Terraform module. Its `prune` command removes
   superseded Terraform-built bases after deployment using an explicit deployed/replaced pair.
@@ -37,13 +37,13 @@ is in the workspace, then execs the launcher. On every resume it starts the laun
 detached: on a new machine the launcher boots the runtime in restored mode, and on the parked
 machine of a quick resume it finds the runtime still running and exits 75.
 
-Prebuilt images are named snapshots too, saved by the control plane as `oi-img-<scope>-<digest>`
+Prebuilt images are saved snapshots too, saved by the control plane as `oi-img-<scope>-<digest>`
 from a build sandbox that deployed from this base snapshot. A build sandbox is created with the boot
 markers alone; its env arrives as `/tmp/openinspect-image-build.env` once the sandbox is private,
 and the launcher (`IMAGE_BUILD_MODE=true`) sources that file once, removes it, and keeps the build's
 lock, log and runtime state under `/tmp` too, so the saved disk carries the workspace and nothing of
 the build. Those names are the control plane's to create and delete; the base snapshot and the
-images share the wallet's named-snapshot allowance. Deleting a source base does not affect existing
+images share the wallet's saved-snapshot allowance. Deleting a source base does not affect existing
 sandboxes or standalone repository and environment images.
 
 ## Authentication
@@ -139,7 +139,7 @@ nonempty replaced value must be `ready` Terraform-built names under the same pre
 lowercase hex characters after the prefix. Set `BOAT_REPLACED_SNAPSHOT=""` only when you know there
 was no previous base in the current prefix and wallet, such as a confirmed scope boundary; missing
 or truncated history is not proof. Optional `BOAT_API_URL` and `BOAT_ORG` must address that same
-Boat wallet. A missing, non-`ready` or nonmatching named base fails pruning before any deletion. The
+Boat wallet. A missing, non-`ready` or nonmatching saved base fails pruning before any deletion. The
 direct command validates the pair against Boat; unlike the wrapper, it does not read or recheck
 Worker deployment history.
 

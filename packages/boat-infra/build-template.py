@@ -4,7 +4,7 @@
 A build sandbox is created from Boat's stock Ubuntu image with none of the
 account's secrets, the shared installation bundle is uploaded and installed in
 it, the launcher is baked next to the runtime, and the sandbox's disk is saved
-as a named snapshot. A second sandbox then deploys from that name and runs the
+as a saved snapshot. A second sandbox then deploys from that name and runs the
 image verification, exactly as a session sandbox will. Only the Boat REST API
 is used, through the standard library.
 """
@@ -304,34 +304,34 @@ class BoatApi:
             if error.status != 404:
                 raise
 
-    def get_named_snapshot(self, name: str) -> dict[str, Any] | None:
+    def get_saved_snapshot(self, name: str) -> dict[str, Any] | None:
         try:
-            return self.request("GET", f"/named-snapshots/{urllib.parse.quote(name)}")["snapshot"]
+            return self.request("GET", f"/saved-snapshots/{urllib.parse.quote(name)}")["snapshot"]
         except BoatApiError as error:
             if error.status == 404:
                 return None
             raise
 
-    def save_named_snapshot(
+    def save_saved_snapshot(
         self, sandbox_id: str, name: str, timeout: int = SNAPSHOT_TIMEOUT_SECONDS
     ) -> dict[str, Any]:
-        self.request("POST", "/named-snapshots", {"sandboxId": sandbox_id, "name": name})
-        return self.wait_named_snapshot(name, timeout)
+        self.request("POST", "/saved-snapshots", {"sandboxId": sandbox_id, "name": name})
+        return self.wait_saved_snapshot(name, timeout)
 
-    def wait_named_snapshot(
+    def wait_saved_snapshot(
         self, name: str, timeout: int = SNAPSHOT_TIMEOUT_SECONDS
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         while True:
-            snapshot = self.get_named_snapshot(name)
+            snapshot = self.get_saved_snapshot(name)
             if snapshot is None:
-                raise RuntimeError(f"Named snapshot {name} disappeared while saving")
+                raise RuntimeError(f"Saved snapshot {name} disappeared while saving")
             if snapshot.get("status") == "ready":
                 return snapshot
             if snapshot.get("status") == "failed":
-                raise RuntimeError(f"Named snapshot {name} failed: {snapshot.get('error')}")
+                raise RuntimeError(f"Saved snapshot {name} failed: {snapshot.get('error')}")
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"Named snapshot {name} not ready after {timeout}s")
+                raise RuntimeError(f"Saved snapshot {name} not ready after {timeout}s")
             time.sleep(POLL_SECONDS)
 
 
@@ -400,7 +400,7 @@ def candidate_name(prefix: str, build_hash: str) -> str:
     )
     if not SNAPSHOT_NAME_PATTERN.fullmatch(name):
         raise RuntimeError(
-            f"Boat named snapshot name {name!r} must be 1-63 lowercase letters, digits or dashes; "
+            f"Boat saved snapshot name {name!r} must be 1-63 lowercase letters, digits or dashes; "
             "shorten BOAT_BASE_SNAPSHOT"
         )
     if name == "oi-img" or name.startswith("oi-img-"):
@@ -425,8 +425,8 @@ def build_snapshot(api: BoatApi, name: str, bundle_directory: Path, build_type: 
         api.run(sandbox_id, cleanup_command(), PREPARE_TIMEOUT_SECONDS)
         # Archive first so the saved disk is quiescent, then freeze it under the name.
         api.stop_and_wait(sandbox_id)
-        api.save_named_snapshot(sandbox_id, name)
-        print(f"Boat named snapshot {name} saved", flush=True)
+        api.save_saved_snapshot(sandbox_id, name)
+        print(f"Boat saved snapshot {name} saved", flush=True)
     finally:
         api.delete_sandbox(sandbox_id)
 
@@ -554,21 +554,21 @@ def main(argv: list[str] | None = None) -> None:
     bundle = pack_bundle(ROOT, "boat", ROOT / ".cache/sandbox-images")
     name = candidate_name(prefix, bundle.plan["buildHash"])
 
-    existing = api.get_named_snapshot(name)
+    existing = api.get_saved_snapshot(name)
     if existing is not None and existing.get("status") == "saving":
-        existing = api.wait_named_snapshot(name)
+        existing = api.wait_saved_snapshot(name)
     if existing is None:
         build_snapshot(api, name, bundle.directory, build_type)
     elif existing.get("status") == "ready":
         # A retry re-verifies the retained artifact instead of rebuilding it.
-        print(f"Boat named snapshot {name} already exists; verifying it", flush=True)
+        print(f"Boat saved snapshot {name} already exists; verifying it", flush=True)
     else:
         # A failed save keeps its name, and the name is fixed by the inputs: a
         # build under it would run the whole install and then fail at the save.
         # Stop before anything is billed; the artifact is the operator's to
         # remove.
         raise RuntimeError(
-            f"Boat named snapshot {name} exists with status {existing.get('status')!r}; "
+            f"Boat saved snapshot {name} exists with status {existing.get('status')!r}; "
             "delete it before rebuilding"
         )
     verify_snapshot(api, name)
