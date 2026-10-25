@@ -1,3 +1,16 @@
+import { getUserAuth } from "../auth/user/runtime";
+import { GitHubAttributionUnavailableError } from "../source-control/github-credential-authority";
+import { UserStore } from "../db/user-store";
+import {
+  AmbiguousGitHubIdentityError,
+  resolveGitHubEnrichmentForCanonicalUser,
+  type GitHubEnrichment,
+} from "../session/identity";
+import { resolveScmProviderFromEnv } from "../source-control/config";
+import { resolveAutomationRepositories } from "../automation/repository";
+import { AutomationInvocationService } from "./invocation-service";
+import { AutomationFailureService } from "./failure-service";
+import { AutomationRecoveryService } from "./recovery-service";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import { AutomationStore } from "../db/automation-store";
@@ -31,6 +44,7 @@ import {
   resolveProviderAuthSnapshot,
   resolveTeamTargets,
   type LaunchAdmissionDeps,
+  type LaunchAdmissionOperations,
 } from "./launch-admission";
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
@@ -46,6 +60,7 @@ export function createScheduler(
   const log = createLogger("scheduler", {}, parseLogLevel(env.LOG_LEVEL));
   const sessionIndex = new SessionIndexStore(db);
   const store = new AutomationStore(db);
+  const teams = new TeamStore(db);
   const channels = new TeamChannelBindingStore(db);
   const slack = new AutomationSlackService({
     bot: env.SLACK_BOT,
@@ -82,7 +97,7 @@ export function createScheduler(
       resolveSessionScopedSettings(db, members, environmentId),
     resolveSkills: (target, selection, userId) =>
       resolveManagedSkills(db, target, selection, userId),
-    teams: new TeamStore(db),
+    teams,
     isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
     selectMemory: (ctx, request) => createSessionMemorySelector(ctx).select(request),
     initializeSession: async (input, ctx) => {
@@ -108,18 +123,68 @@ export function createScheduler(
       resolveAutomationProviderAuth(db, automationId, harness),
     validateHarness: (input, modes) => validateHarnessExecution(db, input, modes),
   };
+  const admission: LaunchAdmissionOperations = {
+    resolveTeamTargets: (automation, team, candidates) =>
+      resolveTeamTargets(admissionDeps, automation, team, candidates),
+    resolveProviderAuth: (automation) => resolveProviderAuthSnapshot(admissionDeps, automation),
+  };
+  const resolveScmEnrichment = async (userId: string): Promise<GitHubEnrichment | null> => {
+    if (resolveScmProviderFromEnv(env.SCM_PROVIDER) !== "github") return null;
+    try {
+      return await resolveGitHubEnrichmentForCanonicalUser(
+        new UserStore(db),
+        userId,
+        () => getUserAuth(env, db).api
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AmbiguousGitHubIdentityError) &&
+        !(error instanceof GitHubAttributionUnavailableError)
+      )
+        throw error;
+      log.warn("GitHub attribution unavailable; continuing without it", {
+        event: "scheduler.github_enrichment_unavailable",
+        user_id: userId,
+        error,
+      });
+      return null;
+    }
+  };
+  const failures = new AutomationFailureService(store, log);
+  const invocations = new AutomationInvocationService({
+    store,
+    teams,
+    admission,
+    launcher,
+    failures,
+    resolveScmEnrichment,
+    isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
+    resolveRepositories: (repositories) => resolveAutomationRepositories(env, repositories),
+    nowMs: () => Date.now(),
+    newId: generateId,
+    log,
+  });
+  const recovery = new AutomationRecoveryService({
+    store,
+    teams,
+    admission,
+    launcher,
+    failures,
+    resolveScmEnrichment,
+    isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
+    executionDeadlineMs: resolveDeadlineMs,
+    nowMs: () => Date.now(),
+    log,
+  });
   return new Scheduler({
     db,
     env,
     backgroundJobs,
     slack,
     log,
-    launcher,
-    admission: {
-      resolveTeamTargets: (automation, team, candidates) =>
-        resolveTeamTargets(admissionDeps, automation, team, candidates),
-      resolveProviderAuth: (automation) => resolveProviderAuthSnapshot(admissionDeps, automation),
-    },
-    executionDeadlineMs: resolveDeadlineMs,
+    invocations,
+    failures,
+    recovery,
+    resolveScmEnrichment,
   });
 }

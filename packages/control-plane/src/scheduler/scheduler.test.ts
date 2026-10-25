@@ -638,6 +638,21 @@ describe("Scheduler", () => {
   });
 
   describe("tick", () => {
+    it("finishes recovery before held prompts, retries, and due automation admission", async () => {
+      await createScheduler().tick();
+      const order = [
+        mockStore.getStaleFailureResetCandidates,
+        mockStore.getRunsWithDueHeldPrompts,
+        mockStore.getRetriesToSettle,
+        mockStore.getOverdueAutomations,
+      ].map((fn) => fn.mock.invocationCallOrder[0]);
+      expect(order.every((call) => call !== undefined)).toBe(true);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      const tickTime = mockStore.getRunsWithDueHeldPrompts.mock.calls[0][0];
+      expect(mockStore.getRetriesToSettle.mock.calls[0][0]).toBe(tickTime);
+      expect(mockStore.getOverdueAutomations.mock.calls[0][0]).toBe(tickTime);
+    });
+
     it("returns empty summary when no overdue automations", async () => {
       const env = createEnv();
       const scheduler = createScheduler(env);

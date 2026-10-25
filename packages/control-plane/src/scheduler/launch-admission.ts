@@ -15,7 +15,11 @@ import type { AutomationSessionTarget } from "../automation/session-target";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import type { validateHarnessExecution } from "../harness-admission";
-import type { LaunchTargetSnapshot, ProviderAuthSnapshot } from "./launch-contracts";
+import type {
+  ExecutionPrincipal,
+  LaunchTargetSnapshot,
+  ProviderAuthSnapshot,
+} from "./launch-contracts";
 
 export interface LaunchAdmissionOperations {
   resolveTeamTargets(
@@ -111,4 +115,15 @@ export async function resolveProviderAuthSnapshot(
   } catch (error) {
     return { error };
   }
+}
+
+/** The automation owner as an unattended firing's execution principal; null without an owner. */
+export function ownerExecutionPrincipal(automation: AutomationRow): ExecutionPrincipal | null {
+  return automation.user_id
+    ? {
+        platformUserId: automation.user_id,
+        participantUserId: automation.created_by,
+        scmEnrichment: null,
+      }
+    : null;
 }

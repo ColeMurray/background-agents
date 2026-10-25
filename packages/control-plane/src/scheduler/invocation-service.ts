@@ -1,0 +1,446 @@
+import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import {
+  isDuplicateKeyError,
+  type AutomationStore,
+  type AutomationRow,
+  type AutomationRunRow,
+  type AutomationInvocationRow,
+  type InvocationOverlapScope,
+  type AutomationRepositoryInsert,
+  type AutomationEnvironmentRow,
+  type TeamGrantsVersion,
+} from "../db/automation-store";
+import type { TeamStore } from "../db/teams";
+import type { AutomationExecutionAuthorizationRequest } from "../automation/authorization-guard";
+import type { resolveAutomationRepositories } from "../automation/repository";
+import type { GitHubEnrichment } from "../session/identity";
+import type { Logger } from "../logger";
+import {
+  executionDenialReason,
+  ownerExecutionPrincipal,
+  type LaunchAdmissionOperations,
+} from "./launch-admission";
+import type {
+  ExecutionPrincipal,
+  LaunchTargetSnapshot,
+  ProviderAuthSnapshot,
+  RunLaunch,
+} from "./launch-contracts";
+import { AUTOMATION_LAUNCH_CONCURRENCY, forEachConcurrently } from "./launch-policy";
+import type { AutomationRunLaunchService } from "./run-launch-service";
+import type { AutomationFailureService } from "./failure-service";
+import type { StartInvocationResult } from "./invocation-outcome";
+
+export interface StartInvocationParams {
+  automation: AutomationRow;
+  source: AutomationInvocationSource;
+  invocationId?: string;
+  /** Human authority used for a manual firing; unattended sources use the automation owner. */
+  executionPrincipal?: ExecutionPrincipal;
+  /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
+  scheduledAt?: number;
+  /** Next cron slot, advanced atomically with the insert (schedule source only). */
+  advanceToNextRunAt?: number;
+  triggerKey?: string | null;
+  /** Finalize a webhook follow-up reservation as soon as its invocation is admitted. */
+  webhookFollowUpClaimId?: string;
+  concurrencyKey?: string | null;
+  /** Source-specific JSON stored on the invocation (slack message coordinates). */
+  triggerMetadata?: string | null;
+  /** Pre-fetched repository selection (the tick passes its batched fetch). */
+  repositories?: AutomationRepositoryInsert[];
+  /** GitHub event identity that repository resolution must preserve. */
+  eventRepositoryId?: number;
+  /** Pre-fetched environment selection (the tick passes its batched fetch). */
+  environments?: AutomationEnvironmentRow[];
+  /** Complete prompt to use directly, or as the fallback for a lazy override. */
+  instructionsOverride?: string;
+  /**
+   * Lazy alternative to `instructionsOverride`, resolved only after the
+   * invocation is admitted. Slack runs use it so thread history is fetched for
+   * runs that actually start — never for unmatched events, steers, concurrency
+   * skips or deduplicated firings. If resolution fails, start uses
+   * `instructionsOverride` so admitted children cannot be stranded.
+   */
+  instructionsOverrideFactory?: () => Promise<string>;
+}
+
+export interface AutomationInvocationServiceDeps {
+  store: Pick<
+    AutomationStore,
+    | "acceptFollowUpReceipt"
+    | "advanceNextRunAt"
+    | "getActiveRunForAutomation"
+    | "getActiveRunForKey"
+    | "getEnvironmentsForAutomation"
+    | "getInvocationIdByTriggerKey"
+    | "getRepositoriesForAutomation"
+    | "insertInvocationGuarded"
+    | "insertSkippedInvocation"
+    | "resolveCanonicalOwner"
+  >;
+  teams: Pick<TeamStore, "getById">;
+  isAuthorized(request: AutomationExecutionAuthorizationRequest): Promise<boolean>;
+  resolveRepositories(
+    repositories: AutomationRepositoryInsert[]
+  ): ReturnType<typeof resolveAutomationRepositories>;
+  admission: LaunchAdmissionOperations;
+  resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null>;
+  launcher: Pick<AutomationRunLaunchService, "launch">;
+  failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
+  nowMs(): number;
+  newId(): string;
+  log: Logger;
+}
+
+/** Admit a firing and launch its children after the invocation owns its slot or trigger key. */
+export class AutomationInvocationService {
+  constructor(private readonly deps: AutomationInvocationServiceDeps) {}
+
+  /**
+   * The single firing pipeline (D6): overlap check per source, atomic
+   * invocation+children insert with self-guarded statements, repository
+   * resolution with per-repo error capture, child launches, and born-terminal
+   * finalization. Tick, manual trigger, and the event path all come through
+   * here.
+   */
+  async start(params: StartInvocationParams): Promise<StartInvocationResult> {
+    const store = this.deps.store;
+    const { source } = params;
+    const automation = await store.resolveCanonicalOwner(params.automation);
+    const executionPrincipal = params.executionPrincipal ?? ownerExecutionPrincipal(automation);
+    if (!executionPrincipal) return { outcome: "unauthorized" };
+    const now = this.deps.nowMs();
+    const concurrencyKey = params.concurrencyKey ?? null;
+    const triggerKey = params.triggerKey ?? null;
+
+    // A redelivered event (or a webhook retry with the same idempotency key)
+    // belongs to the firing that already admitted it — even while that firing
+    // is still running, which the overlap check below would otherwise record
+    // as a fresh skip.
+    if (triggerKey !== null) {
+      const ownerId = await store.getInvocationIdByTriggerKey(automation.id, triggerKey);
+      if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
+    }
+
+    // Schedule/manual firings block on any active run of the automation; event
+    // firings block per concurrency key (an automation-wide guard would
+    // serialize unrelated events, e.g. PR #42 against PR #43).
+    const overlapScope: InvocationOverlapScope =
+      source === "event" && concurrencyKey !== null
+        ? { kind: "concurrencyKey", concurrencyKey }
+        : { kind: "automation" };
+
+    // Cheap pre-check; the conditional insert below re-applies the same predicate
+    // atomically, so a race here only costs a wasted child build.
+    const activeRun =
+      overlapScope.kind === "concurrencyKey"
+        ? await store.getActiveRunForKey(automation.id, concurrencyKey)
+        : await store.getActiveRunForAutomation(automation.id);
+    if (activeRun) {
+      return this.recordOverlapSkip(params, { advanceSchedule: true });
+    }
+
+    const [selection, environmentSelection] = await Promise.all([
+      params.repositories ?? store.getRepositoriesForAutomation(automation.id),
+      params.environments ?? store.getEnvironmentsForAutomation(automation.id),
+    ]);
+    // One snapshot of the owning team classifies denials and pins the grants version.
+    const team =
+      automation.owner_team_id === null
+        ? null
+        : await this.deps.teams.getById(automation.owner_team_id);
+    const authorization: AutomationExecutionAuthorizationRequest = {
+      automationId: automation.id,
+      executionUserId: executionPrincipal.platformUserId,
+      requiresRepositoryUse: selection.length > 0,
+      requiresEnvironmentUse: environmentSelection.length > 0,
+    };
+    if (!(await this.deps.isAuthorized(authorization))) {
+      return { outcome: "unauthorized", reason: executionDenialReason(team) };
+    }
+    const resolutions = await this.deps.resolveRepositories(selection);
+    for (const resolution of resolutions) {
+      if (
+        params.eventRepositoryId !== undefined &&
+        resolution.repository !== null &&
+        resolution.repository.repoId !== params.eventRepositoryId
+      ) {
+        resolution.repository = null;
+        resolution.error = "Repository identity changed during event resolution";
+      }
+    }
+
+    const invocationId = params.invocationId ?? this.deps.newId();
+    const scheduledAt = params.scheduledAt ?? now;
+
+    const childBase = () => ({
+      id: this.deps.newId(),
+      automation_id: automation.id,
+      invocation_id: invocationId,
+      session_id: null,
+      skip_reason: null,
+      failure_reason: null,
+      scheduled_at: scheduledAt,
+      started_at: null,
+      // Stamped by the claim, once the run has a session whose budget to spend.
+      // Until then the orphan sweep owns it.
+      execution_deadline_at: null,
+      completed_at: null,
+      created_at: now,
+      // Raised by the claim, until the run's first prompt is queued.
+      first_prompt_pending: 0,
+      repo_owner: null,
+      repo_name: null,
+      repo_id: null,
+      base_branch: null,
+      environment_id: null,
+    });
+
+    // One child per target. Repository children snapshot the resolved repo; a
+    // failed resolution pre-fails its child (snapshot from the selection row)
+    // without blocking siblings. Environment children snapshot their id; team
+    // workspaces are resolved before grant admission below. Resolution errors
+    // remain launch failures. No targets produce one repo-less child.
+    const children: AutomationRunRow[] = [
+      ...resolutions.map((resolution): AutomationRunRow => ({
+        ...childBase(),
+        status: resolution.error ? "failed" : "starting",
+        failure_reason: resolution.error,
+        completed_at: resolution.error ? now : null,
+        repo_owner: resolution.repository?.repoOwner ?? resolution.requested.repo_owner,
+        repo_name: resolution.repository?.repoName ?? resolution.requested.repo_name,
+        repo_id: resolution.repository?.repoId ?? resolution.requested.repo_id,
+        base_branch: resolution.repository?.baseBranch ?? resolution.requested.base_branch,
+      })),
+      ...environmentSelection.map((environment): AutomationRunRow => ({
+        ...childBase(),
+        status: "starting",
+        environment_id: environment.environment_id,
+      })),
+    ];
+    if (children.length === 0) {
+      children.push({ ...childBase(), status: "starting" });
+    }
+
+    const launchCandidates = children.filter((child) => child.status === "starting");
+    let launchTargets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
+    let teamGrantsVersion: TeamGrantsVersion | undefined;
+    if (automation.owner_team_id !== null) {
+      if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
+      // The guarded insert refuses admission if grants change after coverage is checked.
+      const admitted = await this.deps.admission.resolveTeamTargets(
+        automation,
+        team,
+        launchCandidates
+      );
+      if (!admitted) return { outcome: "unauthorized", reason: "target_team_missing_grant" };
+      ({ targets: launchTargets, teamGrantsVersion } = admitted);
+    }
+    // Resolve provider routing before admission, alongside the already-built
+    // target children. Together these values are the immutable launch snapshot
+    // for this firing: edits made after the conditional insert cannot change which
+    // account an admitted child uses.
+    const providerAuthSnapshot: ProviderAuthSnapshot =
+      launchCandidates.length > 0
+        ? await this.deps.admission.resolveProviderAuth(automation)
+        : { providerAuth: [] };
+
+    const invocation: AutomationInvocationRow = {
+      id: invocationId,
+      automation_id: automation.id,
+      source,
+      scheduled_at: params.scheduledAt ?? null,
+      trigger_key: triggerKey,
+      concurrency_key: concurrencyKey,
+      trigger_metadata: params.triggerMetadata ?? null,
+      skip_reason: null,
+      failure_counted_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    let inserted: boolean;
+    try {
+      ({ inserted } = await store.insertInvocationGuarded({
+        invocation,
+        children,
+        overlapScope,
+        teamGrantsVersion,
+        advanceSchedule:
+          source === "schedule" &&
+          params.scheduledAt !== undefined &&
+          params.advanceToNextRunAt !== undefined
+            ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
+            : undefined,
+      }));
+    } catch (e) {
+      if (isDuplicateKeyError(e)) {
+        // A UNIQUE violation rolls back the whole batch INCLUDING the schedule
+        // advance. The colliding firing owns this slot (cron double-fire) or
+        // event (trigger_key dedup) — re-advance and stand down.
+        if (source === "schedule" && params.advanceToNextRunAt !== undefined) {
+          // Monotonic: never rewind the schedule. A stale duplicate for an old
+          // slot must not move next_run_at behind a newer tick's advance.
+          await store.advanceNextRunAt(automation.id, params.advanceToNextRunAt);
+        }
+        return {
+          outcome: "deduplicated",
+          invocationId:
+            triggerKey === null
+              ? null
+              : await store.getInvocationIdByTriggerKey(automation.id, triggerKey),
+        };
+      }
+      throw e;
+    }
+
+    if (!inserted && teamGrantsVersion) {
+      const current = await this.deps.teams.getById(teamGrantsVersion.teamId);
+      if (current?.grantsVersion !== teamGrantsVersion.version) {
+        // Grants changed after coverage was checked. Nothing was recorded or
+        // advanced, so a schedule slot refires and re-authorizes on the next tick.
+        return { outcome: "blocked", reason: "team_grants_changed" };
+      }
+    }
+    if (!inserted) {
+      // Raced an active invocation between the pre-check and the batch. The
+      // batch's schedule advance already ran (deliberately unconditional), so
+      // the skip record must not advance again.
+      return this.recordOverlapSkip(params, { advanceSchedule: false });
+    }
+
+    if (params.webhookFollowUpClaimId && triggerKey) {
+      try {
+        await store.acceptFollowUpReceipt(
+          automation.id,
+          triggerKey,
+          params.webhookFollowUpClaimId,
+          invocationId,
+          this.deps.nowMs()
+        );
+      } catch (error) {
+        // The invocation's unique trigger key is already the durable owner; receipt repair
+        // must not strand its admitted children before launch.
+        this.deps.log.warn("Failed to finalize an admitted webhook follow-up receipt", {
+          event: "scheduler.webhook_receipt_finalize_failed",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
+
+    let attributionError: unknown;
+    if (!params.executionPrincipal && launchCandidates.length > 0) {
+      try {
+        executionPrincipal.scmEnrichment = await this.deps.resolveScmEnrichment(
+          executionPrincipal.platformUserId
+        );
+      } catch (error) {
+        attributionError = error;
+      }
+    }
+
+    // Admitted. Only now is it worth paying for anything the prompt needs.
+    // Contain provider failures here: children already exist in `starting`, so
+    // a rejected lazy override must not escape and strand persisted state.
+    let instructionsOverride = params.instructionsOverride;
+    if (params.instructionsOverrideFactory) {
+      try {
+        instructionsOverride = await params.instructionsOverrideFactory();
+      } catch (error) {
+        this.deps.log.warn("Failed to resolve lazy instructions; using fallback", {
+          event: "scheduler.instructions_override_failed",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
+
+    const launch: RunLaunch = {
+      executionPrincipal,
+      authorization,
+      providerAuthSnapshot,
+      targets: launchTargets,
+      instructionsOverride,
+      launchError: attributionError,
+      retryable: source === "schedule" && (automation.max_retries ?? 0) > 0,
+    };
+    await forEachConcurrently(launchCandidates, AUTOMATION_LAUNCH_CONCURRENCY, (child) =>
+      this.deps.launcher.launch(automation, child, launch)
+    );
+    const launched = launchCandidates.filter((child) => child.status === "running").length;
+
+    // Pre-failed and launch-failed children have no callback coming — apply
+    // the failure strike now (CAS-deduped). This is also the born-terminal
+    // path: every repo inaccessible → invocation finalizes immediately.
+    if (children.some((child) => child.status === "failed")) {
+      try {
+        await this.deps.failures.applyInvocationOutcome(automation.id, invocationId);
+      } catch (e) {
+        this.deps.log.error("Failed to apply invocation accounting after launch failures", {
+          event: "scheduler.fail_track_error",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return { outcome: "started", invocationId, runs: children, launched };
+  }
+
+  /**
+   * Record an overlap-blocked firing. Manual firings surface as a 409 with no
+   * row; schedule and event firings persist a childless skipped invocation —
+   * for schedule slots atomically with the schedule advance (a skip recorded
+   * without its advance would re-collide on the same slot every tick). A skip
+   * never stores the event trigger_key: a skip must not consume the dedup
+   * slot of a firing that never ran.
+   */
+  private async recordOverlapSkip(
+    params: StartInvocationParams,
+    options: { advanceSchedule: boolean }
+  ): Promise<StartInvocationResult> {
+    const store = this.deps.store;
+    if (params.source === "manual") return { outcome: "blocked", reason: "concurrent_run_active" };
+
+    // A concurrent same-key delivery may have admitted this event since the
+    // pre-check; its invocation commits with its active child, so the overlap
+    // just observed may be that firing.
+    if (params.triggerKey) {
+      const ownerId = await store.getInvocationIdByTriggerKey(
+        params.automation.id,
+        params.triggerKey
+      );
+      if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
+    }
+
+    const now = this.deps.nowMs();
+    const invocationId = this.deps.newId();
+    const { inserted } = await store.insertSkippedInvocation(
+      {
+        id: invocationId,
+        automation_id: params.automation.id,
+        source: params.source,
+        scheduled_at: params.scheduledAt ?? null,
+        trigger_key: null,
+        concurrency_key: params.concurrencyKey ?? null,
+        trigger_metadata: params.triggerMetadata ?? null,
+        skip_reason: "concurrent_run_active",
+        failure_counted_at: null,
+        created_at: now,
+        updated_at: now,
+      },
+      options.advanceSchedule &&
+        params.source === "schedule" &&
+        params.scheduledAt !== undefined &&
+        params.advanceToNextRunAt !== undefined
+        ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
+        : undefined
+    );
+    return { outcome: "skipped", invocationId: inserted ? invocationId : null };
+  }
+}

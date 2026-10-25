@@ -45,3 +45,38 @@ export const DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS: SandboxSettings = {};
 export function executionDeadlineMs(sandboxSettings: SandboxSettings, env: Env): number {
   return resolveExecutionBudgetMs(sandboxSettings, env) + EXECUTION_DEADLINE_GRACE_MS;
 }
+
+/**
+ * Per-tick cap on child-run launches. Each launch costs ~8 subrequests, so an
+ * uncapped 25-automation × 10-repo tick would blow the Workers per-invocation
+ * subrequest limit; automations left overdue when the budget runs out are
+ * simply picked up next tick.
+ */
+export const TICK_CHILD_LAUNCH_BUDGET = 50;
+
+/**
+ * Smooths Modal cold-start pressure for multi-repo fan-out. The maximum fan-out
+ * is 10 repositories, so this only caps the per-invocation spike.
+ */
+export const AUTOMATION_LAUNCH_CONCURRENCY = 4;
+
+/** Most relaunches per tick; half the child-launch budget, so due firings still start. */
+export const MAX_RELAUNCHES_PER_TICK = Math.floor(TICK_CHILD_LAUNCH_BUDGET / 2);
+
+/** Run `task` over `items`, at most `concurrency` at a time. */
+export async function forEachConcurrently<T>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      for (;;) {
+        const item = items[next++];
+        if (item === undefined) return;
+        await task(item);
+      }
+    })
+  );
+}
