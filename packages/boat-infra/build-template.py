@@ -494,7 +494,9 @@ def prune_snapshots(api: BoatApi, prefix: str, deployed: str, *, dry_run: bool) 
             except BoatApiError as error:
                 if error.status != 404:
                     raise
-            print(f"Deleted {name}", flush=True)
+                print(f"Already absent {name}", flush=True)
+            else:
+                print(f"Deleted {name}", flush=True)
     print_snapshot_allowance(
         "after (dry-run, unchanged)" if dry_run else "after",
         api.request("GET", "/saved-snapshots"),

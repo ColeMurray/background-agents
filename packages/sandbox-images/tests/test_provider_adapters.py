@@ -593,7 +593,10 @@ def test_boat_prune_tolerates_only_delete_404s_and_stops_on_other_errors(
             ("DELETE", f"/saved-snapshots/{older['name']}", None, {}),
             ("GET", "/saved-snapshots", None, {}),
         ]
-        assert f"Deleted {old['name']}" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert f"Already absent {old['name']}" in output
+        assert f"Deleted {old['name']}" not in output
+        assert f"Deleted {older['name']}" in output
     else:
         with pytest.raises(RuntimeError, match=f"prune failed: API {status}") as raised:
             namespace["main"](["prune"])
