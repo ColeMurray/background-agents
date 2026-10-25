@@ -1,0 +1,252 @@
+import {
+  matchesConditions,
+  conditionRegistry,
+  type WebhookAutomationEvent,
+  type TriggerConfig,
+} from "@open-inspect/shared/triggers";
+import {
+  parseAutomationTriggerFields,
+  type AutomationRow,
+  type AutomationStore,
+} from "../db/automation-store";
+import type { Logger } from "../logger";
+import { SessionFollowUpRefusedError, type SchedulerEventResult } from "./contracts";
+import type { AutomationInvocationService } from "./invocation-service";
+import type { ContinuationOutcome, ContinuationPolicy, SteeringActor } from "./session-continuity";
+import { composeAutomationPrompt, AUTOMATION_CONTEXT_GUARDRAIL } from "./event-prompt";
+import { recordEventLaunch, recordContinuation, logEventResult } from "./event-outcome";
+
+/** A crashed follow-up request may be retried after this D1 ownership lease expires. */
+const FOLLOW_UP_RECEIPT_CLAIM_MS = 2 * 60 * 1000;
+interface WebhookFollowUpClaim {
+  claimId: string;
+  invocationId: string;
+}
+
+export interface WebhookEventDeps {
+  store: Pick<
+    AutomationStore,
+    | "getById"
+    | "getInvocationIdByTriggerKey"
+    | "claimFollowUpReceipt"
+    | "acceptFollowUpReceipt"
+    | "releaseFollowUpReceipt"
+    | "resolveCanonicalOwner"
+  >;
+  invocations: Pick<AutomationInvocationService, "start">;
+  continueSession(
+    automation: AutomationRow,
+    concurrencyKey: string,
+    now: number,
+    policy: ContinuationPolicy
+  ): Promise<ContinuationOutcome>;
+  findHistoricalPromptReceipt(
+    automation: AutomationRow,
+    concurrencyKey: string,
+    requestId: string
+  ): Promise<ContinuationOutcome>;
+  resolveActor(
+    user: { userId: string; authorId: string },
+    traceId: string,
+    requestId: string
+  ): Promise<SteeringActor | null>;
+  hashToken(token: string): Promise<string>;
+  nowMs(): number;
+  newId(): string;
+  log: Logger;
+}
+
+/** Own the delivery receipt until continuation or invocation admission accepts it. */
+export async function handleWebhookEvent(
+  event: WebhookAutomationEvent,
+  deps: WebhookEventDeps
+): Promise<SchedulerEventResult> {
+  const { store } = deps;
+  const automation = await store.getById(event.automationId);
+  const candidates =
+    automation && automation.enabled === 1 && !automation.deleted_at ? [automation] : [];
+  const summary: SchedulerEventResult = { triggered: 0, skipped: 0, steered: 0, invocationIds: [] };
+  const webhookFollowUpTriggerKey =
+    event.sessionKey && event.triggerKey.startsWith("webhook:idem:") ? event.triggerKey : null;
+  const webhookFollowUpRequestId = webhookFollowUpTriggerKey
+    ? `webhook:${await deps.hashToken(webhookFollowUpTriggerKey)}`
+    : null;
+  for (const automation of candidates) {
+    const now = deps.nowMs();
+    let webhookClaim: WebhookFollowUpClaim | null = null;
+    const releaseWebhookClaim = async (): Promise<void> => {
+      if (webhookClaim) {
+        await store.releaseFollowUpReceipt(automation.id, event.triggerKey, webhookClaim.claimId);
+      }
+    };
+
+    if (webhookFollowUpTriggerKey) {
+      const original = await store.getInvocationIdByTriggerKey(
+        automation.id,
+        webhookFollowUpTriggerKey
+      );
+      if (original) {
+        summary.invocationIds.push(original);
+        summary.skipped++;
+        continue;
+      }
+
+      const claimId = deps.newId();
+      const invocationId = deps.newId();
+      const claim = await store.claimFollowUpReceipt({
+        automationId: automation.id,
+        triggerKey: webhookFollowUpTriggerKey,
+        claimInvocationId: invocationId,
+        claimId,
+        now,
+        expiresAt: now + FOLLOW_UP_RECEIPT_CLAIM_MS,
+      });
+      if (claim.kind === "accepted") {
+        summary.invocationIds.push(claim.invocationId);
+        summary.skipped++;
+        continue;
+      }
+      if (claim.kind === "pending") {
+        throw new SessionFollowUpRefusedError({
+          kind: "refused",
+          invocationId: claim.invocationId,
+          status: null,
+          code: null,
+        });
+      }
+      webhookClaim = { claimId, invocationId };
+
+      const historical = await deps.findHistoricalPromptReceipt(
+        automation,
+        event.concurrencyKey,
+        webhookFollowUpRequestId!
+      );
+      if (historical.kind === "refused") throw new SessionFollowUpRefusedError(historical);
+      if (historical.kind === "skipped" && historical.invocationId) {
+        await store.acceptFollowUpReceipt(
+          automation.id,
+          webhookFollowUpTriggerKey,
+          claimId,
+          historical.invocationId,
+          now
+        );
+        recordContinuation(summary, historical);
+        continue;
+      }
+    }
+
+    // Trigger conditions gate starting a NEW run.
+    let config: TriggerConfig;
+    try {
+      config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
+    } catch {
+      await releaseWebhookClaim();
+      deps.log.error("Skipped automation with invalid stored trigger fields", {
+        event: "scheduler.invalid_trigger_fields",
+        automation_id: automation.id,
+      });
+      summary.skipped++;
+      continue;
+    }
+    if (!matchesConditions(config.conditions, event, conditionRegistry)) {
+      await releaseWebhookClaim();
+      continue;
+    }
+
+    if (event.sessionKey) {
+      const outcome = await deps.continueSession(
+        automation,
+        event.concurrencyKey,
+        now,
+        await webhookContinuation(deps, event, automation, webhookClaim, webhookFollowUpRequestId)
+      );
+      if (outcome.kind === "refused") throw new SessionFollowUpRefusedError(outcome);
+      if (outcome.kind !== "fall_through") {
+        recordContinuation(summary, outcome);
+        continue;
+      }
+    }
+
+    const result = await deps.invocations.start({
+      automation,
+      source: "event",
+      invocationId: webhookClaim?.invocationId,
+      webhookFollowUpClaimId: webhookClaim?.claimId,
+      triggerKey: event.triggerKey,
+      concurrencyKey: event.concurrencyKey,
+      triggerMetadata: null,
+      instructionsOverride: composeAutomationPrompt(event.contextBlock, automation.instructions),
+    });
+    if (webhookClaim) {
+      if (result.outcome === "deduplicated" && result.invocationId) {
+        await store.acceptFollowUpReceipt(
+          automation.id,
+          event.triggerKey,
+          webhookClaim.claimId,
+          result.invocationId,
+          deps.nowMs()
+        );
+      } else if (result.outcome !== "started") {
+        await releaseWebhookClaim();
+      }
+    }
+
+    recordEventLaunch(summary, result, automation, event, deps.log);
+  }
+  logEventResult(deps.log, event, summary, candidates.length);
+  return summary;
+}
+
+/**
+ * Continuity for a webhook delivery with a sessionKey: its context block becomes the
+ * next turn of the session, sent as the automation's executor (whom the run acts as).
+ * No callback context, so the run's own status is untouched.
+ */
+async function webhookContinuation(
+  deps: WebhookEventDeps,
+  event: WebhookAutomationEvent,
+  automation: AutomationRow,
+  claim: WebhookFollowUpClaim | null,
+  requestId: string | null
+): Promise<ContinuationPolicy> {
+  const { store } = deps;
+  const clientRequestId = requestId ?? `webhook:${await deps.hashToken(event.triggerKey)}`;
+  return {
+    source: "webhook",
+    acceptDelivery: claim
+      ? async (run) => {
+          await store.acceptFollowUpReceipt(
+            automation.id,
+            event.triggerKey,
+            claim.claimId,
+            run.invocation_id,
+            deps.nowMs()
+          );
+        }
+      : undefined,
+    releaseDelivery: claim
+      ? () => store.releaseFollowUpReceipt(automation.id, event.triggerKey, claim.claimId)
+      : undefined,
+    resolveActor: async () => {
+      const owner = await store.resolveCanonicalOwner(automation);
+      return owner.user_id
+        ? deps.resolveActor(
+            { userId: owner.user_id, authorId: owner.created_by },
+            `automation:webhook-steering:${event.triggerKey}`,
+            event.triggerKey
+          )
+        : null;
+    },
+    buildPrompt: async (_run, actor) => ({
+      body: {
+        content: `${event.contextBlock}\n\n---\n\n${AUTOMATION_CONTEXT_GUARDRAIL}`,
+        authorId: actor.authorId,
+        canonicalUserId: actor.userId,
+        source: "automation",
+        // Hashed so the id fits clientRequestIdSchema's 128-character limit.
+        clientRequestId,
+      },
+      ctx: { trace_id: `automation:${automation.id}`, request_id: event.triggerKey },
+    }),
+  };
+}

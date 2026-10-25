@@ -12,13 +12,25 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
-import type { Logger } from "../logger";
+import { createLogger, type Logger } from "../logger";
+import type * as LoggerModule from "../logger";
 import type * as AuthCrypto from "../auth/crypto";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
 import { normalizeWebhookEvent, type SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import type { Team } from "@open-inspect/shared/types/teams";
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import type * as SessionAdmissionModule from "../authorization/session-admission";
+
+vi.mock("../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof LoggerModule>();
+  return { ...actual, createLogger: vi.fn(actual.createLogger) };
+});
+
+function schedulerLogger(): Logger {
+  const factory = vi.mocked(createLogger);
+  const index = factory.mock.calls.map(([component]) => component).lastIndexOf("scheduler");
+  return factory.mock.results[index].value;
+}
 
 const mockSelectSessionMemory = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -120,11 +132,9 @@ vi.mock("../session/skill-resolution", () => ({
 }));
 
 const { resolveManagedSkills } = await import("../session/skill-resolution");
-const {
-  AutomationExecutionUnauthorizedError,
-  EXECUTION_DEADLINE_GRACE_MS,
-  SessionFollowUpRefusedError,
-} = await import("./scheduler");
+const { AutomationExecutionUnauthorizedError, SessionFollowUpRefusedError } =
+  await import("./contracts");
+const { EXECUTION_DEADLINE_GRACE_MS } = await import("./launch-policy");
 const { AutomationSlackService } = await import("./slack-service");
 const { createScheduler: createAutomationScheduler } = await import("./factory");
 
@@ -1744,9 +1754,7 @@ describe("Scheduler", () => {
       const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       const result = await scheduler.tick();
 
@@ -1851,9 +1859,7 @@ describe("Scheduler", () => {
       );
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
@@ -1933,9 +1939,7 @@ describe("Scheduler", () => {
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
       const scheduler = createScheduler();
-      const warnSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
-        .mockImplementation(() => {});
+      const warnSpy = vi.spyOn(schedulerLogger(), "warn").mockImplementation(() => {});
 
       await scheduler.tick();
 
@@ -1981,12 +1985,8 @@ describe("Scheduler", () => {
       });
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
-      const warnSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(schedulerLogger(), "warn").mockImplementation(() => {});
 
       await scheduler.tick();
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
@@ -2025,9 +2025,7 @@ describe("Scheduler", () => {
       mockStore.bulkFailStartingRuns.mockRejectedValue(new Error("D1 timeout"));
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
       const bulkFailErrorCall = errorSpy.mock.calls.find(
@@ -2068,9 +2066,7 @@ describe("Scheduler", () => {
       );
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
 
@@ -2115,9 +2111,7 @@ describe("Scheduler", () => {
       mockStore.getInvocationRunAggregate.mockRejectedValue(new Error("D1 timeout"));
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
@@ -2497,9 +2491,7 @@ describe("Scheduler", () => {
       const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await expect(scheduler.trigger("auto-1", "user-1")).rejects.toThrow(
         "Failed to trigger automation"

@@ -9,7 +9,7 @@ import { cleanD1Tables } from "./cleanup";
 import { seedTeam } from "./ownership-test-helpers";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
-import { resolveAutomationProviderAuth } from "../../src/scheduler/scheduler";
+import { resolveAutomationProviderAuth } from "../../src/scheduler/launch-admission";
 import { AutomationExecutionUnauthorizedError } from "../../src/scheduler/contracts";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";

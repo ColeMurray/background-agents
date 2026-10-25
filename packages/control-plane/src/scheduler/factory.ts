@@ -24,7 +24,7 @@ import { retryDelivery } from "../session/callback-delivery";
 import type { Env } from "../types";
 import { Scheduler } from "./scheduler";
 import { AutomationSlackService } from "./slack-service";
-import { generateId } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import { isAutomationExecutionAuthorized } from "../automation/authorization-guard";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import { createRequestMetrics } from "../db/instrumented-sql-database";
@@ -48,7 +48,16 @@ import {
 } from "./launch-admission";
 import { executionDeadlineMs } from "./launch-policy";
 import { AutomationRunLaunchService } from "./run-launch-service";
-import { releaseHeldPrompts } from "./session-continuity";
+import {
+  releaseHeldPrompts,
+  continueSession,
+  findHistoricalPromptReceipt,
+  steeringActor,
+  sweepHeldPrompts,
+} from "./session-continuity";
+import { AutomationEventHandler } from "./event-handler";
+import { SlackChannelStore } from "../db/slack-channel-store";
+import { admitGitHubEvent } from "../automation/github-event-admission";
 import { enqueueAutomationFirstPrompt } from "./session-prompt";
 
 /** Assemble scheduler collaborators without starting database or network work. */
@@ -105,11 +114,12 @@ export function createScheduler(
     },
     executionDeadlineMs: resolveDeadlineMs,
   });
+  const continuity = { store, env, log, db, backgroundJobs };
   const launcher = new AutomationRunLaunchService({
     store,
     sessions,
     enqueueFirstPrompt: (input) => enqueueAutomationFirstPrompt(env, input),
-    releaseHeldPrompts: (run) => releaseHeldPrompts({ store, env, log, db, backgroundJobs }, run),
+    releaseHeldPrompts: (run) => releaseHeldPrompts(continuity, run),
     executionDeadlineMs: resolveDeadlineMs,
     nowMs: () => Date.now(),
     newId: generateId,
@@ -171,15 +181,54 @@ export function createScheduler(
     nowMs: () => Date.now(),
     log,
   });
+  const events = new AutomationEventHandler({
+    store,
+    invocations,
+    admitGitHubEvent: (event, fire) => admitGitHubEvent(db, event, fire, log),
+    slack: {
+      channels: new SlackChannelStore(db),
+      slack,
+      invocations,
+      continueSession: (...args) => continueSession(continuity, ...args),
+      resolveActor: async (event) => {
+        const identity = await new UserStore(db).getIdentity("slack", event.actorUserId);
+        if (!identity) return null;
+        return steeringActor(
+          db,
+          backgroundJobs,
+          { userId: identity.userId, authorId: `slack:${event.actorUserId}` },
+          `automation:slack-steering:${event.triggerKey}`,
+          event.triggerKey
+        );
+      },
+      resolveScmEnrichment,
+      scmProvider: () => resolveScmProviderFromEnv(env.SCM_PROVIDER),
+      nowMs: () => Date.now(),
+      log,
+    },
+    webhook: {
+      store,
+      invocations,
+      continueSession: (...args) => continueSession(continuity, ...args),
+      findHistoricalPromptReceipt: (...args) => findHistoricalPromptReceipt(continuity, ...args),
+      resolveActor: (...args) => steeringActor(db, backgroundJobs, ...args),
+      hashToken,
+      nowMs: () => Date.now(),
+      newId: generateId,
+      log,
+    },
+    log,
+  });
   return new Scheduler({
-    db,
-    env,
-    backgroundJobs,
+    store,
+    events,
+    sweepHeldPrompts: (now) => sweepHeldPrompts(continuity, now),
+    nowMs: () => Date.now(),
+    newId: generateId,
     slack,
     log,
     invocations,
     failures,
     recovery,
-    resolveScmEnrichment,
   });
 }
