@@ -315,7 +315,7 @@ describe("cross-path alarm effects", () => {
         expect(h.shutdown.isHolding()).toBe(true);
         await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
         await expect(h.manager.terminateFailedSandbox("competing fatal report")).resolves.toBe(
-          "not_terminated"
+          "no_action"
         );
         await h.manager.terminateUnresponsiveSandbox("stop_send_failed");
       } finally {

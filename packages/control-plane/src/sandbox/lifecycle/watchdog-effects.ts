@@ -37,9 +37,8 @@ export interface WatchdogEffectsDependencies {
   canStopProviderSandbox: () => boolean;
   usesProviderManagedStop: () => boolean;
   snapshotRequiresShutdown: () => boolean;
-  recordSpawnFailure: (now: number, attemptStartedAt: number) => void;
-  /** Whether the circuit breaker would refuse a launch at `now`. */
-  isCircuitBreakerOpen: (now: number) => boolean;
+  /** Count a failed attempt; returns whether the circuit breaker is now open. */
+  recordSpawnFailure: (now: number, attemptStartedAt: number) => boolean;
   reportSandboxError: (reason: string) => void;
   triggerSnapshot: (reason: string) => Promise<void>;
   stopProviderSandboxSafely: (options: {
@@ -71,7 +70,6 @@ export async function failConnectTimeout(
     | "access"
     | "canStopProviderSandbox"
     | "recordSpawnFailure"
-    | "isCircuitBreakerOpen"
     | "reportSandboxError"
     | "stopProviderSandboxSafely"
     | "getLogger"
@@ -86,8 +84,7 @@ export async function failConnectTimeout(
     timeout_ms: timeoutMs,
   });
   deps.storage.updateSandboxStatus("failed");
-  deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-  const retriesExhausted = deps.isCircuitBreakerOpen(ctx.now);
+  const retriesExhausted = deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
   deps.access.clearAccess();
   const held = deps.shutdown.holdFailedRetainedBoot(
     "Sandbox failed to connect within the allowed time",

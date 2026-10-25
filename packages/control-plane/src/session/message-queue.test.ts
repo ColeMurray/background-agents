@@ -19,7 +19,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
-import type { FatalTerminationOutcome } from "../sandbox/lifecycle/manager";
+import type { SandboxAlarmResult } from "../sandbox/lifecycle/manager";
 import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
@@ -238,7 +238,7 @@ function buildQueue(
     onPromptDispatched: vi.fn(() => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
     terminateFailedSandbox: vi.fn(
-      async (_reason: string) => "terminated" as FatalTerminationOutcome
+      async (_reason: string) => "sandbox_terminated" as SandboxAlarmResult
     ),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
@@ -2341,7 +2341,7 @@ describe("SessionMessageQueue", () => {
 
   it("redrives a pending prompt after fatal sandbox termination completes", async () => {
     const h = buildQueue();
-    let resolveTermination!: (outcome: FatalTerminationOutcome) => void;
+    let resolveTermination!: (outcome: SandboxAlarmResult) => void;
     h.sandboxLifecycle.terminateFailedSandbox.mockReturnValue(
       new Promise((resolve) => {
         resolveTermination = resolve;
@@ -2353,7 +2353,7 @@ describe("SessionMessageQueue", () => {
     await Promise.resolve();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
 
-    resolveTermination("terminated");
+    resolveTermination("sandbox_terminated");
     await handling;
     await h.backgroundTasks.settle();
 
@@ -2366,7 +2366,10 @@ describe("SessionMessageQueue", () => {
     const pending = createMessage({ id: "msg-pending", status: "pending" });
     h.repository.getNextPendingMessage.mockReturnValue(pending);
     h.repository.getMessageById.mockReturnValue(pending);
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("retries_exhausted");
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue({
+      kind: "fatal_report_unrecoverable",
+      reason: "git sync failed",
+    });
 
     await h.queue.handleFatalSandboxFailure("git sync failed");
     await h.backgroundTasks.settle();
@@ -2396,7 +2399,10 @@ describe("SessionMessageQueue", () => {
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(running);
     h.repository.getNextPendingMessage.mockReturnValue(followUp);
     h.repository.getMessageById.mockReturnValue(followUp);
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("retries_exhausted");
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue({
+      kind: "fatal_report_unrecoverable",
+      reason: "Sandbox crashed",
+    });
 
     await h.queue.handleFatalSandboxFailure("Sandbox crashed");
     await h.backgroundTasks.settle();
@@ -2414,7 +2420,10 @@ describe("SessionMessageQueue", () => {
     h.repository.markMessageAwaitingStopConfirmation("msg-stopped", Date.now() + 10_000);
     h.repository.getNextPendingMessage.mockReturnValue(followUp);
     h.repository.getMessageById.mockReturnValue(followUp);
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("retries_exhausted");
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue({
+      kind: "fatal_report_unrecoverable",
+      reason: "Sandbox crashed",
+    });
 
     await h.queue.handleFatalSandboxFailure("Sandbox crashed");
     await h.backgroundTasks.settle();
@@ -2424,7 +2433,7 @@ describe("SessionMessageQueue", () => {
 
   it("neither fails nor redrives a pending prompt when a retryable stop failed", async () => {
     const h = buildQueue();
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("stop_failed");
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("sandbox_failed");
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
 
     await h.queue.handleFatalSandboxFailure("Sandbox crashed");
@@ -2436,7 +2445,7 @@ describe("SessionMessageQueue", () => {
 
   it("leaves a pending prompt alone when the fatal report terminated nothing", async () => {
     const h = buildQueue();
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("not_terminated");
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("no_action");
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
 
     await h.queue.handleFatalSandboxFailure("Sandbox crashed");

@@ -699,6 +699,7 @@ describe("fatal runtime report termination", () => {
   const exhaustingFailureCount = DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold - 1;
   const stopSucceeds = { success: true };
   const stopRejected = { success: false, error: "provider unavailable" };
+  const unrecoverable = { kind: "fatal_report_unrecoverable", reason: "git sync failed" } as const;
 
   function fatalReportHarness(
     sandbox: Parameters<typeof createMockSandbox>[0],
@@ -722,10 +723,10 @@ describe("fatal runtime report termination", () => {
   }
 
   it.each([
-    { stop: stopSucceeds, priorFailures: 0, outcome: "terminated" },
-    { stop: stopRejected, priorFailures: 0, outcome: "stop_failed" },
-    { stop: stopSucceeds, priorFailures: exhaustingFailureCount, outcome: "retries_exhausted" },
-    { stop: stopRejected, priorFailures: exhaustingFailureCount, outcome: "retries_exhausted" },
+    { stop: stopSucceeds, priorFailures: 0, outcome: "sandbox_terminated" },
+    { stop: stopRejected, priorFailures: 0, outcome: "sandbox_failed" },
+    { stop: stopSucceeds, priorFailures: exhaustingFailureCount, outcome: unrecoverable },
+    { stop: stopRejected, priorFailures: exhaustingFailureCount, outcome: unrecoverable },
   ])(
     "resolves $outcome once the row is failed (stop ok: $stop.success, prior failures: $priorFailures)",
     async ({ stop, priorFailures, outcome }) => {
@@ -739,7 +740,7 @@ describe("fatal runtime report termination", () => {
         stop
       );
 
-      await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toBe(outcome);
+      await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toEqual(outcome);
 
       expect(stopSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ providerObjectId: "modal-obj-booting" })
@@ -749,8 +750,8 @@ describe("fatal runtime report termination", () => {
   );
 
   it.each([
-    { priorFailures: 0, outcome: "stop_failed" },
-    { priorFailures: exhaustingFailureCount, outcome: "retries_exhausted" },
+    { priorFailures: 0, outcome: "sandbox_failed" },
+    { priorFailures: exhaustingFailureCount, outcome: unrecoverable },
   ])(
     "resolves $outcome when cleanup throws after the failure is counted (prior failures: $priorFailures)",
     async ({ priorFailures, outcome }) => {
@@ -769,21 +770,21 @@ describe("fatal runtime report termination", () => {
         wsManager
       );
 
-      await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toBe(outcome);
+      await expect(manager.terminateFailedSandbox("git sync failed")).resolves.toEqual(outcome);
 
       expect(stopSandbox).not.toHaveBeenCalled();
       expect(storage.getSandbox()?.status).toBe("failed");
     }
   );
 
-  it("resolves not_terminated for a row that is already dead, even with retries exhausted", async () => {
+  it("resolves no_action for a row that is already dead, even with retries exhausted", async () => {
     const { manager, stopSandbox } = fatalReportHarness({
       status: "failed",
       spawn_failure_count: DEFAULT_LIFECYCLE_CONFIG.circuitBreaker.threshold,
       last_spawn_failure: Date.now(),
     });
 
-    await expect(manager.terminateFailedSandbox("late report")).resolves.toBe("not_terminated");
+    await expect(manager.terminateFailedSandbox("late report")).resolves.toBe("no_action");
 
     expect(stopSandbox).not.toHaveBeenCalled();
   });
@@ -805,7 +806,7 @@ describe("fatal runtime report during a checkpoint hold", () => {
       createTestConfig()
     );
 
-    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe("not_terminated");
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe("no_action");
 
     expect(shutdown.recordRuntimeFailure).toHaveBeenCalledExactlyOnceWith("runtime crashed");
   });
@@ -862,7 +863,7 @@ describe("fatal runtime report during a checkpoint hold", () => {
 
     const checkpoint = manager.triggerSnapshot("execution_complete");
     await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledOnce());
-    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe("not_terminated");
+    await expect(manager.terminateFailedSandbox("runtime crashed")).resolves.toBe("no_action");
     expect(broadcaster.messages).not.toContainEqual({
       type: "sandbox_error",
       error: "runtime crashed",

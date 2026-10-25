@@ -31,6 +31,7 @@ import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } fr
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
+import { applySandboxRecovery } from "./sandbox-recovery";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -636,14 +637,11 @@ export class SessionMessageQueue {
     const bootPrompt = servingPrompt ? null : this.messageRepository.getNextPendingMessage();
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
-    const outcome = await termination;
-    if (outcome === "retries_exhausted") {
-      // No replacement will be admitted, which would leave the prompt pending
-      // with its caller never told, so fail it as the connecting watchdog does.
-      if (bootPrompt) await this.failPendingMessage(bootPrompt.id, reason);
-      return;
-    }
-    if (outcome === "terminated") await this.executionStop.resumeAfterSandboxTermination();
+    await applySandboxRecovery(
+      { messageQueue: this, executionStop: this.executionStop },
+      bootPrompt,
+      await termination
+    );
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */

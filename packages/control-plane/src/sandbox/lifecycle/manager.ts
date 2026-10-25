@@ -393,23 +393,12 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
 /** Which client-visible start a launch announces: a prompt's spawn or typing's warm-up. */
 export type SandboxStartupIntent = "spawn" | "warm";
 
-/**
- * What a fatal report's termination did, for the queue to apply.
- * `terminated`: the sandbox is down and a replacement may run queued work.
- * `stop_failed`: the row was failed and counted toward the circuit breaker,
- * but teardown did not complete, so nothing may replace it yet.
- * `retries_exhausted`: the failure opened the circuit breaker, so no
- * replacement will be admitted for the prompt the boot was for.
- */
-export type FatalTerminationOutcome =
-  "terminated" | "stop_failed" | "retries_exhausted" | "not_terminated";
-
 export interface SandboxLifecycle {
   spawnSandbox(intent?: SandboxStartupIntent): Promise<void>;
   updateLastActivity(timestamp: number): void;
   onPromptDispatched(): void;
   terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
-  terminateFailedSandbox(reason: string): Promise<FatalTerminationOutcome>;
+  terminateFailedSandbox(reason: string): Promise<SandboxAlarmResult>;
   reportSandboxError(reason: string): void;
 }
 
@@ -532,7 +521,6 @@ export class SandboxLifecycleManager
       usesProviderManagedStop: () => this.usesProviderManagedStop(),
       snapshotRequiresShutdown: () => !!provider.capabilities.snapshotRequiresShutdown,
       recordSpawnFailure: (now, attemptStartedAt) => this.recordSpawnFailure(now, attemptStartedAt),
-      isCircuitBreakerOpen: (now) => this.isCircuitBreakerOpen(now),
       reportSandboxError: (reason) => this.reportSandboxError(reason),
       triggerSnapshot: (reason) => this.triggerSnapshot(reason),
       stopProviderSandboxSafely: (options) => this.stopProviderSandboxSafely(options),
@@ -1055,9 +1043,10 @@ export class SandboxLifecycleManager
    * separates a user coming back later (a fresh streak) from an automatic
    * re-drive chain (no idle time at all). Measured failure-to-failure, a
    * boot that outlasts the window would reset the streak every time and a
-   * deterministic late failure would be re-driven forever.
+   * deterministic late failure would be re-driven forever. Returns whether
+   * this failure left the breaker open, so no replacement will be admitted.
    */
-  private recordSpawnFailure(now: number, attemptStartedAt: number = now): void {
+  private recordSpawnFailure(now: number, attemptStartedAt: number = now): boolean {
     const streak = evaluateCircuitBreaker(
       toCircuitBreakerState(this.storage.getSandboxWithCircuitBreaker()),
       this.config.circuitBreaker,
@@ -1065,6 +1054,7 @@ export class SandboxLifecycleManager
     );
     if (streak.shouldReset) this.storage.resetCircuitBreaker();
     this.storage.incrementCircuitBreakerFailure(now);
+    return this.isCircuitBreakerOpen(now);
   }
 
   /** Whether `admitLaunch` would refuse a launch at `now`. */
@@ -1839,29 +1829,30 @@ export class SandboxLifecycleManager
 
   /**
    * Fail the live sandbox after a fatal runtime report and stop it where the
-   * provider allows. Resolves `terminated` only when this call took the
-   * sandbox down, which is the caller's cue to re-evaluate the queue, and
-   * `stop_failed` when it failed the row but the provider refused the stop.
-   * Either becomes `retries_exhausted` when this failure opened the circuit
-   * breaker.
+   * provider allows. Resolves `sandbox_terminated` only when this call took
+   * the sandbox down, which is the caller's cue to re-evaluate the queue, and
+   * `sandbox_failed` when it failed the row but did not finish tearing it
+   * down. Either becomes `fatal_report_unrecoverable` when this failure opened
+   * the circuit breaker: no replacement will be admitted, so the prompt the
+   * boot was for fails instead of waiting.
    * Serving executions remain fenced by preservation until explicit recovery;
    * only failed boots may automatically get a clean replacement, and a failed
-   * boot of the retained source is held instead. A row that is already dead —
-   * including one the connect watchdog failed while its boot was still
-   * running — resolves `not_terminated`: there is nothing to terminate, and
-   * re-driving the queue for it would spawn a replacement for
-   * every late report. A termination counts toward the circuit breaker, so a
-   * boot that dies the same way every time stops being replaced.
+   * boot of the retained source is held instead (`sandbox_failed`). A row that
+   * is already dead — including one the connect watchdog failed while its boot
+   * was still running — resolves `no_action`: there is nothing to terminate,
+   * and re-driving the queue for it would spawn a replacement for every late
+   * report. A termination counts toward the circuit breaker, so a boot that
+   * dies the same way every time stops being replaced.
    */
-  async terminateFailedSandbox(reason: string): Promise<FatalTerminationOutcome> {
+  async terminateFailedSandbox(reason: string): Promise<SandboxAlarmResult> {
     if (this.shutdown.isHolding()) {
       // Teardown waits for the hold; the report is kept until it can act.
       this.shutdown.recordRuntimeFailure(reason);
-      return "not_terminated";
+      return "no_action";
     }
     const sandbox = this.storage.getSandbox();
     if (!sandbox || isDeadSandboxStatus(sandbox.status) || this.isTerminatingSandbox) {
-      return "not_terminated";
+      return "no_action";
     }
 
     this.log.warn("Fatal sandbox runtime error", {
@@ -1870,50 +1861,59 @@ export class SandboxLifecycleManager
       error: reason,
     });
     this.isTerminatingSandbox = true;
-    // Once the row is failed and counted, a later cleanup throw must not hide
-    // that, or an exhausted boot's prompt is left pending.
-    let countedOutcome: FatalTerminationOutcome = "not_terminated";
     try {
       const ownership = await this.shutdown.requestShutdown("fatal_runtime_error", "emergency");
       if (ownership !== "unmanaged") {
-        this.recordSpawnFailure(Date.now(), sandbox.created_at);
+        const exhausted = this.recordSpawnFailure(Date.now(), sandbox.created_at);
         this.reportSandboxError(reason);
-        if (ownership !== "owned") return "not_terminated";
-        return this.isCircuitBreakerOpen(Date.now()) ? "retries_exhausted" : "terminated";
+        if (ownership !== "owned") return "no_action";
+        return exhausted ? { kind: "fatal_report_unrecoverable", reason } : "sandbox_terminated";
       }
-      if (!this.isCurrentSandboxState(sandbox)) return "not_terminated";
+      if (!this.isCurrentSandboxState(sandbox)) return "no_action";
       const held = this.holdFailedRetainedBoot(sandbox, reason);
       this.storage.updateSandboxStatus("failed");
-      this.recordSpawnFailure(Date.now(), sandbox.created_at);
-      const retriesExhausted = this.isCircuitBreakerOpen(Date.now());
-      if (!held) countedOutcome = retriesExhausted ? "retries_exhausted" : "stop_failed";
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
-      this.reportSandboxError(reason);
-      this.access.clearAccess();
-      if (held) return "not_terminated";
-
-      const canStopProvider = this.canStopProviderSandbox();
-      if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
-      this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
-
-      if (canStopProvider) {
-        const stopped = await this.stopProviderSandboxSafely({
-          reason: "fatal_runtime_error",
-          intent: "destroy",
-          failureMessage: "Provider stop failed after fatal runtime error",
-        });
-        if (!stopped) return countedOutcome;
-      }
-      if (retriesExhausted) return "retries_exhausted";
+      const exhausted = this.recordSpawnFailure(Date.now(), sandbox.created_at);
+      const tornDown = await this.tearDownFailedSandbox(reason, held);
+      if (held) return "sandbox_failed";
+      if (exhausted) return { kind: "fatal_report_unrecoverable", reason };
+      return tornDown ? "sandbox_terminated" : "sandbox_failed";
     } catch (error) {
       this.log.warn("Fatal runtime termination failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return countedOutcome;
+      return "no_action";
     } finally {
       this.isTerminatingSandbox = false;
     }
-    return "terminated";
+  }
+
+  /**
+   * Publish a failed row and, unless its source is held, detach and stop it.
+   * The failure is already counted, so a step that throws must not hide it:
+   * this logs and resolves false instead. Resolves true once nothing of the
+   * sandbox is left for a replacement to collide with.
+   */
+  private async tearDownFailedSandbox(reason: string, held: boolean): Promise<boolean> {
+    try {
+      this.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
+      this.reportSandboxError(reason);
+      this.access.clearAccess();
+      if (held) return false;
+      const canStopProvider = this.canStopProviderSandbox();
+      if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+      this.wsManager.detachSandboxWebSocket(1011, "Fatal sandbox runtime error");
+      if (!canStopProvider) return true;
+      return await this.stopProviderSandboxSafely({
+        reason: "fatal_runtime_error",
+        intent: "destroy",
+        failureMessage: "Provider stop failed after fatal runtime error",
+      });
+    } catch (error) {
+      this.log.warn("Fatal runtime termination failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   /**
