@@ -4,7 +4,7 @@ import * as automationRepositories from "../../src/automation/repository";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, sqlDatabase } from "./helpers";
@@ -47,7 +47,7 @@ function sessionStub() {
   });
   return {
     behavior,
-    scheduler: () => new Scheduler(env.DB, schedulerEnv, { submit() {} }),
+    scheduler: () => createScheduler(env.DB, schedulerEnv, { submit() {} }),
     calls: (path: string) => fetch.mock.calls.filter(([input]) => requestPath(input) === path),
   };
 }

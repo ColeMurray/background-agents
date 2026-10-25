@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore } from "../../src/db/automation-store";
-import { Scheduler, SessionFollowUpRefusedError } from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
+import { SessionFollowUpRefusedError } from "../../src/scheduler/contracts";
 import { firstPromptRequestId } from "../../src/scheduler/session-continuity";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedActiveUser } from "./helpers";
@@ -26,7 +27,7 @@ function createScheduler(promptDelayMs = 0, promptGate?: Promise<void>) {
     new URL(request.url).pathname === "/internal/prompt-request"
       ? Response.json({ queued: false })
       : prompts(request, sessionId);
-  return { scheduler: new Scheduler(env.DB, schedulerEnv, { submit() {} }), prompts };
+  return { scheduler: createAutomationScheduler(env.DB, schedulerEnv, { submit() {} }), prompts };
 }
 
 async function seedAutomation(now: number) {
@@ -224,7 +225,9 @@ describe("Scheduler webhook sessionKey (real D1)", () => {
       expect(await store.claimRunSession(run.id, sessionId, Date.now(), Date.now() + 60_000)).toBe(
         true
       );
-      const scheduler = new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} });
+      const scheduler = createAutomationScheduler(env.DB, createCloudflareEnv(env), {
+        submit() {},
+      });
 
       let followUp: unknown;
       const { stub } = await initNamedSession(

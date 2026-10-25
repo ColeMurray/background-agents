@@ -105,7 +105,7 @@ import { resolveCurrentGitHubAccessToken } from "./identity";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
-import { Scheduler } from "../scheduler/scheduler";
+import { createScheduler } from "../scheduler/factory";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
@@ -402,7 +402,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         : undefined,
   });
 
-  const scheduler = new Scheduler(db, env, backgroundTasks);
+  const scheduler = createScheduler(db, env, backgroundTasks);
   const callbackService = new CallbackNotificationService({
     repository: sessionCoreRepository,
     messageRepository,

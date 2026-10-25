@@ -9,7 +9,7 @@ import { GitHubAutomationStore } from "../../src/db/github-automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { queryDO, seedActiveUser, sqlDatabase } from "./helpers";
@@ -91,7 +91,7 @@ async function saveAutomation(
 }
 
 function createScheduler() {
-  return new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  return createAutomationScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
 }
 
 async function revokeGrant(teamId: string) {

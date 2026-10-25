@@ -5,11 +5,11 @@
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import { AutomationStore } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
+import { createScheduler } from "../scheduler/factory";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
-  Scheduler,
-} from "../scheduler/scheduler";
+} from "../scheduler/contracts";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -123,7 +123,7 @@ async function handleTriggerAutomation(
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
+    triggerResult = await createScheduler(ctx.db, env, ctx.executionCtx).trigger(
       id,
       requesterUserId,
       requesterEnrichment

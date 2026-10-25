@@ -4,7 +4,7 @@ import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
 import type * as AutomationStoreModule from "../db/automation-store";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { StartInvocationResult } from "../scheduler/scheduler";
+import type { StartInvocationResult } from "../scheduler/contracts";
 import { admitGitHubEvent, MAX_GITHUB_ADMISSION_ATTEMPTS } from "./github-event-admission";
 
 const mocks = vi.hoisted(() => ({

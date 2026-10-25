@@ -8,7 +8,8 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import * as repositoryResolution from "../../src/repos/resolve";
-import { AutomationExecutionUnauthorizedError, Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
+import { AutomationExecutionUnauthorizedError } from "../../src/scheduler/contracts";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, sqlDatabase } from "./helpers";
@@ -63,7 +64,7 @@ async function saveAutomation(
 async function expectDenied(source: AutomationInvocationSource) {
   const store = new AutomationStore(env.DB);
   const row = (await store.getById(`auto-team-grants-${source}`))!;
-  const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
   if (source === "manual") {
     await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toMatchObject({
       name: AutomationExecutionUnauthorizedError.name,
@@ -194,7 +195,7 @@ describe("automation current team repository grants (integration)", () => {
           .run();
         return covered;
       });
-      const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
+      const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
         submit() {},
       });
       if (source === "manual") {
@@ -224,7 +225,7 @@ describe("automation current team repository grants (integration)", () => {
     vi.mocked(sessionInitialization.initializeSession).mockRejectedValueOnce(
       new Error("D1 unavailable")
     );
-    const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
+    const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
       submit() {},
     });
     await scheduler.tick();
@@ -353,7 +354,9 @@ describe("automation current team repository grants (integration)", () => {
     });
     const schedulerEnv = createCloudflareEnv(env);
     schedulerEnv.SESSION = (_sessionId, request) => runtime(request);
-    expect(await new Scheduler(sqlDatabase(env.DB), schedulerEnv, { submit() {} }).tick()).toEqual({
+    expect(
+      await createScheduler(sqlDatabase(env.DB), schedulerEnv, { submit() {} }).tick()
+    ).toEqual({
       processed: 1,
       skipped: 0,
       failed: 0,

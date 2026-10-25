@@ -13,7 +13,7 @@ import { ModelPreferencesStore } from "../db/model-preferences";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
-} from "../scheduler/scheduler";
+} from "../scheduler/contracts";
 import { createTestRequestHandler } from "../router.test-support";
 import { automationRoutes } from "./automations";
 import {
@@ -87,22 +87,10 @@ vi.mock("../session/identity", () => ({
     mockResolveGitHubEnrichmentForRequest(...args),
 }));
 
-vi.mock("../scheduler/scheduler", () => ({
-  AutomationExecutionUnauthorizedError: class AutomationExecutionUnauthorizedError extends Error {
-    constructor() {
-      super("Automation owner is not authorized to execute");
-      this.name = "AutomationExecutionUnauthorizedError";
-    }
-  },
-  AutomationTriggerBlockedError: class AutomationTriggerBlockedError extends Error {
-    constructor(readonly reason = "concurrent_run_active") {
-      super("An active run already exists");
-      this.name = "AutomationTriggerBlockedError";
-    }
-  },
-  Scheduler: vi.fn().mockImplementation(function () {
-    return { trigger: (...args: unknown[]) => mockSchedulerTrigger(...args) };
-  }),
+vi.mock("../scheduler/factory", () => ({
+  createScheduler: vi.fn(() => ({
+    trigger: (...args: unknown[]) => mockSchedulerTrigger(...args),
+  })),
 }));
 
 const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
@@ -290,7 +278,10 @@ describe("automation lifecycle routes", () => {
       const res = await callRoute("POST", "/automations/auto-1/trigger");
 
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "Execution authorization required" });
+      expect(await res.json()).toEqual({
+        error: "Execution authorization required",
+        reason_code: "execution_authorization_denied",
+      });
     });
 
     it("returns 500 when the scheduler cannot launch the automation", async () => {
