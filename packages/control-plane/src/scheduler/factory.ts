@@ -166,12 +166,7 @@ export function createScheduler(
   });
   const recovery = new AutomationRecoveryService({
     store,
-    teams,
-    admission,
-    launcher,
     failures,
-    resolveScmEnrichment,
-    isAuthorized: (request) => isAutomationExecutionAuthorized(db, request),
     executionDeadlineMs: resolveDeadlineMs,
     nowMs: () => Date.now(),
     log,

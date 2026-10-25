@@ -88,9 +88,9 @@ export interface SchedulerDeps {
     AutomationSlackService,
     "getSessionInstructions" | "contextWithThread" | "notifySkip" | "notifyCompletion"
   >;
-  invocations: Pick<AutomationInvocationService, "start">;
+  invocations: Pick<AutomationInvocationService, "start" | "retryDue">;
   failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
-  recovery: Pick<AutomationRecoveryService, "recoverRuns" | "retryDue">;
+  recovery: Pick<AutomationRecoveryService, "recoverRuns">;
   resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null>;
   log: Logger;
 }
@@ -159,7 +159,7 @@ export class Scheduler {
     // 1. Recovery sweeps, then retries whose wait is over
     await this.recovery.recoverRuns();
     await sweepHeldPrompts(this.continuityDeps(store), now);
-    launchedChildren += await this.recovery.retryDue(now);
+    launchedChildren += await this.invocations.retryDue(now);
 
     // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);

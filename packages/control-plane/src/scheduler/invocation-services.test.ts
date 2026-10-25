@@ -126,6 +126,12 @@ function invocationHarness() {
   let id = 0;
   const deps = {
     store: {
+      getById: vi.fn().mockResolvedValue(automation),
+      getRetriesToSettle: vi.fn().mockResolvedValue([run()]),
+      claimRetry: vi
+        .fn<AutomationInvocationServiceDeps["store"]["claimRetry"]>()
+        .mockImplementation(async (row) => ({ ...row, status: "starting", attempt: 2 })),
+      failWithdrawnRetry: vi.fn().mockResolvedValue(false),
       resolveCanonicalOwner: vi
         .fn<AutomationInvocationServiceDeps["store"]["resolveCanonicalOwner"]>()
         .mockImplementation(async (row) => row),
@@ -155,6 +161,11 @@ function invocationHarness() {
         .fn<AutomationInvocationServiceDeps["launcher"]["launch"]>()
         .mockImplementation(async (_automation, child) => {
           child.status = "running";
+        }),
+      recordFailure: vi
+        .fn<AutomationInvocationServiceDeps["launcher"]["recordFailure"]>()
+        .mockImplementation(async (child) => {
+          child.status = "unauthorized";
         }),
     },
     failures: { applyInvocationOutcome: vi.fn().mockResolvedValue(undefined) },
@@ -260,43 +271,12 @@ describe("AutomationInvocationService", () => {
 function recoveryHarness() {
   const deps = {
     store: {
-      getById: vi.fn().mockResolvedValue(automation),
-      resolveCanonicalOwner: vi
-        .fn<AutomationRecoveryServiceDeps["store"]["resolveCanonicalOwner"]>()
-        .mockImplementation(async (row) => row),
-      getRetriesToSettle: vi.fn().mockResolvedValue([run()]),
-      claimRetry: vi
-        .fn<AutomationRecoveryServiceDeps["store"]["claimRetry"]>()
-        .mockImplementation(async (row) => ({ ...row, status: "starting", attempt: 2 })),
-      failWithdrawnRetry: vi.fn().mockResolvedValue(false),
       getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
       getRunsPastExecutionDeadline: vi.fn().mockResolvedValue([]),
       bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
       bulkFailRunningRuns: vi.fn().mockResolvedValue(undefined),
       getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
       getStaleFailureResetCandidates: vi.fn().mockResolvedValue([]),
-    },
-    teams: { getById: vi.fn().mockResolvedValue(null) },
-    isAuthorized: vi.fn().mockResolvedValue(true),
-    admission: {
-      resolveTeamTargets: vi.fn().mockResolvedValue({
-        targets: new Map(),
-        teamGrantsVersion: { teamId: "team-1", version: 7 },
-      }),
-      resolveProviderAuth: vi.fn().mockResolvedValue({ providerAuth: [] }),
-    },
-    resolveScmEnrichment: vi.fn().mockResolvedValue(null),
-    launcher: {
-      launch: vi
-        .fn<AutomationRecoveryServiceDeps["launcher"]["launch"]>()
-        .mockImplementation(async (_automation, child) => {
-          child.status = "running";
-        }),
-      recordFailure: vi
-        .fn<AutomationRecoveryServiceDeps["launcher"]["recordFailure"]>()
-        .mockImplementation(async (child) => {
-          child.status = "unauthorized";
-        }),
     },
     failures: { applyInvocationOutcome: vi.fn().mockResolvedValue(undefined) },
     executionDeadlineMs: () => 10_000,
@@ -306,9 +286,9 @@ function recoveryHarness() {
   return { deps, service: new AutomationRecoveryService(deps) };
 }
 
-describe("AutomationRecoveryService", () => {
+describe("AutomationInvocationService retries", () => {
   it("spends a claimed attempt after admission denial and records failure only after the claim", async () => {
-    const { deps, service } = recoveryHarness();
+    const { deps, service } = invocationHarness();
     deps.isAuthorized.mockResolvedValue(false);
     expect(await service.retryDue(500)).toBe(1);
     expect(deps.store.getRetriesToSettle).toHaveBeenCalledWith(500, 25);
@@ -332,7 +312,7 @@ describe("AutomationRecoveryService", () => {
   it.each([false, true])(
     "does not record an attempt after a lost claim; withdrawn=%s",
     async (withdrawn) => {
-      const { deps, service } = recoveryHarness();
+      const { deps, service } = invocationHarness();
       deps.isAuthorized.mockResolvedValue(false);
       deps.store.claimRetry.mockResolvedValue(null);
       deps.store.failWithdrawnRetry.mockResolvedValue(withdrawn);
@@ -344,7 +324,7 @@ describe("AutomationRecoveryService", () => {
   );
 
   it("resolves fresh attribution and provider routing before claiming against the admitted grants version", async () => {
-    const { deps, service } = recoveryHarness();
+    const { deps, service } = invocationHarness();
     deps.store.getById.mockResolvedValue({ ...automation, owner_team_id: "team-1" });
     deps.teams.getById.mockResolvedValue({ id: "team-1", grantsVersion: 7 });
     expect(await service.retryDue(500)).toBe(1);
@@ -364,14 +344,16 @@ describe("AutomationRecoveryService", () => {
   });
 
   it("counts a claimed launch failure even if accounting also fails", async () => {
-    const { deps, service } = recoveryHarness();
+    const { deps, service } = invocationHarness();
     deps.launcher.launch.mockImplementation(async (_automation, child) => {
       child.status = "failed";
     });
     deps.failures.applyInvocationOutcome.mockRejectedValue(new Error("D1 unavailable"));
     expect(await service.retryDue(500)).toBe(1);
   });
+});
 
+describe("AutomationRecoveryService", () => {
   it("recovers timed-out siblings and finalizes accounting when the orphan query fails", async () => {
     const { deps, service } = recoveryHarness();
     deps.store.getOrphanedStartingRuns.mockRejectedValue(new Error("orphan query unavailable"));
@@ -403,6 +385,5 @@ describe("AutomationRecoveryService", () => {
       ["auto-1", "missed-failure"],
       ["auto-2", "missed-reset"],
     ]);
-    expect(deps.store.claimRetry).not.toHaveBeenCalled();
   });
 });

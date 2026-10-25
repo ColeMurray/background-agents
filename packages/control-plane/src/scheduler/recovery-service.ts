@@ -2,28 +2,10 @@ import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import {
   EXECUTION_TIMEOUT_FAILURE_REASON,
   type AutomationStore,
-  type AutomationRow,
   type AutomationRunRow,
-  type TeamGrantsVersion,
 } from "../db/automation-store";
-import type { TeamStore } from "../db/teams";
-import type { AutomationExecutionAuthorizationRequest } from "../automation/authorization-guard";
-import type { GitHubEnrichment } from "../session/identity";
 import type { Logger } from "../logger";
-import { AutomationExecutionUnauthorizedError } from "./contracts";
-import {
-  executionDenialReason,
-  ownerExecutionPrincipal,
-  type LaunchAdmissionOperations,
-} from "./launch-admission";
-import type { LaunchTargetSnapshot, RunLaunch } from "./launch-contracts";
-import {
-  AUTOMATION_LAUNCH_CONCURRENCY,
-  MAX_RELAUNCHES_PER_TICK,
-  DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS,
-  forEachConcurrently,
-} from "./launch-policy";
-import type { AutomationRunLaunchService } from "./run-launch-service";
+import { DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS } from "./launch-policy";
 import type { AutomationFailureService } from "./failure-service";
 
 /** Threshold for detecting orphaned "starting" runs (5 minutes). */
@@ -39,185 +21,25 @@ const RECOVERY_SWEEP_LIMIT = 50;
  */
 const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** A retry admitted for relaunch, with the team grants version its claim must still match. */
-interface AdmittedRetry {
-  automation: AutomationRow;
-  launch: RunLaunch;
-  teamGrantsVersion?: TeamGrantsVersion;
-}
-
 export interface AutomationRecoveryServiceDeps {
   store: Pick<
     AutomationStore,
     | "bulkFailRunningRuns"
     | "bulkFailStartingRuns"
-    | "claimRetry"
-    | "failWithdrawnRetry"
-    | "getById"
     | "getOrphanedStartingRuns"
-    | "getRetriesToSettle"
     | "getRunsPastExecutionDeadline"
     | "getStaleFailureResetCandidates"
     | "getUncountedFailedInvocations"
-    | "resolveCanonicalOwner"
   >;
-  teams: Pick<TeamStore, "getById">;
-  isAuthorized(request: AutomationExecutionAuthorizationRequest): Promise<boolean>;
-  admission: LaunchAdmissionOperations;
-  resolveScmEnrichment(userId: string): Promise<GitHubEnrichment | null>;
-  launcher: Pick<AutomationRunLaunchService, "launch" | "recordFailure">;
   failures: Pick<AutomationFailureService, "applyInvocationOutcome">;
   executionDeadlineMs(settings: SandboxSettings): number;
   nowMs(): number;
   log: Logger;
 }
 
-/** Recover abandoned runs and missed accounting, and separately admit and claim due retries. */
+/** Repair abandoned runs and missed invocation accounting. */
 export class AutomationRecoveryService {
   constructor(private readonly deps: AutomationRecoveryServiceDeps) {}
-
-  /**
-   * Relaunch scheduled runs whose launch failed before their prompt was sent, once their wait
-   * is over, and fail waiting runs their automation no longer allows. Returns claimed attempts,
-   * including attempts that fail admission or launch.
-   */
-  async retryDue(nowMs: number): Promise<number> {
-    const store = this.deps.store;
-    let pending: AutomationRunRow[];
-    try {
-      pending = await store.getRetriesToSettle(nowMs, MAX_RELAUNCHES_PER_TICK);
-    } catch (e) {
-      this.deps.log.error("Retry sweep failed to query waiting runs", {
-        event: "scheduler.retry.query_error",
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return 0;
-    }
-
-    // Claim each run as its launch begins, so one queued behind slower launches is not
-    // already aging toward the orphan sweep.
-    let relaunched = 0;
-    await forEachConcurrently(pending, AUTOMATION_LAUNCH_CONCURRENCY, async (run) => {
-      try {
-        if (await this.relaunch(run)) {
-          relaunched++;
-        } else if (await store.failWithdrawnRetry(run.id, this.deps.nowMs())) {
-          // Paused, deleted, or its retry limit lowered while it waited: its last failure stands.
-          await this.deps.failures.applyInvocationOutcome(run.automation_id, run.invocation_id);
-        }
-      } catch (e) {
-        this.deps.log.error("Retry sweep failed to settle a waiting run", {
-          event: "scheduler.retry.settle_error",
-          automation_id: run.automation_id,
-          run_id: run.id,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
-    });
-    return relaunched;
-  }
-
-  /**
-   * Admit a due retry, claim it, and launch it. As for a first launch, admission comes first
-   * and the claim is conditional on the team grants it checked. A denial or a failed admission
-   * still claims the run, spending this attempt on it. Returns whether this tick claimed it.
-   */
-  private async relaunch(run: AutomationRunRow): Promise<boolean> {
-    const store = this.deps.store;
-    let admitted: AdmittedRetry | undefined;
-    let admissionError: unknown;
-    try {
-      admitted = await this.admitRetry(run);
-    } catch (e) {
-      admissionError = e;
-    }
-    // Refused when another tick took it, its automation withdrew it, or its team's grants
-    // changed after the check; in that last case the next tick admits it again.
-    const claimed = await store.claimRetry(run, this.deps.nowMs(), admitted?.teamGrantsVersion);
-    if (!claimed) return false;
-
-    this.deps.log.info("Relaunching automation run", {
-      event: "scheduler.retry_launch",
-      automation_id: claimed.automation_id,
-      invocation_id: claimed.invocation_id,
-      run_id: claimed.id,
-      attempt: claimed.attempt,
-    });
-    if (admitted) {
-      await this.deps.launcher.launch(admitted.automation, claimed, admitted.launch);
-    } else {
-      await this.deps.launcher.recordFailure(claimed, admissionError, true);
-    }
-    if (claimed.status === "running" || claimed.status === "retrying") return true;
-    try {
-      await this.deps.failures.applyInvocationOutcome(claimed.automation_id, claimed.invocation_id);
-    } catch (e) {
-      this.deps.log.error("Failed to apply invocation accounting after a retry", {
-        event: "scheduler.fail_track_error",
-        automation_id: claimed.automation_id,
-        invocation_id: claimed.invocation_id,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    return true;
-  }
-
-  /**
-   * Admit a retry afresh for the run's own target: the owner must still be authorized to use
-   * it, a team's grants must still cover it, and provider routing resolves again. A denial
-   * throws, recording the run as unauthorized; the next scheduled firing then pauses the
-   * automation if the denial persists.
-   */
-  private async admitRetry(run: AutomationRunRow): Promise<AdmittedRetry> {
-    const store = this.deps.store;
-    const stored = await store.getById(run.automation_id);
-    if (!stored) throw new Error("Automation was deleted before its retry launched");
-    const automation = await store.resolveCanonicalOwner(stored);
-    const executionPrincipal = ownerExecutionPrincipal(automation);
-    if (!executionPrincipal) throw new AutomationExecutionUnauthorizedError();
-    const authorization: AutomationExecutionAuthorizationRequest = {
-      automationId: automation.id,
-      executionUserId: executionPrincipal.platformUserId,
-      requiresRepositoryUse: run.repo_owner !== null,
-      requiresEnvironmentUse: run.environment_id !== null,
-    };
-    const team =
-      automation.owner_team_id === null
-        ? null
-        : await this.deps.teams.getById(automation.owner_team_id);
-    if (!(await this.deps.isAuthorized(authorization))) {
-      throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
-    }
-    let targets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
-    let teamGrantsVersion: TeamGrantsVersion | undefined;
-    if (automation.owner_team_id !== null) {
-      if (!team) throw new AutomationExecutionUnauthorizedError();
-      const admittedTargets = await this.deps.admission.resolveTeamTargets(automation, team, [run]);
-      if (!admittedTargets)
-        throw new AutomationExecutionUnauthorizedError("target_team_missing_grant");
-      ({ targets, teamGrantsVersion } = admittedTargets);
-    }
-    let launchError: unknown;
-    try {
-      executionPrincipal.scmEnrichment = await this.deps.resolveScmEnrichment(
-        executionPrincipal.platformUserId
-      );
-    } catch (error) {
-      launchError = error;
-    }
-    return {
-      automation,
-      teamGrantsVersion,
-      launch: {
-        executionPrincipal,
-        authorization,
-        providerAuthSnapshot: await this.deps.admission.resolveProviderAuth(automation),
-        targets,
-        launchError,
-        retryable: true,
-      },
-    };
-  }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────
 
