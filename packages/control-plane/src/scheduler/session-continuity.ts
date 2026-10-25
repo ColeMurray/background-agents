@@ -17,10 +17,14 @@ import type { Env } from "../types";
 import {
   enqueueSerializedSessionPrompt,
   enqueueSessionPrompt,
+  firstPromptRequestId,
   isSessionPromptRequestQueued,
   type SchedulerPromptRequest,
   type SessionPromptOutcome,
 } from "./session-prompt";
+
+// Preserve callers while the prompt ID helper moves alongside prompt transport.
+export { firstPromptRequestId } from "./session-prompt";
 
 /**
  * How long after a session's last activity that slack thread replies, and webhook
@@ -37,14 +41,6 @@ const SESSION_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const HELD_PROMPT_RETRY_MS = 2 * 60 * 1000;
 const HELD_PROMPT_SWEEP_LIMIT = 50;
-
-/**
- * The clientRequestId of a run's own first prompt: the session can say whether it took
- * it, independently of the launching worker recording that.
- */
-export function firstPromptRequestId(runId: string): string {
-  return `automation-run:${runId}`;
-}
 
 export interface SteeringActor {
   userId: string;

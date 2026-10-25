@@ -12,7 +12,7 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
-import { createLogger, type Logger } from "../logger";
+import type { Logger } from "../logger";
 import type * as AuthCrypto from "../auth/crypto";
 import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
 import { normalizeWebhookEvent, type SlackAutomationEvent } from "@open-inspect/shared/triggers";
@@ -123,9 +123,9 @@ const { resolveManagedSkills } = await import("../session/skill-resolution");
 const {
   AutomationExecutionUnauthorizedError,
   EXECUTION_DEADLINE_GRACE_MS,
-  Scheduler,
   SessionFollowUpRefusedError,
 } = await import("./scheduler");
+const { AutomationSlackService } = await import("./slack-service");
 const { createScheduler: createAutomationScheduler } = await import("./factory");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
@@ -445,7 +445,7 @@ function createEnv(
   } as Env;
 }
 
-function createScheduler(env = createEnv()): InstanceType<typeof Scheduler> {
+function createScheduler(env = createEnv()): ReturnType<typeof createAutomationScheduler> {
   return createAutomationScheduler(env.DB, env, createTestBackgroundTasks());
 }
 
@@ -2748,18 +2748,10 @@ describe("Scheduler", () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
         mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { env, stub } = threadContextEnv();
-        const scheduler = new Scheduler({
-          db: env.DB,
-          env,
-          backgroundJobs: createTestBackgroundTasks(),
-          log: createLogger("scheduler", {}, "error"),
-          slack: {
-            getSessionInstructions: vi.fn().mockResolvedValue(undefined),
-            contextWithThread: vi.fn().mockRejectedValue(new Error("prompt provider failed")),
-            notifySkip: vi.fn(),
-            notifyCompletion: vi.fn(),
-          },
-        });
+        const contextWithThread = vi
+          .spyOn(AutomationSlackService.prototype, "contextWithThread")
+          .mockRejectedValueOnce(new Error("prompt provider failed"));
+        const scheduler = createAutomationScheduler(env.DB, env, createTestBackgroundTasks());
 
         expect(await scheduler.event(makeSlackEvent())).toEqual({
           triggered: 1,
@@ -2767,6 +2759,7 @@ describe("Scheduler", () => {
           steered: 0,
           invocationIds: [expect.any(String)],
         });
+        contextWithThread.mockRestore();
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
