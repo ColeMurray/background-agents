@@ -508,8 +508,16 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     const client = this.clients.get(ws);
     if (client) return client.authorizationExpiresAt;
     if (parsed.kind !== "client" || !parsed.wsId) return null;
-    const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
-    return mapping?.authorization_expires_at ?? null;
+    try {
+      const mapping = this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
+      return mapping?.authorization_expires_at ?? null;
+    } catch (error) {
+      this.log.warn("Client authorization lease lookup failed", {
+        ws_id: parsed.wsId,
+        error: error instanceof Error ? error : String(error),
+      });
+      return null;
+    }
   }
 
   private rejectExpiredAuthorization(ws: SessionWebSocket, parsed: ConnectionClassification): void {

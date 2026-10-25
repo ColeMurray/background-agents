@@ -1407,6 +1407,30 @@ describe("SessionWebSocketManagerImpl", () => {
   });
 
   describe("getConnectedClientCount", () => {
+    it("treats failed persisted lease reads as unauthenticated and still counts cached clients", () => {
+      const { manager, sockets, mockRepo, log } = createManager();
+      const recoveredWs = createFakeWebSocket();
+      const cachedWs = createFakeWebSocket();
+      sockets.set(recoveredWs, ["wsid:ws-recovered"]);
+      sockets.set(cachedWs, ["wsid:ws-cached"]);
+      manager.setClient(cachedWs, createClientInfo());
+      const error = new Error("lease read failed");
+      vi.spyOn(
+        mockRepo.repo as unknown as WsClientMappingRepository,
+        "getWsClientMapping"
+      ).mockImplementation(() => {
+        throw error;
+      });
+
+      expect(manager.isClientAuthenticated(recoveredWs)).toBe(false);
+      expect(manager.getConnectedClientCount()).toBe(1);
+      expect(recoveredWs.close).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith("Client authorization lease lookup failed", {
+        ws_id: "ws-recovered",
+        error,
+      });
+    });
+
     it("counts only authorized non-sandbox open sockets", () => {
       const { manager, sockets } = createManager();
       const clientWs1 = createFakeWebSocket();

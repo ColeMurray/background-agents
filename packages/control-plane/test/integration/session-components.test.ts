@@ -12,6 +12,7 @@ import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
 import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
+import { WsClientMappingRepository } from "../../src/session/ws-client-mapping-repository";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
   closeWebSocket,
@@ -179,7 +180,7 @@ describe("createSessionRuntime", () => {
     expect(error).toMatch(/MODAL_API_SECRET/);
   });
 
-  it.each(["unsubscribed", "authorized", "expired"] as const)(
+  it.each(["unsubscribed", "authorized", "expired", "lookup_failed"] as const)(
     "checks the %s client lease before extending an unattended sandbox after rehydration",
     async (lease) => {
       const name = `inactivity-client-${crypto.randomUUID()}`;
@@ -208,14 +209,25 @@ describe("createSessionRuntime", () => {
           const shutdown = vi
             .spyOn(SandboxShutdownCoordinator.prototype, "requestShutdown")
             .mockResolvedValue("owned");
+          const readMapping = WsClientMappingRepository.prototype.getWsClientMapping;
+          const lookup = vi.spyOn(WsClientMappingRepository.prototype, "getWsClientMapping");
+          if (lease === "lookup_failed") {
+            lookup
+              .mockImplementation(() => {
+                throw new Error("lease read failed");
+              })
+              // The expiry sweep succeeds; the subsequent client-count lookup fails.
+              .mockImplementationOnce(readMapping);
+          }
           try {
-            await runtime.internals.lifecycleManager.handleAlarm();
+            await runtime.server.onScheduledDeadline();
             if (lease === "authorized") {
               expect(shutdown).not.toHaveBeenCalled();
             } else {
               expect(shutdown).toHaveBeenCalledExactlyOnceWith("inactivity_timeout");
             }
           } finally {
+            lookup.mockRestore();
             shutdown.mockRestore();
           }
         });
