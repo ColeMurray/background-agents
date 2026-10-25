@@ -35,6 +35,22 @@ export const createAutomationBodySchema = createAutomationRequestSchema.extend({
 
 export type CreateAutomationBody = z.infer<typeof createAutomationBodySchema>;
 
+/**
+ * A consumed one-shot disables immediately; launch retries require a live recurring schedule.
+ * Zero remains valid for clients sending back a configuration they read.
+ */
+export function validateAutomationRetries(
+  triggerType: AutomationTriggerType,
+  scheduleOnceAt: number | null | undefined,
+  maxRetries: number | undefined
+): string | null {
+  if (!maxRetries) return null;
+  if (triggerType !== "schedule") {
+    return "maxRetries above 0 is only valid for schedule triggers";
+  }
+  return scheduleOnceAt != null ? "One-shot schedules do not support launch retries" : null;
+}
+
 export function formatAutomationRequestError(parseError: z.ZodError, rawBody: unknown): string {
   const issue = parseError.issues[0];
   const field = issue?.path[0];

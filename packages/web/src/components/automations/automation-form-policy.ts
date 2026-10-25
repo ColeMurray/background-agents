@@ -441,12 +441,12 @@ function buildSubmissionValues({
   if (draft.trigger.type === "schedule") {
     return {
       ...values,
-      maxRetries: draft.trigger.maxRetries,
+      maxRetries: draft.trigger.scheduleMode === "recurring" ? draft.trigger.maxRetries : 0,
       ...(draft.trigger.scheduleMode === "once"
         ? { scheduleOnceAt }
         : { scheduleCron: draft.trigger.scheduleCron }),
       scheduleTz:
-        draft.trigger.scheduleMode === "once"
+        mode === "create" && draft.trigger.scheduleMode === "once"
           ? Intl.DateTimeFormat().resolvedOptions().timeZone
           : draft.trigger.scheduleTz,
     };

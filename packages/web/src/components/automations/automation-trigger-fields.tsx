@@ -201,7 +201,7 @@ export function AutomationTriggerConfigurationFields({
               <FieldDescription>
                 Choose a future time in your local timezone (
                 {Intl.DateTimeFormat().resolvedOptions().timeZone}). This automation runs once.
-                Pause or delete it before it fires to cancel.
+                Pause or delete it before it fires to cancel. Failed starts are not retried.
               </FieldDescription>
             </div>
           ) : (
@@ -254,33 +254,35 @@ export function AutomationTriggerConfigurationFields({
               </div>
             </>
           )}
-          <div>
-            <label
-              htmlFor="automation-max-retries"
-              className="block text-sm font-medium text-foreground mb-1.5"
-            >
-              Retries
-            </label>
-            <Select
-              value={String(value.maxRetries)}
-              onValueChange={(maxRetries) => update({ maxRetries: Number(maxRetries) })}
-            >
-              <SelectTrigger id="automation-max-retries" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {RETRY_OPTIONS.map((retries) => (
-                  <SelectItem key={retries} value={String(retries)}>
-                    {retries === 0 ? "No retries" : `Up to ${retries}`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <FieldDescription>
-              When a scheduled run fails to start, try again after a short wait that doubles each
-              time. Manual runs, and runs that fail after they start, are not retried.
-            </FieldDescription>
-          </div>
+          {value.scheduleMode === "recurring" && (
+            <div>
+              <label
+                htmlFor="automation-max-retries"
+                className="block text-sm font-medium text-foreground mb-1.5"
+              >
+                Retries
+              </label>
+              <Select
+                value={String(value.maxRetries)}
+                onValueChange={(maxRetries) => update({ maxRetries: Number(maxRetries) })}
+              >
+                <SelectTrigger id="automation-max-retries" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RETRY_OPTIONS.map((retries) => (
+                    <SelectItem key={retries} value={String(retries)}>
+                      {retries === 0 ? "No retries" : `Up to ${retries}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                When a scheduled run fails to start, try again after a short wait that doubles each
+                time. Manual runs, and runs that fail after they start, are not retried.
+              </FieldDescription>
+            </div>
+          )}
         </>
       )}
 

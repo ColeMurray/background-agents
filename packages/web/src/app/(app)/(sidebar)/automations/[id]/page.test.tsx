@@ -153,6 +153,7 @@ describe("AutomationDetailPage one-shot time", () => {
     await renderPage();
     const expected = format.call(new Date(automation.scheduleOnceAt), undefined, {
       timeZone: "UTC",
+      timeZoneName: "short",
     });
     expect(screen.getByText(`Once at ${expected}`)).toBeInTheDocument();
     expect(screen.getByText("UTC")).toBeInTheDocument();

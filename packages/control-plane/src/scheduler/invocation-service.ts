@@ -384,7 +384,10 @@ export class AutomationInvocationService {
       targets: launchTargets,
       instructionsOverride,
       launchError: attributionError,
-      retryable: source === "schedule" && (automation.max_retries ?? 0) > 0,
+      retryable:
+        source === "schedule" &&
+        automation.schedule_once_at == null &&
+        (automation.max_retries ?? 0) > 0,
     };
     await forEachConcurrently(launchCandidates, AUTOMATION_LAUNCH_CONCURRENCY, (child) =>
       this.deps.launcher.launch(automation, child, launch)

@@ -169,6 +169,18 @@ describe("automation create route", () => {
       );
     });
 
+    it("rejects launch retries on a one-shot schedule", async () => {
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", {
+        body: { ...body, scheduleOnceAt: Date.now() + 3_600_000, maxRetries: 2 },
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "One-shot schedules do not support launch retries",
+      });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
     it.each([
       { scheduleOnceAt: Date.now() - 1 },
       { scheduleOnceAt: "tomorrow" },

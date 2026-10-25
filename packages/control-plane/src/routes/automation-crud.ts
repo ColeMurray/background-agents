@@ -91,6 +91,7 @@ import {
   resolveEnvironmentSelection,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
+  validateAutomationRetries,
   validateTargetCounts,
   validateTeamExecutor,
 } from "./automation-validation";
@@ -99,12 +100,6 @@ import { authorizeSessionTarget } from "./session-target-authorization";
 import { authorizeTeamRepositories } from "./workspace-repository-authorization";
 
 const logger = createLogger("router:automations");
-
-/**
- * Only scheduled firings retry a failed launch, so other triggers cannot allow any. Zero, the
- * default, stays accepted so a client can send back an automation it read.
- */
-const MAX_RETRIES_SCHEDULE_ONLY_ERROR = "maxRetries above 0 is only valid for schedule triggers";
 
 async function handleCreateAutomation(
   request: Request,
@@ -216,6 +211,9 @@ async function handleCreateAutomation(
 
   const isSchedule = triggerType === "schedule";
 
+  const retryError = validateAutomationRetries(triggerType, body.scheduleOnceAt, body.maxRetries);
+  if (retryError) return error(retryError, 400);
+
   // Schedule-specific validation
   if (isSchedule) {
     if (body.scheduleOnceAt !== undefined) {
@@ -242,7 +240,6 @@ async function handleCreateAutomation(
     ) {
       return error("Schedule fields are only valid for schedule triggers", 400);
     }
-    if (body.maxRetries) return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
   }
 
   const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
@@ -506,9 +503,12 @@ async function handleUpdateAutomation(
   if (body.triggerConfig !== undefined && existingTriggerType === "schedule") {
     return error("Cannot set triggerConfig on schedule automations", 400);
   }
-  if (body.maxRetries && existingTriggerType !== "schedule") {
-    return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
-  }
+  const retryError = validateAutomationRetries(
+    existingTriggerType,
+    existing.schedule_once_at,
+    body.maxRetries
+  );
+  if (retryError) return error(retryError, 400);
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
   if (body.providerSelections !== undefined) {

@@ -188,6 +188,22 @@ describe("automation read, update, and delete routes", () => {
       expect(mockStore.bindAutomationUpdate.mock.calls[0][1]).not.toHaveProperty("next_run_at");
     });
 
+    it("rejects adding launch retries to an existing one-shot", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: Date.now() + 3_600_000,
+      });
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { maxRetries: 2 },
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "One-shot schedules do not support launch retries",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+
     it("does not re-arm a settled one-shot when the form re-sends its timestamp", async () => {
       const at = Date.now() - 60_000;
       mockStore.getById.mockResolvedValue({
