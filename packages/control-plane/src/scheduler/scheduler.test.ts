@@ -1789,6 +1789,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledTimes(1);
@@ -1815,6 +1816,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
     });
@@ -1842,6 +1844,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-timeout");
@@ -1894,6 +1897,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b", "orphan-c"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledExactlyOnceWith("inv-batch");
@@ -2058,11 +2062,13 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
 
@@ -2102,6 +2108,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       const bulkTrackErrorCall = errorSpy.mock.calls.find(

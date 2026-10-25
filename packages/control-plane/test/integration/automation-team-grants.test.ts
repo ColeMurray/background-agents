@@ -217,6 +217,59 @@ describe("automation current team repository grants (integration)", () => {
     }
   );
 
+  it("refuses a retry's relaunch when grants are revoked after its coverage check", async () => {
+    await seedGrant(TEAM, WEB);
+    const row = await saveAutomation("schedule");
+    await env.DB.prepare("UPDATE automations SET max_retries = 2 WHERE id = ?").bind(row.id).run();
+    vi.mocked(sessionInitialization.initializeSession).mockRejectedValueOnce(
+      new Error("D1 unavailable")
+    );
+    const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
+      submit() {},
+    });
+    await scheduler.tick();
+    const [waiting] = await fetchRuns(row.id);
+    expect(waiting).toMatchObject({ status: "retrying", attempt: 1 });
+    const makeDue = () =>
+      env.DB.prepare("UPDATE automation_runs SET retry_at = ? WHERE id = ?")
+        .bind(Date.now() - 1, waiting!.id)
+        .run();
+    await makeDue();
+    const covers = TeamRepositoryGrantStore.prototype.covers;
+    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementationOnce(async function (
+      this: TeamRepositoryGrantStore,
+      teamId,
+      repoIds
+    ) {
+      const covered = await covers.call(this, teamId, repoIds);
+      // A concurrent revocation lands between coverage and the guarded claim.
+      await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = ?").bind(TEAM).run();
+      await env.DB.prepare("UPDATE teams SET grants_version = grants_version + 1 WHERE id = ?")
+        .bind(TEAM)
+        .run();
+      return covered;
+    });
+
+    await scheduler.tick();
+
+    expect(await fetchRuns(row.id)).toEqual([
+      expect.objectContaining({ status: "retrying", attempt: 1 }),
+    ]);
+    expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+
+    // Still due, so the next tick admits it against current grants and records the denial.
+    await scheduler.tick();
+
+    expect(await fetchRuns(row.id)).toEqual([
+      expect.objectContaining({
+        status: "unauthorized",
+        attempt: 2,
+        failure_reason: "target_team_missing_grant",
+      }),
+    ]);
+    expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+  });
+
   it("rechecks all environment grants against current resolved member IDs", async () => {
     await seedGrant(TEAM, WEB);
     await seedGrant(TEAM, API);

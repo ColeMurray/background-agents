@@ -50,6 +50,7 @@ import {
   type InvocationOverlapScope,
   type AutomationRepositoryInsert,
   type AutomationEnvironmentRow,
+  type TeamGrantsVersion,
 } from "../db/automation-store";
 import {
   AutomationModelProviderAuthStore,
@@ -422,6 +423,13 @@ interface RunLaunch {
   retryable: boolean;
 }
 
+/** A retry admitted for relaunch, with the team grants version its claim must still match. */
+interface AdmittedRetry {
+  automation: AutomationRow;
+  launch: RunLaunch;
+  teamGrantsVersion?: TeamGrantsVersion;
+}
+
 /** The automation owner as an unattended firing's execution principal; null without an owner. */
 function ownerExecutionPrincipal(automation: AutomationRow): ExecutionPrincipal | null {
   return automation.user_id
@@ -652,15 +660,13 @@ export class Scheduler {
 
     const launchCandidates = children.filter((child) => child.status === "starting");
     let launchTargets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
-    let teamGrantsVersion: { teamId: string; version: number } | undefined;
+    let teamGrantsVersion: TeamGrantsVersion | undefined;
     if (automation.owner_team_id !== null) {
       if (!team) return { outcome: "unauthorized", reason: "execution_authorization_denied" };
-      // Snapshot the grants version before checking coverage; the guarded insert
-      // refuses admission if grants change in between.
-      teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
-      const admittedTargets = await this.admitTeamTargets(automation, team.id, launchCandidates);
-      if (!admittedTargets) return { outcome: "unauthorized", reason: "target_team_missing_grant" };
-      launchTargets = admittedTargets;
+      // The guarded insert refuses admission if grants change after coverage is checked.
+      const admitted = await this.admitTeamTargets(automation, team, launchCandidates);
+      if (!admitted) return { outcome: "unauthorized", reason: "target_team_missing_grant" };
+      ({ targets: launchTargets, teamGrantsVersion } = admitted);
     }
     // Resolve provider routing before admission, alongside the already-built
     // target children. Together these values are the immutable launch snapshot
@@ -1137,10 +1143,8 @@ export class Scheduler {
     let relaunched = 0;
     await forEachConcurrently(pending, AUTOMATION_LAUNCH_CONCURRENCY, async (run) => {
       try {
-        const retry = await store.claimRetry(run, Date.now());
-        if (retry) {
+        if (await this.relaunch(store, run)) {
           relaunched++;
-          await this.relaunch(store, retry);
         } else if (await store.failWithdrawnRetry(run.id, Date.now())) {
           // Paused, deleted, or its retry limit lowered while it waited: its last failure stands.
           await this.applyInvocationAccounting(store, run.automation_id, run.invocation_id);
@@ -1157,33 +1161,48 @@ export class Scheduler {
     return relaunched;
   }
 
-  /** Launch a claimed retry, admitted afresh as its scheduled firing would be now. */
-  private async relaunch(store: AutomationStore, run: AutomationRunRow): Promise<void> {
+  /**
+   * Admit a due retry, claim it, and launch it. As for a first launch, admission comes first
+   * and the claim is conditional on the team grants it checked. A denial or a failed admission
+   * still claims the run, spending this attempt on it. Returns whether this tick claimed it.
+   */
+  private async relaunch(store: AutomationStore, run: AutomationRunRow): Promise<boolean> {
+    let admitted: AdmittedRetry | undefined;
+    let admissionError: unknown;
+    try {
+      admitted = await this.admitRetry(store, run);
+    } catch (e) {
+      admissionError = e;
+    }
+    // Refused when another tick took it, its automation withdrew it, or its team's grants
+    // changed after the check; in that last case the next tick admits it again.
+    const claimed = await store.claimRetry(run, Date.now(), admitted?.teamGrantsVersion);
+    if (!claimed) return false;
+
     this.log.info("Relaunching automation run", {
       event: "scheduler.retry_launch",
-      automation_id: run.automation_id,
-      invocation_id: run.invocation_id,
-      run_id: run.id,
-      attempt: run.attempt,
+      automation_id: claimed.automation_id,
+      invocation_id: claimed.invocation_id,
+      run_id: claimed.id,
+      attempt: claimed.attempt,
     });
-    try {
-      const { automation, launch } = await this.admitRetry(store, run);
-      await this.launchRun(store, automation, run, launch);
-    } catch (e) {
-      // Admission itself failed, before any session was claimed.
-      await this.recordLaunchFailure(store, run, e, true);
+    if (admitted) {
+      await this.launchRun(store, admitted.automation, claimed, admitted.launch);
+    } else {
+      await this.recordLaunchFailure(store, claimed, admissionError, true);
     }
-    if (run.status === "running" || run.status === "retrying") return;
+    if (claimed.status === "running" || claimed.status === "retrying") return true;
     try {
-      await this.applyInvocationAccounting(store, run.automation_id, run.invocation_id);
+      await this.applyInvocationAccounting(store, claimed.automation_id, claimed.invocation_id);
     } catch (e) {
       this.log.error("Failed to apply invocation accounting after a retry", {
         event: "scheduler.fail_track_error",
-        automation_id: run.automation_id,
-        invocation_id: run.invocation_id,
+        automation_id: claimed.automation_id,
+        invocation_id: claimed.invocation_id,
         error: e instanceof Error ? e.message : String(e),
       });
     }
+    return true;
   }
 
   /**
@@ -1192,10 +1211,7 @@ export class Scheduler {
    * throws, recording the run as unauthorized; the next scheduled firing then pauses the
    * automation if the denial persists.
    */
-  private async admitRetry(
-    store: AutomationStore,
-    run: AutomationRunRow
-  ): Promise<{ automation: AutomationRow; launch: RunLaunch }> {
+  private async admitRetry(store: AutomationStore, run: AutomationRunRow): Promise<AdmittedRetry> {
     const stored = await store.getById(run.automation_id);
     if (!stored) throw new Error("Automation was deleted before its retry launched");
     const automation = await store.resolveCanonicalOwner(stored);
@@ -1215,12 +1231,13 @@ export class Scheduler {
       throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
     }
     let targets: ReadonlyMap<string, LaunchTargetSnapshot> = new Map();
+    let teamGrantsVersion: TeamGrantsVersion | undefined;
     if (automation.owner_team_id !== null) {
       if (!team) throw new AutomationExecutionUnauthorizedError();
-      const admittedTargets = await this.admitTeamTargets(automation, team.id, [run]);
+      const admittedTargets = await this.admitTeamTargets(automation, team, [run]);
       if (!admittedTargets)
         throw new AutomationExecutionUnauthorizedError("target_team_missing_grant");
-      targets = admittedTargets;
+      ({ targets, teamGrantsVersion } = admittedTargets);
     }
     let launchError: unknown;
     try {
@@ -1232,6 +1249,7 @@ export class Scheduler {
     }
     return {
       automation,
+      teamGrantsVersion,
       launch: {
         executionPrincipal,
         authorization,
@@ -1312,7 +1330,8 @@ export class Scheduler {
         await store.bulkFailStartingRuns(
           orphaned.map((r) => r.id),
           "session_creation_timeout",
-          now
+          now,
+          now - ORPHAN_THRESHOLD_MS
         );
         recoveredRuns.push(...orphaned);
       } catch (e) {
@@ -1330,7 +1349,8 @@ export class Scheduler {
         await store.bulkFailRunningRuns(
           timedOut.map((r) => r.id),
           EXECUTION_TIMEOUT_FAILURE_REASON,
-          now
+          now,
+          this.executionDeadlineMs(DEPLOYMENT_DEFAULT_SANDBOX_SETTINGS)
         );
         recoveredRuns.push(...timedOut);
       } catch (e) {
@@ -2147,18 +2167,26 @@ export class Scheduler {
     return snapshots;
   }
 
-  /** A team automation's launch targets, or null when the team's grants do not cover them. */
+  /**
+   * A team automation's launch targets, with the grants version snapshotted before their
+   * coverage was checked; the caller's admission write must be conditional on that version.
+   * Null when the team's grants do not cover the targets.
+   */
   private async admitTeamTargets(
     automation: AutomationRow,
-    teamId: string,
+    team: Team,
     candidates: readonly AutomationRunRow[]
-  ): Promise<ReadonlyMap<string, LaunchTargetSnapshot> | null> {
+  ): Promise<{
+    targets: ReadonlyMap<string, LaunchTargetSnapshot>;
+    teamGrantsVersion: TeamGrantsVersion;
+  } | null> {
+    const teamGrantsVersion = { teamId: team.id, version: team.grantsVersion };
     const targets = await this.resolveLaunchTargets(automation, candidates);
     const covered = await new TeamRepositoryGrantStore(this.db).covers(
-      teamId,
+      team.id,
       launchTargetRepoIds(targets)
     );
-    return covered ? targets : null;
+    return covered ? { targets, teamGrantsVersion } : null;
   }
 
   private async resolveProviderAuthSnapshot(

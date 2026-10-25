@@ -143,6 +143,32 @@ const RETRY_ALLOWED_SQL = `EXISTS (
   WHERE a.id = automation_runs.automation_id AND a.enabled = 1 AND a.deleted_at IS NULL
     AND automation_runs.attempt <= a.max_retries)`;
 
+/** A run the orphan sweep may fail; binds the creation cutoff. */
+const ORPHANED_STARTING_RUN_PREDICATE = "status = 'starting' AND created_at < ?";
+
+/** A run the deadline sweep may fail; binds `now`, then `now` less the default deadline. */
+const RUN_PAST_EXECUTION_DEADLINE_PREDICATE =
+  "status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
+
+/** Team grants version a launch's targets were authorized against. */
+export interface TeamGrantsVersion {
+  teamId: string;
+  version: number;
+}
+
+/** Refuses an admission write once the team's grants changed from the version checked. */
+function teamGrantsGuard(grants: TeamGrantsVersion | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  return grants
+    ? {
+        sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
+        params: [grants.teamId, grants.version],
+      }
+    : { sql: "", params: [] };
+}
+
 export interface AutomationRunRow {
   id: string;
   automation_id: string;
@@ -1165,19 +1191,44 @@ export class AutomationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async bulkFailStartingRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
-    await this.bulkFailRunsInStatus(runIds, "starting", reason, completedAt);
-  }
-
-  async bulkFailRunningRuns(runIds: string[], reason: string, completedAt: number): Promise<void> {
-    await this.bulkFailRunsInStatus(runIds, "running", reason, completedAt);
-  }
-
-  private async bulkFailRunsInStatus(
+  /**
+   * Fail runs the orphan sweep read, if each is still the stuck attempt it read: still
+   * `starting` and created before `createdBefore`. A retry relaunched since then restamped
+   * created_at, so it is left alone.
+   */
+  async bulkFailStartingRuns(
     runIds: string[],
-    status: "starting" | "running",
     reason: string,
-    completedAt: number
+    completedAt: number,
+    createdBefore: number
+  ): Promise<void> {
+    await this.bulkFailRuns(runIds, reason, completedAt, ORPHANED_STARTING_RUN_PREDICATE, [
+      createdBefore,
+    ]);
+  }
+
+  /**
+   * Fail runs the deadline sweep read, if each is still past its deadline as of `completedAt`
+   * (see {@link getRunsPastExecutionDeadline}); a retry relaunched since then has a new one.
+   */
+  async bulkFailRunningRuns(
+    runIds: string[],
+    reason: string,
+    completedAt: number,
+    defaultDeadlineMs: number
+  ): Promise<void> {
+    await this.bulkFailRuns(runIds, reason, completedAt, RUN_PAST_EXECUTION_DEADLINE_PREDICATE, [
+      completedAt,
+      completedAt - defaultDeadlineMs,
+    ]);
+  }
+
+  private async bulkFailRuns(
+    runIds: string[],
+    reason: string,
+    completedAt: number,
+    predicate: string,
+    predicateParams: unknown[]
   ): Promise<void> {
     if (runIds.length === 0) return;
     const placeholders = runIds.map(() => "?").join(", ");
@@ -1185,9 +1236,9 @@ export class AutomationStore {
       .prepare(
         `UPDATE automation_runs
          SET status = 'failed', failure_reason = ?, completed_at = ?
-         WHERE id IN (${placeholders}) AND status = ?`
+         WHERE id IN (${placeholders}) AND ${predicate}`
       )
-      .bind(reason, completedAt, ...runIds, status)
+      .bind(reason, completedAt, ...runIds, ...predicateParams)
       .run();
   }
 
@@ -1244,20 +1295,26 @@ export class AutomationStore {
 
   /**
    * Take a due retry for relaunch. One claim wins across concurrent ticks, none once the
-   * automation no longer allows it, and none from a copy of `run` read before another tick
-   * relaunched it. Restamps created_at so the orphan sweep times this attempt rather than the
-   * original firing.
+   * automation no longer allows it, none from a copy of `run` read before another tick
+   * relaunched it, and none once the team's grants changed from `teamGrantsVersion`, as for a
+   * first launch's admission. Restamps created_at so the orphan sweep times this attempt rather
+   * than the original firing.
    */
-  async claimRetry(run: AutomationRunRow, now: number): Promise<AutomationRunRow | null> {
+  async claimRetry(
+    run: AutomationRunRow,
+    now: number,
+    teamGrantsVersion?: TeamGrantsVersion
+  ): Promise<AutomationRunRow | null> {
+    const grantsGuard = teamGrantsGuard(teamGrantsVersion);
     const result = await this.db
       .prepare(
         `UPDATE automation_runs
          SET status = 'starting', attempt = attempt + 1, retry_at = NULL, failure_reason = NULL,
              created_at = ?
          WHERE id = ? AND status = 'retrying' AND attempt = ? AND retry_at <= ?
-           AND ${RETRY_ALLOWED_SQL}`
+           AND ${RETRY_ALLOWED_SQL} ${grantsGuard.sql}`
       )
-      .bind(now, run.id, run.attempt ?? 1, now)
+      .bind(now, run.id, run.attempt ?? 1, now, ...grantsGuard.params)
       .run();
     if ((result.meta?.changes ?? 0) === 0) return null;
     return {
@@ -1366,17 +1423,11 @@ export class AutomationStore {
     overlapScope: InvocationOverlapScope;
     advanceSchedule?: ScheduleAdvance;
     /** Team grants version the targets were authorized against; a change refuses admission. */
-    teamGrantsVersion?: { teamId: string; version: number };
+    teamGrantsVersion?: TeamGrantsVersion;
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
-    const grants = params.teamGrantsVersion;
-    const grantsGuard = grants
-      ? {
-          sql: "AND EXISTS (SELECT 1 FROM teams WHERE id = ? AND grants_version = ?)",
-          params: [grants.teamId, grants.version],
-        }
-      : { sql: "", params: [] };
+    const grantsGuard = teamGrantsGuard(params.teamGrantsVersion);
     const statements: SqlStatement[] = [];
     statements.push(
       this.db
@@ -2073,15 +2124,13 @@ export class AutomationStore {
   // Backed by partial indexes (migrations 0024 and 0079); `status` must stay a
   // literal, not a bound param, or the planner skips the index and full-scans
   // automation_runs.
-  static readonly ORPHANED_STARTING_RUNS_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'starting' AND created_at < ?";
+  static readonly ORPHANED_STARTING_RUNS_SQL = `SELECT * FROM automation_runs WHERE ${ORPHANED_STARTING_RUN_PREDICATE}`;
   // A 'running' row without a deadline predates migration 0079, or was claimed
   // by a worker that does (the migration applies before that worker is
   // replaced). Those rows are held to the deployment-default deadline measured
   // from started_at; leaving them out would let one lost callback keep the run
   // 'running', and its automation blocked, forever.
-  static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL =
-    "SELECT * FROM automation_runs WHERE status = 'running' AND (execution_deadline_at < ? OR (execution_deadline_at IS NULL AND started_at < ?))";
+  static readonly RUNS_PAST_EXECUTION_DEADLINE_SQL = `SELECT * FROM automation_runs WHERE ${RUN_PAST_EXECUTION_DEADLINE_PREDICATE}`;
 
   async getOrphanedStartingRuns(thresholdMs: number, limit: number): Promise<AutomationRunRow[]> {
     const cutoff = Date.now() - thresholdMs;
