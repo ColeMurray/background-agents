@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeWebhookEvent, type SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import {
+  normalizeWebhookEvent,
+  type LinearAutomationEvent,
+  type SentryAutomationEvent,
+  type SlackAutomationEvent,
+} from "@open-inspect/shared/triggers";
 import type { AutomationRow } from "../db/automation-store";
 import { createLogger } from "../logger";
+import { AutomationEventHandler, type AutomationEventHandlerDeps } from "./event-handler";
 import { SessionFollowUpRefusedError } from "./contracts";
 import { handleSlackEvent, type SlackEventDeps } from "./slack-events";
 import { handleWebhookEvent, type WebhookEventDeps } from "./webhook-events";
@@ -256,5 +262,155 @@ describe("Webhook receipt ownership", () => {
     );
     expect(deps.store.acceptFollowUpReceipt).not.toHaveBeenCalled();
     expect(deps.store.releaseFollowUpReceipt).not.toHaveBeenCalled();
+  });
+});
+
+function eventHandlerHarness() {
+  const deps = {
+    store: {
+      getById: vi.fn<AutomationEventHandlerDeps["store"]["getById"]>(),
+      getAutomationsForEvent:
+        vi.fn<AutomationEventHandlerDeps["store"]["getAutomationsForEvent"]>(),
+    },
+    invocations: {
+      start: vi.fn<AutomationEventHandlerDeps["invocations"]["start"]>().mockResolvedValue({
+        outcome: "started",
+        invocationId: "inv-1",
+        runs: [],
+        launched: 1,
+      }),
+    },
+    admitGitHubEvent: vi.fn<AutomationEventHandlerDeps["admitGitHubEvent"]>(),
+    slack: slackHarness(),
+    webhook: webhookHarness(),
+    log,
+  } satisfies AutomationEventHandlerDeps;
+  return { deps, handler: new AutomationEventHandler(deps) };
+}
+
+const linearEvent: LinearAutomationEvent = {
+  source: "linear",
+  eventType: "issue.created",
+  repoOwner: "acme",
+  repoName: "api",
+  triggerKey: "linear:delivery-1",
+  concurrencyKey: "linear:issue-1",
+  contextBlock: "Linear issue context",
+  meta: {},
+  linearStatus: "Todo",
+};
+const sentryEvent: SentryAutomationEvent = {
+  source: "sentry",
+  eventType: "issue.created",
+  automationId: automation.id,
+  triggerKey: "sentry:delivery-1",
+  concurrencyKey: "sentry:issue-1",
+  contextBlock: "Sentry issue context",
+  meta: {},
+  sentryProject: "backend",
+  sentryLevel: "error",
+};
+const sentryAutomation: AutomationRow = {
+  ...automation,
+  trigger_type: "sentry",
+  event_type: sentryEvent.eventType,
+  trigger_config: JSON.stringify({
+    conditions: [{ type: "sentry_project", operator: "any_of", value: ["backend"] }],
+  }),
+};
+
+describe("AutomationEventHandler source dispatch", () => {
+  it("looks up Linear candidates by repository and event type, admitting only condition matches", async () => {
+    const { deps, handler } = eventHandlerHarness();
+    const matching = {
+      ...automation,
+      trigger_type: "linear_event",
+      event_type: linearEvent.eventType,
+      trigger_config: JSON.stringify({
+        conditions: [{ type: "linear_status", operator: "any_of", value: ["Todo"] }],
+      }),
+    };
+    deps.store.getAutomationsForEvent.mockResolvedValue([
+      {
+        ...matching,
+        id: "unmatched",
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "linear_status", operator: "any_of", value: ["Done"] }],
+        }),
+      },
+      matching,
+    ]);
+
+    await expect(handler.handle(linearEvent)).resolves.toEqual({
+      triggered: 1,
+      skipped: 0,
+      steered: 0,
+      invocationIds: ["inv-1"],
+    });
+    expect(deps.store.getAutomationsForEvent).toHaveBeenCalledExactlyOnceWith(
+      "acme",
+      "api",
+      "linear_event",
+      "issue.created"
+    );
+    expect(deps.store.getById).not.toHaveBeenCalled();
+    expect(deps.invocations.start).toHaveBeenCalledExactlyOnceWith({
+      automation: matching,
+      source: "event",
+      triggerKey: linearEvent.triggerKey,
+      concurrencyKey: linearEvent.concurrencyKey,
+      triggerMetadata: null,
+      instructionsOverride: expect.stringContaining(linearEvent.contextBlock),
+    });
+  });
+
+  it.each([
+    { name: "missing", candidate: null },
+    { name: "disabled", candidate: { ...sentryAutomation, enabled: 0 } },
+    { name: "deleted", candidate: { ...sentryAutomation, deleted_at: 100 } },
+    { name: "wrong event type", candidate: { ...sentryAutomation, event_type: "issue.resolved" } },
+  ])("does not admit a Sentry automation that is $name", async ({ candidate }) => {
+    const { deps, handler } = eventHandlerHarness();
+    deps.store.getById.mockResolvedValue(candidate);
+
+    await expect(handler.handle(sentryEvent)).resolves.toEqual({
+      triggered: 0,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [],
+    });
+    expect(deps.store.getById).toHaveBeenCalledExactlyOnceWith(automation.id);
+    expect(deps.store.getAutomationsForEvent).not.toHaveBeenCalled();
+    expect(deps.invocations.start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { project: "backend", admitted: true },
+    { project: "frontend", admitted: false },
+  ])("gates Sentry admission on project conditions: $project", async ({ project, admitted }) => {
+    const { deps, handler } = eventHandlerHarness();
+    deps.store.getById.mockResolvedValue(sentryAutomation);
+    const event = { ...sentryEvent, sentryProject: project };
+
+    await expect(handler.handle(event)).resolves.toEqual({
+      triggered: admitted ? 1 : 0,
+      skipped: 0,
+      steered: 0,
+      invocationIds: admitted ? ["inv-1"] : [],
+    });
+    expect(deps.store.getById).toHaveBeenCalledExactlyOnceWith(automation.id);
+    expect(deps.store.getAutomationsForEvent).not.toHaveBeenCalled();
+    if (admitted) {
+      expect(deps.invocations.start).toHaveBeenCalledExactlyOnceWith({
+        automation: sentryAutomation,
+        source: "event",
+        triggerKey: event.triggerKey,
+        concurrencyKey: event.concurrencyKey,
+        triggerMetadata: null,
+        instructionsOverride: expect.stringContaining(event.contextBlock),
+      });
+    } else {
+      expect(deps.invocations.start).not.toHaveBeenCalled();
+    }
   });
 });
