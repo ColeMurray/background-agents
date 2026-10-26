@@ -57,7 +57,10 @@
     "minimatch": "^10.2.5",
     "undici": "^7.29.1",
     "sharp": "^0.35.5",
-    "postcss-selector-parser": "^7.1.6"
+    "postcss-selector-parser": "^7.1.6",
+    "@node-minify/core": {
+      "glob": "^10.5.0"
+    }
   },
   "lint-staged": {
     "*.{ts,tsx}": [
@@ -67,7 +70,7 @@
     "*.{js,jsx,json,md,yaml,yml,css}": [
       "prettier --write"
     ],
-    "packages/{daytona-infra,e2b-infra,modal-infra,sandbox-runtime,sandbox-images}/**/*.py": [
+    "packages/{boat-infra,daytona-infra,e2b-infra,modal-infra,sandbox-runtime,sandbox-images}/**/*.py": [
       "ruff check --fix",
       "ruff format"
     ]

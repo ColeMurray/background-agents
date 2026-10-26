@@ -1,3 +1,4 @@
+import type { FirstPromptInput } from "./launch-contracts";
 import type {
   AutomationCallbackContext,
   SlackCallbackContext,
@@ -89,4 +90,47 @@ async function rejectionCode(response: Response): Promise<string | null> {
     typeof payload.code === "string"
     ? payload.code
     : null;
+}
+
+/** Queue an automation's first prompt under its stable run request ID. */
+export async function enqueueAutomationFirstPrompt(
+  env: Env,
+  input: FirstPromptInput
+): Promise<void> {
+  const { sessionId, automation, runId, executionPrincipal, instructionsOverride } = input;
+  const callbackContext: AutomationCallbackContext = {
+    source: "automation",
+    automationId: automation.id,
+    runId,
+    automationName: automation.name,
+  };
+
+  const outcome = await enqueueSessionPrompt(
+    env,
+    sessionId,
+    {
+      content: instructionsOverride ?? automation.instructions,
+      authorId: executionPrincipal.participantUserId,
+      canonicalUserId: executionPrincipal.platformUserId,
+      source: "automation",
+      callbackContext,
+      clientRequestId: firstPromptRequestId(runId),
+    },
+    { trace_id: `automation:${automation.id}`, request_id: runId }
+  );
+  if (outcome.kind === "rejected") {
+    throw new Error(`Prompt enqueue failed with status ${outcome.status}`);
+  }
+  if (outcome.kind === "request_id_taken") {
+    throw new Error("Prompt enqueue was refused: its request id names another prompt");
+  }
+  // A duplicate means the session already queued this run's first prompt.
+}
+
+/**
+ * The clientRequestId of a run's own first prompt: the session can say whether it took
+ * it, independently of the launching worker recording that.
+ */
+export function firstPromptRequestId(runId: string): string {
+  return `automation-run:${runId}`;
 }

@@ -1,7 +1,7 @@
 /**
  * Pure builders for the scheduler → slack-bot notifications (run completion and
  * concurrency-skip). Kept free of Durable Object state so they can be unit
- * tested directly; the scheduler signs the result (HMAC over the JSON
+ * tested directly; AutomationSlackService signs the result (HMAC over the JSON
  * body) and POSTs it via the optional `SLACK_BOT` Fetcher.
  *
  * Returning `null` from either builder is the explicit signal to skip the bot
@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import type { AutomationRunRow } from "../db/automation-store";
 
 const slackRunMetadataSchema = z.object({
   channel: z.string(),
@@ -42,8 +43,8 @@ export function parseSlackTriggerMetadata(raw: string | null | undefined): Slack
 /**
  * Run result fields the bot needs to post the agent's final response into the
  * triggering message's thread. The scheduler sources `sessionId`/`messageId`
- * (and success/error) from the run-complete callback and repo/model from the
- * automation row.
+ * (and success/error) from the run-complete callback, the repository from the
+ * run's firing-time snapshot, and the model from the automation row.
  */
 export interface SlackCompletionContext {
   sessionId: string;
@@ -92,4 +93,15 @@ export function buildSlackSkipNotification(params: {
     user: params.actorUserId,
     threadTs: params.threadTs ?? params.ts,
   };
+}
+
+/**
+ * Repository label for user-facing surfaces (Slack), read from the run's
+ * firing-time snapshot — the automation row's selection may have been edited
+ * since this run started.
+ */
+export function formatRunRepositoryLabel(
+  run: Pick<AutomationRunRow, "repo_owner" | "repo_name"> | null | undefined
+): string {
+  return run?.repo_owner && run?.repo_name ? `${run.repo_owner}/${run.repo_name}` : "No repository";
 }

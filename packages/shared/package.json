@@ -250,13 +250,13 @@
     "generate:memory-contract": "UPDATE_MEMORY_CONTRACT=1 vitest run src/memory-tools.test.ts"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@octokit/webhooks-types": "^7.6.1",
     "cron-parser": "^5.10.2",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   }
 }

@@ -1,8 +1,8 @@
 # Sandbox images
 
-One build-only package owns platform dependencies for Modal, Daytona, E2B, and Vercel. Provider
-adapters own native creation, uploads, snapshots, restores, provider overlays, and cleanup. The
-control plane does not consume build hashes or dependency inventories.
+One build-only package owns platform dependencies for Modal, Daytona, E2B, Vercel, and Boat.
+Provider adapters own native creation, uploads, snapshots, restores, provider overlays, and cleanup.
+The control plane does not consume build hashes or dependency inventories.
 
 ## Update dependencies
 
@@ -23,8 +23,10 @@ Runtime environments are calculated directly from target configuration. Ordinary
 resolve new dependency versions. To intentionally refresh distro packages, change `osRefresh`. OS
 packages remain substrate-dependent; builds are not byte-for-byte attestations.
 
-Each image owns its launch paths. Infrastructure Python is private and is not activated as the
-project virtualenv. Existing images retain their legacy launch environment.
+Each image owns its launch paths: its own `/opt/openinspect/bin` heads the launch `PATH`, so a
+substrate's preinstalled copy of a pinned tool cannot shadow the verified one. Infrastructure Python
+is private and is not activated as the project virtualenv. Existing images retain their legacy
+launch environment.
 
 ## Build
 
@@ -37,6 +39,7 @@ credentials and create billable temporary sandboxes; they do not deploy the cont
 | Daytona  | DAYTONA_API_KEY, DAYTONA_BASE_SNAPSHOT name prefix; optional API URL/target |
 | E2B      | E2B_API_KEY, E2B_TEMPLATE_ID name prefix; optional API URL/CPU/memory       |
 | Vercel   | VERCEL_TOKEN, VERCEL_PROJECT_ID; optional team/API URL                      |
+| Boat     | BOAT_API_KEY, BOAT_BASE_SNAPSHOT name prefix; optional API URL/org/size     |
 
 ```bash
 npm run sandbox:images -- build --provider e2b --output /tmp/e2b-image.json
@@ -59,9 +62,9 @@ failure. Failed native artifacts remain for investigation and explicit cleanup.
 
 Terraform uses the shared build-input hash for change detection and the existing provider bindings
 for artifact selection. Modal passes the verified native image ID to function deployment; other
-providers use verified template/snapshot references. E2B and Daytona now build distinct names before
-switching their existing Worker bindings. The configured E2B/Daytona base names act as prefixes.
-Vercel retains its existing manual-reference override.
+providers use verified template/snapshot references. E2B, Daytona and Boat build distinct names
+before switching their existing Worker bindings. The configured E2B/Daytona/Boat base names act as
+prefixes. Vercel retains its existing manual-reference override.
 
 For manual deployment, use the returned reference in the provider's existing configuration; do not
 assume building alone redirects sessions. Roll back using a previous known-good configuration and
@@ -96,8 +99,9 @@ docker build --platform linux/amd64 -f packages/sandbox-images/Dockerfile -t ope
 docker run --rm --platform linux/amd64 openinspect-image-contract
 ```
 
-For Amazon Linux, use a Vercel bundle and `--build-arg BASE_IMAGE=amazonlinux:2023`. Native-amd64 CI
-tests both OS families. Chromium may trap under amd64 emulation on ARM Macs. Reference-container
-success does not replace provider-native verification.
+For Amazon Linux, use a Vercel bundle and `--build-arg BASE_IMAGE=amazonlinux:2023`; for Boat's
+Ubuntu substrate, a Boat bundle and `--build-arg BASE_IMAGE=ubuntu:24.04`. Native-amd64 CI tests
+every OS family. Chromium may trap under amd64 emulation on ARM Macs. Reference-container success
+does not replace provider-native verification.
 
 See [design scope](../../docs/plans/sandbox-image-dependency-consolidation.md).

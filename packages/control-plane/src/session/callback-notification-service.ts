@@ -22,7 +22,7 @@ import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
-import type { AutomationRunCompletion } from "../scheduler/scheduler";
+import type { AutomationRunCompletion } from "../scheduler/contracts";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.

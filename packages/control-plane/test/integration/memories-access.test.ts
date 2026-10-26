@@ -2,7 +2,7 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
@@ -277,7 +277,7 @@ describe("memory shared-scope authorization", () => {
       .bind(repo.repoOwner, repo.repoName, repo.repoId)
       .run();
     await createRecord(repoPartition);
-    await new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).tick();
+    await createScheduler(env.DB, createCloudflareEnv(env), { submit() {} }).tick();
     const session = await env.DB.prepare(
       "SELECT id FROM sessions WHERE automation_id = 'memory-auto'"
     ).first<{ id: string }>();

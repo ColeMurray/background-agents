@@ -9,6 +9,7 @@ import type {
   SessionInboxPage,
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
+import type { SessionInboxFilters } from "@/lib/session-inbox-api";
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import { item, page, snapshot } from "@/test/session-inbox-fixtures";
 import { reconcileSessionReadState } from "@/lib/session-read-state";
@@ -25,8 +26,10 @@ const teamContext = vi.hoisted(() => ({
   activeTeamId: null as string | null,
   scope: undefined as "workspace" | "all" | undefined,
   canListAllTeams: false,
+  loading: false,
+  provisionalFilters: null as SessionInboxFilters | null,
 }));
-vi.mock("./use-active-team", () => ({ useActiveTeam: () => ({ ...teamContext, loading: false }) }));
+vi.mock("./use-active-team", () => ({ useActiveTeam: () => teamContext }));
 
 vi.mock("@/lib/session-read-state", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -92,9 +95,22 @@ afterEach(() => {
   vi.useRealTimers();
   teamContext.activeTeamId = null;
   teamContext.scope = undefined;
+  teamContext.loading = false;
+  teamContext.provisionalFilters = null;
 });
 
 describe("useSidebarSessions", () => {
+  it("fetches provisional filters while teams are loading", async () => {
+    teamContext.loading = true;
+    teamContext.provisionalFilters = { teamIds: ["team_alpha"] };
+    const fetcher = vi.fn(async () => snapshot());
+    const { result } = renderHook(useSidebarSessions, { wrapper: wrapper(fetcher) });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/api/sessions/inbox?teamIds%5B%5D=team_alpha");
+    expect(result.current.finished.map(({ id }) => id)).toEqual(["finished"]);
+  });
+
   it("uses the selected team for snapshot and cursor requests and drops retained pages on switches", async () => {
     teamContext.activeTeamId = "team_alpha";
     const fetcher = vi.fn(async (key: string) =>

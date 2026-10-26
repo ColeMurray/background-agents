@@ -5,7 +5,6 @@ import {
 } from "@open-inspect/shared/triggers";
 import {
   AutomationStore,
-  allRunsUnauthorized,
   parseAutomationTriggerFields,
   type AutomationRepositoryInsert,
   type AutomationRow,
@@ -14,8 +13,9 @@ import { GitHubAutomationStore } from "../db/github-automation-store";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { SchedulerEventResult } from "../scheduler/scheduler";
-import { firingInvocationId, type StartInvocationResult } from "../scheduler/invocation-outcome";
+import type { SchedulerEventResult } from "../scheduler/contracts";
+import type { StartInvocationResult } from "../scheduler/invocation-outcome";
+import { recordEventLaunch, logEventResult } from "../scheduler/event-outcome";
 
 export const MAX_GITHUB_ADMISSION_ATTEMPTS = 3;
 
@@ -41,9 +41,12 @@ export async function admitGitHubEvent(
   const github = new GitHubAutomationStore(db);
   const grants = new TeamRepositoryGrantStore(db);
   const candidates = await github.getGitHubAutomationsForEvent(event.repositoryId, event.eventType);
-  let triggered = 0;
-  let skipped = 0;
-  const invocationIds: string[] = [];
+  const summary: SchedulerEventResult = {
+    triggered: 0,
+    skipped: 0,
+    steered: 0,
+    invocationIds: [],
+  };
   let retryFailure: GitHubAdmissionRetryError | undefined;
 
   candidateLoop: for (const candidate of candidates) {
@@ -56,7 +59,7 @@ export async function admitGitHubEvent(
         automation.trigger_type !== "github_event" ||
         automation.event_type !== event.eventType
       ) {
-        skipped++;
+        summary.skipped++;
         continue candidateLoop;
       }
       let conditions;
@@ -67,21 +70,21 @@ export async function admitGitHubEvent(
           event: "scheduler.invalid_trigger_fields",
           automation_id: automation.id,
         });
-        skipped++;
+        summary.skipped++;
         continue candidateLoop;
       }
       if (!matchesConditions(conditions, event, conditionRegistry)) continue candidateLoop;
 
       const selection = await store.getRepositoriesForAutomation(automation.id);
       if (selection.length !== 1 || selection[0].repo_id !== event.repositoryId) {
-        skipped++;
+        summary.skipped++;
         continue candidateLoop;
       }
       const uncovered =
         automation.owner_team_id !== null &&
         !(await grants.covers(automation.owner_team_id, [event.repositoryId]));
       if (uncovered && (await github.recordGitHubGrantDenied(automation.id, event))) {
-        skipped++;
+        summary.skipped++;
         continue candidateLoop;
       }
       const repositories = selection.map((repository) => ({
@@ -93,48 +96,18 @@ export async function admitGitHubEvent(
       if (result.outcome === "blocked" && result.reason === "team_grants_changed") continue;
       if (result.outcome === "unauthorized" && result.reason === "target_team_missing_grant") {
         if (await github.recordGitHubGrantDenied(automation.id, event)) {
-          skipped++;
+          summary.skipped++;
           continue candidateLoop;
         }
         // Coverage returned before the conditional denial; retry fresh admission.
         continue;
       }
-      const invocationId = firingInvocationId(result);
-      if (invocationId) invocationIds.push(invocationId);
-      switch (result.outcome) {
-        case "started":
-          if (result.launched > 0) triggered++;
-          else if (allRunsUnauthorized(result.runs)) skipped++;
-          break;
-        case "unauthorized":
-          log.warn("Skipped event automation after execution authorization denial", {
-            event: "scheduler.authorization_denied",
-            automation_id: automation.id,
-            source: "github",
-            reason_code: result.reason ?? "execution_authorization_denied",
-          });
-          skipped++;
-          break;
-        case "skipped":
-        case "blocked":
-        case "deduplicated":
-          skipped++;
-          break;
-      }
+      recordEventLaunch(summary, result, automation, event, log);
       continue candidateLoop;
     }
     retryFailure ??= new GitHubAdmissionRetryError(candidate.automation.id);
   }
   if (retryFailure) throw retryFailure;
-  log.info("Event processed", {
-    event: "scheduler.event_processed",
-    source: "github",
-    event_type: event.eventType,
-    trigger_key: event.triggerKey,
-    triggered,
-    skipped,
-    steered: 0,
-    candidates: candidates.length,
-  });
-  return { triggered, skipped, steered: 0, invocationIds };
+  logEventResult(log, event, summary, candidates.length);
+  return summary;
 }

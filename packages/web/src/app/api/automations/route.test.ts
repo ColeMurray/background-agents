@@ -87,6 +87,17 @@ describe("automations API route (POST)", () => {
     expect(controlPlaneBody()).toEqual({ ...validBody, teamId });
   });
 
+  it("forwards a one-shot timestamp without adding cron", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: {} }, { status: 201 })
+    );
+    const { scheduleCron: _cron, ...oneShot } = validBody;
+    const body = { ...oneShot, scheduleOnceAt: Date.now() + 60_000 };
+    expect((await POST(postRequest(body))).status).toBe(201);
+    expect(controlPlaneBody()).toEqual(body);
+  });
+
   it("returns 401 when the user session is missing", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
@@ -150,6 +161,17 @@ describe("automations API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent).toEqual(validBody);
+  });
+
+  it("forwards the launch retry limit", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: { id: "auto-retries" } }, { status: 201 })
+    );
+
+    await POST(postRequest({ ...validBody, maxRetries: 3 }));
+
+    expect(controlPlaneBody()).toEqual({ ...validBody, maxRetries: 3 });
   });
 
   it("allowlists provider selections while dropping hydrated provider auth", async () => {

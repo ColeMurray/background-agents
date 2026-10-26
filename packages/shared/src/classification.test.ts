@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
+  MESSAGES_CLASSIFICATION_MAX_TOKENS,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
+  buildClassificationMessagesRequest,
   callOpenAIStructured,
+  extractClassificationToolInput,
   openAiChatCompletionEnvelopeSchema,
   parseClassificationModel,
   resolveClassificationTarget,
+  type OpenAIChatTarget,
 } from "./classification";
 import { z } from "zod";
 import modelIdFixtures from "../test-fixtures/classification-model-ids.json";
@@ -13,6 +17,13 @@ import modelIdFixtures from "../test-fixtures/classification-model-ids.json";
 const SCHEMA = {
   name: "classify",
   schema: { type: "object", properties: {}, required: [], additionalProperties: false },
+};
+
+const OPENAI_TARGET: OpenAIChatTarget = {
+  protocol: "openai-chat",
+  provider: "openai",
+  apiKey: "sk-test",
+  model: "gpt-5.4-mini",
 };
 
 // Terraform's classifier_provider.tftest.hcl reads the same file, so both
@@ -130,8 +141,79 @@ describe("openAiChatCompletionEnvelopeSchema", () => {
   });
 });
 
+describe("buildClassificationMessagesRequest", () => {
+  it("preserves the caller's tool and constructs a compatible request", () => {
+    const tool = { name: "classify", description: "Choose a target", input_schema: SCHEMA.schema };
+    const request = buildClassificationMessagesRequest("claude-haiku-4-5", "prompt", tool);
+
+    expect(request).toEqual({
+      model: "claude-haiku-4-5",
+      max_tokens: MESSAGES_CLASSIFICATION_MAX_TOKENS,
+      system: "Answer by calling the classify tool exactly once. Do not reply in plain text.",
+      tools: [tool],
+      tool_choice: { type: "auto" },
+      messages: [{ role: "user", content: "prompt" }],
+    });
+    expect(request.tools[0]).toBe(tool);
+    expect(request).not.toHaveProperty("temperature");
+  });
+});
+
+describe("extractClassificationToolInput", () => {
+  it("selects the first matching tool, ignoring text and other tools", () => {
+    expect(
+      extractClassificationToolInput(
+        {
+          content: [
+            { type: "text", text: "not structured output" },
+            { type: "tool_use", name: "other", input: { wrong: true } },
+            { type: "tool_use", name: "classify", input: { first: true } },
+            { type: "tool_use", name: "classify", input: { first: false } },
+          ],
+        },
+        "classify"
+      )
+    ).toEqual({ first: true });
+  });
+
+  it.each([undefined, null, "invalid", 42, {}, { confidence: "certain" }])(
+    "leaves domain validation to the caller for %j",
+    (input) => {
+      expect(
+        extractClassificationToolInput(
+          { content: [{ type: "tool_use", name: "classify", input }] },
+          "classify"
+        )
+      ).toEqual(input);
+    }
+  );
+
+  it.each([null, {}, { content: null }, { content: [null] }, { content: [{ type: 1 }] }])(
+    "rejects a malformed envelope: %j",
+    (response) => {
+      expect(() => extractClassificationToolInput(response, "classify")).toThrow(
+        "Malformed Messages API response"
+      );
+    }
+  );
+
+  it.each([
+    { content: [] },
+    { content: [{ type: "text", text: '{"targetId":"acme/prod"}' }] },
+    { content: [{ type: "tool_use", name: "other", input: {} }] },
+    { content: [{ type: "text", name: "classify", input: {} }] },
+  ])("requires the named tool, not JSON-looking text: %j", ({ content }) => {
+    expect(() => extractClassificationToolInput({ content }, "classify")).toThrow(
+      "No classification tool_use block in Messages API response"
+    );
+  });
+});
+
 describe("callOpenAIStructured", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   function stubFetch(impl: typeof fetch) {
     const fetchMock = vi.fn(impl);
@@ -144,7 +226,7 @@ describe("callOpenAIStructured", () => {
       Response.json({ choices: [{ message: { content: '{"ok":true}' } }] })
     );
 
-    const result = await callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA);
+    const result = await callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA);
 
     expect(result).toEqual({ ok: true });
     const [url, init] = fetchMock.mock.calls[0];
@@ -169,7 +251,7 @@ describe("callOpenAIStructured", () => {
       Response.json({ choices: [{ message: { content: "{}" } }] })
     );
 
-    await callOpenAIStructured("sk-test", "gpt-6.1-sol", "prompt", SCHEMA, "low");
+    await callOpenAIStructured({ ...OPENAI_TARGET, model: "gpt-6.1-sol" }, "prompt", SCHEMA, "low");
 
     const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
     expect(body.reasoning_effort).toBe("low");
@@ -182,7 +264,7 @@ describe("callOpenAIStructured", () => {
       Response.json({ choices: [{ message: { content: "{}" } }] })
     );
 
-    await callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA);
+    await callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA);
 
     expect(timeoutSpy).toHaveBeenCalledWith(CLASSIFICATION_REQUEST_TIMEOUT_MS);
     expect(fetchMock.mock.calls[0][1]!.signal).toBe(fakeSignal);
@@ -223,15 +305,13 @@ describe("callOpenAIStructured", () => {
   ])("throws on $label", async ({ respond, message }) => {
     stubFetch(async () => respond());
 
-    await expect(callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA)).rejects.toThrow(
-      message
-    );
+    await expect(callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA)).rejects.toThrow(message);
   });
 
   it("truncates a long error body", async () => {
     stubFetch(async () => new Response("x".repeat(2000), { status: 400 }));
 
-    await expect(callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA)).rejects.toThrow(
+    await expect(callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA)).rejects.toThrow(
       `OpenAI API error 400: ${"x".repeat(500)}`
     );
   });

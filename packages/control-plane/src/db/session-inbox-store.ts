@@ -224,7 +224,7 @@ export class SessionInboxStore {
    * changed.
    */
   async markAllRead(options: InboxFilterOptions, rootSessionId?: string): Promise<number> {
-    const { sql, params } = this.eligibleSessionsCte(options);
+    const { sql, params } = this.eligibleSessionsCte(options, rootSessionId !== undefined);
     const binds = [
       ...params,
       ...(rootSessionId === undefined ? [] : [rootSessionId]),
@@ -265,10 +265,13 @@ export class SessionInboxStore {
   }
 
   /** The filtered, viewer-visible, unarchived sessions with viewer-specific unread state. */
-  private eligibleSessionsCte(options: InboxFilterOptions): { sql: string; params: unknown[] } {
+  private eligibleSessionsCte(
+    options: InboxFilterOptions,
+    materialized: boolean
+  ): { sql: string; params: unknown[] } {
     const { where, params } = buildSessionListPredicates(options);
     return {
-      sql: `eligible_sessions AS (
+      sql: `eligible_sessions AS ${materialized ? "MATERIALIZED " : ""}(
               SELECT sessions.*, ${unreadSql("sessions")} AS unread
               -- Filter before viewer joins to keep shared predicates' columns unambiguous.
               FROM (
@@ -289,7 +292,9 @@ export class SessionInboxStore {
 
   /** Build the shared visibility, effective-root, and category aggregation CTEs. */
   private inboxCtes(options: InboxFilterOptions): { sql: string; params: unknown[] } {
-    const eligible = this.eligibleSessionsCte(options);
+    // The recursive step and later CTEs reuse this set. Inlining it rescans
+    // the viewer's sessions for every re-rooted row.
+    const eligible = this.eligibleSessionsCte(options, true);
     return {
       sql: `WITH RECURSIVE ${eligible.sql},
             -- Filtering can hide an ancestor. Re-root each resulting visible subtree

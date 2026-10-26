@@ -6,6 +6,7 @@ import type { SessionMessageQueue } from "../message-queue";
 import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
+import { applySandboxRecovery } from "../sandbox-recovery";
 
 /** A prompt the lifecycle alarm interrupted; the watchdog names the cause when it has one. */
 const SANDBOX_INTERRUPTED_ERROR =
@@ -105,17 +106,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
           heartbeatLost?.reason ?? SANDBOX_INTERRUPTED_ERROR
         );
       }
-      // A lost heartbeat whose save holds the source fails the prompt but wakes
-      // nothing: the hold parks the queue until recovery, and a pending stop
-      // confirmation times out on its own.
-      if (lifecycleResult === "sandbox_terminated") {
-        await deps.executionStop.resumeAfterSandboxTermination();
-      }
-      if (bootPrompt && typeof lifecycleResult === "object" && !heartbeatLost) {
-        // The boot was for that prompt; it fails with the same words the user
-        // sees, and nothing re-drives it onto a fresh sandbox.
-        await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
-      }
+      await applySandboxRecovery(deps, bootPrompt, lifecycleResult);
       // Last, so the watchdogs have already fenced any runtime they found
       // stale: a lost queue kick is repeated only for a live runtime.
       if (lifecycleResult === "no_action") await deps.redriveIdleQueue?.();

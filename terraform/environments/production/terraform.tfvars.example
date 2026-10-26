@@ -113,6 +113,30 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # sandbox on inbound activity. Default true; set false to kill on timeout.
 # e2b_auto_pause = true
 
+# Boat
+# Only required when sandbox_provider = "boat"
+# - boat_api_key: runtime key (control-plane → Boat API, sandbox access password HMAC)
+#                 AND snapshot-build auth. Dashboard → API keys.
+# The boat-infra Terraform module builds the saved snapshot automatically;
+# boat_base_snapshot is the prefix of the name it saves (and the one fresh
+# sandboxes deploy from). 1-46 lowercase letters, digits or dashes.
+# Base prefixes oi-img and oi-img-* are reserved for prebuilt images and rejected.
+# Use a unique prefix per deployment sharing a Boat account or organization wallet
+# to avoid deleting another deployment's live base. After the Worker switches,
+# Terraform prunes exact <prefix>-<16 lowercase hex> names, retaining the deployed
+# base and the base it actually replaced, using confirmed Worker deployment history.
+# Snapshot name, API URL or organization changes trigger cleanup, not credentials alone.
+# Saving snapshots, manual names and other scopes are untouched.
+# See docs/BOAT_SANDBOX_PROVIDER.md#base-snapshot-pruning.
+boat_api_key = ""              # sensitive — runtime REST API key (also auths the build)
+boat_base_snapshot = ""        # e.g., "open-inspect"
+# boat_api_url = "https://boat.dev/api/v1"
+# boat_org = ""                # Optional organization wallet; empty uses the active one.
+#                              # Sandboxes are created private, whatever its default.
+# Machine size for sessions that request no CPU or memory; a request picks the
+# smallest size that fits it. One of small, default, large, xlarge.
+# boat_sandbox_type = "default"
+
 # =============================================================================
 # GitHub App Credentials
 # =============================================================================
@@ -304,6 +328,7 @@ nextauth_secret = ""
 # - "daytona": direct Daytona REST API integration with stop/start resume
 # - "vercel": Vercel Sandbox API with filesystem snapshot restore
 # - "e2b": direct E2B REST API integration with pause/resume
+# - "boat": direct Boat REST API integration with stop/resume (archived snapshot)
 # Select "modal-vm" for Docker-capable VMs (deployment-wide; see docs/MODAL_DOCKER.md).
 sandbox_provider = "modal"
 

@@ -478,10 +478,13 @@ describe("SessionsPage", () => {
     const { rerender } = render(<SessionsPage />);
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Loading sessions");
+    // The live status line announces loading, so the skeleton stays out of the a11y tree.
+    expect(screen.getByTestId("sessions-skeleton")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByRole("searchbox")).toBeInTheDocument();
 
     mockUseSessionDiscovery.mockReturnValue({ ...defaultHookResult, sessions: [] });
     rerender(<SessionsPage />);
+    expect(screen.queryByTestId("sessions-skeleton")).not.toBeInTheDocument();
     expect(status).toHaveTextContent("No sessions yet");
     expect(screen.getAllByText("No sessions yet")).toHaveLength(2);
     expect(screen.getAllByRole("link", { name: "New session" })).toHaveLength(2);

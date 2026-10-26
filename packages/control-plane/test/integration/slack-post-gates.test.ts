@@ -7,7 +7,7 @@ import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { createDurableObjectSessionPlatform } from "../../src/cloudflare/session-platform";
 import { createSessionRuntime } from "../../src/session/components";
 import { AutomationStore } from "../../src/db/automation-store";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, seedActiveUser } from "./helpers";
 import { makeRunRow, seedRun } from "./run-helpers";
@@ -199,6 +199,7 @@ describe("Slack outbound post gates (real D1)", () => {
       instructions: "Secret instructions",
       trigger_type: "schedule",
       schedule_cron: "0 9 * * *",
+      schedule_once_at: null,
       schedule_tz: "UTC",
       harness: "opencode",
       model: "anthropic/claude-sonnet-4-6",
@@ -222,7 +223,7 @@ describe("Slack outbound post gates (real D1)", () => {
       .run();
     const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
     const linearFetch = vi.fn();
-    const scheduler = new Scheduler(
+    const scheduler = createScheduler(
       env.DB,
       {
         ...createCloudflareEnv(env),

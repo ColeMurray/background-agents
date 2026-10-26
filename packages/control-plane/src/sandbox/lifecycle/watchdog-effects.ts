@@ -37,9 +37,8 @@ export interface WatchdogEffectsDependencies {
   canStopProviderSandbox: () => boolean;
   usesProviderManagedStop: () => boolean;
   snapshotRequiresShutdown: () => boolean;
-  recordSpawnFailure: (now: number, attemptStartedAt: number) => void;
-  /** Whether the circuit breaker would refuse a launch at `now`. */
-  isCircuitBreakerOpen: (now: number) => boolean;
+  /** Count a failed attempt; returns whether the circuit breaker is now open. */
+  recordSpawnFailure: (now: number, attemptStartedAt: number) => boolean;
   reportSandboxError: (reason: string) => void;
   triggerSnapshot: (reason: string) => Promise<void>;
   stopProviderSandboxSafely: (options: {
@@ -71,7 +70,6 @@ export async function failConnectTimeout(
     | "access"
     | "canStopProviderSandbox"
     | "recordSpawnFailure"
-    | "isCircuitBreakerOpen"
     | "reportSandboxError"
     | "stopProviderSandboxSafely"
     | "getLogger"
@@ -86,8 +84,7 @@ export async function failConnectTimeout(
     timeout_ms: timeoutMs,
   });
   deps.storage.updateSandboxStatus("failed");
-  deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-  const retriesExhausted = deps.isCircuitBreakerOpen(ctx.now);
+  const retriesExhausted = deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
   deps.access.clearAccess();
   const held = deps.shutdown.holdFailedRetainedBoot(
     "Sandbox failed to connect within the allowed time",
@@ -251,17 +248,11 @@ export async function stopForInactivity(
     | "stopProviderSandboxSafely"
     | "getLogger"
   >,
-  timeoutMs: number,
   ctx: WatchdogContext
 ): Promise<SandboxAlarmResult> {
   const ownership = await deps.shutdown.requestShutdown("inactivity_timeout");
   if (ownership !== "unmanaged") return "no_action";
 
-  deps.getLogger().info("Inactivity timeout", {
-    event: "sandbox.timeout",
-    last_activity: ctx.sandbox.last_activity,
-    timeout_ms: timeoutMs,
-  });
   // Block reconnect before retiring access or yielding to capture/stop.
   deps.storage.updateSandboxStatus("stopped");
   deps.access.clearAccess();

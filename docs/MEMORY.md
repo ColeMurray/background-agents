@@ -40,6 +40,12 @@ to proposed status. Restoring an approved record returns it to active status. A 
 does **not** archive its predecessor until approval. Concurrent edits and decisions reject stale
 revisions with HTTP 409.
 
+The management pages can select records on the current page and approve, reject, archive or restore
+them together. Each selected record is still fenced by the revision shown and authorized against its
+own scope, so a record that changed or that the caller cannot manage fails alone while the rest
+apply. Each request is bounded to stay within D1's per-invocation query limit, so the page sends
+larger selections as sequential requests. Archiving is the bulk equivalent of deleting.
+
 Sandbox tools currently authenticate a session, not an immutable prompt author. For this reason,
 automatic personal facts are disabled permanently once a session is shared or gains a collaborator,
 even if it is later made private again. Children never auto-save personal facts. A child created by
@@ -135,6 +141,7 @@ owner-only, including when the caller is another administrator.
 | `PATCH /memories/:id`                                     | Revise content; `If-Match: <currentRevisionId>` is required (428 when missing, 409 when stale).                                                                                                                                                         |
 | `GET /memories/:id/revisions`                             | Immutable revision history.                                                                                                                                                                                                                             |
 | `POST /memories/:id/{action}`                             | `approve`, `reject`, `archive`, or `restore` with `If-Match`; only `archive` and `reject` accept an optional `archiveNote`. Transitions follow `MEMORY_TRANSITIONS`.                                                                                    |
+| `POST /memories/bulk`                                     | Apply one `action` to up to `MEMORY_BULK_ACTION_MAX_RECORDS` records, each named with the `revisionId` it was reviewed at. Records are authorized and decided independently, in order; the response lists each record's outcome.                        |
 | `POST /memories/preview`                                  | Summarize the selection a new session would pin (items, sizes, omissions), without creating it. Pass `teamId` to preview a team session; the caller must be a member of the active team.                                                                |
 | `GET, PUT /memory-preferences`                            | Read/save the current user's personal inclusion default.                                                                                                                                                                                                |
 | `GET /sessions/:id/memories`                              | The pinned selection summary with per-item drift, readable with the session.                                                                                                                                                                            |

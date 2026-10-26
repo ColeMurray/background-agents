@@ -96,6 +96,11 @@ export class AuthorizationService {
     return this.store.listMembers();
   }
 
+  /** Returns one assigned workspace member, or null when absent or unassigned. */
+  async getMember(userId: string): Promise<WorkspaceMember | null> {
+    return this.store.getMember(userId);
+  }
+
   /** Replaces a member's role under actor revalidation and ownership invariants. */
   async replaceMemberRole(input: {
     targetUserId: string;

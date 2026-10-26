@@ -343,7 +343,10 @@ describe("AuditLogSettings", () => {
     hook.loading = true;
     render(<AuditLogSettings />);
 
-    expect(screen.getByText("Loading audit events...")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading audit events" })).toHaveTextContent(
+      "Loading audit events..."
+    );
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
   });
 
   it("keeps pagination mounted while loading a later page", () => {

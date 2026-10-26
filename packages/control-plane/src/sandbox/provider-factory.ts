@@ -1,8 +1,16 @@
+import {
+  createBoatRestClient,
+  DEFAULT_BOAT_API_URL,
+  isBoatMachineType,
+  type BoatMachineType,
+  type BoatRestClient,
+} from "./boat-rest-client";
 import { createModalClient } from "./client";
 import { createDaytonaRestClient, type DaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
 import type { SandboxProvider } from "./provider";
+import { createBoatProvider, type BoatSandboxProvider } from "./providers/boat-provider";
 import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/daytona-provider";
 import {
   createE2BProvider,
@@ -135,6 +143,47 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
+/**
+ * The Boat transport, shared by the session provider and the image-build
+ * resources. Only creating a sandbox needs the base snapshot; finalizing and
+ * reclaiming what an earlier configuration created must stay possible after
+ * a provider switch, when no Boat base snapshot is built any more.
+ */
+export function createBoatRestClientFromEnv(env: Env): BoatRestClient {
+  if (!env.BOAT_API_KEY) {
+    throw new Error("BOAT_API_KEY is required when SANDBOX_PROVIDER=boat");
+  }
+  return createBoatRestClient({
+    apiUrl: env.BOAT_API_URL || DEFAULT_BOAT_API_URL,
+    apiKey: env.BOAT_API_KEY,
+    org: env.BOAT_ORG?.trim() || undefined,
+  });
+}
+
+/** Machine size for a sandbox whose scope requests no CPU or memory. */
+export function resolveBoatDefaultMachineType(env: Env): BoatMachineType {
+  const defaultMachineType = env.BOAT_SANDBOX_TYPE?.trim() || "default";
+  if (!isBoatMachineType(defaultMachineType)) {
+    throw new Error("BOAT_SANDBOX_TYPE must be one of small, default, large, xlarge");
+  }
+  return defaultMachineType;
+}
+
+function createBoatProviderFromEnv(env: Env): BoatSandboxProvider {
+  if (!env.BOAT_API_KEY || !env.BOAT_BASE_SNAPSHOT) {
+    throw new Error("BOAT_API_KEY and BOAT_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=boat");
+  }
+
+  return createBoatProvider(createBoatRestClientFromEnv(env), {
+    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    sandboxAccessPasswordSecret: env.BOAT_API_KEY,
+    baseSnapshot: env.BOAT_BASE_SNAPSHOT,
+    defaultMachineType: resolveBoatDefaultMachineType(env),
+    deploymentName: env.DEPLOYMENT_NAME,
+  });
+}
+
+export function createSandboxProviderFromEnv(env: Env, backend: "boat"): BoatSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(
@@ -151,6 +200,8 @@ export function createSandboxProviderFromEnv(
   backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER)
 ): SandboxProvider {
   switch (backend) {
+    case "boat":
+      return createBoatProviderFromEnv(env);
     case "daytona":
       return createDaytonaProviderFromEnv(env);
     case "vercel":

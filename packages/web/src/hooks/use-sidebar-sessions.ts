@@ -40,6 +40,7 @@ import { subscribeSessionTitleChanges } from "@/lib/session-title-events";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
 const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
+const EMPTY_INBOX_FILTERS: SessionInboxFilters = {};
 
 export type SessionItem = SessionInboxSession;
 type SessionCreatorFilter = "all" | "mine";
@@ -211,11 +212,18 @@ function useCategoryPagination(
 
 export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
-  const { activeTeamId, scope, loading: loadingTeams, error: teamsError } = useActiveTeam();
-  const filters = useMemo(
+  const {
+    activeTeamId,
+    scope,
+    provisionalFilters,
+    loading: loadingTeams,
+    error: teamsError,
+  } = useActiveTeam();
+  const validatedFilters = useMemo(
     () => ({ teamIds: activeTeamId ? [activeTeamId] : undefined, scope }),
     [activeTeamId, scope]
   );
+  const filters = loadingTeams ? provisionalFilters : validatedFilters;
   const { fetcher, mutate: mutateCache } = useSWRConfig();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
     useState<SessionCreatorFilter | null>(null);
@@ -242,7 +250,7 @@ export function useSidebarSessions() {
   }, []);
 
   const enabled =
-    Boolean(authSession) && sessionCreatorFilter !== null && !loadingTeams && !teamsError;
+    Boolean(authSession) && sessionCreatorFilter !== null && filters !== null && !teamsError;
   const mine = sessionCreatorFilter === "mine";
   const snapshotKey = enabled ? buildSessionInboxSnapshotKey(mine, filters) : null;
   const {
@@ -284,7 +292,7 @@ export function useSidebarSessions() {
     paginationFilterIdentity,
     canonicalRootIds,
     mine,
-    filters,
+    filters ?? EMPTY_INBOX_FILTERS,
     refreshSnapshot,
     nextPageSequence
   );
@@ -294,7 +302,7 @@ export function useSidebarSessions() {
     paginationFilterIdentity,
     canonicalRootIds,
     mine,
-    filters,
+    filters ?? EMPTY_INBOX_FILTERS,
     refreshSnapshot,
     nextPageSequence
   );
@@ -304,7 +312,7 @@ export function useSidebarSessions() {
     paginationFilterIdentity,
     canonicalRootIds,
     mine,
-    filters,
+    filters ?? EMPTY_INBOX_FILTERS,
     refreshSnapshot,
     nextPageSequence
   );
@@ -537,7 +545,7 @@ export function useSidebarSessions() {
   );
 
   const handleMarkAllAttentionRead = useCallback(
-    () => markSessionInboxRead({ ...filters, mine }),
+    () => markSessionInboxRead({ ...filters, teamIds: filters?.teamIds?.slice(), mine }),
     [filters, mine]
   );
 
@@ -556,7 +564,12 @@ export function useSidebarSessions() {
   const handleMarkHierarchyRead = useCallback(
     async (rootSessionId: string) => {
       const requestSnapshotKey = snapshotKey;
-      await markSessionInboxHierarchyRead({ ...filters, mine, rootSessionId });
+      await markSessionInboxHierarchyRead({
+        ...filters,
+        teamIds: filters?.teamIds?.slice(),
+        mine,
+        rootSessionId,
+      });
       // Another scope can list children the server left unread; refetch it instead.
       if (snapshotKeyRef.current !== requestSnapshotKey) {
         await mutateCache(isSessionInboxKey);
@@ -598,7 +611,7 @@ export function useSidebarSessions() {
     finished: finishedItems.map((item) => item.rootSession),
     childrenMap,
     unreadDescendantRootIds,
-    loading: sessionCreatorFilter === null || loadingTeams || isLoading,
+    loading: sessionCreatorFilter === null || filters === null || isLoading,
     sessionsError:
       teamsError ?? snapshotError ?? categoryResults.find((result) => result.error)?.error,
     refreshSnapshot,

@@ -202,6 +202,9 @@ jobs:
       - name: Build web package
         run: npm run build -w @open-inspect/web
 
+      - name: Verify Mermaid browser isolation
+        run: npm run test:mermaid-browser -w @open-inspect/web
+
   build-docs:
     name: Build (Docs)
     runs-on: ubuntu-latest

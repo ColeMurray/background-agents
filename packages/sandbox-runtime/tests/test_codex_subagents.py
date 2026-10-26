@@ -115,6 +115,8 @@ def test_spawned_subagent_is_a_task_whose_activity_nests_under_it():
     assert (tool["isSubtask"], tool["taskCallId"], tool["childSessionId"]) == (True, TASK, CHILD)
     [step] = subagents.accept(usage(100, 10))
     assert step["tokens"]["total"] == 110
+    # Unpriced: no step cost, and no claim about the prompt's cost.
+    assert "cost" not in step and "messageCostUsd" not in step
 
     # Sub-agent text is the task result, never streamed.
     message = {"type": "agentMessage", "id": "a1", "text": "Auth is fine."}

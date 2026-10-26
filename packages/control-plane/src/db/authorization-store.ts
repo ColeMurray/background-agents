@@ -225,6 +225,22 @@ export class AuthorizationStore {
     return result.results.map(toMember);
   }
 
+  /** Loads one assigned member, or null when the user is absent or unassigned. */
+  async getMember(userId: string): Promise<WorkspaceMember | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT u.id AS user_id, u.display_name, u.email, u.suspended_at,
+                r.id AS role_id, r.key AS role_key, r.name AS role_name
+         FROM users u
+         JOIN user_role_assignments ura ON ura.user_id = u.id
+         JOIN roles r ON r.id = ura.role_id
+         WHERE u.id = ?`
+      )
+      .bind(userId)
+      .first<MemberRow>();
+    return row ? toMember(row) : null;
+  }
+
   /** Atomically revalidates the actor, preserves owner invariants, updates the role, and audits. */
   async replaceMemberRole(input: {
     targetUserId: string;

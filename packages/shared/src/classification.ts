@@ -1,11 +1,10 @@
 /**
  * Shared plumbing for the Slack and Linear bots' target classifiers.
  *
- * Both bots resolve one request target from the model id alone and, on the
- * OpenAI path, speak the same strict structured-output dialect of the Chat
- * Completions API. Only that target resolution and the OpenAI transport live
- * here; each bot keeps its own response validation, prompt, and Messages API
- * transport, which serves both Anthropic and Claude in Amazon Bedrock.
+ * Owns model resolution and protocol-level request/response handling. Each
+ * bot keeps its prompt, domain validation, and Messages API transport (Slack
+ * uses the SDK; Linear uses fetch). Provider payloads cross that boundary as
+ * unknown values, never as trusted classification results.
  */
 
 import { z } from "zod";
@@ -20,6 +19,9 @@ export const DEFAULT_CLASSIFICATION_MODEL = "claude-haiku-4-5";
  * model call can't hang message handling indefinitely.
  */
 export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 10_000;
+
+/** Output-token budget for a Messages API classification tool call. */
+export const MESSAGES_CLASSIFICATION_MAX_TOKENS = 500;
 
 /**
  * Cap on an OpenAI classification response.
@@ -45,6 +47,8 @@ export type ClassificationModel =
  */
 export interface ClassificationEnv {
   CLASSIFICATION_MODEL?: string;
+  /** OpenAI only; unset preserves the model's default effort. */
+  CLASSIFICATION_REASONING_EFFORT?: string;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
   BEDROCK_API_KEY?: string;
@@ -182,6 +186,49 @@ export const openAiChatCompletionEnvelopeSchema = z.object({
 });
 
 /**
+ * Build the Messages API request used by both SDK and fetch callers.
+ * Auto tool selection and omitted temperature support newer Claude models;
+ * text-only replies are rejected by extractClassificationToolInput.
+ * Preserve the caller's tool type so SDK callers need no conversion or cast.
+ */
+export function buildClassificationMessagesRequest<T extends { name: string }>(
+  model: string,
+  prompt: string,
+  tool: T
+) {
+  return {
+    model,
+    max_tokens: MESSAGES_CLASSIFICATION_MAX_TOKENS,
+    system: `Answer by calling the ${tool.name} tool exactly once. Do not reply in plain text.`,
+    tools: [tool],
+    tool_choice: { type: "auto" as const },
+    messages: [{ role: "user" as const, content: prompt }],
+  };
+}
+
+const messagesEnvelopeSchema = z.object({
+  content: z.array(
+    z.object({
+      type: z.string(),
+      name: z.string().optional(),
+      input: z.unknown().optional(),
+    })
+  ),
+});
+
+/** Extract the first named tool's input; the caller validates its domain schema. */
+export function extractClassificationToolInput(response: unknown, toolName: string): unknown {
+  const envelope = messagesEnvelopeSchema.safeParse(response);
+  if (!envelope.success) throw new Error("Malformed Messages API response");
+
+  const tool = envelope.data.content.find(
+    (block) => block.type === "tool_use" && block.name === toolName
+  );
+  if (!tool) throw new Error("No classification tool_use block in Messages API response");
+  return tool.input;
+}
+
+/**
  * Call OpenAI's Chat Completions API in strict structured-output mode and
  * return the parsed JSON payload.
  *
@@ -195,8 +242,7 @@ export const openAiChatCompletionEnvelopeSchema = z.object({
  * OpenAI applies the model's default effort.
  */
 export async function callOpenAIStructured(
-  apiKey: string,
-  model: string,
+  target: OpenAIChatTarget,
   prompt: string,
   schema: { name: string; schema: unknown },
   reasoningEffort?: string
@@ -205,10 +251,10 @@ export async function callOpenAIStructured(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${target.apiKey}`,
     },
     body: JSON.stringify({
-      model,
+      model: target.model,
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       max_completion_tokens: OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
       messages: [{ role: "user", content: prompt }],

@@ -13,6 +13,7 @@ The infrastructure spans multiple cloud providers:
 | **Vercel**     | Next.js Web App, optional sandbox sessions           | Native provider + Sandbox API calls |
 | **Modal**      | Optional sandbox infrastructure                      | CLI wrapper (no provider exists)    |
 | **Daytona**    | Optional sandbox snapshots                           | REST API wrapper                    |
+| **Boat**       | Optional sandbox snapshots                           | REST API wrapper                    |
 
 ## Directory Structure
 
@@ -232,6 +233,7 @@ MODAL_API_SECRET
 # Sandbox provider
 SANDBOX_PROVIDER
 SANDBOX_INACTIVITY_TIMEOUT_MS # Optional; defaults to 600000
+SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS # Optional; defaults to 120000, minimum 60000
 SANDBOX_BOOT_TIMEOUT_MS       # Optional; defaults to 1800000, must exceed 240000
 
 # Daytona (only if SANDBOX_PROVIDER=daytona)
@@ -248,6 +250,13 @@ VERCEL_SANDBOX_TEAM_ID # Optional
 VERCEL_BASE_SNAPSHOT_ID # Optional manual fallback; skips Terraform-managed snapshot builds
 VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
+
+# Boat (only if SANDBOX_PROVIDER=boat)
+BOAT_API_KEY
+BOAT_BASE_SNAPSHOT # Prefix for the Terraform-managed saved snapshot
+BOAT_API_URL       # Optional; defaults to https://boat.dev/api/v1
+BOAT_ORG           # Optional organization wallet
+BOAT_SANDBOX_TYPE  # Optional; defaults to default
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
 # Optional GitHub sign-in pair (set both or neither)
@@ -305,6 +314,15 @@ ENABLE_SERVICE_BINDINGS # Optional; defaults to true
 APP_NAME # Optional; defaults to Open-Inspect
 APP_ICON_URL
 ```
+
+### Sandbox Inactivity
+
+Set `sandbox_inactivity_timeout_ms` and `sandbox_unattended_inactivity_timeout_ms` in
+`terraform.tfvars`, or use the corresponding uppercase Actions settings above for CI deployments.
+Terraform passes them to the control-plane Worker as `SANDBOX_INACTIVITY_TIMEOUT_MS` and
+`SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS`. See
+[the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for which sessions use each
+timeout and what extends them.
 
 ## Module Reference
 
@@ -386,7 +404,7 @@ curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/health
 # Manual form: https://<workspace>[-<modal_environment_web_suffix>]--open-inspect-api-health.modal.run
 MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suffix>"
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
-# Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
+# Daytona, Vercel, E2B and Boat use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
 # 3. Verify the web deployment
 curl -I "$(terraform output -raw web_app_url)"

@@ -23,9 +23,10 @@ from typing import Any
 from .events import (
     MAX_ASSISTANT_TEXT_CHARS,
     TOKEN_FIELDS,
+    cumulative_total,
     failure_message,
-    project_usage,
     tool_call_event,
+    usage_tokens,
 )
 
 SUBAGENT_INTERRUPTED_MESSAGE = "Sub-agent interrupted"
@@ -228,12 +229,13 @@ class CodexSubagents:
     def _usage(self, agent: _Agent, usage: Any) -> list[dict[str, Any]]:
         if not agent.usage_valid:
             return []
-        # A sub-agent's only turn starts with its thread, at zero usage.
-        total, tokens = project_usage(usage, _zero_usage(), agent.total, baseline_known=True)
+        # A sub-agent's only turn starts with its thread, so its cumulative
+        # usage is the turn's.
+        total = cumulative_total(usage, agent.total)
         if total is None:
             agent.usage_valid, agent.tokens = False, None
         else:
-            agent.total, agent.tokens = total, tokens
+            agent.total, agent.tokens = total, usage_tokens(total)
         return [self._step(agent, "step_finish")] if agent.args is not None else []
 
     def _present(self, agent: _Agent, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -267,8 +269,9 @@ class CodexSubagents:
         if kind == "step_finish":
             if agent.tokens is not None:
                 event["tokens"] = agent.tokens
-            # Native turn events report tokens, not dollar costs.
-            event.update(cost=0, messageCostUsd=0, reason=agent.reason or "unknown")
+            # Sub-agent requests are not priced: an absent cost marks an
+            # unpriced step, and the prompt's cost is the parent turn's.
+            event["reason"] = agent.reason or "unknown"
         return self._nested(agent, event)
 
     def _nested(self, agent: _Agent, event: dict[str, Any]) -> dict[str, Any]:
