@@ -325,6 +325,7 @@ describe("delegated route authentication", () => {
     imageBuildFeeds.flatMap(({ path }) => [
       { path, otherStatus: 200 },
       { path, otherStatus: 503 },
+      { path, otherStatus: "rejected" as const },
     ])
   )(
     "GET /api/image-builds preserves a 401 from $path when other feeds return $otherStatus",
@@ -333,6 +334,7 @@ describe("delegated route authentication", () => {
         if (path === unauthorizedPath) {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
+        if (otherStatus === "rejected") throw new Error("Feed request failed");
         const feed = imageBuildFeeds.find((candidate) => candidate.path === path);
         if (!feed) throw new Error(`Unexpected control-plane path: ${path}`);
         return Response.json(feed.data, { status: otherStatus });
@@ -347,6 +349,25 @@ describe("delegated route authentication", () => {
       expect(vi.mocked(controlPlaneUserFetch).mock.calls.map(([path]) => path)).toEqual(
         imageBuildFeeds.map(({ path }) => path)
       );
+    }
+  );
+
+  it.each(imageBuildFeeds)(
+    "GET /api/image-builds preserves the 500 fallback when $path rejects without a 401",
+    async ({ path: rejectedPath }) => {
+      vi.mocked(controlPlaneUserFetch).mockImplementation(async (path) => {
+        if (path === rejectedPath) throw new Error("Feed request failed");
+        const feed = imageBuildFeeds.find((candidate) => candidate.path === path);
+        if (!feed) throw new Error(`Unexpected control-plane path: ${path}`);
+        return Response.json(feed.data);
+      });
+
+      const response = await getImageBuilds();
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "Failed to fetch image builds" });
+      expect(getServerAuthSession).not.toHaveBeenCalled();
+      expect(controlPlaneUserFetch).toHaveBeenCalledTimes(3);
     }
   );
 

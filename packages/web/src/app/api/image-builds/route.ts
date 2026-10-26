@@ -20,17 +20,20 @@ export async function GET() {
     const rejection = await rejectUnsupportedRepoImages();
     if (rejection) return rejection;
 
-    const [enabledResponse, enabledReposResponse, statusResponse] = await Promise.all([
+    const results = await Promise.allSettled([
       controlPlaneUserFetch("/image-builds/enabled"),
       controlPlaneUserFetch("/image-builds/enabled-repos"),
       controlPlaneUserFetch("/image-builds/status"),
     ]);
 
-    if (
-      [enabledResponse, enabledReposResponse, statusResponse].some(({ status }) => status === 401)
-    ) {
+    if (results.some((result) => result.status === "fulfilled" && result.value.status === 401)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const [enabledResponse, enabledReposResponse, statusResponse] = results.map((result) => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
 
     if (!enabledResponse.ok || !enabledReposResponse.ok || !statusResponse.ok) {
       return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 502 });
