@@ -213,7 +213,7 @@ development environment.
 - Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode and the Claude Agent SDK (the coding agent harnesses)
+- OpenCode, the Claude Agent SDK, and the pinned Codex CLI (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -286,7 +286,7 @@ When you create a session for a repo without an existing snapshot:
 5. **Start script** (`start`): Runs `.openinspect/start.sh` for runtime startup (if present)
 6. **Managed skills** (`skills`): Installs the session's managed skills into the workspace
 7. **Agent start** (`harness`): The agent harness starts (the OpenCode server, or the Claude Agent
-   staging). The bridge attaches to it and sends `ready`
+   or Codex staging). The bridge attaches to it and sends `ready`
 8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
    were waiting dispatch now
 
@@ -544,11 +544,21 @@ runs on exactly one harness, chosen at create:
   the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
   carries exactly one Anthropic credential. This is the harness that can use a connected Claude
   subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+- **Codex**: the bridge launches OpenAI's Codex CLI as `codex app-server` and speaks JSON-RPC to it
+  over stdio. It always runs the image's pinned install (`/opt/openinspect/codex/bin/codex`), never
+  whatever `codex` is in `/usr/local/bin`, which a provider such as Boat replaces at boot. A small
+  subreaper owns the process and contains everything it spawns when the harness stops it.
+  `CODEX_HOME` is a per-sandbox directory (`~/.openinspect/codex`) that never holds the OpenAI
+  credential: the bridge hands Codex `OPENAI_API_KEY` or a short-lived ChatGPT access token fetched
+  from the control plane at login, and the process does not inherit the sandbox's `OPENAI_*` or
+  `CODEX_*` variables. Codex runs OpenAI models only and refuses a model, reasoning effort, or
+  credential it cannot use instead of substituting a default. See
+  [Using OpenAI Models](OPENAI_MODELS.md).
 
-Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
-above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
-of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
-the running turn ends on both harnesses.
+All three harnesses emit the same session events (tokens, tool calls, steps, warnings), so
+everything above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports
+the outcome of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts
+queue until the running turn ends on every harness.
 
 ### What the Agent Can Do
 

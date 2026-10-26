@@ -4,7 +4,7 @@ description: Run coding agents on a schedule or in response to webhooks, Sentry 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/control-plane/src/routes/automation-crud.ts
   - packages/web/src/hooks/use-can-create-automation.ts
@@ -32,7 +32,7 @@ An automation stores a repository selection, a model, and a set of instructions 
 
 ## What an automation does
 
-An authorized, admitted firing starts an ordinary session. The session clones the configured repository, runs your instructions on the OpenCode or Claude Agent harness you chose, and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
+An authorized, admitted firing starts an ordinary session. The session clones the configured repository, runs your instructions on the harness you chose (OpenCode, Claude Agent, or Codex), and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
 
 Authorized firings follow the path below. Repeated failures pause the automation; scheduled execution authorization denial pauses it immediately instead:
 
