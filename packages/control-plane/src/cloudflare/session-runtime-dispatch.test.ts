@@ -77,22 +77,41 @@ describe("session Durable Object location hint parser", () => {
 
 describe("Cloudflare environment location hint wiring", () => {
   it.each([undefined, "", "wnam", "invalid"])(
-    "parses %s once when composing the environment",
+    "parses %s once across repeated environment composition",
     async (value) => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const stub = sessionNamespace();
-      const env = createCloudflareEnv({
+      const bindings = {
         SESSION: stub.namespace,
         SESSION_DO_LOCATION_HINT: value,
-      } as WorkerBindings);
+      } as WorkerBindings;
       const request = new Request("https://session.test/internal/state");
 
-      await env.SESSION("session-id", request);
-      await env.SESSION("another-session-id", request);
+      await createCloudflareEnv(bindings).SESSION("session-id", request);
+      await createCloudflareEnv({ ...bindings }).SESSION("another-session-id", request);
 
       const args = value === "wnam" ? [stub.id, { locationHint: value }] : [stub.id];
       expect(stub.get.mock.calls).toEqual([args, args]);
       expect(warn).toHaveBeenCalledTimes(value === "invalid" ? 1 : 0);
     }
   );
+
+  it("does not reuse a stale hint when the binding changes or is removed", async () => {
+    const stub = sessionNamespace();
+    const request = new Request("https://session.test/internal/state");
+
+    for (const value of ["weur", "wnam", undefined]) {
+      const env = createCloudflareEnv({
+        SESSION: stub.namespace,
+        SESSION_DO_LOCATION_HINT: value,
+      } as WorkerBindings);
+      await env.SESSION("session-id", request);
+    }
+
+    expect(stub.get.mock.calls).toEqual([
+      [stub.id, { locationHint: "weur" }],
+      [stub.id, { locationHint: "wnam" }],
+      [stub.id],
+    ]);
+  });
 });

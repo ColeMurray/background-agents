@@ -17,6 +17,8 @@ import {
 } from "./session-runtime-dispatch";
 
 const logger = createLogger("cloudflare-platform");
+let cachedLocationHint:
+  { raw: string | undefined; value: DurableObjectLocationHint | undefined } | undefined;
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
@@ -48,7 +50,12 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     IMAGE_BUILD_FINALIZATION_QUEUE,
     ...config
   } = bindings;
-  const locationHint = parseSessionDoLocationHint(config.SESSION_DO_LOCATION_HINT, logger);
+  // Reuse the deployment setting across requests, including its invalid-value warning.
+  const raw = config.SESSION_DO_LOCATION_HINT;
+  if (!cachedLocationHint || cachedLocationHint.raw !== raw) {
+    cachedLocationHint = { raw, value: parseSessionDoLocationHint(raw, logger) };
+  }
+  const locationHint = cachedLocationHint.value;
   const platform: Platform = {
     DB,
     SESSION: createDurableObjectSessionRuntimeDispatch(SESSION, { locationHint }),

@@ -5,6 +5,7 @@ import worker, { SessionDO } from "../../src/index";
 import type { WorkerBindings } from "../../src/cloudflare/platform";
 import { REPOS_CACHE_KEY, reposCacheIdentity } from "../../src/routes/repos";
 import { cleanD1Tables } from "./cleanup";
+import { closeWebSocket, initSession } from "./helpers";
 
 function recordingExecutionContext(): {
   context: ExecutionContext;
@@ -41,6 +42,7 @@ describe("composite Worker lifecycle boundary", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await env.REPOS_CACHE.delete(REPOS_CACHE_KEY);
   });
 
@@ -115,6 +117,31 @@ describe("composite Worker lifecycle boundary", () => {
     await expect(response.text()).resolves.toBe("Session not found");
     expect(sessionNamespace.idFromName).not.toHaveBeenCalled();
     expect(sessionNamespace.get).not.toHaveBeenCalled();
+  });
+
+  it("preserves a real WebSocket upgrade with a configured session location hint", async () => {
+    const { sessionName } = await initSession();
+    const get = vi.spyOn(env.SESSION, "get");
+    const { context } = recordingExecutionContext();
+
+    const response = await worker.fetch(
+      new Request(`https://test.local/sessions/${sessionName}/ws`, {
+        headers: { Upgrade: "websocket" },
+      }),
+      { ...env, SESSION_DO_LOCATION_HINT: "wnam" } as WorkerBindings,
+      context
+    );
+
+    const ws = response.webSocket;
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    try {
+      expect(response.status).toBe(101);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+      expect(get).toHaveBeenCalledExactlyOnceWith(expect.anything(), { locationHint: "wnam" });
+    } finally {
+      await closeWebSocket(ws!);
+    }
   });
 
   it("routes a non-upgrade WebSocket path through ordinary HTTP dispatch", async () => {
