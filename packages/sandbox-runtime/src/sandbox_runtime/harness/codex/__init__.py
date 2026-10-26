@@ -108,14 +108,14 @@ class CodexHarness:
         # record must not read as an absent one that permits unchecked adoption.
         self._turn_id: str | None = None
         self._submitting = False
-        self._turn_known = asyncio.Event()
         self._epoch = ""
         self._total: dict[str, int] = {}
         self._usage_baseline_known = True
         # Sub-agents of the running prompt.
         self._subagents: CodexSubagents | None = None
-        # Notified after each projected frame, for tool calls awaiting ownership.
-        self._frames = asyncio.Condition()
+        # Notified when the turn is known and after each projected frame, for
+        # tool calls whose ownership is not decided yet.
+        self._ownership = asyncio.Condition()
         # Account quota state outlives a turn; each turn projects into it.
         self._rate_limits = CodexRateLimits()
         self._manifest_path = config.state_dir / "openinspect-state.json"
@@ -416,7 +416,6 @@ class CodexHarness:
                 self._usage_baseline_known = False
                 self._persist()
                 self._submitting = True
-                self._turn_known.clear()
                 response = await self._client.request(
                     "turn/start",
                     {
@@ -432,7 +431,7 @@ class CodexHarness:
                     },
                 )
                 self._turn_id = response["turn"]["id"]
-                self._turn_known.set()
+                await self._ownership_changed()
                 state = CodexTurnEvents(
                     prompt.message_id,
                     self.session_id,
@@ -456,8 +455,7 @@ class CodexHarness:
                     for event in (*state.accept(frame), *subagents.accept(frame)):
                         await emit(event)
                     await self._interrupt(subagents.take_interrupts())
-                    async with self._frames:
-                        self._frames.notify_all()
+                    await self._ownership_changed()
                     if self._total != state.usage.total:
                         self._total = state.usage.total
                         self._persist()
@@ -550,11 +548,9 @@ class CodexHarness:
             raise
         finally:
             self._subagents = None
-            async with self._frames:
-                self._frames.notify_all()
             self._submitting = False
-            self._turn_known.set()
             self._turn_id = None
+            await self._ownership_changed()
             for path in paths:
                 path.unlink(missing_ok=True)
 
@@ -625,12 +621,7 @@ class CodexHarness:
                 self._token = token
                 return {"accessToken": token.access_token, "chatgptAccountId": token.account_id}
         if method == "item/tool/call":
-            if self._submitting and self._turn_id is None:
-                await asyncio.wait_for(self._turn_known.wait(), TOOL_OWNERSHIP_WAIT_SECONDS)
-            thread_id, turn_id = params.get("threadId"), params.get("turnId")
-            owned = bool(self._turn_id) and (thread_id, turn_id) == (self.session_id, self._turn_id)
-            if not owned and thread_id != self.session_id:
-                owned = await self._subagent_owns(thread_id, turn_id)
+            owned = await self._owns_tool_call(params.get("threadId"), params.get("turnId"))
             if self._tools is None or not owned:
                 raise RuntimeError("Tool request is not owned by the active turn")
             return await self._tools.call(params)
@@ -638,23 +629,28 @@ class CodexHarness:
             return {"decision": "decline"}
         raise RuntimeError("Interactive or unknown host requests are not supported")
 
-    async def _subagent_owns(self, thread_id: Any, turn_id: Any) -> bool:
-        """Whether a tool call comes from a running sub-agent turn of the active prompt."""
-        subagents = self._subagents
-        if subagents is None:
-            return False
+    async def _owns_tool_call(self, thread_id: Any, turn_id: Any) -> bool:
+        """Whether a host tool call comes from the active turn or one of its running sub-agents."""
 
-        def decided() -> bool:
-            return (
-                self._subagents is not subagents
-                or subagents.owns(thread_id, turn_id)
-                or subagents.refuses(thread_id)
-            )
+        def owner() -> bool | None:
+            # ``None`` while undecided: the call overtook what identifies its turn.
+            if self._submitting and self._turn_id is None:
+                return None
+            if self._turn_id and (thread_id, turn_id) == (self.session_id, self._turn_id):
+                return True
+            subagents = self._subagents
+            if subagents is None or thread_id == self.session_id or subagents.refuses(thread_id):
+                return False
+            return True if subagents.owns(thread_id, turn_id) else None
 
         with contextlib.suppress(TimeoutError):
-            async with asyncio.timeout(TOOL_OWNERSHIP_WAIT_SECONDS), self._frames:
-                await self._frames.wait_for(decided)
-        return self._subagents is subagents and subagents.owns(thread_id, turn_id)
+            async with asyncio.timeout(TOOL_OWNERSHIP_WAIT_SECONDS), self._ownership:
+                await self._ownership.wait_for(lambda: owner() is not None)
+        return owner() is True
+
+    async def _ownership_changed(self) -> None:
+        async with self._ownership:
+            self._ownership.notify_all()
 
     async def _interrupt(self, turns: list[tuple[str, str]]) -> None:
         """Interrupt native turns; one that already ended is rejected harmlessly."""

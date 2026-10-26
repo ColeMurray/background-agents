@@ -257,3 +257,38 @@ async def test_subagent_spend_counts_toward_the_prompts_cost(tmp_path):
     assert parent["cost"] == 0.0015 and parent["messageCostUsd"] == 0.0045
     assert outcome.message_cost_usd == 0.0045
     assert not [e for e in events if e["type"] == "warning"]
+
+
+async def test_parent_tool_call_waits_for_the_turn_to_be_known(tmp_path):
+    harness, client, queue, _ = build(tmp_path)
+    harness._tools = MagicMock(
+        call=AsyncMock(return_value={"success": True}), catalog_hash="fixture"
+    )
+    turn_started = asyncio.Event()
+    request = client.request.side_effect
+
+    async def slow_turn_start(method, params, **kwargs):
+        if method == "turn/start":
+            await turn_started.wait()
+        return await request(method, params, **kwargs)
+
+    client.request.side_effect = slow_turn_start
+    prompt = asyncio.create_task(run(harness, []))
+    await asyncio.sleep(0.05)
+    params = {"threadId": PARENT, "turnId": TURN, "namespace": "oi", "tool": "t"}
+    # The call overtakes the turn/start response that identifies its turn.
+    call = asyncio.create_task(harness._server_request("item/tool/call", params))
+    await asyncio.sleep(0.05)
+    assert not call.done()
+    turn_started.set()
+    assert await asyncio.wait_for(call, 5) == {"success": True}
+
+    with pytest.raises(RuntimeError, match="not owned"):
+        await asyncio.wait_for(
+            harness._server_request("item/tool/call", {**params, "turnId": "older-turn"}), 5
+        )
+    queue.put_nowait(completed(PARENT, TURN))
+    assert (await asyncio.wait_for(prompt, 5)).success
+    # Between prompts, nothing owns a tool call.
+    with pytest.raises(RuntimeError, match="not owned"):
+        await asyncio.wait_for(harness._server_request("item/tool/call", params), 5)
