@@ -95,6 +95,8 @@ export interface EnvConfig {
   BOAT_ORG?: string; // Optional Boat organization wallet sandboxes are billed to
   BOAT_SANDBOX_TYPE?: string; // Machine size when a session requests no resources: small, default (default), large, xlarge
 
+  SESSION_DO_LOCATION_HINT?: string; // Cloudflare placement hint for newly created session Durable Objects
+
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms; defaults to DEFAULT_INACTIVITY_CONFIG.timeoutMs
   SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS?: string; // Unattended inactivity timeout in ms; defaults to DEFAULT_INACTIVITY_CONFIG.unattendedTimeoutMs

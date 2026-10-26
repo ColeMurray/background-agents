@@ -324,6 +324,53 @@ Terraform passes them to the control-plane Worker as `SANDBOX_INACTIVITY_TIMEOUT
 [the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for which sessions use each
 timeout and what extends them.
 
+### Co-locating the request path
+
+For a Vercel web deployment, an API request travels from the browser to a Vercel edge, then to the
+web project's functions, the control-plane Worker, and D1. The edge and function regions are
+separate placements. Without Smart Placement, the Worker normally runs near its caller. Session
+requests also reach a session Durable Object, which reads and writes D1. Browser WebSockets and
+sandbox agent connections reach that object through the Worker; sandboxes run in their provider's
+locations, independently of the web functions and session objects.
+
+Two production Terraform inputs let you reduce distance along this path without changing the
+defaults:
+
+| Terraform input            | Actions repository variable | Default | Scope                                       |
+| -------------------------- | --------------------------- | ------- | ------------------------------------------- |
+| `web_serverless_region`    | `WEB_SERVERLESS_REGION`     | `iad1`  | Vercel web project functions only, not docs |
+| `session_do_location_hint` | `SESSION_DO_LOCATION_HINT`  | `""`    | New session Durable Objects                 |
+
+Set these in `terraform.tfvars`, or use the Actions repository variables for CI deployments. Choose
+a supported Vercel region near your users and D1's primary, balancing distance to each. The web
+region must match `^[a-z]{3}[0-9]$`; it has no effect when `web_platform = "cloudflare"`. Choose the
+session hint for D1's region: `wnam`, `enam`, `sam`, `weur`, `eeur`, `apac`, `oc`, `afr`, or `me`.
+An empty hint preserves automatic placement. Terraform rejects invalid values; if an invalid hint
+reaches the Worker outside Terraform, it logs a warning and ignores it rather than failing the
+request. Consider the Worker's Smart Placement separately after measuring these changes; neither
+input enables it.
+
+Apply and measure one setting at a time. A web region change takes effect only after a web redeploy
+following Terraform apply: Deploy Web pulls the updated project settings before building. A session
+hint is best-effort and only affects objects first created after the change. It applies to all
+session callers, including bots, automations, and sandboxes. Existing objects stay where they are,
+so requests to older sessions may still cross regions. Objects near D1 may also be farther from some
+sandboxes or third-party APIs; watch agent-event latency as well as web request latency.
+
+Check actual placement rather than assuming the settings were honored:
+
+- **Web functions:** inspect `functionEvents[].region` in Vercel request logs, separately from the
+  edge region.
+- **Control-plane Worker:** inspect `$workers.event.request.cf.colo` on `cf-worker-event` in Workers
+  telemetry, comparing the callers whose requests you want to improve.
+- **Session Durable Objects:** query GraphQL `durableObjectsPeriodicGroups`, grouped by `coloCode`;
+  filter by `objectId` to check a newly created session rather than an older one.
+
+To roll back, unset the relevant Actions repository variable or remove the Terraform override,
+re-apply, and redeploy the web app if its region changed. This restores the default web region
+and/or removes the hint for future objects. Objects created with a hint remain where they are. These
+settings do not move D1, enable read replication, or select a sandbox-provider region.
+
 ## Module Reference
 
 Browse [modules/](modules/) for the available modules. Each module's `variables.tf` defines its

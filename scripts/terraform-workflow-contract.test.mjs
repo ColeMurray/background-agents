@@ -32,6 +32,20 @@ test("Daytona base snapshot memory reaches Terraform plan and apply", () => {
   );
 });
 
+test("web function region reaches Terraform plan and apply with the default", () => {
+  assertInPlanAndApply(
+    "TF_VAR_web_serverless_region: \"${{ vars.WEB_SERVERLESS_REGION || 'iad1' }}\"",
+    "web function region"
+  );
+});
+
+test("session location hint reaches Terraform plan and apply as opt-in", () => {
+  assertInPlanAndApply(
+    "TF_VAR_session_do_location_hint: \"${{ vars.SESSION_DO_LOCATION_HINT || '' }}\"",
+    "session location hint"
+  );
+});
+
 for (const [label, assignment] of [
   [
     "classifier Anthropic key",

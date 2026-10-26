@@ -105,6 +105,9 @@ module "control_plane_worker" {
       SANDBOX_BOOT_TIMEOUT_MS                  = { value = tostring(var.sandbox_boot_timeout_ms) }
       TEAMS_ENFORCEMENT                        = { value = var.teams_enforcement }
     },
+    var.session_do_location_hint != "" ? {
+      SESSION_DO_LOCATION_HINT = { value = var.session_do_location_hint }
+    } : {},
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
     } : {},

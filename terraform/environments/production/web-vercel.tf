@@ -6,9 +6,10 @@ module "web_app" {
   count  = var.web_platform == "vercel" ? 1 : 0
   source = "../../modules/vercel-project"
 
-  project_name = "open-inspect-${local.name_suffix}"
-  team_id      = var.vercel_team_id
-  framework    = "nextjs"
+  project_name      = "open-inspect-${local.name_suffix}"
+  team_id           = var.vercel_team_id
+  framework         = "nextjs"
+  serverless_region = var.web_serverless_region
 
   # No git_repository - deploy via CLI/CI instead of auto-deploy on push.
   # The Node.js runtime comes from `engines.node` in packages/web/package.json

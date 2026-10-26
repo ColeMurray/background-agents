@@ -5,7 +5,7 @@
  * on Workers each field is a binding Terraform declares; here each is a
  * process environment variable of the same name, so one `.env` describes
  * a deployment on either. The key table below is checked against the type
- * at compile time, so a field added to `EnvConfig` must be added here too.
+ * at compile time, excluding Worker-only placement configuration.
  *
  * An empty variable counts as unset, as `FOO=` in an env file means "no
  * value" rather than "the empty string".
@@ -22,7 +22,7 @@ import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
 /** A source of configuration values, `process.env` in production. */
 export type ConfigSource = Record<string, string | undefined>;
 
-/** Every `EnvConfig` field. `satisfies` fails if the table and the type ever disagree. */
+/** Host-independent `EnvConfig` fields; Node has no Durable Object placement. */
 const ENV_CONFIG_KEYS = {
   GITHUB_CLIENT_ID: true,
   GITHUB_CLIENT_SECRET: true,
@@ -96,7 +96,7 @@ const ENV_CONFIG_KEYS = {
   SECRETS_CAP_ENFORCEMENT: true,
   TEAMS_ENFORCEMENT: true,
   LOG_LEVEL: true,
-} as const satisfies Record<keyof EnvConfig, true>;
+} as const satisfies Record<Exclude<keyof EnvConfig, "SESSION_DO_LOCATION_HINT">, true>;
 
 /** The `EnvConfig` field names, for checking documentation against the type. */
 export const ENV_CONFIG_KEY_NAMES: readonly (keyof EnvConfig)[] = Object.keys(

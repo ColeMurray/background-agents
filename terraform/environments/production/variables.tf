@@ -761,6 +761,17 @@ variable "sandbox_provider" {
   }
 }
 
+variable "session_do_location_hint" {
+  description = "Best-effort Cloudflare location hint for new session Durable Objects; empty preserves automatic placement. Existing objects do not move."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"], var.session_do_location_hint)
+    error_message = "session_do_location_hint must be empty or one of wnam, enam, sam, weur, eeur, apac, oc, afr, me."
+  }
+}
+
 variable "sandbox_inactivity_timeout_ms" {
   description = "Regular sandbox inactivity timeout in milliseconds before OpenInspect preserves and stops the sandbox when no session-page WebSocket clients are connected."
   type        = number
@@ -812,6 +823,17 @@ variable "web_platform" {
   validation {
     condition     = contains(["vercel", "cloudflare"], var.web_platform)
     error_message = "web_platform must be 'vercel' or 'cloudflare'."
+  }
+}
+
+variable "web_serverless_region" {
+  description = "Vercel function region for the web project only; requires a web redeploy after apply. Unused when web_platform is cloudflare."
+  type        = string
+  default     = "iad1"
+
+  validation {
+    condition     = can(regex("^[a-z]{3}[0-9]$", var.web_serverless_region))
+    error_message = "web_serverless_region must be a Vercel region ID: three lowercase letters followed by one digit."
   }
 }
 
