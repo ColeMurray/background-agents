@@ -42,7 +42,7 @@ Every memory is one of two types.
 | Type      | Shown in the editor as      | How a session uses it                                                                                                        |
 | --------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Fact      | Fact · read when relevant   | The title and description go into a catalog the agent sees at start. The agent reads the full content only when it needs it. |
-| Directive | Directive · always included | The full content is given to the agent at the start of every session it applies to, like a custom instruction.               |
+| Directive | Directive · always included | When selected for a session, the full content is given to the agent at the start, like a custom instruction.                 |
 
 Use facts for knowledge that matters only sometimes; use directives sparingly, for rules that should apply to every session. The description is what the agent uses to decide whether a fact is relevant, so make it specific.
 
@@ -123,7 +123,7 @@ Settings › Shared memories opens on **All**, which lists memories from every r
 
 To review everything waiting for approval, open the Proposed tab in All. You can edit, approve, reject, archive, and restore from All wherever you have management access, but you cannot create a memory there.
 
-The All view pages through at most 1,000 records. Past that, it says "All-view browsing limit reached"; choose a single scope or narrow your search.
+The All view stops paging once a page would start past the 1,000th record. If more matches remain, it says "All-view browsing limit reached"; choose a single scope or narrow your search.
 
 Use **Memory scope** to switch between All and a single repository or environment. The picker is searchable and groups options under Repositories and Environments.
 
@@ -136,7 +136,7 @@ Use **Memory scope** to switch between All and a single repository or environmen
 5. Enter the **Content**: up to 20,000 characters for a fact or 2,000 for a directive.
 6. Click **Save memory**.
 
-The memory is active immediately and loads into new sessions.
+The memory is active immediately and is selected for new sessions it applies to, within the [session budget](#how-agents-use-memories-in-a-session).
 
 ## Editing, superseding, and history
 
@@ -199,7 +199,8 @@ The server accepts up to 8 memories per request. The page sends larger selection
 </Accordion>
   <Accordion title="A memory change is not visible in a running session">
     Cause: memories are pinned when a session is created. Fix: start a new session. A running
-    session's agent can still read a fact's current content with `memory_read`.
+    session's agent can still read an active fact's current content with `memory_read`; an archived
+    fact returns only an archive notice.
 
 </Accordion>
   <Accordion title="A memory is not loaded in a new session">
