@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig, useSWRConfig } from "swr";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
@@ -20,6 +20,11 @@ const AUTHORIZATION = {
   role: { id: "role_builtin_member", key: "member", name: "Member" },
   permissions: ["repositories.read"],
 };
+const OTHER_AUTHORIZATION = { ...AUTHORIZATION, userId: "22222222222222222222222222222222" };
+const AUTHENTICATED_SESSION = {
+  data: { user: { id: AUTHORIZATION.userId, name: "Test User" } },
+  status: "authenticated" as const,
+};
 
 function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
@@ -30,8 +35,9 @@ function useHarness() {
   return { authorization: useCurrentUserAuthorization(), mutate: useSWRConfig().mutate };
 }
 
-function renderHarness() {
+function renderHarness(strictMode = false) {
   return renderHook(useHarness, {
+    reactStrictMode: strictMode,
     // A fresh provider per render keeps SWR's cache from leaking between tests.
     wrapper: ({ children }) => (
       <SWRConfig
@@ -44,14 +50,203 @@ function renderHarness() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  vi.mocked(useAuthSession).mockReturnValue({
-    data: { user: { id: "user-1", name: "Test User" } },
-    status: "authenticated",
-  });
+  vi.resetAllMocks();
+  vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
 });
+afterEach(cleanup);
 
 describe("useCurrentUserAuthorization", () => {
+  it("starts the authorization request while the session is loading", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
+    const { result } = renderHarness();
+
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalledWith("/api/me/authorization"));
+    expect(result.current.authorization.authorization).toBeNull();
+    expect(result.current.authorization.hasPermission("repositories.read")).toBe(false);
+  });
+
+  it("adopts a matching prefetch without another network call", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    let response = jsonResponse(AUTHORIZATION);
+    vi.mocked(browserApiFetch).mockImplementation(async () => response);
+    const { result, rerender } = renderHarness();
+    await act(async () => {});
+
+    response = jsonResponse({}, 403);
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    rerender();
+
+    await waitFor(() => expect(result.current.authorization.authorization).toEqual(AUTHORIZATION));
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.authorization.error).toBeUndefined();
+  });
+
+  it("waits for an in-flight matching prefetch instead of fetching again", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    let resolveAuthorization!: (response: Response) => void;
+    vi.mocked(browserApiFetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveAuthorization = resolve;
+      })
+    );
+    const { result, rerender } = renderHarness();
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    rerender();
+    expect(result.current.authorization.loading).toBe(true);
+    expect(result.current.authorization.authorization).toBeNull();
+
+    await act(async () => resolveAuthorization(jsonResponse(AUTHORIZATION)));
+
+    await waitFor(() => expect(result.current.authorization.authorization).toEqual(AUTHORIZATION));
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards another user's prefetch and fetches fresh authorization", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(jsonResponse(OTHER_AUTHORIZATION))
+      .mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
+    const { result, rerender } = renderHarness();
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    rerender();
+
+    await waitFor(() => expect(result.current.authorization.authorization).toEqual(AUTHORIZATION));
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["network", 503, 401, 403, "invalid-json", "invalid-schema"] as const)(
+    "discards a failed prefetch (%s) and uses the fresh outcome",
+    async (failure) => {
+      vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+      vi.mocked(browserApiFetch).mockImplementationOnce(async () => {
+        if (failure === "network") throw new TypeError("Failed to fetch");
+        if (failure === "invalid-json") return new Response("Invalid JSON");
+        return jsonResponse({}, failure === "invalid-schema" ? 200 : failure);
+      });
+      const { result, rerender } = renderHarness();
+      await act(async () => {});
+
+      vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
+      vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+      rerender();
+
+      await waitFor(() =>
+        expect(result.current.authorization.authorization).toEqual(AUTHORIZATION)
+      );
+      expect(result.current.authorization.error).toBeUndefined();
+      expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("uses a fresh denial after a failed prefetch", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(jsonResponse({}, 503))
+      .mockResolvedValueOnce(jsonResponse({}, 403));
+    const { result, rerender } = renderHarness();
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.authorization.error).toMatchObject({ retryable: false })
+    );
+    expect(result.current.authorization.authorization).toBeNull();
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])(
+    "fails closed when a fresh response names another user (prefetched: %s)",
+    async (prefetched) => {
+      if (prefetched) vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+      vi.mocked(browserApiFetch).mockImplementation(async () => jsonResponse(OTHER_AUTHORIZATION));
+      const { result, rerender } = renderHarness();
+      if (prefetched) {
+        vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+        rerender();
+      }
+
+      await waitFor(() =>
+        expect(result.current.authorization.error).toMatchObject({
+          name: "AuthorizationRequestError",
+          message: "Authorization belongs to another user",
+          retryable: false,
+        })
+      );
+      expect(result.current.authorization.authorization).toBeNull();
+      expect(result.current.authorization.hasPermission("repositories.read")).toBe(false);
+      expect(browserApiFetch).toHaveBeenCalledTimes(prefetched ? 2 : 1);
+    }
+  );
+
+  it("revalidates an adopted grant over the network and withholds it on a denial", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
+    const { result, rerender } = renderHarness();
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    rerender();
+    await waitFor(() => expect(result.current.authorization.authorization).toEqual(AUTHORIZATION));
+
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse({}, 403));
+    await act(async () => {
+      await result.current.mutate(currentUserAuthorizationKey(AUTHORIZATION.userId));
+    });
+
+    await waitFor(() => expect(result.current.authorization.authorization).toBeNull());
+    expect(result.current.authorization.hasPermission("repositories.read")).toBe(false);
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("prefetches only once across loading rerenders and StrictMode effects", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
+    const { rerender } = renderHarness(true);
+    await act(async () => {});
+    rerender();
+
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates prefetched authorization between cache providers", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(jsonResponse(AUTHORIZATION))
+      .mockResolvedValueOnce(jsonResponse(OTHER_AUTHORIZATION));
+    const first = renderHarness();
+    const second = renderHarness();
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    first.rerender();
+    await waitFor(() =>
+      expect(first.result.current.authorization.authorization).toEqual(AUTHORIZATION)
+    );
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: OTHER_AUTHORIZATION.userId } },
+      status: "authenticated",
+    });
+    second.rerender();
+    await waitFor(() =>
+      expect(second.result.current.authorization.authorization).toEqual(OTHER_AUTHORIZATION)
+    );
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not adopt a prefetch for an unauthenticated session", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse({}, 401));
+    const { result, rerender } = renderHarness();
+    await act(async () => {});
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "unauthenticated" });
+    rerender();
+
+    expect(result.current.authorization.authorization).toBeNull();
+    expect(result.current.authorization.error).toBeUndefined();
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the cached grant when a revalidation fails with a server error", async () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
     const { result } = renderHarness();
@@ -59,7 +254,7 @@ describe("useCurrentUserAuthorization", () => {
 
     // 200 -> 500: the server answered nothing about this user's access.
     vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse({ error: "boom" }, 500));
-    await result.current.mutate(currentUserAuthorizationKey("user-1"));
+    await result.current.mutate(currentUserAuthorizationKey(AUTHORIZATION.userId));
 
     await waitFor(() => expect(result.current.authorization.error).toBeDefined());
     expect(result.current.authorization.authorization).toEqual(AUTHORIZATION);
@@ -72,7 +267,7 @@ describe("useCurrentUserAuthorization", () => {
     await waitFor(() => expect(result.current.authorization.authorization).not.toBeNull());
 
     vi.mocked(browserApiFetch).mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    await result.current.mutate(currentUserAuthorizationKey("user-1"));
+    await result.current.mutate(currentUserAuthorizationKey(AUTHORIZATION.userId));
 
     await waitFor(() => expect(result.current.authorization.error).toBeDefined());
     expect(result.current.authorization.authorization).toEqual(AUTHORIZATION);
@@ -88,7 +283,7 @@ describe("useCurrentUserAuthorization", () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       jsonResponse({ error: "assignment_required" }, status)
     );
-    await result.current.mutate(currentUserAuthorizationKey("user-1"));
+    await result.current.mutate(currentUserAuthorizationKey(AUTHORIZATION.userId));
 
     await waitFor(() => expect(result.current.authorization.authorization).toBeNull());
     expect(result.current.authorization.hasPermission("repositories.read")).toBe(false);
@@ -100,7 +295,7 @@ describe("useCurrentUserAuthorization", () => {
     await waitFor(() => expect(result.current.authorization.authorization).not.toBeNull());
 
     vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse({ nonsense: true }));
-    await result.current.mutate(currentUserAuthorizationKey("user-1"));
+    await result.current.mutate(currentUserAuthorizationKey(AUTHORIZATION.userId));
 
     await waitFor(() => expect(result.current.authorization.authorization).toBeNull());
   });
