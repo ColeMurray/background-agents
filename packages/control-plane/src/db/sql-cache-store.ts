@@ -34,14 +34,17 @@ import type { SqlDatabase } from "./sql-database";
 /**
  * The table this store reads and writes, as one statement so any engine can
  * apply it. Values are opaque strings; `expires_at` is epoch milliseconds,
- * NULL for an entry that never expires. Reads go by primary key; writes scan
- * the cache for expired entries.
+ * NULL for an entry that never expires. Reads go by primary key; expiry cleanup
+ * uses the companion index.
  */
 export const CACHE_ENTRIES_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS cache_entries (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   expires_at INTEGER
 )`;
+
+export const CACHE_ENTRIES_EXPIRY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS cache_entries_expires_at_idx
+  ON cache_entries (expires_at)`;
 
 interface CacheEntryRow {
   value: string;

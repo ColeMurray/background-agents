@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CACHE_STORE_MIN_TTL_MS } from "@open-inspect/shared/cache-store";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
-import { CACHE_ENTRIES_SCHEMA_SQL, SqlCacheStore } from "./sql-cache-store";
+import {
+  CACHE_ENTRIES_EXPIRY_INDEX_SQL,
+  CACHE_ENTRIES_SCHEMA_SQL,
+  SqlCacheStore,
+} from "./sql-cache-store";
 
 describe("SqlCacheStore expiry reclamation", () => {
   let db: NodeSqlDatabase;
@@ -12,6 +16,7 @@ describe("SqlCacheStore expiry reclamation", () => {
   beforeEach(async () => {
     db = createNodeSqlDatabase(new DatabaseSync(":memory:"));
     await db.prepare(CACHE_ENTRIES_SCHEMA_SQL).run();
+    await db.prepare(CACHE_ENTRIES_EXPIRY_INDEX_SQL).run();
     now = 0;
     store = new SqlCacheStore(db, { now: () => now });
   });

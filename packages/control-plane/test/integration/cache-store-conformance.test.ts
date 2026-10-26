@@ -14,7 +14,11 @@
 import { env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CACHE_STORE_MIN_TTL_MS, createKvCacheStore } from "@open-inspect/shared/cache-store";
-import { CACHE_ENTRIES_SCHEMA_SQL, SqlCacheStore } from "../../src/db/sql-cache-store";
+import {
+  CACHE_ENTRIES_EXPIRY_INDEX_SQL,
+  CACHE_ENTRIES_SCHEMA_SQL,
+  SqlCacheStore,
+} from "../../src/db/sql-cache-store";
 import {
   registerCacheStoreConformanceSuite,
   type CacheStoreFactory,
@@ -41,6 +45,7 @@ describe("SqlCacheStore over D1", () => {
   // Pool-workers isolates D1 per test file, so this table is this file's own.
   beforeAll(async () => {
     await env.DB.prepare(CACHE_ENTRIES_SCHEMA_SQL).run();
+    await env.DB.prepare(CACHE_ENTRIES_EXPIRY_INDEX_SQL).run();
   });
   afterAll(async () => {
     await env.DB.prepare("DROP TABLE IF EXISTS cache_entries").run();
