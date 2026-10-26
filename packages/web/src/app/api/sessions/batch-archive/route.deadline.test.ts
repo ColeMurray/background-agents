@@ -11,9 +11,6 @@ const batchModulePath = new URL(
 ).pathname;
 const { archiveSessionBatch } = await import(batchModulePath);
 
-vi.mock("@/lib/server-auth-session", () => ({
-  getServerAuthSession: vi.fn(async () => ({ user: { id: "test-user" } })),
-}));
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: (path: string, options: RequestInit) =>
     dispatchControlPlaneFetch(`https://cp.test${path}`, options, {}),

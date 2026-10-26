@@ -10,7 +10,6 @@ import { PATCH } from "./route";
 describe("session read-state BFF", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
   it("rejects actions outside the shared request contract", async () => {
@@ -56,8 +55,10 @@ describe("session read-state BFF", () => {
     });
   });
 
-  it("rejects unauthenticated requests", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
     const request = new Request("http://localhost/api/sessions/session-1/read-state", {
       method: "PATCH",
       body: JSON.stringify({ action: "mark_latest_message_read" }),
@@ -68,6 +69,8 @@ describe("session read-state BFF", () => {
     });
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 });

@@ -1,15 +1,12 @@
 import { NextRequest } from "next/server";
 import { beforeEach, expect, it, vi } from "vitest";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { PUT } from "./route";
 
-vi.mock("@/lib/server-auth-session", () => ({ getServerAuthSession: vi.fn() }));
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
   vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ environment: {} }));
 });
 
