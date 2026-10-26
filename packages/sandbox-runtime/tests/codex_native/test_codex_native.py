@@ -22,7 +22,7 @@ from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
 from sandbox_runtime.model_prices import ModelPriceCatalog
 
 BINARY = os.environ.get("OI_TEST_CODEX_BINARY")
-CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
+CATALOG = Path(__file__).parents[1] / "fixtures/reasoning-models.json"
 pytestmark = pytest.mark.skipif(
     not BINARY, reason="Set OI_TEST_CODEX_BINARY for pinned native integration"
 )
@@ -409,7 +409,7 @@ async def test_native_local_mcp_environment_and_disabled_server_isolation(
         "type": "local",
         "command": [
             sys.executable,
-            str(Path(__file__).parent / "fixtures" / "codex_mcp_server.py"),
+            str(Path(__file__).parents[1] / "fixtures" / "codex_mcp_server.py"),
         ],
     }
     if env_field:

@@ -14,7 +14,7 @@ from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
 from sandbox_runtime.model_prices import ModelPriceCatalog
 
-CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
+CATALOG = Path(__file__).parents[1] / "fixtures/reasoning-models.json"
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("OI_TEST_CODEX_BINARY"),
