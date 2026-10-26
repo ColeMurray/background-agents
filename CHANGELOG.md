@@ -16,6 +16,24 @@ and Linear sessions keep the 10-minute default. Operators can configure the shor
 extensions; direct terminal, VS Code, or VNC connections alone do not. Running turns stay active
 through runtime heartbeats, and follow-up prompts resume the existing stopped session.
 
+**One-shot scheduled automations.** A schedule automation can now **Run once** at a future date and
+time instead of following a cron expression. The automation stays enabled while its runs are active
+or retrying, then disables itself. To run a paused one-shot whose time has passed, give it a new
+future time and resume it. Pause or delete it to cancel a pending start. Requires D1 migration 0091.
+
+**Launch retries for scheduled runs.** Schedule automations can set **Retries** (none by default, up
+to 5) to relaunch a run that failed before its prompt reached a session, for example during a D1
+stall. The first retry waits 2 minutes, and the wait doubles for each later attempt. Runs that fail
+after starting, configuration errors such as a model the harness can't run, and **Trigger Now** runs
+are never retried. A waiting run counts as active, and a run that uses up its retries counts as one
+failure toward auto-pause. Requires D1 migration 0090.
+
+**Review memories in bulk.** **Settings › Memories** and **Settings › Shared memories** can select
+up to 100 records and approve, reject, archive, or restore them in one action. Memories are never
+hard-deleted, so bulk removal archives them or rejects proposals. Shared memories now open on an
+**All** view across every repository and environment you can access. Each record links to its own
+scope, and you pick a concrete scope before creating a memory.
+
 ## October 24, 2026
 
 **Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;
@@ -25,6 +43,20 @@ too. The harness now launches the image's pinned Codex CLI rather than whatever 
 the Codex CLI, including a pinned `vercel_base_snapshot_id`. Prebuilt repository images older than
 runtime v77 are rebuilt automatically; until then, Codex sessions start without them while other
 harnesses keep using them.
+
+**Codex sessions report their cost.** Codex turns used to report a cost of zero. Each model request
+is now priced from the models.dev catalog that the image already caches for OpenCode, so session
+totals, analytics, and `maxSessionCostUsd` include Codex spend. A model missing from the image's
+catalog is still reported as zero.
+
+**Mermaid diagrams in assistant messages.** Completed Mermaid code blocks in assistant replies
+render as diagrams that follow the light or dark theme. The source stays available behind a
+disclosure, and a diagram that fails to render falls back to code.
+
+**Duplicate an automation.** A **Duplicate** button on an automation's detail page opens the create
+form filled in from that automation, named `<name> (copy)`. Webhook keys aren't copied, since new
+keys are issued, and the Sentry client secret must be entered again. Environments you can't use are
+left out, with a notice.
 
 ## October 23, 2026
 
@@ -65,6 +97,14 @@ scope's secrets only after it is private, through a file no snapshot keeps, so a
 carries them. Images count toward the account's named-snapshot allowance. See
 [Pre-Built Images](docs/IMAGE_PREBUILD.md#boat-prebuilds).
 
+**Merge duplicate member accounts.** Owners and Administrators can merge two accounts that belong to
+the same person from **Settings › Workspace access**, for example a Slack-created account alongside
+a GitHub sign-in with a different email. This used to require running
+`scripts/merge-split-users.ts`. A dry-run review lists everything that moves, changes, or is
+discarded before you confirm, and the merge is recorded in the audit log. The new
+`workspace.members.merge` permission can be granted to custom roles, which also need
+`workspace.members.read` to review a merge. Merging Owner accounts requires an Owner.
+
 ## October 20, 2026
 
 **Boat sandbox provider.** [Boat](https://boat.dev) joins Modal, Daytona, Vercel, and E2B as a
@@ -73,6 +113,12 @@ from a Terraform-built named snapshot; idle sessions are stopped (disk snapshott
 released) and resume on a new machine with their files intact. Sessions pick the smallest Boat
 machine size that fits their CPU and memory settings. See
 [Boat Sandbox Provider](docs/BOAT_SANDBOX_PROVIDER.md).
+
+**OpenComputer sandbox provider removed.** The remaining providers are Modal, Modal VM, Daytona,
+Vercel, E2B, and Boat. A deployment still set to `sandbox_provider = "opencomputer"` fails Terraform
+validation, so switch providers before upgrading. The `opencomputer_*` Terraform variables and the
+control plane's `ANTHROPIC_API_KEY` binding are gone; `anthropic_api_key` still feeds sandboxes and
+the classifier bots. D1 migration 0089 deletes OpenComputer image build records.
 
 ## October 19, 2026
 
