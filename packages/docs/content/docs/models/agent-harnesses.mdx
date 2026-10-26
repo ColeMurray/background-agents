@@ -16,6 +16,7 @@ relatedCode:
   - packages/web/src/components/model-reasoning-selector.tsx
   - packages/web/src/components/provider-auth-controls.tsx
   - packages/control-plane/src/harness-admission.ts
+  - packages/control-plane/src/sandbox/managed-provider-env.ts
   - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/__init__.py
   - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/env.py
   - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/events.py
@@ -143,7 +144,7 @@ Codex never swaps a selection it cannot honor for a default. A model it cannot r
 
 - The session's OpenAI authentication choice (a connected ChatGPT account or `OPENAI_API_KEY`) is fixed when the session is created. The legacy `OPENAI_OAUTH_*` secrets are not used.
 - With a connected account, the sandbox fetches a short-lived access token from the control plane before every turn, and again whenever Codex asks for a refresh. Codex keeps the OpenAI credential in memory only, so it is never written to Codex's state directory or captured in a snapshot. A session stays bound to the ChatGPT workspace it started with.
-- The `codex` process does not inherit the sandbox's `OPENAI_*` or `CODEX_*` environment variables; the credential is handed to Codex directly. Custom OpenAI endpoints (`OPENAI_BASE_URL`, `OPENAI_API_BASE`, `CODEX_API_ENDPOINT`) are refused.
+- The `codex` process does not inherit the sandbox's `OPENAI_*` or `CODEX_*` environment variables; the credential is handed to Codex directly. Custom OpenAI endpoints are not supported: secrets such as `OPENAI_BASE_URL`, `OPENAI_API_BASE`, or `CODEX_API_ENDPOINT` are dropped before a Codex sandbox starts, so Codex uses the standard OpenAI endpoint. If one of those variables is set in the sandbox's runtime environment instead (for example by the image), Codex refuses to start.
 - Codex runs with no approval prompts and without its own command sandbox. The OpenInspect sandbox is the isolation boundary, as under the other harnesses.
 
 ### Tools, MCP servers, and skills
@@ -187,7 +188,8 @@ Codex prices each model request from the model price list cached in the sandbox 
     The full message is `Codex rejected this session's configuration or credential; check Settings
     before retrying`. Check that an API-key session has `OPENAI_API_KEY` in scope, that a bound
     ChatGPT account is active under Settings › Accounts, that the repository has no
-    `.codex/config.toml`, and that no secret sets a custom OpenAI endpoint. Then send the prompt
+    `.codex/config.toml`, and that the sandbox image does not set a custom OpenAI endpoint
+    variable. Then send the prompt
     again. `Codex could not obtain a credential right now; retry shortly` is a transient token fetch
     failure; retry without changing settings.
 
