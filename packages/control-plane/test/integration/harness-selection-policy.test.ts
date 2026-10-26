@@ -9,6 +9,7 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { cleanD1Tables } from "./cleanup";
 import { resolveSessionProviderAuth } from "../../src/session/provider-account-resolution";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import {
   closeWebSocket,
   collectMessages,
@@ -40,6 +41,7 @@ function codexAutomation(id: string): AutomationRow {
     model: "openai/gpt-5.6-sol",
     reasoning_effort: "max",
     enabled: 1,
+    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: BROWSER_USER_ID,

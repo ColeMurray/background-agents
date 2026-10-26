@@ -9,6 +9,8 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
 import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
+  MAX_AUTOMATION_CONCURRENT_RUNS,
   MAX_AUTOMATION_NAME_LENGTH,
   validateAutomationTargetCounts,
   type Automation,
@@ -36,6 +38,8 @@ export interface AutomationFormValues {
   scheduleCron?: string;
   scheduleOnceAt?: number;
   scheduleTz?: string;
+  maxConcurrentRuns?: number;
+
   /** Launch retries; submitted for schedule triggers only. */
   maxRetries?: number;
   instructions: string;
@@ -52,6 +56,8 @@ export interface AutomationTriggerDraft {
   scheduleMode: "recurring" | "once";
   scheduleOnceAt: string;
   scheduleTz: string;
+  maxConcurrentRuns: number;
+
   maxRetries: number;
   eventType: string;
   conditions: TriggerCondition[];
@@ -102,6 +108,19 @@ type InitialAutomationFormValues = Partial<AutomationFormValues>;
 
 export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 
+/**
+ * Coerce a stored or template concurrency to the range the API accepts. An
+ * automation created before the field existed, or a template that omits it,
+ * reads as DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as an invalid
+ * form.
+ */
+export function clampConcurrentRuns(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS;
+  }
+  return Math.min(MAX_AUTOMATION_CONCURRENT_RUNS, Math.max(1, Math.trunc(value)));
+}
+
 function toLocalDateTime(timestamp: number): string {
   const date = new Date(timestamp);
   return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -125,6 +144,8 @@ export function createAutomationFormDraft(
       scheduleOnceAt:
         initialValues.scheduleOnceAt != null ? toLocalDateTime(initialValues.scheduleOnceAt) : "",
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+      maxConcurrentRuns: clampConcurrentRuns(initialValues.maxConcurrentRuns),
+
       maxRetries: initialValues.maxRetries ?? 0,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
@@ -151,6 +172,7 @@ export function automationToFormValues(automation: Automation): InitialAutomatio
     scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
     scheduleTz: automation.scheduleTz,
     scheduleOnceAt: automation.scheduleOnceAt ?? undefined,
+    maxConcurrentRuns: automation.maxConcurrentRuns,
     maxRetries: automation.maxRetries,
     instructions: automation.instructions,
     triggerType: automation.triggerType,
@@ -441,6 +463,7 @@ function buildSubmissionValues({
   if (draft.trigger.type === "schedule") {
     return {
       ...values,
+      maxConcurrentRuns: clampConcurrentRuns(draft.trigger.maxConcurrentRuns),
       maxRetries: draft.trigger.maxRetries,
       ...(draft.trigger.scheduleMode === "once"
         ? { scheduleOnceAt }

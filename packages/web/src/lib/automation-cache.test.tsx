@@ -20,6 +20,7 @@ import type {
   ListAutomationInvocationsResponse,
   ListAutomationsResponse,
 } from "@open-inspect/shared";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import AutomationDetailPage from "@/app/(app)/(sidebar)/automations/[id]/page";
 import { useAutomation, useAutomationInvocations, useAutomations } from "@/hooks/use-automations";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
@@ -59,6 +60,7 @@ const original: AutomationListItem = {
   model: "openai/gpt-5.4",
   reasoningEffort: null,
   enabled: true,
+  maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   nextRunAt: null,
   consecutiveFailures: 0,
   maxRetries: 0,

@@ -77,7 +77,7 @@ The row's status is derived from its children:
 
 ## Auto-pause counting
 
-Multi-repository firings count toward the same three-strike [auto-pause](/automations#auto-pause-after-failures) as single-repository ones, with these rules for multiple targets:
+Multi-repository firings count toward the same five-strike [auto-pause](/automations#auto-pause-after-failures) as single-repository ones, with these rules for multiple targets:
 
 - A firing with **any** failed repository counts as one failure. A weekly sweep that fails the same repository every week is still broken.
 - The failure is counted when the first repository fails, not when the last one finishes.

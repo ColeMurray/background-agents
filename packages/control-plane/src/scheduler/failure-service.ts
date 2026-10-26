@@ -1,8 +1,16 @@
 import type { AutomationStore } from "../db/automation-store";
 import type { Logger } from "../logger";
 
-/** Consecutive failure threshold for auto-pause. */
-const AUTO_PAUSE_THRESHOLD = 3;
+/**
+ * Consecutive failure threshold for auto-pause.
+ *
+ * Sized against concurrency rather than against a serialized automation: at a
+ * `max_concurrent_runs` above one, several firings can be in flight when a
+ * shared cause (a bad base branch, an expired credential) fails them, and they
+ * strike in a row with no success interleaved to reset the streak. Three
+ * strikes is one such round; five needs the failures to outlast it.
+ */
+const AUTO_PAUSE_THRESHOLD = 5;
 
 type FailureStore = Pick<
   AutomationStore,

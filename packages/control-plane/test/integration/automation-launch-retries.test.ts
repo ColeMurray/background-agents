@@ -338,7 +338,7 @@ describe.each(["recurring", "one-shot"] as const)("%s scheduled launch retries",
         )
     );
     const session = sessionStub();
-    await createOverdueAutomation({ max_retries: 2, consecutive_failures: 2 });
+    await createOverdueAutomation({ max_retries: 2, consecutive_failures: 4 });
     await sqlDatabase(env.DB).batch(
       store().bindRepositoryInserts(
         AUTOMATION_ID,
@@ -360,7 +360,7 @@ describe.each(["recurring", "one-shot"] as const)("%s scheduled launch retries",
     });
     expect(await store().getById(AUTOMATION_ID)).toMatchObject({
       enabled: 1,
-      consecutive_failures: 2,
+      consecutive_failures: 4,
     });
 
     await makeRetryDue((await byRepo()).app!.id);
@@ -378,7 +378,7 @@ describe.each(["recurring", "one-shot"] as const)("%s scheduled launch retries",
 
     expect(await store().getById(AUTOMATION_ID)).toMatchObject({
       enabled: 0,
-      consecutive_failures: 3,
+      consecutive_failures: 5,
     });
     expect(await latestInvocation()).toMatchObject({ status: "partial_failed" });
   });

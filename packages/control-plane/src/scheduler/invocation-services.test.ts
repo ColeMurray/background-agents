@@ -12,6 +12,7 @@ import {
 } from "./invocation-service";
 import { AutomationRecoveryService, type AutomationRecoveryServiceDeps } from "./recovery-service";
 import { AutomationExecutionUnauthorizedError } from "./contracts";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 const automation: AutomationRow = {
   id: "auto-1",
@@ -25,6 +26,7 @@ const automation: AutomationRow = {
   model: "openai/gpt-5.4",
   reasoning_effort: null,
   enabled: 1,
+  max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   next_run_at: 100,
   consecutive_failures: 0,
   created_by: "author-1",
@@ -77,7 +79,7 @@ function failureHarness(overrides: Partial<InvocationRunAggregate> = {}) {
       ...overrides,
     }),
     tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
-    incrementConsecutiveFailures: vi.fn().mockResolvedValue(3),
+    incrementConsecutiveFailures: vi.fn().mockResolvedValue(5),
     autoPause: vi.fn().mockResolvedValue(undefined),
     disableSettledOneShots: vi.fn().mockResolvedValue(undefined),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
@@ -151,7 +153,7 @@ function invocationHarness() {
         .fn<AutomationInvocationServiceDeps["store"]["resolveCanonicalOwner"]>()
         .mockImplementation(async (row) => row),
       getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
-      getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
+      countActiveInvocations: vi.fn().mockResolvedValue(0),
       getActiveRunForKey: vi.fn().mockResolvedValue(null),
       getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
       getEnvironmentsForAutomation: vi.fn().mockResolvedValue([]),

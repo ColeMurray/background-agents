@@ -1,5 +1,8 @@
 import type * as Crypto from "../auth/crypto";
-import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import {
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
+  type AutomationInvocationSource,
+} from "@open-inspect/shared/types/automations";
 import {
   isDuplicateKeyError,
   allRunsUnauthorized,
@@ -35,6 +38,18 @@ import type { AutomationFailureService } from "./failure-service";
 import { AutomationExecutionUnauthorizedError } from "./contracts";
 import type { StartInvocationResult } from "./invocation-outcome";
 
+/**
+ * The automation's concurrency bound. Anything that is not a positive integer
+ * reads as DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as an unbounded
+ * one: the predicate compares a count against this, and a comparison against
+ * NaN is false — which would admit every firing instead of refusing them. The
+ * column is NOT NULL with a SQL default, so this only guards rows assembled
+ * outside SQL.
+ */
+function automationConcurrencyLimit(automation: AutomationRow): number {
+  const limit = automation.max_concurrent_runs;
+  return Number.isInteger(limit) && limit >= 1 ? limit : DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS;
+}
 export interface StartInvocationParams {
   automation: AutomationRow;
   source: AutomationInvocationSource;
@@ -82,10 +97,10 @@ export interface AutomationInvocationServiceDeps {
     | "acceptFollowUpReceipt"
     | "advanceNextRunAt"
     | "claimRetry"
+    | "countActiveInvocations"
     | "failWithdrawnRetry"
     | "getById"
     | "getRetriesToSettle"
-    | "getActiveRunForAutomation"
     | "getActiveRunForKey"
     | "getEnvironmentsForAutomation"
     | "getInvocationIdByTriggerKey"
@@ -138,21 +153,30 @@ export class AutomationInvocationService {
       if (ownerId) return { outcome: "deduplicated", invocationId: ownerId };
     }
 
-    // Schedule/manual firings block on any active run of the automation; event
-    // firings block per concurrency key (an automation-wide guard would
-    // serialize unrelated events, e.g. PR #42 against PR #43).
+    // Schedule/manual firings block once the automation is at its concurrency
+    // limit; event firings block per concurrency key (an automation-wide guard
+    // would serialize unrelated events, e.g. PR #42 against PR #43).
+    //
+    // The limit is read off the automation row rather than passed in, so an
+    // operator raising it takes effect on the next firing and an automation
+    // that predates the column keeps the serialized behaviour its default
+    // encodes.
     const overlapScope: InvocationOverlapScope =
       source === "event" && concurrencyKey !== null
         ? { kind: "concurrencyKey", concurrencyKey }
         : { kind: "automation" };
 
-    // Cheap pre-check; the conditional insert below re-applies the same predicate
-    // atomically, so a race here only costs a wasted child build.
-    const activeRun =
+    // Cheap pre-check; the conditional insert below re-applies the same
+    // predicate atomically, so a race here only costs a wasted child build.
+    // This half compares against the snapshot the firing was read with, while
+    // the insert re-reads the bound from the row — deliberately, since the
+    // authoritative answer is the one the database orders against a PATCH.
+    const blocked =
       overlapScope.kind === "concurrencyKey"
-        ? await store.getActiveRunForKey(automation.id, concurrencyKey)
-        : await store.getActiveRunForAutomation(automation.id);
-    if (activeRun) {
+        ? (await store.getActiveRunForKey(automation.id, concurrencyKey)) !== null
+        : (await store.countActiveInvocations(automation.id)) >=
+          automationConcurrencyLimit(automation);
+    if (blocked) {
       return this.recordOverlapSkip(params, { advanceSchedule: true });
     }
 

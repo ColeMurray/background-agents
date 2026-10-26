@@ -14,6 +14,7 @@ import type { ContinuationPolicy, SteeringActor } from "./session-continuity";
 import { SessionFollowUpRefusedError } from "./contracts";
 import { SlackEventHandler, type SlackEventHandlerDeps } from "./slack-event-handler";
 import { WebhookEventHandler, type WebhookEventHandlerDeps } from "./webhook-event-handler";
+import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 const automation: AutomationRow = {
   id: "auto-1",
@@ -27,6 +28,7 @@ const automation: AutomationRow = {
   model: "openai/gpt-5.4",
   reasoning_effort: null,
   enabled: 1,
+  max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   next_run_at: null,
   consecutive_failures: 0,
   created_by: "author-1",
