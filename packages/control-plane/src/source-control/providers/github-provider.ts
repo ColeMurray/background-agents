@@ -13,6 +13,8 @@ import type {
   SourceControlProvider,
   SourceControlAuthContext,
   GetRepositoryConfig,
+  ListBranchesContext,
+  ListBranchesResult,
   RepositoryAccessResult,
   RepositoryInfo,
   CreatePullRequestConfig,
@@ -34,6 +36,7 @@ import {
   parseProviderResponse,
 } from "../errors";
 import { classifyGitTreeEntry } from "./git-tree";
+import { listBranchesWithCache } from "../branch-cache";
 import {
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
@@ -265,11 +268,13 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
   private readonly cacheStore?: GitHubProviderConfig["cacheStore"];
+  private readonly branchesCache?: GitHubProviderConfig["branchesCache"];
   private readonly userAgent: string;
 
   constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
     this.cacheStore = config.cacheStore;
+    this.branchesCache = config.branchesCache;
     this.userAgent = config.userAgent || USER_AGENT;
   }
 
@@ -727,7 +732,19 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   /**
    * List branches for a repository.
    */
-  async listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
+  listBranches(
+    config: GetRepositoryConfig,
+    context: ListBranchesContext
+  ): Promise<ListBranchesResult> {
+    return listBranchesWithCache(
+      config,
+      () => this.fetchBranches(config),
+      context,
+      this.branchesCache
+    );
+  }
+
+  private async fetchBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
     if (!this.appConfig) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list branches",
