@@ -344,7 +344,10 @@ defaults:
 Set these in `terraform.tfvars`, or use the Actions repository variables for CI deployments. Choose
 a supported Vercel region near your users and D1's primary, balancing distance to each. The web
 region must match `^[a-z]{3}[0-9]$`; it has no effect when `web_platform = "cloudflare"`. Choose the
-session hint for D1's region: `wnam`, `enam`, `sam`, `weur`, `eeur`, `apac`, `oc`, `afr`, or `me`.
+session hint for D1's region: `wnam`, `enam`, `sam`, `weur`, `eeur`, `apac`, `apac-ne`, `apac-se`,
+`oc`, `afr`, or `me`. Prefer `apac` for general Asia-Pacific placement; use `apac-ne` or `apac-se`
+for the northeast or southeast subregion. See
+[Cloudflare's location hints](https://developers.cloudflare.com/durable-objects/reference/data-location/#provide-a-location-hint).
 An empty hint preserves automatic placement. Terraform rejects invalid values; if an invalid hint
 reaches the Worker outside Terraform, it logs a warning and ignores it rather than failing the
 request. Consider the Worker's Smart Placement separately after measuring these changes; neither
@@ -359,8 +362,12 @@ sandboxes or third-party APIs; watch agent-event latency as well as web request 
 
 Check actual placement rather than assuming the settings were honored:
 
-- **Web functions:** inspect `functionEvents[].region` in Vercel request logs, separately from the
-  edge region.
+- **Web functions:** inspect the function's location in **Function** details in
+  [Vercel Runtime Logs](https://vercel.com/docs/logs/runtime#log-details), not the request's
+  **Region** field (the edge location). In
+  [log drains](https://vercel.com/docs/drains/reference/logs#logs-schema), use `proxy.lambdaRegion`
+  for the function execution region; `executionRegion` describes request execution and
+  `proxy.region` describes proxy processing.
 - **Control-plane Worker:** inspect `$workers.event.request.cf.colo` on `cf-worker-event` in Workers
   telemetry, comparing the callers whose requests you want to improve.
 - **Session Durable Objects:** query GraphQL `durableObjectsPeriodicGroups`, grouped by `coloCode`;

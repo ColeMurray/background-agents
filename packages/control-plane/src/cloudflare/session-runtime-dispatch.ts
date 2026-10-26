@@ -15,6 +15,8 @@ export function parseSessionDoLocationHint(
     case "weur":
     case "eeur":
     case "apac":
+    case "apac-ne":
+    case "apac-se":
     case "oc":
     case "afr":
     case "me":

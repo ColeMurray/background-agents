@@ -767,8 +767,8 @@ variable "session_do_location_hint" {
   default     = ""
 
   validation {
-    condition     = contains(["", "wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"], var.session_do_location_hint)
-    error_message = "session_do_location_hint must be empty or one of wnam, enam, sam, weur, eeur, apac, oc, afr, me."
+    condition     = contains(["", "wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"], var.session_do_location_hint)
+    error_message = "session_do_location_hint must be empty or one of wnam, enam, sam, weur, eeur, apac, apac-ne, apac-se, oc, afr, me."
   }
 }
 

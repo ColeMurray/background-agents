@@ -59,7 +59,7 @@ describe("session Durable Object location hint parser", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it.each(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"])(
+  it.each(["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"])(
     "accepts %s",
     (value) => {
       const log = { warn: vi.fn() };

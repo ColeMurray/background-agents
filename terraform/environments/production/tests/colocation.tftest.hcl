@@ -86,17 +86,30 @@ run "session_hint_reaches_worker_binding" {
   command = plan
 
   variables {
-    session_do_location_hint = "weur"
+    session_do_location_hint = "apac-ne"
   }
 
   assert {
-    condition     = module.control_plane_worker.plain_text_bindings["SESSION_DO_LOCATION_HINT"] == "weur"
+    condition     = module.control_plane_worker.plain_text_bindings["SESSION_DO_LOCATION_HINT"] == "apac-ne"
     error_message = "The configured hint must reach the control-plane Worker."
   }
 
   assert {
     condition     = module.web_app[0].serverless_region == "iad1"
     error_message = "The session hint must not affect the web region."
+  }
+}
+
+run "southeast_asia_pacific_hint_reaches_worker_binding" {
+  command = plan
+
+  variables {
+    session_do_location_hint = "apac-se"
+  }
+
+  assert {
+    condition     = module.control_plane_worker.plain_text_bindings["SESSION_DO_LOCATION_HINT"] == "apac-se"
+    error_message = "The Southeast Asia-Pacific hint must reach the control-plane Worker."
   }
 }
 
