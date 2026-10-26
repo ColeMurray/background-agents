@@ -6,6 +6,9 @@ import { useState, type ComponentProps } from "react";
 export function IntentPrefetchLink(props: Omit<ComponentProps<typeof Link>, "prefetch">) {
   const [intent, setIntent] = useState(false);
 
+  // First intent enables viewport observation, so prefetch starts at default priority;
+  // later hover/touch events use Next's intent priority. We accept the first-intent
+  // delay to avoid speculative prefetches for every visible session.
   return (
     <Link
       {...props}
