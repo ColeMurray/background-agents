@@ -1,12 +1,24 @@
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+
+// Key rotation accepts only an optional client secret, not a bulk payload.
+const MAX_REGENERATE_KEY_BODY_BYTES = 16 * 1024;
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
   try {
-    const body = await request.text();
+    const contentLength = Number(request.headers.get("Content-Length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_REGENERATE_KEY_BODY_BYTES) {
+      return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+    }
+    const bytes = await readBodyCapped(request.body, MAX_REGENERATE_KEY_BODY_BYTES);
+    if (bytes === null) {
+      return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+    }
+    const body = new TextDecoder().decode(bytes);
     const response = await controlPlaneUserFetch(
       `/automations/${encodeURIComponent(id)}/regenerate-key`,
       {
