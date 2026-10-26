@@ -242,7 +242,7 @@ export function useSessionTargetPicker({
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
   const [selectionInvalidated, setSelectionInvalidated] = useState(false);
-  const [storedTarget] = useState(readStoredSessionTarget);
+  const [storedTarget, setStoredTarget] = useState(readStoredSessionTarget);
   const targetCatalogError =
     draftTarget?.kind === "environment"
       ? environmentsError
@@ -380,10 +380,12 @@ export function useSessionTargetPicker({
   ]);
 
   // Persist launchable, restorable selections: repos and environments. Ad-hoc
-  // lists and "no repository" keep whatever was stored before them.
+  // lists and "no repository" keep whatever was stored before them. The anticipated
+  // target follows the stored one, so a later context change guesses what the effect restores.
   useEffect(() => {
     if (sessionTarget?.kind !== "repo" && sessionTarget?.kind !== "environment") return;
     localStorage.setItem(LAST_SELECTED_TARGET_STORAGE_KEY, getTargetSelectValue(sessionTarget));
+    setStoredTarget(sessionTarget);
   }, [sessionTarget]);
 
   const onTargetSelectValueChange = useCallback(

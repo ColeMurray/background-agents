@@ -885,6 +885,22 @@ describe("useSessionTargetPicker", () => {
       expect(mocks.imageBuilds).toHaveBeenLastCalledWith(false);
     });
 
+    it("anticipates the latest persisted target after a context change", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
+      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+      const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+        initialProps: { teamId: "team-1", defaultEnvironmentId: "env-1" as string | null },
+      });
+      expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+      mocks.repos.mockReturnValue({ repos: [], loading: true });
+      mocks.environments.mockReturnValue({ environments: [], loading: true });
+      mocks.branches.mockClear();
+      rerender({ teamId: "team-2", defaultEnvironmentId: null });
+      expect(result.current.anticipatedRequestFields).toEqual({ environmentId: "env-1" });
+      expect(branchCalls().every((call) => call === "/")).toBe(true);
+    });
+
     it("does not anticipate a stored No repository in a team context", () => {
       localStorage.setItem("open-inspect-last-selected-repo", NO_REPOSITORY_OPTION_VALUE);
       const { result } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
