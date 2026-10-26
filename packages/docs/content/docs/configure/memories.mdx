@@ -113,7 +113,7 @@ flowchart TB
 Both settings pages share the same list controls.
 
 - **Proposed, Active, and Archived** tabs filter by status. Active is selected by default. Archived records show why they were archived: Archived manually, Rejected, or Superseded, with any archive note.
-- **Search** filters by title, description, and content. Type at least 2 characters and at most 8 words; every word must appear somewhere in the memory. The search is kept in the page URL, so a copied link shows the same results.
+- **Search** filters by title, description, and content. Type at least 2 characters and at most 8 words; every word must appear somewhere in the memory. The search text is kept in the page URL; a copied link restores the search, but the tab, page, and any scope chosen in **Memory scope** may need to be selected again.
 - **Previous page** and **Next page** move through 50 records at a time, most recently updated first.
 - Each record shows its type, revision number, and whether it is User-authored or came from an **Agent session** (a link to the session that wrote it).
 
@@ -121,7 +121,7 @@ Both settings pages share the same list controls.
 
 Settings › Shared memories opens on **All**, which lists memories from every repository and environment you can read, in one list. Each record shows its scope. Environment scopes link to that environment's own view. Repository scopes are shown as text; choose the repository in **Memory scope** to see only its memories.
 
-To review everything waiting for approval, open the Proposed tab in All. You can edit, approve, reject, archive, and restore from All wherever you have management access, but you cannot create a memory there.
+To review everything waiting for approval, open the Proposed tab in All. You can edit, approve, reject, archive, and restore from All wherever you have management access, but you cannot create or supersede a memory there.
 
 The All view stops paging once a page would start past the 1,000th record. If more matches remain, it says "All-view browsing limit reached"; choose a single scope or narrow your search.
 
@@ -141,7 +141,7 @@ The memory is active immediately and is selected for new sessions it applies to,
 ## Editing, superseding, and history
 
 - **Edit** changes a proposed or active memory. Each save creates a new revision; the original author is kept. Archived memories cannot be edited until they are restored.
-- **Supersede** on an active memory opens a new memory that replaces it. When you save, the new memory becomes active and the old one is archived as Superseded. When an agent proposes a replacement, the original stays active until the proposal is approved.
+- **Supersede** on an active memory opens a new memory that replaces it. In Settings › Shared memories, choose the repository or environment in **Memory scope** first; Supersede is not available in All. When you save, the new memory becomes active and the old one is archived as Superseded. When an agent proposes a replacement, the original stays active until the proposal is approved.
 - **Revision history** shows each revision with a before-and-after comparison. **Revert to this revision** saves that content as a new revision; history is never rewritten.
 
 ## Approving, rejecting, archiving, and restoring
@@ -163,22 +163,27 @@ When a page has records you can act on, a bar above the list lets you select the
 2. Click an action such as **Approve selected** or **Archive selected**. Only actions that every selected record allows are offered.
 3. **Reject selected** and **Archive selected** ask for an optional **Archive note for all selected**, then a confirmation such as **Archive 3 memories**. Approve and restore apply immediately.
 
-Selection is limited to the current page and clears when you change the tab, page, or search. Each memory is checked separately against your access and against the revision you were looking at, so one that changed or that you cannot manage fails on its own while the rest apply. The page reports the outcome, for example "Approved 5 of 7 memories." followed by each failure by title with its reason.
+Selection is limited to the current page and clears when you change the tab, page, or search. Each memory is checked separately against your access and against the revision you were looking at, so one whose content was revised, whose current status no longer allows the action, or that you cannot manage fails on its own while the rest apply. The page reports the outcome, for example "Approved 5 of 7 memories." followed by each failure by title with its reason.
 
 The server accepts up to 8 memories per request. The page sends larger selections as consecutive batches of 8 automatically. If a whole batch fails, for example because the connection dropped, that batch and any batches not yet sent are reported as failed, and earlier batches stay applied. The server may still have applied the failed batch before its response was lost, so reload and check each memory's current status before retrying.
 
 ## Troubleshooting
 
 <Accordions>
-  <Accordion title='"Memory changed; reload before acting" or "reload before editing"'>
-    Cause: someone else edited, approved, rejected, or archived the memory after you loaded it.
-    OpenInspect applies each change only to the revision you reviewed, so your change is refused
-    rather than overwriting theirs. Fix: reload the page, review the current version, and try again.
+  <Accordion title='"Memory changed" or "Memory status changed; reload before acting"'>
+    Cause: someone else revised the memory's content after you loaded it, or its status changed so
+    that your action no longer applies (for example it was archived, or a proposal you tried to
+    approve was already rejected). Edits and actions apply only to the content revision you
+    reviewed, so your change is refused rather than overwriting theirs. A status change alone does
+    not block an action the new status still allows: editing or archiving a proposal that someone
+    has since approved applies to the now-active memory. Fix: reload the page, review the current
+    version, and try again.
 
 </Accordion>
   <Accordion title="Some memories failed in a bulk action">
-    Cause: each selected memory is decided separately. A memory fails on its own when it changed
-    since you loaded it, its status changed, or you cannot manage its scope. The error lists each
+    Cause: each selected memory is decided separately. A memory fails on its own when its content
+    was revised since you loaded it, its current status no longer allows the action, or you cannot
+    manage its scope. The error lists each
     failed memory by title with the reason. Fix: reload, then select the remaining memories and
     try again.
 
