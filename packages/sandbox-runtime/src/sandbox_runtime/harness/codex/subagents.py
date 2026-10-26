@@ -103,10 +103,11 @@ class CodexSubagents:
         if not isinstance(params, dict) or not isinstance(params.get("threadId"), str):
             return []
         thread_id = params["threadId"]
-        item = params.get("item") if isinstance(params.get("item"), dict) else {}
+        item, turn = params.get("item"), params.get("turn")
+        item = item if isinstance(item, dict) else {}
+        turn = turn if isinstance(turn, dict) else {}
         if method in {"item/started", "item/completed"} and item.get("type") == "subAgentActivity":
             return self._activity(thread_id, params.get("turnId"), item)
-        turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
         if thread_id == self.thread_id:
             # A parent turn that did not complete stops the sub-agents rooted at it.
             if (
@@ -121,7 +122,7 @@ class CodexSubagents:
             return self._turn_started(thread_id, turn)
         agent = self._agents.get(thread_id)
         turn_id = turn.get("id") if method == "turn/completed" else params.get("turnId")
-        if agent is None or not agent.running or turn_id != agent.turn_id:
+        if agent is None or not agent.running or agent.turn_id is None or turn_id != agent.turn_id:
             return []
         if method == "turn/completed":
             return self._turn_completed(agent, turn)
@@ -140,7 +141,7 @@ class CodexSubagents:
             if method == "item/completed":
                 agent.text = str(item.get("text", ""))[:MAX_ASSISTANT_TEXT_CHARS]
             return []
-        event = tool_call_event(method, item, self.message_id, turn_id)
+        event = tool_call_event(method, item, self.message_id, agent.turn_id)
         return self._present(agent, self._nested(agent, event)) if event else []
 
     def _agent(self, thread_id: str) -> _Agent:

@@ -431,7 +431,6 @@ class CodexHarness:
                     },
                 )
                 self._turn_id = response["turn"]["id"]
-                await self._ownership_changed()
                 state = CodexTurnEvents(
                     prompt.message_id,
                     self.session_id,
@@ -445,6 +444,7 @@ class CodexHarness:
                 )
                 subagents = CodexSubagents(state)
                 self._subagents = subagents
+                await self._ownership_changed()
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
                 # start response. Only this epoch/thread/turn and the sub-agents
@@ -673,7 +673,7 @@ class CodexHarness:
         return accepted
 
     async def abort(self) -> bool:
-        if not (self._client and self._turn_id):
+        if not (self._client and self.session_id and self._turn_id):
             return False
         turns = [(self.session_id, self._turn_id)]
         if self._subagents is not None:
