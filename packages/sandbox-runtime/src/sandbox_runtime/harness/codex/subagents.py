@@ -10,6 +10,7 @@ notification streams arrive in. The parent thread's ``subAgentActivity``
 announcement only adds presentation: the sub-agent becomes one ``task`` tool
 call under the prompt's message, its tool calls nest under that task, and its
 turn reports usage as a subtask step. Until then its presentation is deferred.
+Its requests are charged to the prompt's cost, as the parent's are.
 
 Only one level is supported, matching the timeline: a spawn announced by any
 thread but the parent's is refused, and the refused turn reported for interruption.
@@ -20,23 +21,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .events import (
-    MAX_ASSISTANT_TEXT_CHARS,
-    TOKEN_FIELDS,
-    cumulative_total,
-    failure_message,
-    tool_call_event,
-    usage_tokens,
-)
+from .events import MAX_ASSISTANT_TEXT_CHARS, CodexTurnEvents, failure_message, tool_call_event
+from .usage import CodexUsage
 
 SUBAGENT_INTERRUPTED_MESSAGE = "Sub-agent interrupted"
 # Deferred tool calls of not-yet-announced sub-agents. Only presentation is
 # bounded; lifecycle and usage are already reduced into native state.
 MAX_DEFERRED_EVENTS = 2000
-
-
-def _zero_usage() -> dict[str, int]:
-    return dict.fromkeys(TOKEN_FIELDS, 0)
 
 
 @dataclass
@@ -45,6 +36,8 @@ class _Agent:
 
     thread_id: str
     task_call_id: str
+    # A spawned thread is new: its cumulative usage starts from zero.
+    usage: CodexUsage
     # Presentation, set by the parent's announcement.
     args: dict[str, Any] | None = None
     model: str | None = None
@@ -57,18 +50,16 @@ class _Agent:
     output: str = ""
     text: str = ""
     error: Any = None
-    # A spawned thread is new: its cumulative usage starts from zero.
-    total: dict[str, int] = field(default_factory=_zero_usage)
-    usage_valid: bool = True
-    tokens: dict[str, Any] | None = None
     reason: str | None = None
     deferred: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CodexSubagents:
-    def __init__(self, message_id: str, thread_id: str, turn_id: str, model: str) -> None:
-        self.message_id, self.thread_id, self.turn_id = message_id, thread_id, turn_id
-        self.model = model
+    def __init__(self, parent: CodexTurnEvents) -> None:
+        """Project the sub-agents rooted at ``parent``, charging its prompt's cost."""
+        self._parent = parent
+        self.message_id, self.thread_id = parent.message_id, parent.thread_id
+        self.turn_id, self.model = parent.turn_id, parent.model
         self._agents: dict[str, _Agent] = {}
         self._deferred_events = 0
         self._interrupts: list[tuple[str, str]] = []
@@ -125,7 +116,9 @@ class CodexSubagents:
         if method == "turn/completed":
             return self._turn_completed(agent, turn)
         if method == "thread/tokenUsage/updated":
-            return self._usage(agent, params.get("tokenUsage"))
+            return self._usage(agent, agent.usage.update(params.get("tokenUsage")))
+        if method == "model/rerouted" and isinstance(params.get("toModel"), str):
+            return self._parent.warnings(agent.usage.ran(params["toModel"]))
         if method == "error":
             # The terminal ``turn/completed`` reports the failure.
             if params.get("willRetry") is not True and isinstance(params.get("error"), dict):
@@ -142,8 +135,11 @@ class CodexSubagents:
 
     def _agent(self, thread_id: str) -> _Agent:
         if thread_id not in self._agents:
+            # Requests are priced at the prompt's model until the spawn names another.
             self._agents[thread_id] = _Agent(
-                thread_id, task_call_id=f"codex:{self.turn_id}:agent:{thread_id}"
+                thread_id,
+                task_call_id=f"codex:{self.turn_id}:agent:{thread_id}",
+                usage=CodexUsage(self._parent.usage.prompt_cost, self.model),
             )
         return self._agents[thread_id]
 
@@ -174,13 +170,13 @@ class CodexSubagents:
         agent.model = model if isinstance(model, str) and model else self.model
         # Spawning always starts the sub-agent's turn.
         agent.pending = agent.turn_id is None
-        events = [self._task(agent)]
+        events = [*self._parent.warnings(agent.usage.ran(agent.model)), self._task(agent)]
         if agent.turn_id is not None:
             events.append(self._step(agent, "step_start"))
         events.extend(agent.deferred)
         self._deferred_events -= len(agent.deferred)
         agent.deferred = []
-        if agent.tokens is not None or (agent.turn_id is not None and not agent.running):
+        if agent.usage.tokens is not None or (agent.turn_id is not None and not agent.running):
             events.append(self._step(agent, "step_finish"))
         return events
 
@@ -226,17 +222,10 @@ class CodexSubagents:
             return []
         return [self._step(agent, "step_finish"), self._task(agent)]
 
-    def _usage(self, agent: _Agent, usage: Any) -> list[dict[str, Any]]:
-        if not agent.usage_valid:
-            return []
-        # A sub-agent's only turn starts with its thread, so its cumulative
-        # usage is the turn's.
-        total = cumulative_total(usage, agent.total)
-        if total is None:
-            agent.usage_valid, agent.tokens = False, None
-        else:
-            agent.total, agent.tokens = total, usage_tokens(total)
-        return [self._step(agent, "step_finish")] if agent.args is not None else []
+    def _usage(self, agent: _Agent, warnings: list[str]) -> list[dict[str, Any]]:
+        # Warnings concern the prompt's cost, so they are never deferred.
+        events = self._parent.warnings(warnings)
+        return [*events, self._step(agent, "step_finish")] if agent.args is not None else events
 
     def _present(self, agent: _Agent, event: dict[str, Any]) -> list[dict[str, Any]]:
         """Emit an announced sub-agent's event, or defer it, within bounds, until then."""
@@ -267,10 +256,13 @@ class CodexSubagents:
             "model": f"openai/{agent.model}",
         }
         if kind == "step_finish":
-            if agent.tokens is not None:
-                event["tokens"] = agent.tokens
-            # Sub-agent requests are not priced: an absent cost marks an
-            # unpriced step, and the prompt's cost is the parent turn's.
+            if agent.usage.tokens is not None:
+                event["tokens"] = agent.usage.tokens
+            # An absent cost marks a sub-agent that could not be priced; the
+            # prompt's cost includes every priced request, the parent's too.
+            if (cost := agent.usage.step_cost_usd) is not None:
+                event["cost"] = cost
+            event["messageCostUsd"] = self._parent.message_cost_usd
             event["reason"] = agent.reason or "unknown"
         return self._nested(agent, event)
 

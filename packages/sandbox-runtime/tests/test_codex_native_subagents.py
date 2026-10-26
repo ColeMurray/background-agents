@@ -5,12 +5,16 @@ Run with OI_TEST_CODEX_BINARY pointing to the pinned executable.
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
+from sandbox_runtime.model_prices import ModelPriceCatalog
+
+CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("OI_TEST_CODEX_BINARY"),
@@ -53,6 +57,7 @@ async def test_native_subagent_is_a_task_with_nested_tools_and_usage(
         limits=PromptLimits(1, 60, 30),
         client_factory=native_factory,
         environ={"OPENAI_API_KEY": "synthetic"},
+        prices=ModelPriceCatalog(CATALOG, MagicMock()),
     )
     harness._tool_client.request = AsyncMock(
         return_value=httpx.Response(200, json={"children": []})
@@ -80,7 +85,14 @@ async def test_native_subagent_is_a_task_with_nested_tools_and_usage(
     assert tool["tool"] == "get-child-status"
     assert "No child sessions found." in tool["output"]
     # Two sub-agent model calls of 120 tokens each, reported apart from the parent's.
-    assert [e for e in nested if e["type"] == "step_finish"][-1]["tokens"]["total"] == 240
+    # Each request is 100 input at $2/M, 15 output and 5 reasoning at $10/M.
+    child_step = [e for e in nested if e["type"] == "step_finish"][-1]
+    assert child_step["tokens"]["total"] == 240
+    assert child_step["cost"] == 0.0008
     parent_step = events[-1]
     assert parent_step["type"] == "step_finish" and "isSubtask" not in parent_step
     assert parent_step["tokens"]["total"] == 360
+    assert parent_step["cost"] == 0.0012
+    # The prompt's cost includes its sub-agent's.
+    assert parent_step["messageCostUsd"] == result.message_cost_usd == 0.002
+    assert not [e for e in events if e["type"] == "warning"]

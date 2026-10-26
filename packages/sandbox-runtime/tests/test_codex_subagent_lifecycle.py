@@ -5,8 +5,10 @@ import pytest
 
 from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
+from sandbox_runtime.model_prices import ModelPrice
 
 PARENT, TURN, CHILD = "parent-thread", "parent-turn", "child-thread"
+PRICE = {"input": 2, "output": 10}
 
 
 def build(tmp_path):
@@ -215,3 +217,43 @@ async def test_subagent_finished_before_its_announcement_settles(tmp_path):
         queue.put_nowait(frame)
     assert (await asyncio.wait_for(run(harness, events), 5)).success
     assert [e for e in events if e.get("tool") == "task"][-1]["status"] == "completed"
+
+
+def usage(thread, turn, input_tokens, output_tokens):
+    counts = {
+        "inputTokens": input_tokens,
+        "cachedInputTokens": 0,
+        "outputTokens": output_tokens,
+        "reasoningOutputTokens": 0,
+        "totalTokens": input_tokens + output_tokens,
+    }
+    return {
+        "method": "thread/tokenUsage/updated",
+        "params": {"threadId": thread, "turnId": turn, "tokenUsage": {"total": counts}},
+    }
+
+
+async def test_subagent_spend_counts_toward_the_prompts_cost(tmp_path):
+    harness, _, queue, _ = build(tmp_path)
+    # USD per million tokens.
+    harness._prices = MagicMock(price=MagicMock(return_value=ModelPrice.parse(PRICE)))
+    events = []
+    for frame in (
+        spawned(),
+        started(CHILD, "child-turn"),
+        usage(CHILD, "child-turn", 1000, 100),
+        completed(CHILD, "child-turn"),
+        usage(PARENT, TURN, 500, 50),
+        completed(PARENT, TURN),
+    ):
+        queue.put_nowait(frame)
+    outcome = await asyncio.wait_for(run(harness, events), 5)
+    assert outcome.success
+    steps = [e for e in events if e["type"] == "step_finish"]
+    child = [e for e in steps if e.get("isSubtask")][-1]
+    parent = steps[-1]
+    # 1000 input at $2/M and 100 output at $10/M; then 500 and 50 for the parent.
+    assert child["cost"] == 0.003 and child["messageCostUsd"] == 0.003
+    assert parent["cost"] == 0.0015 and parent["messageCostUsd"] == 0.0045
+    assert outcome.message_cost_usd == 0.0045
+    assert not [e for e in events if e["type"] == "warning"]

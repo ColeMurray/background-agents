@@ -444,7 +444,7 @@ class CodexHarness:
                     price=price,
                     unpriced_warning=unpriced,
                 )
-                subagents = CodexSubagents(prompt.message_id, self.session_id, self._turn_id, model)
+                subagents = CodexSubagents(state)
                 self._subagents = subagents
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
@@ -463,10 +463,10 @@ class CodexHarness:
                     await self._interrupt(subagents.take_interrupts())
                     async with self._frames:
                         self._frames.notify_all()
-                    if self._total != state.total:
-                        self._total = state.total
+                    if self._total != state.usage.total:
+                        self._total = state.usage.total
                         self._persist()
-                self._usage_baseline_known = state.status == "completed" and state.has_usage
+                self._usage_baseline_known = state.status == "completed" and state.usage.has_usage
                 self._persist()
                 await emit(state.finish())
                 if state.status == "completed":

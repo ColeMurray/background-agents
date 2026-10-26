@@ -1,4 +1,4 @@
-"""Pure, turn-correlated native event and token-usage projection."""
+"""Pure, turn-correlated native event projection."""
 
 from __future__ import annotations
 
@@ -6,26 +6,19 @@ import json
 import re
 import time
 from datetime import UTC, datetime
-from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...model_prices import ModelPrice, TokenBuckets
 from ..tool_results import content_text
+from .usage import CodexUsage, PromptCost
+
+if TYPE_CHECKING:
+    from ...model_prices import ModelPrice
 
 # Even non-BMP characters expand to at most 12 JSON bytes each. Leave ample
 # room for event identity/timestamps below the bridge's one-megabyte limit.
 MAX_ASSISTANT_TEXT_CHARS = 64 * 1024
 TEXT_UPDATE_INTERVAL_SECONDS = 0.1
 TEXT_TRUNCATION_NOTICE = "\n\n[Response exceeds the display limit; remaining text omitted.]"
-TOKEN_FIELDS = (
-    "inputTokens",
-    "cachedInputTokens",
-    "cacheWriteInputTokens",
-    "outputTokens",
-    "reasoningOutputTokens",
-    "totalTokens",
-)
-MAX_SAFE_TOKEN_COUNT = 2**53 - 1
 TOOL_ITEM_KINDS = frozenset(
     {"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch"}
 )
@@ -38,22 +31,6 @@ PLAN_STEP_STATUSES = {
 MAX_DIAGNOSTIC_CHARS = 500
 RATE_LIMIT_WARNING_PERCENT = 90
 TURN_FAILED_MESSAGE = "Codex turn failed"
-UNATTRIBUTED_USAGE_WARNING = (
-    "Some of this turn's Codex usage could not be separated from earlier work in this "
-    "conversation, so it is not included in the turn's cost."
-)
-COMBINED_USAGE_WARNING = (
-    "Codex did not report this turn's usage one request at a time, so this turn's cost is "
-    "an estimate."
-)
-REROUTED_MODEL_WARNING = (
-    "Codex switched models during this turn, so this turn's cost is an estimate at the "
-    "requested model's prices."
-)
-INCONSISTENT_USAGE_WARNING = (
-    "Codex reported inconsistent token usage, so this turn's cost covers only the usage "
-    "reported before it."
-)
 FAILURE_MESSAGES = {
     "unauthorized": (
         "OpenAI rejected this session's credential. Reconnect the OpenAI account in "
@@ -147,60 +124,6 @@ def _resets(window: dict[str, Any]) -> str:
     except (OverflowError, OSError, ValueError):
         return ""
     return f", resets {moment:%Y-%m-%d %H:%M} UTC"
-
-
-def _token_counts(value: Any) -> dict[str, int] | None:
-    if not isinstance(value, dict):
-        return None
-    # Cache writes are optional in the pinned protocol; the other cumulative
-    # fields must be present. Missing usage must not invent token counts.
-    counts: dict[str, int] = {}
-    for key in TOKEN_FIELDS:
-        count = value.get(key, 0 if key == "cacheWriteInputTokens" else None)
-        if type(count) is not int or not 0 <= count <= MAX_SAFE_TOKEN_COUNT:
-            return None
-        counts[key] = count
-    if (
-        counts["cachedInputTokens"] + counts["cacheWriteInputTokens"] > counts["inputTokens"]
-        or counts["reasoningOutputTokens"] > counts["outputTokens"]
-        or counts["totalTokens"] != counts["inputTokens"] + counts["outputTokens"]
-    ):
-        return None
-    return counts
-
-
-def cumulative_total(usage: Any, previous: dict[str, int]) -> dict[str, int] | None:
-    """A native usage report's cumulative total; ``None`` when invalid or below ``previous``."""
-    total = _token_counts(usage.get("total") if isinstance(usage, dict) else None)
-    if total is None or any(total[k] < previous[k] for k in TOKEN_FIELDS):
-        return None
-    return total
-
-
-def _buckets(counts: dict[str, int]) -> TokenBuckets:
-    # Native input includes cached reads and writes, native output includes
-    # reasoning. Neutral buckets are disjoint.
-    read, write = counts["cachedInputTokens"], counts["cacheWriteInputTokens"]
-    reasoning = counts["reasoningOutputTokens"]
-    return TokenBuckets(
-        input=max(0, counts["inputTokens"] - read - write),
-        output=max(0, counts["outputTokens"] - reasoning),
-        reasoning=reasoning,
-        cache_read=read,
-        cache_write=write,
-    )
-
-
-def usage_tokens(counts: dict[str, int]) -> dict[str, Any]:
-    """Project native token counts onto the bridge's ``step_finish`` tokens."""
-    buckets = _buckets(counts)
-    return {
-        "input": buckets.input,
-        "output": buckets.output,
-        "reasoning": buckets.reasoning,
-        "cache": {"read": buckets.cache_read, "write": buckets.cache_write},
-        "total": counts["totalTokens"],
-    }
 
 
 def tool_call_event(
@@ -346,26 +269,11 @@ class CodexTurnEvents:
     ) -> None:
         self.message_id, self.thread_id, self.turn_id = message_id, thread_id, turn_id
         self.model = model
-        self.price = price
-        # Why usage goes unpriced without a price; worded by the catalog's owner.
-        self.unpriced_warning = unpriced_warning
-        self._cost = Decimal(0)
         self.step_id = f"codex:{thread_id}:{turn_id}"
-        normalized_baseline = _token_counts(
-            baseline if baseline else dict.fromkeys(TOKEN_FIELDS, 0)
+        # Sub-agents charge the same prompt cost; see CodexSubagents.
+        self.usage = CodexUsage(
+            PromptCost(price, unpriced_warning), model, baseline, baseline_known=baseline_known
         )
-        # The last accepted cumulative native total.
-        self.total = normalized_baseline or dict.fromkeys(TOKEN_FIELDS, 0)
-        # An untrusted checkpoint may lag native history this turn must not be
-        # charged for; the first total the turn observes replaces it.
-        self._checkpoint_trusted = baseline_known and normalized_baseline is not None
-        # This turn's usage: the sum of the increments accepted so far.
-        self._usage = dict.fromkeys(TOKEN_FIELDS, 0)
-        # Reporting facts only; neither stops later increments from counting.
-        self.attribution_complete = True
-        self.requests_separable = True
-        # False once Codex reroutes the turn: prices are for the requested model.
-        self.model_priced = True
         self.text: dict[str, list[str]] = {}
         self._text_length = 0
         self._text_truncated = False
@@ -379,9 +287,6 @@ class CodexTurnEvents:
         self._fatal_error: dict[str, Any] | None = None
         self._warned: set[str] = set()
         self.rate_limits = rate_limits
-        self.tokens: dict[str, Any] | None = None
-        self.usage_valid = True
-        self.has_usage = False
         self._plan_updates = 0
 
     def start(self) -> dict[str, Any]:
@@ -394,19 +299,8 @@ class CodexTurnEvents:
 
     @property
     def message_cost_usd(self) -> float:
-        """Priced cost of the requests observed so far in this turn."""
-        return float(self._cost)
-
-    @property
-    def cost_complete(self) -> bool:
-        """Whether every request this turn reported could be priced."""
-        return (
-            self.price is not None
-            and self.usage_valid
-            and self.attribution_complete
-            and self.requests_separable
-            and self.model_priced
-        )
+        """Priced cost of the requests observed so far for this prompt, sub-agents included."""
+        return self.usage.prompt_cost.usd
 
     def finish(self) -> dict[str, Any]:
         return {
@@ -414,10 +308,9 @@ class CodexTurnEvents:
             "messageId": self.message_id,
             "stepId": self.step_id,
             "model": f"openai/{self.model}",
-            **({"tokens": self.tokens} if self.tokens is not None else {}),
-            # One step per turn, so the step's cost is the turn's. An absent
-            # cost marks a turn that could not be priced.
-            **({"cost": self.message_cost_usd} if self.cost_complete else {}),
+            **({"tokens": self.usage.tokens} if self.usage.tokens is not None else {}),
+            # An absent cost marks a turn that could not be priced.
+            **({"cost": cost} if (cost := self.usage.step_cost_usd) is not None else {}),
             "messageCostUsd": self.message_cost_usd,
             "reason": self.status or "unknown",
         }
@@ -467,18 +360,13 @@ class CodexTurnEvents:
             message = f"Codex switched this turn from {params.get('fromModel')} to {to_model}"
             if isinstance(reason, str):
                 message += f" ({re.sub(r'(?<!^)(?=[A-Z])', ' ', reason).lower()})"
-            events = self._warning(message)
-            if to_model != self.model and self.price is not None:
-                # Pricing is never resolved while native work runs.
-                self.model_priced = False
-                events += self._warning(REROUTED_MODEL_WARNING)
-            return events
+            return self.warnings([message, *self.usage.ran(to_model)])
         if method in AUTH_RECOVERY_SUMMARIES:
             provider = params.get("provider") or "model provider"
             summary = AUTH_RECOVERY_SUMMARIES[method].format(provider)
             return self._warning(_with_detail(summary, params.get("message")))
         if method == "thread/tokenUsage/updated":
-            return self._usage_update(params.get("tokenUsage"))
+            return [*self.warnings(self.usage.update(params.get("tokenUsage"))), self.finish()]
         if method == "turn/plan/updated":
             # Each update is a distinct call: upserts keep a callId's first
             # timeline slot, and the task list shows the latest todowrite.
@@ -521,61 +409,6 @@ class CodexTurnEvents:
         # Raw reasoning is not assistant text; sub-agent items belong to CodexSubagents.
         return []
 
-    def _usage_update(self, usage: Any) -> list[dict[str, Any]]:
-        """Fold one cumulative native report into this turn's usage and cost."""
-        total = cumulative_total(usage, self.total)
-        if not self.usage_valid or total is None:
-            return self._invalid_usage()
-        advance = {k: total[k] - self.total[k] for k in TOKEN_FIELDS}
-        # Codex sends one update per model request; `last` is that request.
-        reported_last = usage.get("last") if isinstance(usage, dict) else None
-        last = _token_counts(reported_last)
-        increment: dict[str, int] | None = advance
-        events: list[dict[str, Any]] = []
-        if not any(advance.values()):
-            pass  # A repeated report adds nothing.
-        elif not self._checkpoint_trusted:
-            # A contained cancellation can leave native history ahead of the
-            # checkpoint, so only the request this update reports is attributed.
-            if last is not None and all(last[k] <= advance[k] for k in TOKEN_FIELDS):
-                increment = last
-            else:
-                increment = None
-                self.attribution_complete = False
-                events += self._warning(UNATTRIBUTED_USAGE_WARNING)
-        elif _token_counts(advance) is None:
-            # Valid cumulative totals can still yield an inconsistent request.
-            return self._invalid_usage()
-        elif reported_last is not None and last != advance:
-            # Several requests arrived together, or the reported request is
-            # malformed (unlike an absent one). Pricing the advance as one selects the
-            # highest tier any of them could need, so a limit is never reached
-            # late, but the turn's cost is then an estimate.
-            self.requests_separable = False
-            events += self._warning(COMBINED_USAGE_WARNING)
-        self.total = total
-        self._checkpoint_trusted = True
-        self.has_usage = True
-        if increment is not None:
-            self._add_usage(increment)
-        if self.price is None and any(advance.values()):
-            events += self._warning(self.unpriced_warning)
-        return [*events, self.finish()]
-
-    def _add_usage(self, increment: dict[str, int]) -> None:
-        self._usage = {k: self._usage[k] + increment[k] for k in TOKEN_FIELDS}
-        if self.price is not None:
-            # Each request is priced on its own: context-tier rates depend on
-            # that request's input size, not the turn's.
-            self._cost += self.price.cost(_buckets(increment), increment["inputTokens"])
-        self.tokens = usage_tokens(self._usage)
-
-    def _invalid_usage(self) -> list[dict[str, Any]]:
-        self.usage_valid = False
-        self.has_usage = False
-        self.tokens = None
-        return [*self._warning(INCONSISTENT_USAGE_WARNING), self.finish()]
-
     def fail_pending(self) -> list[dict[str, Any]]:
         """Report a recorded non-retried native error when ``turn/completed`` never arrives."""
         return self._failed(self._fatal_error) if self._fatal_error is not None else []
@@ -585,6 +418,10 @@ class CodexTurnEvents:
             return []
         self.error = failure_message(error)
         return [{"type": "error", "error": self.error, "messageId": self.message_id}]
+
+    def warnings(self, messages: list[str]) -> list[dict[str, Any]]:
+        """Provider warnings for this prompt, each reported once."""
+        return [event for message in messages for event in self._warning(message)]
 
     def _warning(self, message: Any) -> list[dict[str, Any]]:
         if not isinstance(message, str) or not message.strip():

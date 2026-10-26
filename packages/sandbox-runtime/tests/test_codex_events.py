@@ -241,22 +241,22 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     assert projected["messageCostUsd"] == 0
     assert "costAvailability" not in projected
     assert "tokens" not in projected
-    assert state.has_usage
-    assert state.total["inputTokens"] == 160
+    assert state.usage.has_usage
+    assert state.usage.total["inputTokens"] == 160
 
     following = CodexTurnEvents(
         "m3",
         "thread",
         "turn3",
         "gpt-6.1-sol",
-        state.total,
+        state.usage.total,
         price=PRICE,
         rate_limits=CodexRateLimits(),
     )
     projected = usage(following, counts(170))
     assert projected["tokens"]["input"] == 10
     assert projected["cost"] == projected["messageCostUsd"] == 0.00002
-    assert following.has_usage
+    assert following.usage.has_usage
 
 
 def test_unknown_baseline_attributes_each_request_from_its_own_usage():
@@ -277,7 +277,7 @@ def test_unknown_baseline_attributes_each_request_from_its_own_usage():
     projected = usage(state, counts(190), last=counts(30))
     assert projected["tokens"]["input"] == 40
     assert projected["cost"] == projected["messageCostUsd"] == 0.00008
-    assert state.attribution_complete
+    assert state.usage.attribution_complete
 
 
 def test_untrusted_checkpoint_is_settled_by_the_first_observed_total():
@@ -327,7 +327,7 @@ def test_unattributable_first_request_leaves_later_requests_counted(last):
     assert "tokens" not in events[-1]
     usage(state, counts(170), last=counts(10))
     projected = usage(state, counts(180))
-    assert not state.attribution_complete
+    assert not state.usage.attribution_complete
     # Usage the turn could attribute still counts; the gap keeps `cost` absent.
     assert "cost" not in projected
     assert projected["messageCostUsd"] == 0.00004
@@ -353,7 +353,7 @@ def test_malformed_request_report_makes_the_cost_an_estimate(last, exact):
     # cannot show the advance is a single request.
     assert ("cost" in events[-1]) is exact
     assert events[-1]["messageCostUsd"] == 0.0002
-    assert state.requests_separable is exact
+    assert state.usage.requests_separable is exact
     assert any(event["type"] == "warning" for event in events) is not exact
 
 
@@ -389,7 +389,7 @@ def test_replayed_report_is_a_no_op():
     )
     assert [event["type"] for event in events] == ["step_finish"]
     assert first["cost"] == events[-1]["cost"] == 0.0002
-    assert state.requests_separable
+    assert state.usage.requests_separable
 
 
 @pytest.mark.parametrize(
@@ -421,13 +421,13 @@ def test_malformed_usage_does_not_invent_tokens(invalid):
     assert projected["messageCostUsd"] == 0.0001
     assert "costAvailability" not in projected
     assert "tokens" not in projected
-    assert not state.has_usage
-    assert state.total["inputTokens"] == 50
+    assert not state.usage.has_usage
+    assert state.usage.total["inputTokens"] == 50
     # A later clean frame cannot retroactively make this malformed series trustworthy.
     projected = usage(state, counts(200))
     assert "cost" not in projected
     assert projected["messageCostUsd"] == 0.0001
-    assert not state.has_usage
+    assert not state.usage.has_usage
 
 
 def test_absolute_valid_but_overlapping_delta_cannot_be_attributed():
@@ -443,7 +443,7 @@ def test_absolute_valid_but_overlapping_delta_cannot_be_attributed():
     projected = usage(state, {**counts(100), "cachedInputTokens": 1})
     assert "cost" not in projected
     assert projected["messageCostUsd"] == 0
-    assert not state.has_usage
+    assert not state.usage.has_usage
 
 
 def test_request_delta_that_breaks_token_invariants_is_not_priced():
@@ -454,7 +454,7 @@ def test_request_delta_that_breaks_token_invariants_is_not_priced():
     # Both totals are valid, and so is the turn's, but this request's 150 cached
     # tokens exceed its 100 input tokens.
     projected = usage(state, {**counts(200), "cachedInputTokens": 150})
-    assert not state.usage_valid
+    assert not state.usage.valid
     assert "cost" not in projected
     assert projected["messageCostUsd"] == 0.0002
 
@@ -473,20 +473,20 @@ def test_unknown_baseline_tracks_valid_totals_without_using_unsafe_deltas():
     projected = usage(state, {**counts(160), "cachedInputTokens": 150})
     assert "cost" not in projected
     assert projected["messageCostUsd"] == 0
-    assert state.has_usage
-    assert state.total["cachedInputTokens"] == 150
+    assert state.usage.has_usage
+    assert state.usage.total["cachedInputTokens"] == 150
 
 
 def test_no_usage_and_nonmonotonic_series_cannot_establish_a_safe_baseline():
     state = CodexTurnEvents(
         "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
     )
-    assert not state.has_usage
+    assert not state.usage.has_usage
     # Nothing reported yet is nothing spent.
     assert state.finish()["cost"] == 0
     usage(state, counts(100))
     assert "cost" not in usage(state, counts(99))
-    assert not state.has_usage
+    assert not state.usage.has_usage
 
 
 @pytest.mark.parametrize("envelope", [None, [], "invalid"])
@@ -499,7 +499,7 @@ def test_malformed_usage_envelope_does_not_throw(envelope):
         }
     )[0]
     assert "costAvailability" not in projected
-    assert not state.has_usage
+    assert not state.usage.has_usage
 
 
 def test_zero_usage_is_authoritative_and_unpriced_models_omit_cost():
@@ -507,7 +507,7 @@ def test_zero_usage_is_authoritative_and_unpriced_models_omit_cost():
         "m", "thread", "turn", "unknown-model", {}, rate_limits=CodexRateLimits()
     )
     projected = usage(state, counts(0))
-    assert state.has_usage
+    assert state.usage.has_usage
     assert projected["tokens"]["total"] == 0
     assert "cost" not in projected
     assert projected["messageCostUsd"] == 0
@@ -526,8 +526,8 @@ def test_invalid_restored_baseline_can_recover_authoritative_totals():
     )
     # The totals recover; a turn with no trusted baseline is still not billed.
     assert "cost" not in usage(state, counts(10))
-    assert state.has_usage
-    assert state.total["inputTokens"] == 10
+    assert state.usage.has_usage
+    assert state.usage.total["inputTokens"] == 10
 
 
 def breakdown(input_tokens, cached, write, output, reasoning):
@@ -564,7 +564,7 @@ def test_each_request_is_priced_at_the_rate_for_its_own_context():
     # rate instead would report $0.8767.
     assert reported == [0.035, 0.0766, 0.4496]
     assert state.finish()["cost"] == 0.4496
-    assert state.tokens == {
+    assert state.usage.tokens == {
         "input": 188_000,
         "output": 1_900,
         "reasoning": 2_600,
@@ -594,7 +594,7 @@ def test_usage_for_several_requests_in_one_update_is_an_estimate(input_tokens, e
     )
     # Earlier requests were not reported on their own; only the last 10k is known.
     projected = usage(state, counts(input_tokens), last=counts(10_000))
-    assert not state.requests_separable
+    assert not state.usage.requests_separable
     assert "cost" not in projected
     # The estimate selects the aggregate's tier, not the last 10k request's.
     assert projected["messageCostUsd"] == expected_cost

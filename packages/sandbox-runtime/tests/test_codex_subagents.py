@@ -1,15 +1,20 @@
+from sandbox_runtime.harness.codex.events import CodexRateLimits, CodexTurnEvents
 from sandbox_runtime.harness.codex.subagents import (
     MAX_DEFERRED_EVENTS,
     SUBAGENT_INTERRUPTED_MESSAGE,
     CodexSubagents,
 )
+from sandbox_runtime.model_prices import ModelPrice
 
 PARENT, TURN, CHILD = "parent-thread", "parent-turn", "child-thread"
 TASK = f"codex:{TURN}:agent:{CHILD}"
+# USD per million tokens.
+PRICE = ModelPrice.parse({"input": 2, "output": 10})
 
 
 def build():
-    return CodexSubagents("m", PARENT, TURN, "gpt-6.1-sol")
+    parent = CodexTurnEvents("m", PARENT, TURN, "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
+    return CodexSubagents(parent)
 
 
 def activity(kind="started", *, thread=PARENT, turn=TURN, agent=CHILD, path="/root/review_auth"):
@@ -115,8 +120,8 @@ def test_spawned_subagent_is_a_task_whose_activity_nests_under_it():
     assert (tool["isSubtask"], tool["taskCallId"], tool["childSessionId"]) == (True, TASK, CHILD)
     [step] = subagents.accept(usage(100, 10))
     assert step["tokens"]["total"] == 110
-    # Unpriced: no step cost, and no claim about the prompt's cost.
-    assert "cost" not in step and "messageCostUsd" not in step
+    # Unpriced: no step cost, and nothing priced for the prompt.
+    assert "cost" not in step and step["messageCostUsd"] == 0
 
     # Sub-agent text is the task result, never streamed.
     message = {"type": "agentMessage", "id": "a1", "text": "Auth is fine."}
@@ -150,9 +155,12 @@ def test_failed_and_interrupted_subagents_report_errors():
 def test_regressing_usage_is_dropped_for_the_rest_of_the_turn():
     subagents = build()
     feed(subagents, activity(), turn_started(), usage(100, 10))
-    [step] = subagents.accept(usage(50, 5))
+    warning, step = subagents.accept(usage(50, 5))
+    assert warning["type"] == "warning" and "inconsistent" in warning["message"]
     assert "tokens" not in step
-    assert subagents.accept(usage(200, 10)) == []
+    # Reported once; later usage is not counted.
+    [step] = subagents.accept(usage(200, 10))
+    assert "tokens" not in step
 
 
 def test_turn_finished_before_its_announcement_settles_and_is_projected():
@@ -272,3 +280,34 @@ def test_stop_reports_running_turns_and_any_that_start_later():
         turn_started("late-turn", thread="late"),
     )
     assert subagents.take_interrupts() == [("late", "late-turn")]
+
+
+def test_subagent_requests_are_charged_to_the_prompts_cost():
+    parent = CodexTurnEvents(
+        "m", PARENT, TURN, "gpt-6.1-sol", {}, rate_limits=CodexRateLimits(), price=PRICE
+    )
+    subagents = CodexSubagents(parent)
+    feed(subagents, activity(), turn_started())
+    [step] = subagents.accept(usage(1000, 100))
+    # 1000 input at $2/M and 100 output at $10/M.
+    assert step["cost"] == step["messageCostUsd"] == 0.003
+    assert parent.finish()["messageCostUsd"] == parent.message_cost_usd == 0.003
+    # The parent's own step made no requests.
+    assert parent.finish()["cost"] == 0
+
+
+def test_subagent_on_another_model_is_an_estimate_at_the_prompts_prices():
+    parent = CodexTurnEvents(
+        "m", PARENT, TURN, "gpt-6.1-sol", {}, rate_limits=CodexRateLimits(), price=PRICE
+    )
+    subagents = CodexSubagents(parent)
+    subagents.accept(turn_started())
+    subagents.accept(usage(1000, 100))
+    other = activity()
+    other["params"]["item"]["model"] = "gpt-6-luna"
+    warning, task, *rest = subagents.accept(other)
+    assert warning["type"] == "warning" and "switched models" in warning["message"]
+    assert task["tool"] == "task"
+    [step] = [e for e in rest if e["type"] == "step_finish"]
+    assert "cost" not in step and step["messageCostUsd"] == 0.003
+    assert step["model"] == "openai/gpt-6-luna"
