@@ -210,7 +210,7 @@ CLOUDFLARE_WORKER_SUBDOMAIN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
 R2_MEDIA_LOCATION # Optional; defaults to ENAM
-R2_MEDIA_BUCKET_NAME # Optional; set when the media bucket is pre-created out-of-band
+R2_MEDIA_BUCKET_NAME # Optional; name of the Terraform-created media bucket (import an existing one first)
 WEB_PLATFORM # Optional; defaults to vercel
 
 # Vercel web app (only if WEB_PLATFORM=vercel)
