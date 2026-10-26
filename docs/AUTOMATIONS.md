@@ -477,6 +477,16 @@ types can be changed to **No repository**.
 
 If you update the schedule or timezone, the next run time is recalculated automatically.
 
+### Duplicate
+
+**Duplicate** on the detail page opens the create form (`/automations/new?from=<id>`) filled in from
+the automation. The copy is named `<name> (copy)`, trimmed to the name limit, and is saved only when
+you click **Create Automation**, as a new automation with you as its executor and no run history.
+Webhook keys are never copied (the server issues new ones) and the form asks for the Sentry client
+secret again. If you cannot create automations in the source's team, the copy starts in your current
+scope with no repositories or environments; targets you cannot use are left out. A notice above the
+form says when either happens. The button appears only when you can create automations.
+
 ### Delete
 
 Deleting an automation stops all future runs and removes it from the list. Existing run history and
