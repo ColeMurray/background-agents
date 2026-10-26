@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
+import { SourceControlProviderError } from "../source-control";
 import { REPOS_CACHE_KEY, reposCacheIdentity, reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
 import {
   createTestRequestHandler,
+  authorizationDatabase,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
@@ -16,6 +18,7 @@ const {
   mockCacheGet,
   mockCachePut,
   mockGetBatch,
+  mockListBranches,
   mockListRepositories,
   mockLogger,
   mockUpsert,
@@ -24,6 +27,7 @@ const {
   mockCacheGet: vi.fn(),
   mockCachePut: vi.fn(),
   mockGetBatch: vi.fn(),
+  mockListBranches: vi.fn(),
   mockListRepositories: vi.fn(),
   mockLogger: {
     debug: vi.fn(),
@@ -56,6 +60,7 @@ vi.mock("./shared", async () => {
   return {
     ...actual,
     createRouteSourceControlProvider: vi.fn(() => ({
+      listBranches: mockListBranches,
       listRepositories: mockListRepositories,
     })),
   };
@@ -227,6 +232,263 @@ describe("repository list route", () => {
       cached: false,
       repos: [{ metadata: { description: "Updated description" } }],
     });
+  });
+});
+
+describe("repository branch route", () => {
+  const cacheKey = "repos:branches:v1:acme/widgets";
+  const branches = [{ name: "main" }, { name: "feature/widgets" }];
+  const now = Date.parse("2026-01-01T00:00:00.000Z");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
+    mockCacheGet.mockResolvedValue(null);
+    mockCachePut.mockResolvedValue(undefined);
+    mockListBranches.mockResolvedValue(branches);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function cacheEntry(env: Env, freshUntil = now + 60_000) {
+    return {
+      branches,
+      cachedAt: new Date(now).toISOString(),
+      scmIdentity: await reposCacheIdentity(env),
+      freshUntil,
+    };
+  }
+
+  it("populates a miss once, keeps the refresh alive, and times cache and SCM access", async () => {
+    const env = createEnv();
+    const backgroundTasks = createTestBackgroundTasks();
+    let resolveBranches!: (value: { name: string }[]) => void;
+    mockListBranches.mockImplementation(
+      () => new Promise<{ name: string }[]>((resolve) => (resolveBranches = resolve))
+    );
+
+    const pending = handleRequest(request("/repos/Acme/Widgets/branches"), env, backgroundTasks);
+    await vi.waitFor(() => expect(backgroundTasks.submissions).toHaveLength(1));
+    expect(mockCachePut).not.toHaveBeenCalled();
+    vi.setSystemTime(now);
+    resolveBranches(branches);
+    await backgroundTasks.settle();
+    expect(mockCachePut).toHaveBeenCalledOnce();
+    const response = await pending;
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      branches,
+      cached: false,
+      cachedAt: new Date(now).toISOString(),
+    });
+    expect(mockListBranches).toHaveBeenCalledExactlyOnceWith({ owner: "Acme", name: "Widgets" });
+    expect(mockCacheGet).toHaveBeenCalledExactlyOnceWith(cacheKey, "json");
+    expect(mockCachePut).toHaveBeenCalledExactlyOnceWith(
+      cacheKey,
+      JSON.stringify(await cacheEntry(env)),
+      { ttlMs: 3_600_000 }
+    );
+    expect(backgroundTasks.submissions).toHaveLength(1);
+    await backgroundTasks.settle();
+    expect(backgroundTasks.failures).toEqual([]);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      "http.request",
+      expect.objectContaining({ kv_read_ms: expect.any(Number), scm_api_ms: expect.any(Number) })
+    );
+  });
+
+  it("serves the next request from cache throughout the fresh window", async () => {
+    const env = createEnv();
+    mockCachePut.mockImplementation(async (_key, value: string) => {
+      mockCacheGet.mockResolvedValue(JSON.parse(value));
+    });
+    await handleRequest(request("/repos/acme/widgets/branches"), env, createTestBackgroundTasks());
+    mockListBranches.mockClear();
+    mockLogger.info.mockClear();
+    vi.setSystemTime(now + 59_999);
+    const backgroundTasks = createTestBackgroundTasks();
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      backgroundTasks
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      branches,
+      cached: true,
+      cachedAt: new Date(now).toISOString(),
+    });
+    expect(mockListBranches).not.toHaveBeenCalled();
+    expect(backgroundTasks.submissions).toHaveLength(0);
+    const requestLog = mockLogger.info.mock.calls.find(
+      ([message]) => message === "http.request"
+    )?.[1];
+    expect(requestLog).toHaveProperty("kv_read_ms", expect.any(Number));
+    expect(requestLog).not.toHaveProperty("scm_api_ms");
+  });
+
+  it("serves a stale entry immediately and schedules one refresh at the freshness boundary", async () => {
+    const env = createEnv();
+    const entry = await cacheEntry(env, now);
+    mockCacheGet.mockResolvedValue(entry);
+    let resolveBranches!: (value: { name: string }[]) => void;
+    mockListBranches.mockImplementation(
+      () => new Promise<{ name: string }[]>((resolve) => (resolveBranches = resolve))
+    );
+    const backgroundTasks = createTestBackgroundTasks();
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      backgroundTasks
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      branches,
+      cached: true,
+      cachedAt: entry.cachedAt,
+    });
+    expect(backgroundTasks.submissions).toHaveLength(1);
+    expect(mockListBranches).toHaveBeenCalledOnce();
+    expect(mockCachePut).not.toHaveBeenCalled();
+    resolveBranches([{ name: "new-branch" }]);
+    await backgroundTasks.settle();
+    expect(backgroundTasks.failures).toEqual([]);
+    expect(mockCachePut).toHaveBeenCalledOnce();
+    expect(JSON.parse(mockCachePut.mock.calls[0][1])).toMatchObject({
+      branches: [{ name: "new-branch" }],
+      freshUntil: now + 60_000,
+    });
+  });
+
+  it("treats an SCM identity mismatch as a miss", async () => {
+    const env = createEnv();
+    mockCacheGet.mockResolvedValue(
+      await cacheEntry({ ...env, GITHUB_APP_INSTALLATION_ID: "other-installation" })
+    );
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      createTestBackgroundTasks()
+    );
+
+    await expect(response.json()).resolves.toMatchObject({ cached: false });
+    expect(mockListBranches).toHaveBeenCalledOnce();
+    expect(JSON.parse(mockCachePut.mock.calls[0][1]).scmIdentity).toBe(
+      await reposCacheIdentity(env)
+    );
+  });
+
+  it("treats a malformed entry as a miss", async () => {
+    const env = createEnv();
+    mockCacheGet.mockResolvedValue({ ...(await cacheEntry(env)), branches: [{ name: 42 }] });
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      createTestBackgroundTasks()
+    );
+
+    await expect(response.json()).resolves.toMatchObject({ cached: false, branches });
+    expect(mockListBranches).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { failure: new Error("Provider unavailable"), message: "Failed to list branches" },
+    {
+      failure: new SourceControlProviderError("Not configured", "permanent"),
+      message: "SCM provider not configured",
+    },
+    {
+      failure: new SourceControlProviderError("Not found", "permanent", 404),
+      message: "Failed to list branches",
+    },
+  ])(
+    "preserves synchronous errors without caching them ($message)",
+    async ({ failure, message }) => {
+      mockListBranches.mockRejectedValue(failure);
+      const backgroundTasks = createTestBackgroundTasks();
+
+      const response = await handleRequest(
+        request("/repos/acme/widgets/branches"),
+        createEnv(),
+        backgroundTasks
+      );
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: message });
+      await backgroundTasks.settle();
+      expect(mockCachePut).not.toHaveBeenCalled();
+      expect(mockCacheDelete).not.toHaveBeenCalled();
+    }
+  );
+
+  it("logs a failed background refresh and leaves the stale entry intact", async () => {
+    const env = createEnv();
+    const entry = await cacheEntry(env, now - 1);
+    mockCacheGet.mockResolvedValue(entry);
+    const failure = new Error("Provider unavailable");
+    mockListBranches.mockRejectedValue(failure);
+    const backgroundTasks = createTestBackgroundTasks();
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      backgroundTasks
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      branches,
+      cached: true,
+      cachedAt: entry.cachedAt,
+    });
+    await backgroundTasks.settle();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      "Failed to refresh branches cache",
+      expect.objectContaining({ error: failure })
+    );
+    expect(mockCachePut).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+  });
+
+  it.each(["read", "write"])("returns branches despite a cache %s failure", async (operation) => {
+    if (operation === "read") mockCacheGet.mockRejectedValue(new Error("Cache unavailable"));
+    else mockCachePut.mockRejectedValue(new Error("Cache unavailable"));
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      createEnv(),
+      createTestBackgroundTasks()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ branches, cached: false });
+    expect(mockLogger.warn).toHaveBeenCalled();
+  });
+
+  it("checks route permissions before reading the cache", async () => {
+    const env = { ...createEnv(), DB: authorizationDatabase({ permissions: [] }) };
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      createTestBackgroundTasks()
+    );
+
+    expect(response.status).toBe(403);
+    expect(mockCacheGet).not.toHaveBeenCalled();
+    expect(mockListBranches).not.toHaveBeenCalled();
   });
 });
 

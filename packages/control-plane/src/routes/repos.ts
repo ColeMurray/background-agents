@@ -22,6 +22,13 @@ import {
   reposCacheIdentity,
   type CachedReposList,
 } from "../repos/cache";
+import {
+  BRANCHES_CACHE_FRESH_MS,
+  BRANCHES_CACHE_TTL_MS,
+  branchesCacheKey,
+  cachedBranchesListSchema,
+  type CachedBranchesList,
+} from "../repos/branch-cache";
 import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
@@ -315,16 +322,77 @@ async function handleListBranches(
   _request: Request,
   env: Env,
   params: { owner: string; name: string },
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const repository = repositoryParams(params);
   if (repository instanceof Response) return repository;
   const { owner, name } = repository;
 
   try {
-    const provider = createRouteSourceControlProvider(env);
-    const branches = await provider.listBranches({ owner, name });
-    return json({ branches });
+    const cacheStore = env.REPOS_CACHE;
+    const cacheKey = branchesCacheKey(owner, name);
+    const scmIdentity = await reposCacheIdentity(env);
+    let cached: CachedBranchesList | null = null;
+    try {
+      const result = cachedBranchesListSchema.safeParse(
+        await ctx.metrics.time("kv_read", () => cacheStore.get(cacheKey, "json"))
+      );
+      cached = result.success ? result.data : null;
+    } catch (e) {
+      logger.warn("Failed to read branches cache", {
+        trace_id: ctx.trace_id,
+        error: e instanceof Error ? e : String(e),
+      });
+    }
+
+    const refresh = async (): Promise<CachedBranchesList> => {
+      const provider = createRouteSourceControlProvider(env);
+      const branches = await ctx.metrics.time("scm_api", () =>
+        provider.listBranches({ owner, name })
+      );
+      const entry: CachedBranchesList = {
+        branches,
+        cachedAt: new Date().toISOString(),
+        scmIdentity,
+        freshUntil: Date.now() + BRANCHES_CACHE_FRESH_MS,
+      };
+      try {
+        await cacheStore.put(cacheKey, JSON.stringify(entry), { ttlMs: BRANCHES_CACHE_TTL_MS });
+      } catch (e) {
+        logger.warn("Failed to write branches cache", {
+          trace_id: ctx.trace_id,
+          error: e instanceof Error ? e : String(e),
+        });
+      }
+      return entry;
+    };
+
+    if (cached?.scmIdentity === scmIdentity) {
+      if (Date.now() >= cached.freshUntil) {
+        ctx.executionCtx.submit(
+          () =>
+            refresh().catch((e) => {
+              logger.warn("Failed to refresh branches cache", {
+                trace_id: ctx.trace_id,
+                error: e instanceof Error ? e : String(e),
+                repo_owner: owner,
+                repo_name: name,
+              });
+            }),
+          { name: "repos_branches_cache.refresh", context: { trace_id: ctx.trace_id } }
+        );
+      }
+      return json({ branches: cached.branches, cached: true, cachedAt: cached.cachedAt });
+    }
+
+    // Share one refresh with waitUntil so a disconnected caller still fills the cache.
+    const pending = refresh();
+    ctx.executionCtx.submit(() => pending, {
+      name: "repos_branches_cache.refresh",
+      context: { trace_id: ctx.trace_id },
+    });
+    const result = await pending;
+    return json({ branches: result.branches, cached: false, cachedAt: result.cachedAt });
   } catch (e) {
     if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
       return error("SCM provider not configured", 500);
