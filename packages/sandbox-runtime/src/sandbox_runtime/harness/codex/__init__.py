@@ -450,13 +450,8 @@ class CodexHarness:
                 # The transport queue retains notifications delivered before the
                 # start response. Only this epoch/thread/turn and the sub-agents
                 # rooted at it are projected. As with the other harnesses'
-                # sub-agents, the prompt settles only once its sub-agents finish;
-                # a parent turn that did not complete stops them.
-                stopping = False
+                # sub-agents, the prompt settles only once its sub-agents finish.
                 while state.status is None or subagents.busy:
-                    if state.status not in (None, "completed") and not stopping:
-                        stopping = True
-                        await self._interrupt(subagents.stop())
                     frame = await self._next_notification()
                     for event in (*state.accept(frame), *subagents.accept(frame)):
                         await emit(event)

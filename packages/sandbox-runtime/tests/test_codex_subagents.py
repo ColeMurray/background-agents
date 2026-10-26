@@ -311,3 +311,19 @@ def test_subagent_on_another_model_is_an_estimate_at_the_prompts_prices():
     [step] = [e for e in rest if e["type"] == "step_finish"]
     assert "cost" not in step and step["messageCostUsd"] == 0.003
     assert step["model"] == "openai/gpt-6-luna"
+
+
+def test_a_parent_turn_that_does_not_complete_stops_its_subagents():
+    subagents = build()
+    feed(subagents, activity(), turn_started())
+    subagents.accept(turn_completed(TURN, "completed", thread=PARENT))
+    assert subagents.take_interrupts() == []
+
+    stopped = build()
+    feed(stopped, activity(), turn_started())
+    stopped.accept(turn_completed(TURN, "interrupted", thread=PARENT))
+    assert stopped.take_interrupts() == [(CHILD, "child-turn")]
+    # Reported once; a turn that starts later is reported too.
+    stopped.accept(turn_completed(TURN, "interrupted", thread=PARENT))
+    stopped.accept(turn_started("late-turn", thread="late"))
+    assert stopped.take_interrupts() == [("late", "late-turn")]

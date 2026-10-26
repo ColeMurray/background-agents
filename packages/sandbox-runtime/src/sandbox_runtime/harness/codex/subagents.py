@@ -44,14 +44,17 @@ class _Agent:
     refused: bool = False
     turn_id: str | None = None
     running: bool = False
-    # Announced, but its turn has not been reported yet.
-    pending: bool = False
     status: str = "running"
     output: str = ""
     text: str = ""
     error: Any = None
     reason: str | None = None
     deferred: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def pending(self) -> bool:
+        """Announced, but its turn (which spawning always starts) is not reported yet."""
+        return self.args is not None and self.turn_id is None
 
 
 class CodexSubagents:
@@ -61,7 +64,6 @@ class CodexSubagents:
         self.message_id, self.thread_id = parent.message_id, parent.thread_id
         self.turn_id, self.model = parent.turn_id, parent.model
         self._agents: dict[str, _Agent] = {}
-        self._deferred_events = 0
         self._interrupts: list[tuple[str, str]] = []
         self._stopping = False
 
@@ -92,7 +94,7 @@ class CodexSubagents:
         return [(a.thread_id, a.turn_id) for a in self._agents.values() if a.running and a.turn_id]
 
     def take_interrupts(self) -> list[tuple[str, str]]:
-        """Refused (or post-stop) turns to interrupt, each reported once."""
+        """Refused or stopped turns to interrupt, each reported once."""
         interrupts, self._interrupts = self._interrupts, []
         return interrupts
 
@@ -104,9 +106,17 @@ class CodexSubagents:
         item = params.get("item") if isinstance(params.get("item"), dict) else {}
         if method in {"item/started", "item/completed"} and item.get("type") == "subAgentActivity":
             return self._activity(thread_id, params.get("turnId"), item)
-        if thread_id == self.thread_id:
-            return []
         turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        if thread_id == self.thread_id:
+            # A parent turn that did not complete stops the sub-agents rooted at it.
+            if (
+                method == "turn/completed"
+                and turn.get("id") == self.turn_id
+                and turn.get("status") != "completed"
+                and not self._stopping
+            ):
+                self._interrupts.extend(self.stop())
+            return []
         if method == "turn/started":
             return self._turn_started(thread_id, turn)
         agent = self._agents.get(thread_id)
@@ -168,13 +178,10 @@ class CodexSubagents:
         model = item.get("model")
         agent.args = {"description": path.rstrip("/").rsplit("/", 1)[-1], "task_id": path}
         agent.model = model if isinstance(model, str) and model else self.model
-        # Spawning always starts the sub-agent's turn.
-        agent.pending = agent.turn_id is None
         events = [*self._parent.warnings(agent.usage.ran(agent.model)), self._task(agent)]
         if agent.turn_id is not None:
             events.append(self._step(agent, "step_start"))
         events.extend(agent.deferred)
-        self._deferred_events -= len(agent.deferred)
         agent.deferred = []
         if agent.usage.tokens is not None or (agent.turn_id is not None and not agent.running):
             events.append(self._step(agent, "step_finish"))
@@ -184,7 +191,6 @@ class CodexSubagents:
         if agent.refused:
             return
         agent.refused = True
-        self._deferred_events -= len(agent.deferred)
         agent.deferred = []
         if agent.running and agent.turn_id:
             self._interrupts.append((agent.thread_id, agent.turn_id))
@@ -198,7 +204,7 @@ class CodexSubagents:
         if agent.turn_id is not None:
             # A sub-agent runs only the turn its spawn starts.
             return []
-        agent.turn_id, agent.running, agent.pending = turn_id, True, False
+        agent.turn_id, agent.running = turn_id, True
         if self._stopping or agent.refused:
             self._interrupts.append((thread_id, turn_id))
         if agent.args is None:
@@ -231,9 +237,9 @@ class CodexSubagents:
         """Emit an announced sub-agent's event, or defer it, within bounds, until then."""
         if agent.args is not None:
             return [event]
-        if not agent.refused and self._deferred_events < MAX_DEFERRED_EVENTS:
+        deferred = sum(len(other.deferred) for other in self._agents.values())
+        if not agent.refused and deferred < MAX_DEFERRED_EVENTS:
             agent.deferred.append(event)
-            self._deferred_events += 1
         return []
 
     def _task(self, agent: _Agent) -> dict[str, Any]:
