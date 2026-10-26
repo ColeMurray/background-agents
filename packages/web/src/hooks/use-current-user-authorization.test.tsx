@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { SWRConfig, useSWRConfig } from "swr";
+import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { SWRConfig, useSWRConfig, type Cache } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -35,18 +36,40 @@ function useHarness() {
   return { authorization: useCurrentUserAuthorization(), mutate: useSWRConfig().mutate };
 }
 
-function renderHarness(strictMode = false) {
+function SwrProvider({ cache, children }: { cache: Cache; children: ReactNode }) {
+  return (
+    <SWRConfig value={{ provider: () => cache, dedupingInterval: 0, shouldRetryOnError: false }}>
+      {children}
+    </SWRConfig>
+  );
+}
+
+// A fresh cache per render keeps SWR's state from leaking between tests; pass one
+// to remount a consumer against the same cache.
+function renderHarness({ strictMode = false, cache = new Map() } = {}) {
   return renderHook(useHarness, {
     reactStrictMode: strictMode,
-    // A fresh provider per render keeps SWR's cache from leaking between tests.
-    wrapper: ({ children }) => (
-      <SWRConfig
-        value={{ provider: () => new Map(), dedupingInterval: 0, shouldRetryOnError: false }}
-      >
-        {children}
-      </SWRConfig>
-    ),
+    wrapper: ({ children }) => <SwrProvider cache={cache}>{children}</SwrProvider>,
   });
+}
+
+/** Renders one keyed harness per name under one cache; rerender with fewer names to unmount. */
+function renderHarnesses(names: string[]) {
+  const harnesses: Record<string, ReturnType<typeof useHarness>> = {};
+  function Harness({ name }: { name: string }) {
+    harnesses[name] = useHarness();
+    return null;
+  }
+  const cache = new Map();
+  const tree = (mounted: string[]) => (
+    <SwrProvider cache={cache}>
+      {mounted.map((name) => (
+        <Harness key={name} name={name} />
+      ))}
+    </SwrProvider>
+  );
+  const view = render(tree(names));
+  return { harnesses, rerender: (mounted: string[]) => view.rerender(tree(mounted)) };
 }
 
 beforeEach(() => {
@@ -202,14 +225,14 @@ describe("useCurrentUserAuthorization", () => {
   it("prefetches only once across loading rerenders and StrictMode effects", async () => {
     vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
     vi.mocked(browserApiFetch).mockResolvedValueOnce(jsonResponse(AUTHORIZATION));
-    const { rerender } = renderHarness(true);
+    const { rerender } = renderHarness({ strictMode: true });
     await act(async () => {});
     rerender();
 
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("isolates prefetched authorization between cache providers", async () => {
+  it("adopts only the prefetch its own consumer started", async () => {
     vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
     vi.mocked(browserApiFetch)
       .mockResolvedValueOnce(jsonResponse(AUTHORIZATION))
@@ -245,6 +268,74 @@ describe("useCurrentUserAuthorization", () => {
     expect(result.current.authorization.authorization).toBeNull();
     expect(result.current.authorization.error).toBeUndefined();
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unavailable", "unauthenticated"] as const)(
+    "drops a successful prefetch when the session lookup ends %s, then honors a fresh denial",
+    async (outcome) => {
+      vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+      vi.mocked(browserApiFetch)
+        .mockResolvedValueOnce(jsonResponse(AUTHORIZATION))
+        .mockResolvedValueOnce(jsonResponse({}, 403));
+      const { result, rerender } = renderHarness();
+      await act(async () => {});
+      vi.mocked(useAuthSession).mockReturnValue({ data: null, status: outcome });
+      rerender();
+
+      // The session lookup recovers for the same user after their access was revoked.
+      vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+      rerender();
+
+      await waitFor(() =>
+        expect(result.current.authorization.error).toMatchObject({ retryable: false })
+      );
+      expect(result.current.authorization.authorization).toBeNull();
+      expect(result.current.authorization.hasPermission("repositories.read")).toBe(false);
+      expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("does not adopt a prefetch started by an earlier mount", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch)
+      .mockResolvedValueOnce(jsonResponse(AUTHORIZATION))
+      .mockResolvedValueOnce(jsonResponse({}, 403));
+    const cache = new Map();
+    renderHarness({ cache }).unmount();
+    await act(async () => {});
+
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    const { result } = renderHarness({ cache });
+
+    await waitFor(() =>
+      expect(result.current.authorization.error).toMatchObject({ retryable: false })
+    );
+    expect(result.current.authorization.authorization).toBeNull();
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the prefetch of a consumer whose first fetch SWR deduplicated", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({ data: null, status: "loading" });
+    vi.mocked(browserApiFetch).mockResolvedValue(jsonResponse(AUTHORIZATION));
+    const { harnesses, rerender } = renderHarnesses(["first", "second"]);
+    await act(async () => {});
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+
+    vi.mocked(useAuthSession).mockReturnValue(AUTHENTICATED_SESSION);
+    rerender(["first", "second"]);
+    await waitFor(() =>
+      expect(harnesses.second.authorization.authorization).toEqual(AUTHORIZATION)
+    );
+
+    // With the first consumer gone, the second one's fetcher serves the revalidation.
+    rerender(["second"]);
+    vi.mocked(browserApiFetch).mockResolvedValue(jsonResponse({}, 403));
+    await act(async () => {
+      await harnesses.second.mutate(currentUserAuthorizationKey(AUTHORIZATION.userId));
+    });
+
+    await waitFor(() => expect(harnesses.second.authorization.authorization).toBeNull());
+    expect(browserApiFetch).toHaveBeenCalledTimes(3);
   });
 
   it("keeps the cached grant when a revalidation fails with a server error", async () => {
