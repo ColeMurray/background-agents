@@ -86,8 +86,10 @@ describe("Cloudflare environment location hint wiring", () => {
         SESSION_DO_LOCATION_HINT: value,
       } as WorkerBindings;
       const request = new Request("https://session.test/internal/state");
+      const env = createCloudflareEnv(bindings);
 
-      await createCloudflareEnv(bindings).SESSION("session-id", request);
+      expect(env).not.toHaveProperty("SESSION_DO_LOCATION_HINT");
+      await env.SESSION("session-id", request);
       await createCloudflareEnv({ ...bindings }).SESSION("another-session-id", request);
 
       const args = value === "wnam" ? [stub.id, { locationHint: value }] : [stub.id];

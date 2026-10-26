@@ -23,6 +23,7 @@ let cachedLocationHint:
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
+  SESSION_DO_LOCATION_HINT?: string; // Placement hint for newly created session Durable Objects
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
@@ -33,8 +34,8 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
 
 /**
  * The application environment over the Worker's bindings: every binding
- * taken off the record and put behind its port, the configuration passed
- * through as given. A binding this function does not name is refused at
+ * taken off the record and put behind its port, the application configuration
+ * passed through as given. A binding this function does not name is refused at
  * compile time (below), so adding one is an explicit composition decision.
  */
 export function createCloudflareEnv(bindings: WorkerBindings): Env {
@@ -48,10 +49,10 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     IMAGE_BUILD_FINALIZATION_QUEUE,
+    SESSION_DO_LOCATION_HINT: raw,
     ...config
   } = bindings;
   // Reuse the deployment setting across requests, including its invalid-value warning.
-  const raw = config.SESSION_DO_LOCATION_HINT;
   if (!cachedLocationHint || cachedLocationHint.raw !== raw) {
     cachedLocationHint = { raw, value: parseSessionDoLocationHint(raw, logger) };
   }
@@ -71,10 +72,10 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
 }
 
 // Every field of WorkerBindings is either a platform port (adapted above), a
-// queue behind the jobs port, or configuration: a new binding that is none
-// of these fails to compile here.
+// queue behind the jobs port, or application/Cloudflare-local configuration:
+// a new binding that is none of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
   Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings>,
-  keyof EnvConfig
+  keyof EnvConfig | "SESSION_DO_LOCATION_HINT"
 >;
