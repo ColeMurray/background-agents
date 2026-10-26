@@ -6,9 +6,12 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/sessions/${id}/pull-requests/refresh`, {
-      method: "POST",
-    });
+    const response = await controlPlaneUserFetch(
+      `/sessions/${encodeURIComponent(id)}/pull-requests/refresh`,
+      {
+        method: "POST",
+      }
+    );
 
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });

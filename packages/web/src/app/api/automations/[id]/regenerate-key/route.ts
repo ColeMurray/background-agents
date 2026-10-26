@@ -7,10 +7,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   try {
     const body = await request.text();
-    const response = await controlPlaneUserFetch(`/automations/${id}/regenerate-key`, {
-      method: "POST",
-      ...(body ? { headers: { "Content-Type": "application/json" }, body } : {}),
-    });
+    const response = await controlPlaneUserFetch(
+      `/automations/${encodeURIComponent(id)}/regenerate-key`,
+      {
+        method: "POST",
+        ...(body ? { headers: { "Content-Type": "application/json" }, body } : {}),
+      }
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {

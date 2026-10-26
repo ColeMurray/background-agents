@@ -9,7 +9,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/automations/${id}`);
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -29,7 +29,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         body[field],
       ])
     );
-    const response = await controlPlaneUserFetch(`/automations/${id}`, {
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(automationBody),
     });
@@ -63,7 +63,7 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/automations/${id}`, {
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
     const data = await response.json();

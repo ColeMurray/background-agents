@@ -6,7 +6,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/sessions/${id}/children`);
+    const response = await controlPlaneUserFetch(`/sessions/${encodeURIComponent(id)}/children`);
     const data = await response.json();
 
     if (!response.ok) {

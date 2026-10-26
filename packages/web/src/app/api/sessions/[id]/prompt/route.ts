@@ -37,16 +37,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // authorId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
-    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/prompt`, {
-      method: "POST",
-      body: JSON.stringify({
-        content,
-        source: "web",
-        model,
-        reasoningEffort,
-        attachments,
-      }),
-    });
+    const response = await controlPlaneUserFetch(
+      `/sessions/${encodeURIComponent(sessionId)}/prompt`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          content,
+          source: "web",
+          model,
+          reasoningEffort,
+          attachments,
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => null);

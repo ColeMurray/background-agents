@@ -14,10 +14,13 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
 
   try {
     const fetchStart = Date.now();
-    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/ws-token`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    const response = await controlPlaneUserFetch(
+      `/sessions/${encodeURIComponent(sessionId)}/ws-token`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      }
+    );
     const fetchMs = Date.now() - fetchStart;
     const totalMs = Date.now() - routeStart;
 

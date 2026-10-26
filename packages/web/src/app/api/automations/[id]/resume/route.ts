@@ -6,7 +6,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/automations/${id}/resume`, {
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}/resume`, {
       method: "POST",
     });
     const data = await response.json();

@@ -5,7 +5,7 @@ import { controlPlaneUserFetch } from "@/lib/control-plane";
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const response = await controlPlaneUserFetch(`/mcp-servers/${id}`);
+    const response = await controlPlaneUserFetch(`/mcp-servers/${encodeURIComponent(id)}`);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -23,7 +23,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
   try {
-    const response = await controlPlaneUserFetch(`/mcp-servers/${id}`, {
+    const response = await controlPlaneUserFetch(`/mcp-servers/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(body),
     });
@@ -41,7 +41,7 @@ export async function DELETE(
 ) {
   const { id } = await params;
   try {
-    const response = await controlPlaneUserFetch(`/mcp-servers/${id}`, {
+    const response = await controlPlaneUserFetch(`/mcp-servers/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
     const data = await response.json();

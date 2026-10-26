@@ -6,7 +6,7 @@ import { buildControlPlanePath } from "@/lib/control-plane-query";
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const path = buildControlPlanePath(
-    `/automations/${id}/invocations`,
+    `/automations/${encodeURIComponent(id)}/invocations`,
     request.nextUrl.searchParams
   );
 

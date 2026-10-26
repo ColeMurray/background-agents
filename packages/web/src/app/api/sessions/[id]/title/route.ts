@@ -17,7 +17,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 
   try {
-    const response = await controlPlaneUserFetch(`/sessions/${id}/title`, {
+    const response = await controlPlaneUserFetch(`/sessions/${encodeURIComponent(id)}/title`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       // userId is derived by the control plane from the Bearer principal and

@@ -8,7 +8,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     // userId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
-    const response = await controlPlaneUserFetch(`/sessions/${id}/archive`, {
+    const response = await controlPlaneUserFetch(`/sessions/${encodeURIComponent(id)}/archive`, {
       method: "POST",
       body: JSON.stringify({}),
     });

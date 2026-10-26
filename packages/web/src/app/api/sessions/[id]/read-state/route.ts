@@ -20,7 +20,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const { id } = await params;
   try {
-    const response = await controlPlaneUserFetch(`/sessions/${id}/read-state`, {
+    const response = await controlPlaneUserFetch(`/sessions/${encodeURIComponent(id)}/read-state`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

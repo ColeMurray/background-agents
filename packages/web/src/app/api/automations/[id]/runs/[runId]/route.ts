@@ -9,7 +9,9 @@ export async function GET(
   const { id, runId } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/automations/${id}/runs/${runId}`);
+    const response = await controlPlaneUserFetch(
+      `/automations/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`
+    );
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
