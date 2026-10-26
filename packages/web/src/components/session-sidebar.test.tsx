@@ -8,9 +8,10 @@ import { SessionSidebar } from "./session-sidebar";
 
 expect.extend(matchers);
 
-const { mockHook, authorization } = vi.hoisted(() => ({
+const { mockHook, authorization, teamContext } = vi.hoisted(() => ({
   mockHook: vi.fn(),
   authorization: { permissions: null as Set<string> | null },
+  teamContext: { loading: false },
 }));
 
 vi.mock("@/hooks/use-sidebar-sessions", () => ({ useSidebarSessions: mockHook }));
@@ -21,6 +22,7 @@ vi.mock("@/hooks/use-active-team", () => ({
     canListAllTeams: false,
     teams: [],
     setActiveTeam: vi.fn(),
+    loading: teamContext.loading,
   }),
 }));
 vi.mock("@/lib/auth-session", () => ({
@@ -93,6 +95,7 @@ beforeEach(() => {
     },
   });
   authorization.permissions = null;
+  teamContext.loading = false;
   const attention = session("attention", "Needs review");
   const running = session("running", "Implementing inbox");
   const child = session("child", "Checking tests", running.id);
@@ -319,6 +322,14 @@ describe("SessionSidebar", () => {
     const confirmation = await screen.findByRole("dialog");
     expect(within(confirmation).getByText("Mark all sessions as read?")).toBeInTheDocument();
     expect(within(confirmation).getByText("Mine")).toBeInTheDocument();
+  });
+
+  it("offers mark all as read only once team filters are validated", () => {
+    teamContext.loading = true;
+    render(<SessionSidebar />);
+
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark all as read" })).not.toBeInTheDocument();
   });
 
   it("surfaces a retryable error when the initial snapshot fails", () => {

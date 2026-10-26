@@ -82,24 +82,24 @@ function useActiveTeamState() {
     setHydratedUserId(userId);
   }, [userId]);
 
+  // Without an active team, lists stay unfiltered and the switcher is hidden, so aggregate
+  // scopes reconcile to All my teams instead of staying stored.
   const activeSelection =
     !loading &&
     !error &&
-    (selection === "workspace" ||
-      selection === "all-my-teams" ||
-      (selection === "all-teams" && canListAllTeams) ||
+    (selection === "all-my-teams" ||
+      (teams.length > 0 &&
+        (selection === "workspace" || (selection === "all-teams" && canListAllTeams))) ||
       teams.some((team) => team.id === selection))
       ? selection
       : "all-my-teams";
   const activeTeamId = teams.some((team) => team.id === activeSelection) ? activeSelection : null;
   const scope =
-    teams.length === 0
-      ? undefined
-      : activeSelection === "workspace"
-        ? ("workspace" as const)
-        : activeSelection === "all-teams"
-          ? ("all" as const)
-          : undefined;
+    activeSelection === "workspace"
+      ? ("workspace" as const)
+      : activeSelection === "all-teams"
+        ? ("all" as const)
+        : undefined;
 
   useEffect(() => {
     if (loading || error) return;

@@ -126,7 +126,7 @@ export function SessionSidebar({
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
-  const { activeTeamId, scope, teams } = useActiveTeam();
+  const { activeTeamId, scope, teams, loading: loadingTeams } = useActiveTeam();
   const teamQuery = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
@@ -436,7 +436,9 @@ export function SessionSidebar({
                   needsAttention,
                   sectionPagination.needsAttention,
                   true,
-                  needsAttention.length > 0 && (
+                  // Rows can come from the stored selection before memberships confirm the
+                  // scope this confirmation names.
+                  needsAttention.length > 0 && !loadingTeams && (
                     <MarkAllReadButton
                       count={sectionPagination.needsAttention.hasMore ? null : attentionUnreadCount}
                       scopeLabel={attentionScopeLabel}

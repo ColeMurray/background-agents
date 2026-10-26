@@ -35,9 +35,9 @@ function authorizationResponse() {
   });
 }
 
-function membershipsResponse() {
+function membershipsResponse(teams = [team("team_alpha"), team("team_beta"), team("team_old", 1)]) {
   return Response.json({
-    teams: [team("team_alpha"), team("team_beta"), team("team_old", 1)],
+    teams,
     requireTeamOnCreate: true,
     ...(canListAllTeams === undefined ? {} : { capabilities: { canListAllTeams } }),
   });
@@ -142,8 +142,16 @@ describe("active team context", () => {
     { selection: "team_old", query: "?teamIds%5B%5D=team_old", finalQuery: "" },
     { selection: "all-my-teams", query: "" },
     { selection: "workspace", query: "?scope=workspace" },
+    { selection: "workspace", archivedOnly: true, query: "?scope=workspace", finalQuery: "" },
     { selection: "all-teams", role: "owner", query: "?scope=all" },
     { selection: "all-teams", role: "administrator", query: "?scope=all" },
+    {
+      selection: "all-teams",
+      role: "owner",
+      archivedOnly: true,
+      query: "?scope=all",
+      finalQuery: "",
+    },
     { selection: "all-teams", role: "member", query: "", reconciled: "all-my-teams" },
     {
       selection: "all-teams",
@@ -155,8 +163,8 @@ describe("active team context", () => {
     { selection: "team_alpha", mine: true, query: "?mine=true&teamIds%5B%5D=team_alpha" },
     { selection: "team_invalid/id", query: "", reconciled: "all-my-teams" },
   ])(
-    "fetches stored $selection before memberships resolve ($role, mine=$mine, suspended=$suspended)",
-    async ({ selection, role, suspended, mine, query, finalQuery, reconciled }) => {
+    "fetches stored $selection before memberships resolve ($role, mine=$mine, suspended=$suspended, archived-only=$archivedOnly)",
+    async ({ selection, role, suspended, mine, archivedOnly, query, finalQuery, reconciled }) => {
       roleKey = role ?? "member";
       suspendedAt = suspended ? 1 : null;
       canListAllTeams = !suspended && (role === "owner" || role === "administrator");
@@ -193,7 +201,9 @@ describe("active team context", () => {
       expect(fetcher.mock.calls).toEqual([[provisionalKey]]);
       expect(localStorage.getItem("open-inspect-active-team")).toBe(selection);
 
-      await act(async () => resolveMemberships(membershipsResponse()));
+      await act(async () =>
+        resolveMemberships(membershipsResponse(archivedOnly ? [team("team_old", 1)] : undefined))
+      );
       await waitFor(() => expect(result.current.context.loading).toBe(false));
       await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
       expect(result.current.context.provisionalFilters).toBeNull();
@@ -373,6 +383,7 @@ describe("active team context", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.activeTeamId).toBeNull();
     expect(result.current.scope).toBeUndefined();
+    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
   });
 
   it.each(["owner", "administrator", "member", "viewer", null])(
