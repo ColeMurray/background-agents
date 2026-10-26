@@ -5,6 +5,7 @@ import pytest
 
 from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
+from sandbox_runtime.harness.codex.client import CodexTransportError
 from sandbox_runtime.model_prices import ModelPrice
 
 PARENT, TURN, CHILD = "parent-thread", "parent-turn", "child-thread"
@@ -292,3 +293,28 @@ async def test_parent_tool_call_waits_for_the_turn_to_be_known(tmp_path):
     # Between prompts, nothing owns a tool call.
     with pytest.raises(RuntimeError, match="not owned"):
         await asyncio.wait_for(harness._server_request("item/tool/call", params), 5)
+
+
+async def test_an_uncertain_interrupt_does_not_skip_the_rest(tmp_path):
+    harness, client, queue, interrupts = build(tmp_path)
+    request = client.request.side_effect
+
+    async def first_interrupt_times_out(method, params, **kwargs):
+        if method == "turn/interrupt" and not interrupts:
+            interrupts.append((params["threadId"], params["turnId"]))
+            raise CodexTransportError("Codex turn/interrupt response timed out")
+        return await request(method, params, **kwargs)
+
+    client.request.side_effect = first_interrupt_times_out
+    for frame in (
+        spawned(),
+        started(CHILD, "child-turn"),
+        spawned("second"),
+        started("second", "second-turn"),
+        completed(PARENT, TURN, "interrupted"),
+        completed(CHILD, "child-turn", "interrupted"),
+        completed("second", "second-turn", "interrupted"),
+    ):
+        queue.put_nowait(frame)
+    assert (await asyncio.wait_for(run(harness, []), 5)).cancelled
+    assert interrupts == [(CHILD, "child-turn"), ("second", "second-turn")]

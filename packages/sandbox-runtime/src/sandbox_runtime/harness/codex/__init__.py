@@ -29,7 +29,7 @@ from ..base import (
     TurnOutcome,
 )
 from ..tools import ControlPlaneToolClient, ToolServerConfig
-from .client import CodexClient, CodexRpcError, CodexTransportError
+from .client import RPC_TIMEOUT_SECONDS, CodexClient, CodexRpcError, CodexTransportError
 from .env import (
     CODEX_BINARY,
     CODEX_VERSION,
@@ -652,14 +652,25 @@ class CodexHarness:
         async with self._ownership:
             self._ownership.notify_all()
 
-    async def _interrupt(self, turns: list[tuple[str, str]]) -> None:
-        """Interrupt native turns; one that already ended is rejected harmlessly."""
+    async def _interrupt(
+        self, turns: list[tuple[str, str]], *, timeout_seconds: float = RPC_TIMEOUT_SECONDS
+    ) -> bool:
+        """Request each turn's interruption; returns whether any request was accepted.
+
+        Best effort per turn: one that already ended is rejected harmlessly, and a
+        failed transport surfaces on the next notification or in containment.
+        """
         assert self._client is not None
+        accepted = False
         for thread_id, turn_id in turns:
-            with contextlib.suppress(CodexRpcError):
+            with contextlib.suppress(CodexTransportError, CodexRpcError):
                 await self._client.request(
-                    "turn/interrupt", {"threadId": thread_id, "turnId": turn_id}
+                    "turn/interrupt",
+                    {"threadId": thread_id, "turnId": turn_id},
+                    timeout_seconds=timeout_seconds,
                 )
+                accepted = True
+        return accepted
 
     async def abort(self) -> bool:
         if not (self._client and self._turn_id):
@@ -667,16 +678,7 @@ class CodexHarness:
         turns = [(self.session_id, self._turn_id)]
         if self._subagents is not None:
             turns.extend(self._subagents.stop())
-        requested = False
-        for thread_id, turn_id in turns:
-            with contextlib.suppress(CodexTransportError, CodexRpcError):
-                await self._client.request(
-                    "turn/interrupt",
-                    {"threadId": thread_id, "turnId": turn_id},
-                    timeout_seconds=ABORT_TIMEOUT_SECONDS,
-                )
-                requested = True
-        return requested
+        return await self._interrupt(turns, timeout_seconds=ABORT_TIMEOUT_SECONDS)
 
     async def stop_execution(self, timeout_seconds: float) -> bool:
         # Never wait for the open/authentication lock before containing a process.
