@@ -86,14 +86,15 @@ export class SqlCacheStore implements CacheStore {
     if (ttlMs !== undefined) assertValidCacheTtlMs(ttlMs);
     const now = this.now();
     const expiresAt = ttlMs === undefined ? null : now + ttlMs;
-    await this.db.prepare("DELETE FROM cache_entries WHERE expires_at <= ?").bind(now).run();
-    await this.db
-      .prepare(
-        `INSERT INTO cache_entries (key, value, expires_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`
-      )
-      .bind(key, value, expiresAt)
-      .run();
+    await this.db.batch([
+      this.db.prepare("DELETE FROM cache_entries WHERE expires_at <= ?").bind(now),
+      this.db
+        .prepare(
+          `INSERT INTO cache_entries (key, value, expires_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`
+        )
+        .bind(key, value, expiresAt),
+    ]);
   }
 
   async delete(key: string): Promise<void> {

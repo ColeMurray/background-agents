@@ -66,4 +66,32 @@ describe("SqlCacheStore over D1", () => {
       results: [{ key: "new" }, { key: "permanent" }],
     });
   });
+
+  it("rolls back expiry cleanup when a cache upsert fails", async () => {
+    let now = Date.now();
+    const store = new SqlCacheStore(env.DB, { now: () => now });
+    await store.put("rollback-expired", "old", { ttlMs: CACHE_STORE_MIN_TTL_MS });
+    now += CACHE_STORE_MIN_TTL_MS;
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_cache_insert BEFORE INSERT ON cache_entries
+       WHEN NEW.key = 'rollback-rejected'
+       BEGIN SELECT RAISE(ABORT, 'forced cache write failure'); END`
+    ).run();
+
+    try {
+      await expect(store.put("rollback-rejected", "new")).rejects.toThrow(
+        "forced cache write failure"
+      );
+      expect(
+        await env.DB.prepare("SELECT value FROM cache_entries WHERE key = ?")
+          .bind("rollback-expired")
+          .first()
+      ).toEqual({ value: "old" });
+      expect(await store.get("rollback-rejected")).toBeNull();
+    } finally {
+      await env.DB.prepare("DROP TRIGGER reject_cache_insert").run();
+      await store.delete("rollback-expired");
+      await store.delete("rollback-rejected");
+    }
+  });
 });

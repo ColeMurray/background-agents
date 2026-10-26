@@ -51,4 +51,26 @@ describe("SqlCacheStore expiry reclamation", () => {
       results: [{ key: "expired" }],
     });
   });
+
+  it("rolls back expiry cleanup when the upsert fails", async () => {
+    await store.put("expired", "old", { ttlMs: CACHE_STORE_MIN_TTL_MS });
+    now += CACHE_STORE_MIN_TTL_MS;
+    await db
+      .prepare(
+        `CREATE TRIGGER reject_cache_insert BEFORE INSERT ON cache_entries
+         WHEN NEW.key = 'rejected'
+         BEGIN SELECT RAISE(ABORT, 'forced cache write failure'); END`
+      )
+      .run();
+
+    await expect(store.put("rejected", "new")).rejects.toThrow("forced cache write failure");
+
+    expect(await db.prepare("SELECT key, value FROM cache_entries").all()).toMatchObject({
+      results: [{ key: "expired", value: "old" }],
+    });
+    await store.put("accepted", "new");
+    expect(await db.prepare("SELECT key, value FROM cache_entries").all()).toMatchObject({
+      results: [{ key: "accepted", value: "new" }],
+    });
+  });
 });
