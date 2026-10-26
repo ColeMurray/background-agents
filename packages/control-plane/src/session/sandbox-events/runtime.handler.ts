@@ -4,8 +4,9 @@ import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
-import { dispatchedBefore, type SessionMessageQueue } from "../message-queue";
+import type { SessionMessageQueue } from "../message-queue";
 import type { SessionMessenger } from "../messenger";
+import { orphanedPromptReason, runtimeBoundaries } from "../orphaned-prompt";
 import type { SandboxRuntimeFacts, SandboxStateReader } from "../sandbox-ports";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
@@ -57,7 +58,7 @@ export class SandboxRuntimeEventHandler {
     const processing = context.processingMessage;
     if (
       processing !== null &&
-      !dispatchedBefore(processing, this.sandboxRepository.getSandbox()?.instance_reserved_at)
+      !orphanedPromptReason(processing, runtimeBoundaries(this.sandboxRepository.getSandbox()))
     ) {
       this.updateLastActivity(context.now);
       // The same proof drives Slack's assistant-thread indicator, which Slack
@@ -94,21 +95,22 @@ export class SandboxRuntimeEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
 
     // No await between the authorized event and the lifecycle-owned commit.
-    // Repeated, fenced or retired readiness must not wake the prompt queue.
     const becameReady = this.lifecycle.onRuntimeReady(
       context.now,
       event.harness,
       event.preservationProtocolVersion
     );
-    // The bridge names the prompt it still owes a result for. A processing
-    // prompt no runtime will finish is failed in the background, and the
-    // queue is woken for the prompts behind it even when this readiness is a
-    // reconnect; neither sits in front of the readiness publication below.
+    const report =
+      event.activeMessageId === undefined ? undefined : { owedMessageId: event.activeMessageId };
+    // In the background, off the readiness publication below: the bridge's
+    // report fails a processing prompt no runtime will finish, whatever the
+    // readiness. The report is applied outside the queue pump, whose dispatch
+    // gates would otherwise drop it. Only a readiness that took effect wakes
+    // the queue, unless the report freed it of an orphaned prompt; a repeated,
+    // fenced or retired one must not.
     this.backgroundTasks.submit(
       async () => {
-        const orphanFailed = await this.messageQueue.reconcileProcessingMessage(
-          event.activeMessageId
-        );
+        const orphanFailed = await this.messageQueue.reconcileProcessingMessage(report);
         if (becameReady || orphanFailed) await this.messageQueue.processMessageQueue();
       },
       { name: "message_queue.process" }

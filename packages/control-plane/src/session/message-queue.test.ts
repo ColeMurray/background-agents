@@ -216,11 +216,14 @@ function buildQueue(
       return socket ? { kind: "dispatch", socket } : { kind: "unavailable" };
     }),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
-    sandboxSocketAttachedAt: vi.fn((): number | null => null),
   };
   const sandboxState = {
     getSandbox: vi.fn(
-      (): { created_at: number; instance_reserved_at: number | null } | null => null
+      (): {
+        created_at: number;
+        instance_reserved_at: number | null;
+        active_socket_attached_at?: number | null;
+      } | null => null
     ),
   };
 
@@ -2665,6 +2668,15 @@ describe("SessionMessageQueue processing prompt reconciliation", () => {
     });
   }
 
+  /** The current bridge socket was accepted at `attachedAt`. */
+  function withSocketAttachedAt(h: ReturnType<typeof buildQueue>, attachedAt: number | null) {
+    h.sandboxState.getSandbox.mockReturnValue({
+      created_at: INSTANCE_RESERVED_AT,
+      instance_reserved_at: INSTANCE_RESERVED_AT,
+      active_socket_attached_at: attachedAt,
+    });
+  }
+
   function expectFailed(h: ReturnType<typeof buildQueue>, error: string, reason: string) {
     expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: "msg-running", success: false, error }),
@@ -2739,7 +2751,7 @@ describe("SessionMessageQueue processing prompt reconciliation", () => {
     const h = buildQueue();
     withProcessingPrompt(h, null);
 
-    await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(false);
+    await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(false);
     expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
   });
 
@@ -2758,9 +2770,9 @@ describe("SessionMessageQueue processing prompt reconciliation", () => {
     it("fails a prompt dispatched before the socket attached that the bridge does not hold", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
 
-      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(true);
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(true);
 
       expectFailed(
         h,
@@ -2772,42 +2784,50 @@ describe("SessionMessageQueue processing prompt reconciliation", () => {
     it("treats a different held prompt the same as none", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
 
-      await expect(h.queue.reconcileProcessingMessage("msg-other")).resolves.toBe(true);
+      await expect(
+        h.queue.reconcileProcessingMessage({ owedMessageId: "msg-other" })
+      ).resolves.toBe(true);
     });
 
     it("keeps the prompt the bridge holds", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
 
-      await expect(h.queue.reconcileProcessingMessage("msg-running")).resolves.toBe(false);
+      await expect(
+        h.queue.reconcileProcessingMessage({ owedMessageId: "msg-running" })
+      ).resolves.toBe(false);
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     });
 
     it("never judges a prompt dispatched on the current socket by the report", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, SOCKET_ATTACHED_AT);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
 
-      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(false);
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(
+        false
+      );
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     });
 
     it("keeps the prompt when the socket's attach time is unknown", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(null);
+      withSocketAttachedAt(h, null);
 
-      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(false);
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(
+        false
+      );
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     });
 
     it("keeps the prompt without a report, whatever the socket boundary says", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
 
       await expect(h.queue.reconcileProcessingMessage()).resolves.toBe(false);
       expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
@@ -2816,11 +2836,30 @@ describe("SessionMessageQueue processing prompt reconciliation", () => {
     it("names the replaced instance when both boundaries apply", async () => {
       const h = buildQueue();
       withProcessingPrompt(h, INSTANCE_RESERVED_AT - 1);
-      h.wsManager.sandboxSocketAttachedAt.mockReturnValue(SOCKET_ATTACHED_AT);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
 
-      await expect(h.queue.reconcileProcessingMessage(null)).resolves.toBe(true);
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(true);
 
       expectFailed(h, "The sandbox running this prompt was replaced.", "sandbox_replaced");
+    });
+
+    it("applies the report even while dispatch is gated, which the queue pump would not", async () => {
+      // Why the ready handler reconciles outside `processMessageQueue`: the
+      // pump returns at its dispatch gates before it reconciles, and a report
+      // it dropped could not be applied by any later pump.
+      const h = buildQueue(() => false);
+      withProcessingPrompt(h, SOCKET_ATTACHED_AT - 1);
+      withSocketAttachedAt(h, SOCKET_ATTACHED_AT);
+
+      await h.queue.processMessageQueue();
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(true);
+      expectFailed(
+        h,
+        "The sandbox runtime restarted while this prompt was running.",
+        "runtime_restarted"
+      );
     });
   });
 

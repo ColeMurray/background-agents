@@ -138,3 +138,53 @@ describe("SandboxRepository completeProviderResume (SQLite)", () => {
     }
   );
 });
+
+describe("SandboxRepository socket attach time (SQLite)", () => {
+  function createSqliteRepository() {
+    const db = new DatabaseSync(":memory:");
+    const { sql } = createNodeSqlStorage(db);
+    initSchema(sql);
+    const repository = new SandboxRepository(sql, log, TEST_ENCRYPTION_KEY);
+    repository.createSandbox({
+      id: "row-1",
+      status: "ready",
+      gitSyncStatus: "pending",
+      createdAt: 2000,
+    });
+    sql.exec("UPDATE sandbox SET modal_sandbox_id = 'sb-1'");
+    return { db, repository };
+  }
+
+  it.each([
+    ["revoke", (r: SandboxRepository) => r.revokeActiveSocketId()],
+    ["fence", (r: SandboxRepository) => r.fenceSandboxGeneration()],
+    [
+      "spawn reservation",
+      (r: SandboxRepository) =>
+        r.updateSandboxForSpawn({ status: "spawning", createdAt: 9000, modalSandboxId: "sb-2" }),
+    ],
+    [
+      "rejected startup",
+      (r: SandboxRepository) =>
+        r.rejectProviderStartup({ sandboxId: "sb-1", createdAt: 2000 }, null),
+    ],
+  ] as const)("clears the attach time with the socket's authority: %s", (_case, revoke) => {
+    const { db, repository } = createSqliteRepository();
+    try {
+      repository.setActiveSocketId("sbws-1", 5000);
+      expect(repository.getSandbox()).toMatchObject({
+        active_socket_id: "sbws-1",
+        active_socket_attached_at: 5000,
+      });
+
+      revoke(repository);
+
+      expect(repository.getSandbox()).toMatchObject({
+        active_socket_id: "",
+        active_socket_attached_at: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+});

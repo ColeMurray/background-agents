@@ -137,7 +137,12 @@ class AgentHarness(Protocol):
         ...
 
     async def resume_session(self, persisted_id: str) -> bool:
-        """Adopt ``persisted_id`` when the vendor still has it; ``False`` leaves ``session_id`` unset."""
+        """Adopt ``persisted_id`` when the vendor still has it; ``False`` leaves ``session_id`` unset.
+
+        Raises ``HarnessStartError`` when the session exists but cannot be
+        adopted safely, e.g. a vendor server that outlived an earlier bridge
+        process is still executing in it and will not stop.
+        """
         ...
 
     async def create_session(self) -> None:
@@ -162,18 +167,6 @@ class AgentHarness(Protocol):
         Unlike ``abort``, ``True`` confirms the harness and its owned tool
         execution are no longer active. Implementations may terminate only
         their own process domain when a cooperative interrupt is insufficient.
-        """
-        ...
-
-    async def contain_inherited_execution(self, timeout_seconds: float) -> bool:
-        """Stop whatever a session this process did not start may still run.
-
-        Called once a persisted session resumed, before the bridge reports
-        ready. ``True`` confirms that nothing an earlier bridge process started
-        is still executing in the vendor this harness talks to. A harness whose
-        vendor process is a child this process starts itself reaches nothing of
-        a predecessor through that child, so it returns ``True`` without side
-        effects.
         """
         ...
 

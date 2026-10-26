@@ -82,14 +82,6 @@ MAX_SAFE_GENERATION_CREATED_AT = 9_007_199_254_740_991
 HEALTH_LOG_INTERVAL_SECONDS = 60.0
 HEARTBEAT_DELAY_WARNING_SECONDS = 5.0
 HEARTBEAT_SEND_WARNING_SECONDS = 5.0
-# A bridge that resumed a vendor session asks the harness to confirm nothing
-# from an earlier bridge process is still executing in it: one attempt waits
-# this long, and attempts repeat until the budget is spent.
-RESUMED_EXECUTION_CONTAINMENT_SECONDS = 15.0
-RESUMED_EXECUTION_CONTAINMENT_BUDGET_SECONDS = 120.0
-# An attempt that fails at once (the abort request itself failed) is not
-# repeated at once.
-RESUMED_EXECUTION_CONTAINMENT_RETRY_DELAY_SECONDS = 1.0
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
@@ -125,16 +117,6 @@ class SessionTerminatedError(Exception):
     """
 
     pass
-
-
-class ResumedExecutionUncontainedError(HarnessStartError):
-    """A resumed vendor session kept executing past the containment budget.
-
-    Raised while attaching, so the bridge never reports ready over an
-    execution it does not own. A harness start failure: the cause is recorded
-    for the supervisor and the bridge exits without spending the restart
-    budget, since the budget's retries already happened in this process.
-    """
 
 
 class AgentBridge:
@@ -311,6 +293,8 @@ class AgentBridge:
         current = self.activity.current_prompt_message_id
         if current is not None:
             return current
+        # Oldest first: a terminal the supervisor has not yet handed over is
+        # newer than any the forwarder holds, which lists its own oldest first.
         owed = [
             *self.event_forwarder.unacknowledged_message_ids("execution_complete"),
             *self.activity.undelivered_terminal_message_ids(),
@@ -1169,64 +1153,17 @@ class AgentBridge:
             return
         try:
             resumed = await harness.resume_session(persisted)
+        except HarnessStartError as e:
+            # The harness refused to adopt the session safely (it may still be
+            # executing for an earlier bridge process): never report ready.
+            self._record_fatal_error(str(e))
+            self.log.error("agent.session.load_error", exc=e)
+            raise
         except Exception as e:
             self.log.error("agent.session.load_error", exc=e)
             return
         if resumed:
-            # This process did not start the session: the server may still be
-            # running what an earlier bridge process dispatched. Nothing here
-            # owns that work, so `ready` would report no owner and the control
-            # plane would fail the prompt and dispatch the next one into the
-            # same execution. Contain it first.
-            await self._contain_resumed_execution(harness, persisted)
             await self._save_session_id(harness)
-
-    async def _contain_resumed_execution(self, harness: AgentHarness, session_id: str) -> None:
-        """Stop whatever the resumed session still runs for an earlier process.
-
-        The harness confirms its execution domain is idle, or says it has
-        nothing a predecessor could have left running. Attempts repeat within
-        the budget, since a server mid-tool-call may need a moment to honour
-        the abort; a confirmation that never comes keeps this process from
-        attaching at all.
-        """
-        started = time.monotonic()
-        attempts = 0
-        while True:
-            attempts += 1
-            contained = await harness.contain_inherited_execution(
-                RESUMED_EXECUTION_CONTAINMENT_SECONDS
-            )
-            elapsed = time.monotonic() - started
-            if contained:
-                self.log.info(
-                    "bridge.resumed_execution_contained",
-                    vendor_session_id=session_id,
-                    attempts=attempts,
-                    duration_ms=int(elapsed * 1000),
-                )
-                return
-            self.log.warn(
-                "bridge.resumed_execution_uncontained",
-                vendor_session_id=session_id,
-                attempts=attempts,
-                duration_ms=int(elapsed * 1000),
-            )
-            if elapsed >= RESUMED_EXECUTION_CONTAINMENT_BUDGET_SECONDS:
-                cause = (
-                    f"resumed session {session_id} did not become idle within "
-                    f"{RESUMED_EXECUTION_CONTAINMENT_BUDGET_SECONDS:g}s"
-                )
-                # Only a harness open failure records its cause on the way out;
-                # this one is raised past that point.
-                self._record_fatal_error(cause)
-                raise ResumedExecutionUncontainedError(cause)
-            await asyncio.sleep(
-                min(
-                    RESUMED_EXECUTION_CONTAINMENT_RETRY_DELAY_SECONDS,
-                    RESUMED_EXECUTION_CONTAINMENT_BUDGET_SECONDS - elapsed,
-                )
-            )
 
     async def _persist_rotated_session_id(
         self, harness: AgentHarness, *, strict: bool = False

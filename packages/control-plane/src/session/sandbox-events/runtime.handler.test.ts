@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { RuntimeReport } from "../orphaned-prompt";
 import type { SandboxEventContext } from "./context";
 import { SandboxRuntimeEventHandler } from "./runtime.handler";
 
@@ -23,7 +24,7 @@ function createHandler(opts: { becomesReady?: boolean } = {}) {
   };
   const messageQueue = {
     processMessageQueue: vi.fn(async () => {}),
-    reconcileProcessingMessage: vi.fn(async (_activeMessageId?: string | null) => false),
+    reconcileProcessingMessage: vi.fn(async (_report?: RuntimeReport) => false),
   };
   const lifecycle = { onRuntimeReady: vi.fn(() => opts.becomesReady ?? true) };
   const handler = new SandboxRuntimeEventHandler(
@@ -105,7 +106,7 @@ describe("SandboxRuntimeEventHandler ready", () => {
     await settled();
 
     expect(h.lifecycle.onRuntimeReady).toHaveBeenCalledWith(50_000, "opencode", undefined);
-    expect(h.messageQueue.reconcileProcessingMessage).toHaveBeenCalledWith(null);
+    expect(h.messageQueue.reconcileProcessingMessage).toHaveBeenCalledWith({ owedMessageId: null });
     expect(h.lifecycle.onRuntimeReady.mock.invocationCallOrder[0]).toBeLessThan(
       h.messageQueue.reconcileProcessingMessage.mock.invocationCallOrder[0]
     );
@@ -128,7 +129,9 @@ describe("SandboxRuntimeEventHandler ready", () => {
     await h.handler.handleReady({ ...READY, activeMessageId: "msg-1" }, context(null));
     await settled();
 
-    expect(h.messageQueue.reconcileProcessingMessage).toHaveBeenCalledWith("msg-1");
+    expect(h.messageQueue.reconcileProcessingMessage).toHaveBeenCalledWith({
+      owedMessageId: "msg-1",
+    });
     expect(h.messageQueue.processMessageQueue).not.toHaveBeenCalled();
     expect(h.scheduleInactivityCheck).not.toHaveBeenCalled();
   });

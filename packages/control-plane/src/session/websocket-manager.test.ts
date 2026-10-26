@@ -324,18 +324,16 @@ describe("SessionWebSocketManagerImpl", () => {
       const { manager, mockRepo } = createManager();
       const row = createSandboxRow("sandbox-abc");
       mockRepo.setSandbox(row);
-      expect(manager.sandboxSocketAttachedAt()).toBeNull();
       const before = Date.now();
 
       manager.acceptAndSetSandboxSocket(createFakeWebSocket(), "sandbox-abc");
 
       expect(row.active_socket_attached_at).not.toBeNull();
       expect(row.active_socket_attached_at!).toBeGreaterThanOrEqual(before);
-      expect(manager.sandboxSocketAttachedAt()).toBe(row.active_socket_attached_at);
 
       manager.detachSandboxSocket(1000, "done");
 
-      expect(manager.sandboxSocketAttachedAt()).toBeNull();
+      expect(row.active_socket_attached_at).toBeNull();
     });
 
     it("accepts with only sandbox tag when no sandboxId", () => {

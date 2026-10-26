@@ -61,14 +61,6 @@ export interface SessionWebSocketManager {
    */
   acceptAndSetSandboxSocket(ws: SessionWebSocket, sandboxId?: string): { replaced: boolean };
 
-  /**
-   * When the sandbox socket the session dispatches to was accepted, by the
-   * control plane's clock. Persisted with the socket's identity, so it
-   * survives hibernation and restarts. Null while no socket holds dispatch
-   * authority, and on rows written before the time was recorded.
-   */
-  sandboxSocketAttachedAt(): number | null;
-
   /** Whether `ws` is the sandbox socket the session currently dispatches to. */
   isActiveSandboxSocket(ws: SessionWebSocket): boolean;
 
@@ -213,11 +205,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
     this.sandboxWs = ws;
     return { replaced };
-  }
-
-  sandboxSocketAttachedAt(): number | null {
-    const sandbox = this.sandboxRepository.getSandbox();
-    return sandbox?.active_socket_id ? sandbox.active_socket_attached_at : null;
   }
 
   // -------------------------------------------------------------------------
