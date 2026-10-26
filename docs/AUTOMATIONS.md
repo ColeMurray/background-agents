@@ -388,8 +388,10 @@ comes due while a previous run is active is recorded as **Skipped** and still co
 
 To cancel a pending one-shot, including any waiting retries, pause or delete it. Editing the time
 reschedules it and withdraws retries waiting on the previous time. A paused one-shot whose time has
-passed must be given a new future time before it can be resumed. Fired one-shots that completed or
-were skipped are hidden from the automations list; their history stays readable on the detail page.
+passed must be given a new future time before it can be resumed. Fired one-shots that completed, or
+were skipped because a previous run was active, are hidden from the automations list once no run is
+active; their history stays readable on the detail page. A one-shot skipped because execution
+authorization was denied stays listed so its access or executor can be repaired.
 
 ### Recurring Schedules
 
@@ -430,18 +432,20 @@ Examples:
 ### Launch Retries
 
 **Retries** (`maxRetries`, none by default, up to 5) relaunches a scheduled run that failed before
-its prompt reached a session, for example when a D1 stall stops the session from being created. It
-applies to recurring and one-shot schedules alike.
+it tried to enqueue its first prompt, for example when a D1 stall stops the session from being
+created. It applies to recurring and one-shot schedules alike.
 
-- **Not retried**: **Trigger Now** runs; runs that fail after the prompt is sent (the session may
-  have accepted it, so a retry could repeat the work), including agent failures, timeouts, and
-  budget stops; and configuration errors such as a model the harness cannot run.
+- **Not retried**: **Trigger Now** runs; runs that fail once the first-prompt enqueue has been
+  attempted, even if that call fails (the session may have accepted it, so a retry could repeat the
+  work), including agent failures, timeouts, and budget stops; and configuration errors such as a
+  model the harness cannot run.
 - **Backoff**: the first retry waits 2 minutes and the wait doubles for each later attempt. While it
   waits, the run shows **Retrying** with the launch error and the time of the next attempt.
 - **Attempts**: each attempt opens a new session under the same run row, which shows the attempt
   number. Execution authorization is checked again before every attempt.
-- **Auto-pause**: a run that relaunches successfully counts as a success; one that exhausts its
-  retries counts as a single failure. A waiting run counts as active for concurrency.
+- **Auto-pause**: a run counts as a success only if its relaunched session completes successfully;
+  one that exhausts its retries counts as a single failure. A waiting run counts as active for
+  concurrency.
 - **Cancellation**: pausing or deleting the automation, or lowering **Retries** below the attempts a
   waiting run has made, fails that run within a minute.
 
