@@ -14,6 +14,7 @@ relatedCode:
   - packages/control-plane/src/db/memory-records.ts
   - packages/control-plane/src/authorization/memory-access.ts
   - packages/control-plane/src/memory/render.ts
+  - packages/control-plane/src/memory/lifecycle.ts
   - packages/web/src/components/settings/memories-settings/index.tsx
   - packages/web/src/components/settings/memories-settings/memory-collection.tsx
   - packages/web/src/components/settings/memories-settings/memory-card.tsx
@@ -87,7 +88,7 @@ Memories you create in Settings are active immediately. What an agent writes dep
 | Personal directive               | Proposed for you to review.                                                                                                  |
 | Repository or environment memory | Proposed for someone who can manage that scope.                                                                              |
 
-Once a session is shared or gains a collaborator, its personal facts are always proposed, even if it is made private again. Child sessions never save personal facts directly. When an agent proposes a memory, it is instructed to tell you that it awaits review in Settings › Memories (personal) or Settings › Shared memories.
+Once a session is shared or gains a collaborator, its personal facts are always proposed, even if it is made private again. Child sessions never save personal facts directly. An agent's personal fact that replaces a directive is always proposed, so a directive cannot be replaced without your approval. When an agent proposes a memory, it is instructed to tell you that it awaits review in Settings › Memories (personal) or Settings › Shared memories.
 
 Each session can make at most 20 memory writes, with at most 5 proposals pending at a time.
 
@@ -164,7 +165,7 @@ When a page has records you can act on, a bar above the list lets you select the
 
 Selection is limited to the current page and clears when you change the tab, page, or search. Each memory is checked separately against your access and against the revision you were looking at, so one that changed or that you cannot manage fails on its own while the rest apply. The page reports the outcome, for example "Approved 5 of 7 memories." followed by each failure by title with its reason.
 
-The server accepts up to 8 memories per request. The page sends larger selections as consecutive batches of 8 automatically. If a whole batch fails, for example because the connection dropped, that batch and any batches not yet sent are reported as failed; earlier batches stay applied.
+The server accepts up to 8 memories per request. The page sends larger selections as consecutive batches of 8 automatically. If a whole batch fails, for example because the connection dropped, that batch and any batches not yet sent are reported as failed, and earlier batches stay applied. The server may still have applied the failed batch before its response was lost, so reload and check each memory's current status before retrying.
 
 ## Troubleshooting
 
