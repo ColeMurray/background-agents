@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useState, useCallback, useEffect, useRef, type TouchEvent } from "react";
 import { ArchiveSessionDialog } from "@/components/archive-session-dialog";
+import { IntentPrefetchLink } from "@/components/intent-prefetch-link";
 import { archiveSession } from "@/lib/archive-session";
 import { pullRequestSummaryDisplay } from "@/lib/pr-summary";
 import { PullRequestStateIcon } from "@/components/pr-state-icon";
@@ -249,7 +249,7 @@ export function SessionListItem({
             </div>
           </>
         ) : (
-          <Link
+          <IntentPrefetchLink
             href={buildSessionHref(session)}
             onClick={(event) => {
               if (longPressTriggeredRef.current) {
@@ -319,7 +319,7 @@ export function SessionListItem({
                 </>
               )}
             </div>
-          </Link>
+          </IntentPrefetchLink>
         )}
 
         {hasActions && (
@@ -428,7 +428,7 @@ export function ChildSessionListItem({
   };
   return (
     <div className="group relative">
-      <Link
+      <IntentPrefetchLink
         href={buildSessionHref(session)}
         onClick={() => {
           if (isMobile) onSessionSelect?.();
@@ -456,7 +456,7 @@ export function ChildSessionListItem({
             <span className="shrink-0 font-medium text-destructive">Failed</span>
           )}
         </div>
-      </Link>
+      </IntentPrefetchLink>
       {canMarkRead && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

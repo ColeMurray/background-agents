@@ -15,7 +15,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({ children, ...props }: React.ComponentProps<"a">) => <a {...props}>{children}</a>,
+  default: ({
+    prefetch,
+    children,
+    ...props
+  }: React.ComponentProps<"a"> & { prefetch?: boolean | null }) => (
+    <a data-prefetch={String(prefetch)} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@/hooks/use-session-rename", () => ({
@@ -75,6 +83,34 @@ function renderItem(unread = false) {
     />
   );
 }
+
+it.each(["Session one", "Child session"])(
+  "does not prefetch sidebar rows until hovered, enabling only %s",
+  (title) => {
+    renderItem();
+    render(
+      <ChildSessionListItem
+        session={{ ...session(), id: "child-session", title: "Child session" }}
+        isActive={false}
+        isMobile={false}
+        depth={1}
+        onMarkLatestMessageRead={vi.fn()}
+      />
+    );
+
+    const links = screen.getAllByRole("link");
+    for (const link of links) {
+      expect(link).toHaveAttribute("data-prefetch", "false");
+    }
+
+    const hoveredLink = screen.getByRole("link", { name: new RegExp(title) });
+    fireEvent.mouseEnter(hoveredLink);
+
+    for (const link of links) {
+      expect(link).toHaveAttribute("data-prefetch", link === hoveredLink ? "null" : "false");
+    }
+  }
+);
 
 it("uses the server lifecycle denial even when the workspace permission is granted", () => {
   mocks.allowedPermissions.add("sessions.lifecycle");
