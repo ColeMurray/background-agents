@@ -44,6 +44,9 @@ export { REPOS_CACHE_KEY, reposCacheIdentity } from "../repos/cache";
 
 const logger = createLogger("router:repos");
 
+// Coalesce within this isolate; duplicates across isolates are still possible and harmless.
+const branchesRefreshesInFlight = new Map<string, Promise<CachedBranchesList>>();
+
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
 const REPOS_CACHE_KV_TTL_MS = 3600 * 1000;
 
@@ -345,11 +348,20 @@ async function handleListBranches(
       });
     }
 
-    const refresh = async (): Promise<CachedBranchesList> => {
+    const fetchAndCacheBranches = async (): Promise<CachedBranchesList> => {
       const provider = createRouteSourceControlProvider(env);
-      const branches = await ctx.metrics.time("scm_api", () =>
-        provider.listBranches({ owner, name })
-      );
+      const scmStartedAt = Date.now();
+      const branches = await ctx.metrics
+        .time("scm_api", () => provider.listBranches({ owner, name }))
+        .finally(() => {
+          logger.info("repos_branches_cache.fetch", {
+            event: "repos_branches_cache.fetch",
+            trace_id: ctx.trace_id,
+            repo_owner: owner,
+            repo_name: name,
+            scm_api_ms: Date.now() - scmStartedAt,
+          });
+        });
       const entry: CachedBranchesList = {
         branches,
         cachedAt: new Date().toISOString(),
@@ -365,6 +377,17 @@ async function handleListBranches(
         });
       }
       return entry;
+    };
+
+    const refresh = (): Promise<CachedBranchesList> => {
+      const refreshKey = `${scmIdentity}:${cacheKey}`;
+      const inFlight = branchesRefreshesInFlight.get(refreshKey);
+      if (inFlight) return inFlight;
+      const pending = fetchAndCacheBranches().finally(() => {
+        branchesRefreshesInFlight.delete(refreshKey);
+      });
+      branchesRefreshesInFlight.set(refreshKey, pending);
+      return pending;
     };
 
     if (cached?.scmIdentity === scmIdentity) {

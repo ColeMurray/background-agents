@@ -360,14 +360,131 @@ describe("repository branch route", () => {
     expect(backgroundTasks.submissions).toHaveLength(1);
     expect(mockListBranches).toHaveBeenCalledOnce();
     expect(mockCachePut).not.toHaveBeenCalled();
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      "repos_branches_cache.fetch",
+      expect.anything()
+    );
+    vi.setSystemTime(now + 250);
     resolveBranches([{ name: "new-branch" }]);
     await backgroundTasks.settle();
     expect(backgroundTasks.failures).toEqual([]);
     expect(mockCachePut).toHaveBeenCalledOnce();
     expect(JSON.parse(mockCachePut.mock.calls[0][1])).toMatchObject({
       branches: [{ name: "new-branch" }],
-      freshUntil: now + 60_000,
+      freshUntil: now + 250 + 60_000,
     });
+    expect(mockLogger.info).toHaveBeenCalledWith("repos_branches_cache.fetch", {
+      event: "repos_branches_cache.fetch",
+      trace_id: "trace-1",
+      repo_owner: "acme",
+      repo_name: "widgets",
+      scm_api_ms: 250,
+    });
+  });
+
+  it.each(["cold", "stale"])(
+    "coalesces concurrent %s refreshes until they settle",
+    async (state) => {
+      const env = createEnv();
+      if (state === "stale") mockCacheGet.mockResolvedValue(await cacheEntry(env, now));
+      let resolveBranches!: (value: { name: string }[]) => void;
+      mockListBranches.mockReturnValue(
+        new Promise<{ name: string }[]>((resolve) => (resolveBranches = resolve))
+      );
+      const tasks = [createTestBackgroundTasks(), createTestBackgroundTasks()];
+      const responses = [
+        handleRequest(request("/repos/acme/widgets/branches"), env, tasks[0]),
+        handleRequest(request("/repos/Acme/Widgets/branches"), env, tasks[1]),
+      ];
+
+      try {
+        await vi.waitFor(() => tasks.forEach((task) => expect(task.submissions).toHaveLength(1)));
+        expect(mockListBranches).toHaveBeenCalledOnce();
+        expect(mockCachePut).not.toHaveBeenCalled();
+        if (state === "stale") {
+          for (const response of await Promise.all(responses)) expect(response.status).toBe(200);
+        }
+      } finally {
+        resolveBranches(branches);
+        await Promise.all(tasks.map((task) => task.settle()));
+        await Promise.all(responses);
+      }
+
+      expect(mockCachePut).toHaveBeenCalledOnce();
+      mockListBranches.mockResolvedValue(branches);
+      const retryTasks = createTestBackgroundTasks();
+      await handleRequest(request("/repos/acme/widgets/branches"), env, retryTasks);
+      await retryTasks.settle();
+      expect(mockListBranches).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each(["repository", "SCM identity"])("keeps refreshes separate by %s", async (scope) => {
+    const env = createEnv();
+    let resolveBranches!: (value: { name: string }[]) => void;
+    mockListBranches.mockReturnValue(
+      new Promise<{ name: string }[]>((resolve) => (resolveBranches = resolve))
+    );
+    const tasks = [createTestBackgroundTasks(), createTestBackgroundTasks()];
+    const responses = [
+      handleRequest(request("/repos/acme/widgets/branches"), env, tasks[0]),
+      handleRequest(
+        request(
+          scope === "repository" ? "/repos/acme/other/branches" : "/repos/acme/widgets/branches"
+        ),
+        scope === "SCM identity"
+          ? { ...env, GITHUB_APP_INSTALLATION_ID: "other-installation" }
+          : env,
+        tasks[1]
+      ),
+    ];
+
+    try {
+      await vi.waitFor(() => tasks.forEach((task) => expect(task.submissions).toHaveLength(1)));
+      expect(mockListBranches).toHaveBeenCalledTimes(2);
+    } finally {
+      resolveBranches(branches);
+      await Promise.all(tasks.map((task) => task.settle()));
+      await Promise.all(responses);
+    }
+    expect(mockCachePut).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries after a shared refresh fails", async () => {
+    const env = createEnv();
+    let rejectBranches!: (reason: Error) => void;
+    mockListBranches.mockReturnValue(
+      new Promise<{ name: string }[]>((_resolve, reject) => (rejectBranches = reject))
+    );
+    const tasks = [createTestBackgroundTasks(), createTestBackgroundTasks()];
+    const responses = tasks.map((task) =>
+      handleRequest(request("/repos/acme/widgets/branches"), env, task)
+    );
+
+    try {
+      await vi.waitFor(() => tasks.forEach((task) => expect(task.submissions).toHaveLength(1)));
+      expect(mockListBranches).toHaveBeenCalledOnce();
+    } finally {
+      rejectBranches(new Error("Provider unavailable"));
+      await Promise.all(tasks.map((task) => task.settle()));
+      await Promise.all(responses);
+    }
+    for (const response of await Promise.all(responses)) expect(response.status).toBe(500);
+    expect(mockCachePut).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      "repos_branches_cache.fetch",
+      expect.objectContaining({ scm_api_ms: expect.any(Number) })
+    );
+
+    mockListBranches.mockResolvedValue(branches);
+    const retry = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      createTestBackgroundTasks()
+    );
+    expect(retry.status).toBe(200);
+    expect(mockListBranches).toHaveBeenCalledTimes(2);
+    expect(mockCachePut).toHaveBeenCalledOnce();
   });
 
   it("treats an SCM identity mismatch as a miss", async () => {

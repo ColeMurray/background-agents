@@ -12,8 +12,8 @@
  */
 
 import { env } from "cloudflare:test";
-import { afterAll, beforeAll, describe } from "vitest";
-import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { CACHE_STORE_MIN_TTL_MS, createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { CACHE_ENTRIES_SCHEMA_SQL, SqlCacheStore } from "../../src/db/sql-cache-store";
 import {
   registerCacheStoreConformanceSuite,
@@ -47,4 +47,18 @@ describe("SqlCacheStore over D1", () => {
   });
 
   registerCacheStoreConformanceSuite(d1Factory, { controllableClock: true });
+
+  it("reclaims expired SQL rows when another key is written", async () => {
+    let now = Date.now();
+    const store = new SqlCacheStore(env.DB, { now: () => now });
+    await store.put("expired", "old", { ttlMs: CACHE_STORE_MIN_TTL_MS });
+    await store.put("permanent", "retained");
+    now += CACHE_STORE_MIN_TTL_MS;
+
+    await store.put("new", "fresh", { ttlMs: CACHE_STORE_MIN_TTL_MS });
+
+    expect(await env.DB.prepare("SELECT key FROM cache_entries ORDER BY key").all()).toMatchObject({
+      results: [{ key: "new" }, { key: "permanent" }],
+    });
+  });
 });
