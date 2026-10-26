@@ -4,7 +4,7 @@ description: A tour of the session page, from the header and timeline to the com
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/web/src/hooks/use-prompt-draft.ts
   - packages/web/src/lib/prompt-drafts.ts
@@ -15,6 +15,7 @@ relatedCode:
   - packages/web/src/lib/session-socket/boot-phase.ts
   - packages/web/src/components/session-header.tsx
   - packages/web/src/components/session-timeline.tsx
+  - packages/web/src/components/mermaid-code-block.tsx
   - packages/web/src/components/session-prompt-composer.tsx
   - packages/web/src/components/session-right-sidebar.tsx
   - packages/web/src/components/session-details-overlay.tsx
@@ -56,6 +57,8 @@ The timeline is the shared record of the session. Everyone connected sees the sa
 | "Resumed by PR feedback" | A header on a prompt that PR Feedback Autofix queued from a review or PR comment, with "PR comment" or "Review", "Human" or "Bot", and an "Open feedback" link.                                                                                |
 | Pull request card        | "Opened pull request #12", "Updated pull request #12", or "Create pull request failed". Expand it to see the title, the branch route ("feature-branch into main"), the description, a Draft, Open, or Updated badge, and an "Open PR" button.  |
 | Screenshot or video card | A preview with a caption, labeled "Screenshot" or "Video". Click it to open the media viewer.                                                                                                                                                  |
+
+Assistant responses render Mermaid diagrams. Once a ` ```mermaid ` code block is complete, it shows as a diagram with a "View diagram source" disclosure beneath it. A diagram that cannot be rendered stays as code. Ask the agent for a Mermaid diagram when a flow or architecture is easier to read as a picture.
 
 Older events load as you scroll up. The view stays pinned to the bottom while new events arrive unless you have scrolled away.
 
