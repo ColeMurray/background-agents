@@ -9,6 +9,7 @@ relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/AUTOMATIONS.md
   - docs/MANAGED_SKILLS.md
+  - docs/MEMORY.md
   - docs/IMAGE_PREBUILD.md
   - docs/AUTH.md
   - docs/CLAUDE_AGENT.md
@@ -53,6 +54,9 @@ Reusable instructions and supporting files stored in OpenInspect and installed i
 
 **MCP server**
 A Model Context Protocol server the agent can call as a tool source, configured under Settings › MCP Servers as a local command or a remote URL, for all repositories or selected ones. See [MCP servers](/configure/mcp-servers).
+
+**Memory**
+A fact or directive that carries knowledge between sessions, scoped to you personally, a repository, or an environment. Active memories are pinned into new sessions; agent-written memories usually wait for approval under Settings › Memories or Settings › Shared memories. See [Memories](/configure/memories).
 
 **Multi-repository session**
 A session whose sandbox holds several repositories cloned side by side under `/workspace`, either an ad-hoc "Multiple repositories" pick or an environment. Pushes and pull requests are per repository. See [Core concepts](/getting-started/core-concepts).

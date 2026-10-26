@@ -15,7 +15,7 @@ review in Settings → Memories or Settings → Shared memories; it is not yet a
 | Surface                    | Behavior                                                                                                                                                                                  |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                                        |
-| Settings → Shared memories | Select a repository or environment. Readers see its catalog; authorized maintainers can manage it.                                                                                        |
+| Settings → Shared memories | Opens on **All**, every readable repository and environment memory with its scope. Select a scope to narrow it or to create. Readers see the catalog; maintainers manage it.              |
 | Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions, and is available to every session creator.          |
 | Session sidebar → Memories | Pinned memories grouped by repository, environment or personal scope; hover or focus a row for its revision, inclusion and estimate. Flags omitted records and subsequent edits/archives. |
 
@@ -45,6 +45,14 @@ them together. Each selected record is still fenced by the revision shown and au
 own scope, so a record that changed or that the caller cannot manage fails alone while the rest
 apply. Each request is bounded to stay within D1's per-invocation query limit, so the page sends
 larger selections as sequential requests. Archiving is the bulk equivalent of deleting.
+
+Shared memories opens on an **All** view that merges every repository and environment the viewer can
+read, so pending proposals are reviewable under Proposed without choosing a scope first. Each record
+shows its scope; environment scopes link to their own view, while repository scopes stay text
+because repository links resolve to the All view by memory ID (display names may be stale). Creating
+and superseding require a concrete scope. Status tabs, search, paging, bulk actions and revision
+fencing work the same across scopes. Browsing is capped at a fixed depth, after which the page asks
+the viewer to choose a scope or narrow the search.
 
 Sandbox tools currently authenticate a session, not an immutable prompt author. For this reason,
 automatic personal facts are disabled permanently once a session is shared or gains a collaborator,
@@ -136,6 +144,7 @@ owner-only, including when the caller is another administrator.
 | Method and path                                           | Purpose                                                                                                                                                                                                                                                 |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /memories?scope=...&status=...&offset=...&limit=...` | Page through one scope (`personal`, `repository`, or `environment`) and status (`active`, `proposed`, or `archived`). Repository scope also takes `repoOwner` and `repoName`; environment takes `environmentId`. `nextOffset` is null at the last page. |
+| `GET /memories?scope=shared&status=...`                   | The All view: one page merged across every readable repository and environment partition, with per-record capabilities; `canCreate` is false. Paging stops at `MEMORY_SHARED_LIST_MAX_OFFSET` and sets `truncated`.                                     |
 | `POST /memories`                                          | Create a memory, optionally superseding an active one via `supersedesMemoryId`; the superseded record lists it in `supersededByMemoryIds`.                                                                                                              |
 | `GET /memories/:id`                                       | Current record and server-calculated management capabilities.                                                                                                                                                                                           |
 | `PATCH /memories/:id`                                     | Revise content; `If-Match: <currentRevisionId>` is required (428 when missing, 409 when stale).                                                                                                                                                         |

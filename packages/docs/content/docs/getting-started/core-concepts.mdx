@@ -15,6 +15,7 @@ relatedCode:
   - packages/shared/src/triggers/types.ts
   - docs/HOW_IT_WORKS.md
   - docs/AUTH.md
+  - docs/MEMORY.md
 ---
 
 This page defines the terms you will meet everywhere else in these docs.
@@ -66,6 +67,12 @@ Learn more: [Choosing a model](/models/choosing-a-model), [Provider accounts](/m
 A managed skill is a reusable instruction file, with optional supporting files, stored in the workspace and assigned to repositories, environments, or everything. At session creation you choose **All applicable**, **None**, or a personal profile; the matching skills are installed into the sandbox before the agent starts and pinned at their current revision for that session.
 
 Learn more: [Managed skills](/configure/managed-skills).
+
+## Memory
+
+A memory is a fact or a directive that carries knowledge between sessions without changing repository files. Memories belong to you personally, to a repository, or to an environment. Directives are given to the agent in full; facts appear as a catalog the agent reads from when relevant. Active memories that apply are pinned when a session is created. Agents can propose new memories, which usually wait for your approval, or for approval by someone who manages the repository or environment.
+
+Learn more: [Memories](/configure/memories).
 
 ## Automation
 
