@@ -4,6 +4,10 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## October 27, 2026
 
+**Slack completion replies post once.** A retried completion callback or a redelivered queue job
+names the same delivery by session and message. After Slack accepts the reply, a marker kept for one
+day suppresses a second copy of that message.
+
 **GitHub sign-in diagnostics.** Failed sign-ins, including provider and admission checks and a
 cancelled consent screen, return to the login page with an error and a retry option. If the GitHub
 App lacks **Email addresses: Read-only**, the page names the permission to check and the control
