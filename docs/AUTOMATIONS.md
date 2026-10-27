@@ -366,9 +366,9 @@ dropped.
 Bot messages can start at most 10 runs of one automation per hour; later bot messages in that hour
 are skipped. The first skip in the hour appears in the automation's run history, and the rest are
 not recorded, so a busy bot does not flood it. This stops a loop in which a run makes another bot
-post in the watched channel, which starts the automation again. The limit can be overshot by a burst
-of bot messages that arrive at the same moment, but not by such a loop. Messages from people are not
-limited.
+post in the watched channel, which starts the automation again. The limit can be overshot by bot
+messages that arrive at the same moment, since each is checked before the others are counted,
+including several bots answering one run at once. Messages from people are not limited.
 
 Bot output is untrusted input that can start autonomous work, so list only bots you trust. Anyone
 holding an incoming-webhook URL can post as that integration.

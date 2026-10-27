@@ -62,7 +62,8 @@ export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIde
     try {
       await Promise.all([
         kv.put(BOT_USER_ID_KV_KEY, identity.userId),
-        identity.botId ? kv.put(BOT_ID_KV_KEY, identity.botId) : undefined,
+        // A stale bot id must not outlive the identity that reported none.
+        identity.botId ? kv.put(BOT_ID_KV_KEY, identity.botId) : kv.delete(BOT_ID_KV_KEY),
       ]);
     } catch (e) {
       log.warn("kv.put", {

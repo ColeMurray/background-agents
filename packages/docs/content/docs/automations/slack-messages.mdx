@@ -83,7 +83,7 @@ Messages posted by other bots and integrations, such as alerting tools, CI notif
 
 - Only a bot message's text is read. An integration that posts its content only in attachments or blocks triggers nothing.
 - A bot can start a run but never continues one. Its reply in a thread that already has a session is dropped.
-- Bot messages can start at most 10 runs of one automation per hour. Later bot messages in that hour are skipped, which stops a loop where a run's output makes another bot post in the watched channel. The first skip in the hour appears in the run history; the rest are not recorded. Messages from people are not limited.
+- Bot messages can start at most 10 runs of one automation per hour. Later bot messages in that hour are skipped, which stops a loop where a run's output makes another bot post in the watched channel. The first skip in the hour appears in the run history; the rest are not recorded. Bot messages that arrive at the same moment can overshoot the limit, since each is checked before the others are counted. Messages from people are not limited.
 - The agent is told the message came from a bot.
 
 No extra Slack scope is needed: bot posts arrive on the same `message.channels` and `message.groups` subscriptions.

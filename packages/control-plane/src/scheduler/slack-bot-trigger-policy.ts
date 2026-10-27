@@ -7,9 +7,10 @@ import type { AutomationStore } from "../db/automation-store";
  * the watched channel, so an automation that accepts bot messages could
  * otherwise trigger itself indefinitely.
  *
- * The count is read before the firing is inserted, so a burst of simultaneous
- * bot messages can overshoot it. A loop cannot: each of its firings follows the
- * previous run, which is already counted.
+ * The count is read before the firing is inserted, so simultaneous bot messages
+ * can overshoot it, including several bots answering one run at once. A loop in
+ * which one bot answers each run cannot: each firing follows the previous run,
+ * which is already counted.
  */
 export const SLACK_BOT_TRIGGER_LIMIT = 10;
 export const SLACK_BOT_TRIGGER_WINDOW_MS = 60 * 60 * 1000;

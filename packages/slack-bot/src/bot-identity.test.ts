@@ -22,6 +22,7 @@ function kvWith(stored: Record<string, string> = {}) {
   return {
     get: vi.fn(async (key: string) => stored[key] ?? null),
     put: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -88,6 +89,9 @@ describe("getBotIdentity", () => {
 
     expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UBOT123", botId: null });
     expect(kv.put).toHaveBeenCalledExactlyOnceWith("slack:bot-user-id", "UBOT123");
+    // A bot id stored earlier is cleared, so a later KV fallback cannot pair it
+    // with this user id.
+    expect(kv.delete).toHaveBeenCalledExactlyOnceWith("slack:bot-id");
   });
 
   it("still returns the identity when persisting it to KV fails", async () => {
