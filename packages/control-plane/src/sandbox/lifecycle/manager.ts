@@ -68,7 +68,6 @@ import {
 } from "./launch-context";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../../platform-ports";
 import { DEFAULT_SANDBOX_STATUS } from "../sandbox-status";
-import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
 import type {
   SandboxGeneration,
   SandboxReadiness,
@@ -782,17 +781,11 @@ export class SandboxLifecycleManager
         this.log.warn("Replacing a sandbox without restoring its state", {
           event: "sandbox.state_discarded",
         });
-        try {
-          this.config.recordWarning?.(
-            "A fresh sandbox was requested without restoring the previous state. Uncommitted changes and earlier conversation context will not be carried over.",
-            `sandbox-state-discarded:${replaced.sandboxId}:${replaced.createdAt}`
-          );
-        } catch (error) {
-          this.log.warn("Could not record sandbox continuity warning", {
-            event: "sandbox.state_discarded_notice_failed",
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        this.recordWarningSafely(
+          "A fresh sandbox was requested without restoring the previous state. Uncommitted changes and earlier conversation context will not be carried over.",
+          `sandbox-state-discarded:${replaced.sandboxId}:${replaced.createdAt}`,
+          "sandbox.state_discarded_notice_failed"
+        );
       }
 
       const priorSandbox = this.storage.getSandbox();
@@ -821,10 +814,7 @@ export class SandboxLifecycleManager
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
-      const { servers: mcpServers } = await this.launchContext.loadMcpServers(
-        repositories,
-        selectedImage?.runtimeVersion ?? SANDBOX_RUNTIME_VERSION
-      );
+      const mcpServers = await this.launchContext.loadMcpServers(repositories);
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
@@ -1112,16 +1102,13 @@ export class SandboxLifecycleManager
     return false;
   }
 
-  /** Tells the user which restricted MCP servers a restored, older runtime was not given. */
-  private recordWithheldMcpServers(names: string[], snapshotImageId: string): void {
+  /** Records a session warning for the user; a failure to record is logged, never thrown. */
+  private recordWarningSafely(message: string, eventId: string, failureEvent: string): void {
     try {
-      this.config.recordWarning?.(
-        `MCP servers limited to selected tools (${names.join(", ")}) are unavailable in this session, because its saved sandbox runs a runtime that cannot apply the selection. Start a new session to use them.`,
-        `mcp-servers-withheld:${snapshotImageId}`
-      );
+      this.config.recordWarning?.(message, eventId);
     } catch (error) {
-      this.log.warn("Could not record withheld MCP servers warning", {
-        event: "mcp.restricted_servers_withheld_notice_failed",
+      this.log.warn("Could not record session warning", {
+        event: failureEvent,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1185,7 +1172,10 @@ export class SandboxLifecycleManager
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
       const { servers: mcpServers, withheld: withheldMcpServers } =
-        await this.launchContext.loadMcpServers(repositories, snapshotRuntimeVersion);
+        this.launchContext.withholdUnenforceableMcpServers(
+          await this.launchContext.loadMcpServers(repositories),
+          snapshotRuntimeVersion
+        );
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
       const restoreConfig = {
@@ -1250,7 +1240,11 @@ export class SandboxLifecycleManager
           message: "Session restored from snapshot",
         });
         if (withheldMcpServers.length) {
-          this.recordWithheldMcpServers(withheldMcpServers, snapshotImageId);
+          this.recordWarningSafely(
+            `MCP servers limited to selected tools (${withheldMcpServers.join(", ")}) are unavailable in this session, because its saved sandbox runs a runtime that cannot apply the selection. Start a new session to use them.`,
+            `mcp-servers-withheld:${snapshotImageId}`,
+            "mcp.restricted_servers_withheld_notice_failed"
+          );
         }
 
         this.log.info("Sandbox restore completed", {

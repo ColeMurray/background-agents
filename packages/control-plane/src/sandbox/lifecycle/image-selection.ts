@@ -23,7 +23,7 @@ import {
 } from "../../image-builds/fingerprint";
 import {
   minCompatibleRuntimeVersionFor,
-  parseRuntimeVersionNumber,
+  runtimeGenerationAtLeast,
   type ImageBuildScope,
 } from "../../image-builds/model";
 import { parseRepositoryShasJson } from "../../image-builds/provenance";
@@ -96,11 +96,8 @@ export async function evaluateImageBuildForSpawn(
     return { outcome: "miss", reason: "missing_artifact", imageBuildId: image.id };
   }
 
-  const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness);
   if (
-    runtimeVersion === null ||
-    runtimeVersion < minimumRuntimeVersion ||
+    !runtimeGenerationAtLeast(image.runtime_version, minCompatibleRuntimeVersionFor(harness)) ||
     !supportsConfirmedShutdown(image.runtime_version)
   ) {
     return { outcome: "miss", reason: "runtime_below_floor", imageBuildId: image.id };

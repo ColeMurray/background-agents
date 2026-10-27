@@ -11,7 +11,11 @@ import {
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { McpToolDiscoveryError, discoverRemoteMcpTools } from "../mcp/tool-discovery";
+import {
+  McpToolDiscoveryError,
+  discoverRemoteMcpTools,
+  discoveryFailureDetail,
+} from "../mcp/tool-discovery";
 import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -166,14 +170,6 @@ async function handleDeleteMcpServer(
   return json({ ok: true });
 }
 
-/** The underlying error messages, for logs only: they can quote the server's response. */
-function causeMessage(cause: unknown): string | undefined {
-  if (cause instanceof AggregateError) {
-    return cause.errors.map((error) => causeMessage(error)).join("; ");
-  }
-  return cause instanceof Error ? cause.message : undefined;
-}
-
 /** Connects to a saved remote server with its stored headers and lists its tools. */
 async function handleDiscoverMcpTools(
   _request: Request,
@@ -207,8 +203,7 @@ async function handleDiscoverMcpTools(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
       id,
-      error: err instanceof Error ? err.message : String(err),
-      cause: err instanceof Error ? causeMessage(err.cause) : undefined,
+      error: discoveryFailureDetail(err),
     });
     const reason = err instanceof McpToolDiscoveryError ? `: ${err.message}` : "";
     return error(`Could not load tools from the MCP server${reason}`, 502);

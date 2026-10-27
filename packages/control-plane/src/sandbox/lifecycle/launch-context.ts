@@ -7,8 +7,8 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import {
-  parseRuntimeVersionNumber,
   repoImageBuildScope,
+  runtimeGenerationAtLeast,
   type ImageBuildScope,
 } from "../../image-builds/model";
 import type { Logger } from "../../logger";
@@ -66,7 +66,7 @@ export interface SandboxLaunchContextDependencies {
 
 export interface LoadedMcpServers {
   servers: McpServerConfig[] | undefined;
-  /** Names of restricted servers left out because the runtime cannot enforce their allowlists. */
+  /** Names of restricted servers left out because the snapshot's runtime cannot enforce them. */
   withheld: string[];
 }
 
@@ -93,11 +93,6 @@ export function resolveImageBuildScope(
   return sessionHasRepository(session) && repositories.length === 1
     ? repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName)
     : null;
-}
-
-function supportsMcpToolAllowlists(runtimeVersion: string): boolean {
-  const generation = parseRuntimeVersionNumber(runtimeVersion);
-  return generation !== null && generation >= MIN_MCP_TOOL_ALLOWLIST_RUNTIME_GENERATION;
 }
 
 /**
@@ -226,48 +221,53 @@ export class SandboxLaunchContext {
     }
   }
 
-  /**
-   * `runtimeVersion` is the runtime that will read the servers: the selected
-   * prebuilt image's (the current runtime's when none is selected), or the
-   * snapshot's on restore. Restricted servers are withheld from a runtime that
-   * predates tool allowlists or whose version cannot be parsed, since it would
-   * give them every tool.
-   */
   async loadMcpServers(
-    repositories: SessionRepositoryInfo[],
-    runtimeVersion: string
-  ): Promise<LoadedMcpServers> {
+    repositories: SessionRepositoryInfo[]
+  ): Promise<McpServerConfig[] | undefined> {
     try {
-      if (!this.config.mcpServerLookup) return { servers: undefined, withheld: [] };
-      const loaded = await this.config.mcpServerLookup.getDecryptedForSession(
+      if (!this.config.mcpServerLookup) return undefined;
+      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
         repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
       );
-      const withheld = supportsMcpToolAllowlists(runtimeVersion)
-        ? []
-        : loaded.filter((server) => server.toolAllowlist != null).map((server) => server.name);
-      const servers = withheld.length
-        ? loaded.filter((server) => server.toolAllowlist == null)
-        : loaded;
-      if (withheld.length) {
-        this.getLogger().warn("MCP servers with a tool allowlist withheld from an older runtime", {
-          event: "mcp.restricted_servers_withheld",
-          runtime_version: runtimeVersion,
-          names: withheld,
-        });
-      }
       this.getLogger().info("MCP servers loaded", {
         event: "mcp.loaded",
-        count: servers.length,
-        names: servers.map((s) => s.name),
+        count: servers?.length ?? 0,
+        names: servers?.map((s) => s.name) ?? [],
       });
-      return { servers: servers.length ? servers : undefined, withheld };
+      return servers?.length ? servers : undefined;
     } catch (err) {
       this.getLogger().warn("Failed to load MCP servers", {
         event: "mcp.load_failed",
         error: String(err),
       });
-      return { servers: undefined, withheld: [] };
+      return undefined;
     }
+  }
+  /**
+   * Leaves restricted servers out of a restore whose snapshot runtime predates
+   * tool allowlists or whose version cannot be parsed, since that runtime would
+   * give them every tool. Fresh launches need no check: every harness's image
+   * floor is at or above MIN_MCP_TOOL_ALLOWLIST_RUNTIME_GENERATION.
+   */
+  withholdUnenforceableMcpServers(
+    servers: McpServerConfig[] | undefined,
+    snapshotRuntimeVersion: string
+  ): LoadedMcpServers {
+    if (
+      !servers ||
+      runtimeGenerationAtLeast(snapshotRuntimeVersion, MIN_MCP_TOOL_ALLOWLIST_RUNTIME_GENERATION)
+    ) {
+      return { servers, withheld: [] };
+    }
+    const withheld = servers.filter((s) => s.toolAllowlist != null).map((s) => s.name);
+    if (!withheld.length) return { servers, withheld };
+    this.getLogger().warn("MCP servers with a tool allowlist withheld from an older runtime", {
+      event: "mcp.restricted_servers_withheld",
+      runtime_version: snapshotRuntimeVersion,
+      names: withheld,
+    });
+    const kept = servers.filter((s) => s.toolAllowlist == null);
+    return { servers: kept.length ? kept : undefined, withheld };
   }
 
   resolveSandboxSettings(session: SessionRow): ResolvedSandboxSettings {

@@ -1,5 +1,5 @@
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
-import { parseRuntimeVersionNumber, type ImageBuildProvider } from "./model";
+import { runtimeGenerationAtLeast, type ImageBuildProvider } from "./model";
 import { repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
 import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
@@ -32,10 +32,9 @@ export function evaluateImageBuildRebuildPolicy(
   );
   if (!ready) return { type: "rebuild", reason: "missing_image" };
 
-  const runtimeVersion = parseRuntimeVersionNumber(ready.runtimeVersion);
   // Rebuild old images to the current toolchain without invalidating images
   // that remain safe to boot during the rollout gap.
-  if (runtimeVersion === null || runtimeVersion < MIN_REBUILD_RUNTIME_VERSION) {
+  if (!runtimeGenerationAtLeast(ready.runtimeVersion, MIN_REBUILD_RUNTIME_VERSION)) {
     return { type: "rebuild", reason: "runtime_incompatible" };
   }
 

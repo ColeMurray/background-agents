@@ -113,3 +113,15 @@ export function parseRuntimeVersionNumber(runtimeVersion: string): number | null
   const match = /^v(\d+)/.exec(runtimeVersion);
   return match ? Number.parseInt(match[1], 10) : null;
 }
+
+/**
+ * Whether a runtime is at or above a generation floor. Fails closed: a missing
+ * or unparseable version is below every floor.
+ */
+export function runtimeGenerationAtLeast(
+  runtimeVersion: string | null | undefined,
+  floor: number
+): boolean {
+  const generation = runtimeVersion ? parseRuntimeVersionNumber(runtimeVersion) : null;
+  return generation !== null && generation >= floor;
+}

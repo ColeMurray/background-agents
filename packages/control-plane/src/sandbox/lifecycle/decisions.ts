@@ -10,10 +10,7 @@
  */
 
 import type { SandboxStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  parseRuntimeVersionNumber,
-} from "../../image-builds/model";
+import { MIN_COMPATIBLE_RUNTIME_VERSION, runtimeGenerationAtLeast } from "../../image-builds/model";
 
 // ==================== Dead-Sandbox Policy ====================
 
@@ -273,9 +270,7 @@ export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
  * keep the snapshot for operator recovery instead of substituting a clean tree.
  */
 export function isSnapshotRuntimeCompatible(snapshotRuntimeVersion: string | null): boolean {
-  if (!snapshotRuntimeVersion) return false;
-  const version = parseRuntimeVersionNumber(snapshotRuntimeVersion);
-  return version !== null && version >= MIN_COMPATIBLE_RUNTIME_VERSION;
+  return runtimeGenerationAtLeast(snapshotRuntimeVersion, MIN_COMPATIBLE_RUNTIME_VERSION);
 }
 
 /**

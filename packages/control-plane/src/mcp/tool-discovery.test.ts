@@ -5,6 +5,7 @@ import {
   McpToolDiscoveryError,
   authenticatedFetch,
   discoverRemoteMcpTools,
+  discoveryFailureDetail,
   type RemoteMcpServer,
 } from "./tool-discovery";
 
@@ -309,5 +310,17 @@ describe("discoverRemoteMcpTools", () => {
       )
     ).rejects.toBeInstanceOf(McpToolDiscoveryError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("discoveryFailureDetail", () => {
+  it("lists every underlying error of a failure", () => {
+    const failure = new McpToolDiscoveryError("The server returned HTTP 404", {
+      cause: new AggregateError([new Error("streamable: 404"), "sse: closed"]),
+    });
+
+    expect(discoveryFailureDetail(failure)).toBe(
+      "The server returned HTTP 404 (streamable: 404; sse: closed)"
+    );
   });
 });
