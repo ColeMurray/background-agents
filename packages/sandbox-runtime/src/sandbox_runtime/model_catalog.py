@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
-import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
+from .durable_files import atomic_write_private
 from .model_prices import DEFAULT_MODELS_URL, ModelPrice
 
 if TYPE_CHECKING:
@@ -26,7 +27,13 @@ def configure_model_catalog(environ: MutableMapping[str, str]) -> Path:
     """Give OpenCode, its pricing plugin, and Codex the same persisted file."""
     if not environ.get("OPENCODE_MODELS_PATH"):
         home = Path(environ.get("HOME") or Path.home())
-        environ["OPENCODE_MODELS_PATH"] = str(home / ".local/share/openinspect/models.json")
+        source = environ.get("OPENCODE_MODELS_URL") or DEFAULT_MODELS_URL
+        filename = (
+            "models.json"
+            if source == DEFAULT_MODELS_URL
+            else f"models-{hashlib.sha256(source.encode('utf-8')).hexdigest()}.json"
+        )
+        environ["OPENCODE_MODELS_PATH"] = str(home / ".local/share/openinspect" / filename)
     path = Path(environ["OPENCODE_MODELS_PATH"]).absolute()
     environ["OPENCODE_MODELS_PATH"] = str(path)
     return path
@@ -50,16 +57,21 @@ def _suppress_catalog_request_logs() -> Iterator[None]:
         logger.removeFilter(allow_log)
 
 
-def validate_catalog(raw: bytes) -> None:
-    """Reject catalogs without any usable, nonzero OpenAI prices."""
-    catalog = json.loads(raw)
+def _reject_json_constant(_value: str) -> NoReturn:
+    raise ValueError("Model catalog contains a nonstandard JSON constant")
+
+
+def validate_catalog(raw: bytes) -> str:
+    """Require standard UTF-8 JSON with nonzero OpenAI prices; return the text."""
+    text = raw.decode("utf-8")
+    catalog = json.loads(text, parse_constant=_reject_json_constant)
     provider = catalog.get("openai") if isinstance(catalog, dict) else None
     models = provider.get("models") if isinstance(provider, dict) else None
     if isinstance(models, dict):
         for model in models.values():
             price = ModelPrice.parse(model.get("cost")) if isinstance(model, dict) else None
             if price and (price.base.input > 0 or price.base.output > 0):
-                return
+                return text
     raise ValueError("Model catalog has no usable OpenAI prices")
 
 
@@ -70,21 +82,6 @@ def catalog_is_usable(path: Path) -> bool:
     except (OSError, ValueError, RecursionError):
         return False
     return True
-
-
-def _publish_catalog(path: Path, raw: bytes) -> None:
-    """Readers see either the previous valid catalog or the complete replacement."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        dir=path.parent, prefix=f".{path.name}.", delete=False
-    ) as file:
-        temporary = Path(file.name)
-        try:
-            file.write(raw)
-            file.flush()
-            temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
 
 
 async def ensure_model_catalog(
@@ -100,13 +97,14 @@ async def ensure_model_catalog(
         with _suppress_catalog_request_logs():
             async with (
                 asyncio.timeout(MODEL_CATALOG_FETCH_TIMEOUT_SECONDS),
-                httpx.AsyncClient(timeout=MODEL_CATALOG_FETCH_TIMEOUT_SECONDS) as client,
+                httpx.AsyncClient(
+                    timeout=MODEL_CATALOG_FETCH_TIMEOUT_SECONDS, follow_redirects=True
+                ) as client,
             ):
                 response = await client.get(f"{source.rstrip('/')}/api.json")
                 response.raise_for_status()
-                raw = response.content
-                validate_catalog(raw)
-                _publish_catalog(path, raw)
+                text = validate_catalog(response.content)
+                atomic_write_private(path, text)
     except (
         httpx.HTTPError,
         httpx.InvalidURL,

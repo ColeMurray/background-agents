@@ -190,7 +190,8 @@ flowchart TD
 OpenCode and native Codex share a model catalog at `~/.local/share/openinspect/models.json`, outside
 the disposable cache directory. The runtime sets `OPENCODE_MODELS_PATH` to this location unless an
 explicit path is configured. Both `OPENCODE_MODELS_PATH` and `OPENCODE_MODELS_URL` overrides apply
-to catalog downloads.
+to catalog downloads. A custom source uses a separate filename derived from the source URL, so it
+does not reuse the default catalog baked into the image. An explicit path takes precedence.
 
 Base and prepared-image builds download and validate the published catalog before atomically
 replacing the file. A failed refresh keeps any previous valid prices. Base-image installation and

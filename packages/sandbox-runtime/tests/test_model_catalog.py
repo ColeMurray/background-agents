@@ -1,7 +1,10 @@
 """Catalog publication and recovery without relying on disposable cache state."""
 
 import asyncio
+import json
 import logging
+import os
+import stat
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -207,3 +210,119 @@ async def test_relative_override_is_shared_across_working_directories(tmp_path, 
     assert default_catalog_path(environment) == path
     assert Path(environment["OPENCODE_MODELS_PATH"]).read_bytes() == CATALOG
     assert not (repository / "models.json").exists()
+
+
+async def test_publication_syncs_private_file_before_replace_and_directory_after(
+    tmp_path, monkeypatch
+):
+    environment = {"HOME": str(tmp_path)}
+    path = configure_model_catalog(environment)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(CATALOG)
+    replacement = CATALOG + b"\n"
+    serve_catalog(monkeypatch, lambda _: httpx.Response(200, content=replacement))
+    synced = []
+    real_fsync = os.fsync
+
+    def fsync(descriptor):
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            synced.append("directory")
+            assert path.read_bytes() == replacement
+        else:
+            synced.append("file")
+            assert path.read_bytes() == CATALOG
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    assert await ensure_model_catalog(environment, MagicMock(), refresh=True)
+    assert synced == ["file", "directory"]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert list(path.parent.iterdir()) == [path]
+
+
+async def test_custom_source_does_not_reuse_baked_default_catalog(tmp_path, monkeypatch):
+    default_path = configure_model_catalog({"HOME": str(tmp_path)})
+    default_path.parent.mkdir(parents=True)
+    default_path.write_bytes(CATALOG)
+    custom_catalog = json.loads(CATALOG)
+    custom_catalog["openai"]["models"]["gpt-6.1-sol"]["cost"]["input"] = 9
+    replacement = json.dumps(custom_catalog).encode("utf-8")
+    requests = []
+
+    def respond(request):
+        requests.append(str(request.url))
+        return httpx.Response(200, content=replacement)
+
+    serve_catalog(monkeypatch, respond)
+    environment = {"HOME": str(tmp_path), "OPENCODE_MODELS_URL": "https://mirror.test"}
+    assert await ensure_model_catalog(environment, MagicMock())
+    custom_path = configure_model_catalog(environment)
+    assert custom_path != default_path
+    assert custom_path.read_bytes() == replacement
+    assert default_path.read_bytes() == CATALOG
+    assert requests == ["https://mirror.test/api.json"]
+
+    # A new boot reuses only this source's persisted catalog without a request.
+    restored = {"HOME": str(tmp_path), "OPENCODE_MODELS_URL": "https://mirror.test"}
+    assert await ensure_model_catalog(restored, MagicMock())
+    assert configure_model_catalog(restored) == custom_path
+    assert requests == ["https://mirror.test/api.json"]
+    assert configure_model_catalog({"HOME": str(tmp_path)}) == default_path
+
+
+def test_explicit_path_remains_authoritative_for_custom_sources(tmp_path):
+    path = tmp_path / "custom.json"
+    for source in ("https://mirror.test/one", "https://mirror.test/two"):
+        environment = {"OPENCODE_MODELS_PATH": str(path), "OPENCODE_MODELS_URL": source}
+        assert configure_model_catalog(environment) == path
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        CATALOG.replace(b'"input": 2', b'"input": NaN', 1),
+        CATALOG.replace(b'"input": 2', b'"input": Infinity', 1),
+        CATALOG.replace(b'"input": 2', b'"input": -Infinity', 1),
+        CATALOG.decode("utf-8").encode("utf-16"),
+        CATALOG.decode("utf-8").encode("utf-32"),
+        b"\xef\xbb\xbf" + CATALOG,
+    ],
+    ids=["nan", "infinity", "negative_infinity", "utf16", "utf32", "utf8_bom"],
+)
+async def test_nonstandard_json_cannot_replace_usable_prices(tmp_path, monkeypatch, invalid):
+    environment = {"HOME": str(tmp_path)}
+    path = configure_model_catalog(environment)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(invalid)
+    assert not catalog_is_usable(path)
+    path.write_bytes(CATALOG)
+    serve_catalog(monkeypatch, lambda _: httpx.Response(200, content=invalid))
+
+    log = MagicMock()
+    assert await ensure_model_catalog(environment, log, refresh=True)
+    log.warn.assert_called_once()
+    assert path.read_bytes() == CATALOG
+    assert catalog_is_usable(path)
+
+
+async def test_redirect_to_valid_catalog_is_followed(tmp_path, monkeypatch, caplog):
+    requests = []
+
+    def respond(request):
+        requests.append(str(request.url))
+        if len(requests) == 1:
+            return httpx.Response(
+                302, headers={"Location": "https://cdn.test/catalog?token=secret"}
+            )
+        return httpx.Response(200, content=CATALOG)
+
+    serve_catalog(monkeypatch, respond)
+    environment = {"HOME": str(tmp_path)}
+    with caplog.at_level(logging.INFO):
+        assert await ensure_model_catalog(environment, MagicMock())
+    assert requests == [
+        "https://models.opencode.ai/api.json",
+        "https://cdn.test/catalog?token=secret",
+    ]
+    assert configure_model_catalog(environment).read_bytes() == CATALOG
+    assert "token=secret" not in caplog.text
