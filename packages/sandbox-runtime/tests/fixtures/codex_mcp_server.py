@@ -22,9 +22,16 @@ for line in sys.stdin:
                     "name": "ready",
                     "description": "Check fixture readiness",
                     "inputSchema": {"type": "object", "properties": {}},
-                }
+                },
+                {
+                    "name": "unselected",
+                    "description": "A tool tool-allowlist tests leave out",
+                    "inputSchema": {"type": "object", "properties": {}},
+                },
             ]
         }
+    elif method == "tools/call" and frame["params"]["name"] == "unselected":
+        result = {"content": [{"type": "text", "text": "unselected tool ran"}]}
     elif method == "tools/call":
         result = {
             "content": [

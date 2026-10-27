@@ -2,6 +2,18 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 27, 2026
+
+**MCP tool selection.** Choose which of an MCP server's tools agents can use under **Settings > MCP
+Servers**. Set a server to **Selected tools only**, click **Load tools** to list what a remote
+server offers, and tick the tools to keep; for a local server, type tool names. OpenCode leaves the
+other tools out of every request, so a large server no longer fills the context window. Claude Agent
+allows only the selected tools and refuses the rest, and Codex hides the rest and refuses calls to
+them. Servers default to **All tools**, so existing configurations are unchanged. A session resumed
+from a snapshot taken before this release starts without servers set to **Selected tools only**,
+with a warning, since its runtime cannot enforce the selection. Requires D1 migration 0092 and a
+sandbox image rebuild. See [MCP tool allowlists](docs/HOW_IT_WORKS.md#mcp-tool-allowlists).
+
 ## October 26, 2026
 
 **Fewer memory proposals.** Agents no longer weigh a memory at the end of every task; saving nothing

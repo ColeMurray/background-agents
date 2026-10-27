@@ -137,7 +137,7 @@ class Harness:
             default_model="claude-sonnet-4-6",
             oauth_managed=oauth_managed,
             system_prompt_append=overrides.pop("system_prompt_append", None),
-            tools=None,
+            tools=overrides.pop("tools", None),
         )
         binary = tmp_path / "claude-bin"
         binary.write_text("#!/bin/sh\n")
@@ -155,6 +155,7 @@ class Harness:
             environ=environ,
             client_factory=client_factory,
             options_factory=lambda **kwargs: kwargs,
+            tool_server_factory=overrides.pop("tool_server_factory", None),
             transcript_exists=transcript_exists,
             binary=binary,
         )

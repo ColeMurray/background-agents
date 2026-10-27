@@ -7,3 +7,4 @@ def test_runtime_manifest_generation_matches_version() -> None:
     assert CACHE_BUSTER == RUNTIME_VERSION
     assert RUNTIME_MANIFEST["minimumCompatibleGeneration"] <= RUNTIME_MANIFEST["generation"]
     assert RUNTIME_MANIFEST["minimumRebuildGeneration"] <= RUNTIME_MANIFEST["generation"]
+    assert RUNTIME_MANIFEST["minimumMcpToolAllowlistGeneration"] <= RUNTIME_MANIFEST["generation"]

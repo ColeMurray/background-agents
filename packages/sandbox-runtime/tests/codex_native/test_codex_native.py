@@ -450,6 +450,85 @@ async def test_native_local_mcp_environment_and_disabled_server_isolation(
     assert not (harness.config.state_dir / "shell_snapshots").exists()
 
 
+_LIST_AND_CALL_FIXTURE_TOOLS = """\
+const names = ALL_TOOLS.map((tool) => tool.name).filter((name) => name.startsWith("mcp__fixture__"));
+let call;
+try {
+  call = JSON.stringify(await tools.mcp__fixture__unselected({}));
+} catch (error) {
+  call = String(error);
+}
+text(JSON.stringify({ names, call }));"""
+
+
+@pytest.mark.parametrize(
+    "allowlist,listed",
+    [
+        (None, ["mcp__fixture__ready", "mcp__fixture__unselected"]),
+        (["ready"], ["mcp__fixture__ready"]),
+        ([], []),
+    ],
+)
+async def test_native_mcp_tool_allowlist_hides_and_refuses_unselected_tools(
+    tmp_path, responses, native_factory, allowlist, listed
+):
+    _, requests, scripted = responses
+    scripted.extend(
+        [
+            {
+                "type": "custom_tool_call",
+                "call_id": "list-and-call",
+                "namespace": "functions",
+                "name": "exec",
+                "input": _LIST_AND_CALL_FIXTURE_TOOLS,
+            },
+            {
+                "type": "function_call",
+                "call_id": "direct-call",
+                "namespace": "mcp__fixture",
+                "name": "unselected",
+                "arguments": "{}",
+            },
+        ]
+    )
+    server = {
+        "name": "fixture",
+        "type": "local",
+        "command": [
+            sys.executable,
+            str(Path(__file__).parent / "fixtures" / "codex_mcp_server.py"),
+        ],
+    }
+    if allowlist is not None:
+        server["toolAllowlist"] = allowlist
+    harness = CodexHarness(
+        config=CodexHarnessConfig(
+            tmp_path, tmp_path / "state", "gpt-6.1-sol", False, mcp_servers=(server,)
+        ),
+        log=MagicMock(),
+        limits=PromptLimits(1, 30, 5),
+        client_factory=native_factory,
+        environ={"OPENAI_API_KEY": "synthetic"},
+    )
+    try:
+        result = await harness.run_prompt(HarnessPrompt("m", "Check MCP"), AsyncMock())
+        assert result.success, result
+    finally:
+        await harness.close()
+    assert len(requests) == 3
+    outputs = {
+        item["call_id"]: item["output"]
+        for item in requests[-1]["body"]["input"]
+        if "output" in item
+    }
+    # The script's text() output follows Codex's "Script completed" status item.
+    script = json.loads(outputs["list-and-call"][-1]["text"])
+    assert script["names"] == listed
+    ran = allowlist is None
+    assert ("unselected tool ran" in script["call"]) is ran
+    assert ("unselected tool ran" in json.dumps(outputs["direct-call"])) is ran
+
+
 @pytest.mark.parametrize(
     "remote_mcp,header_field",
     [

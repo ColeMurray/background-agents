@@ -30,6 +30,12 @@ describe("route policy table", () => {
     expect(routeFor("POST", "/github/route")).toBeUndefined();
   });
 
+  it("requires MCP management to list a server's tools", () => {
+    expect(routeFor("POST", "/mcp-servers/server-1/tools")?.authorization).toMatchObject({
+      allOf: [{ kind: "permission", permission: "mcp_servers.manage" }],
+    });
+  });
+
   it("does not expose a member-facing team activity route", () => {
     expect(routeFor("GET", "/teams/team-1/activity")).toBeUndefined();
     expect(routeFor("GET", "/audit-events")?.authorization).toMatchObject({

@@ -15,6 +15,7 @@ import httpx
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
+from .mcp_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_tool_policy, tool_allowlist
 from .memories import memory_path
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
@@ -28,6 +29,86 @@ if TYPE_CHECKING:
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
+
+
+_TOOL_EXPORT_SCAN_TIMEOUT_SECONDS = 15.0
+# Lists each file's export names with Bun's parser, which reads a module without
+# running it: OpenCode, a Bun program, loads the same syntax. A file the parser
+# rejects maps to null.
+_TOOL_EXPORT_SCAN_SCRIPT = """
+const fs = require("fs");
+const exports = {};
+for (const file of process.argv.slice(1)) {
+  try {
+    const loader = file.endsWith(".ts") ? "ts" : "js";
+    exports[file] = new Bun.Transpiler({ loader }).scan(fs.readFileSync(file, "utf8")).exports;
+  } catch {
+    exports[file] = null;
+  }
+}
+console.log(JSON.stringify(exports));
+"""
+
+
+async def _read_tool_exports(paths: Sequence[Path]) -> dict[str, list[str] | None]:
+    """Each tool file's export names, from the image's pinned ``bun``."""
+    process = await asyncio.create_subprocess_exec(
+        "bun",
+        "-e",
+        _TOOL_EXPORT_SCAN_SCRIPT,
+        *map(str, paths),
+        # Away from the repository, so its bunfig.toml does not apply.
+        cwd="/",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), _TOOL_EXPORT_SCAN_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise
+    if process.returncode:
+        raise RuntimeError(stderr.decode(errors="replace").strip()[-500:])
+    exports: dict[str, list[str] | None] = json.loads(stdout)
+    return exports
+
+
+async def _custom_tool_ids(workdir: Path, log: Any) -> list[str]:
+    """Ids of the custom tools in the project's and global config's tool
+    directories, Open-Inspect's and the repository's own.
+
+    OpenCode names a file's default export ``<file>`` and each named export
+    ``<file>_<export>``. The rules must be in its config before it loads the
+    files, so their exports are read with Bun's parser. A file without ES module
+    exports (CommonJS) or one the parser cannot read falls back to its file
+    name, as if its only tool were the default export.
+    """
+    config_dirs = (workdir / ".opencode", resolve_opencode_global_config_dir())
+    paths = [
+        path
+        for config_dir in config_dirs
+        for subdirectory in ("tool", "tools")
+        for path in sorted((config_dir / subdirectory).glob("*"))
+        if path.suffix in {".js", ".ts"} and path.is_file()
+    ]
+    if not paths:
+        return []
+    try:
+        exports = await _read_tool_exports(paths)
+    except Exception as exc:
+        log.warn("opencode.custom_tool_scan_failed", exc=exc)
+        exports = {}
+    tool_ids: set[str] = set()
+    for path in paths:
+        names = exports.get(str(path))
+        if not names:
+            tool_ids.add(path.stem)
+            continue
+        tool_ids.update(path.stem if name == "default" else f"{path.stem}_{name}" for name in names)
+    return sorted(tool_ids)
 
 
 def resolve_opencode_global_config_dir() -> Path:
@@ -431,6 +512,17 @@ class OpenCodeServer:
         # Working directory: the repo for single-repo sessions, /workspace
         # for multi-repo (every member visible) and repo-less sessions.
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir, repositories)
+        # Only a restricted server's deny pattern can hide a built-in or custom tool.
+        restricted = any(tool_allowlist(server) is not None for server in mcp_servers)
+        custom_tool_ids = await _custom_tool_ids(workdir, self.log) if restricted else []
+        tool_policy = opencode_tool_policy(
+            mcp_servers, (*OPENCODE_BUILTIN_TOOL_IDS, *custom_tool_ids)
+        )
+        if tool_policy.rules:
+            opencode_config["permission"].update(tool_policy.rules)
+            self.log.info("mcp.tool_allowlists_applied", rules=tool_policy.rules)
+        if tool_policy.shadowed:
+            self.log.warn("mcp.tool_allowlist_shadowed_servers", namespaces=tool_policy.shadowed)
         # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
         managed_plugins = (

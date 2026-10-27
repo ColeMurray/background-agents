@@ -89,3 +89,22 @@ def test_native_env_preserves_session_config_and_omits_legacy_header_variables(t
 def test_remote_mcp_requires_a_non_empty_url(url):
     with pytest.raises(HarnessStartError, match="requires a URL"):
         mcp_configuration(({"name": "remote", "url": url},))
+
+
+@pytest.mark.parametrize("allowlist", [["search", "fetch"], []])
+@pytest.mark.parametrize(
+    "transport", [{"url": "https://mcp.example/mcp"}, {"command": ["fixture", "--stdio"]}]
+)
+def test_tool_allowlist_becomes_enabled_tools(allowlist, transport):
+    config = mcp_configuration(({"name": "docs", "toolAllowlist": allowlist, **transport},))
+    assert config["docs"]["enabled_tools"] == allowlist
+
+
+def test_unrestricted_server_enables_every_tool():
+    server = {"name": "docs", "url": "https://mcp.example/mcp", "toolAllowlist": None}
+    assert "enabled_tools" not in mcp_configuration((server,))["docs"]
+
+
+def test_malformed_tool_allowlist_enables_no_tools():
+    server = {"name": "docs", "url": "https://mcp.example/mcp", "toolAllowlist": "search"}
+    assert mcp_configuration((server,))["docs"]["enabled_tools"] == []

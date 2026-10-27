@@ -1,12 +1,13 @@
 {
-  "runtimeVersion": "v77-codex-pinned-binary",
-  "generation": 77,
+  "runtimeVersion": "v78-mcp-tool-allowlist",
+  "generation": 78,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 77,
+  "minimumRebuildGeneration": 78,
+  "minimumMcpToolAllowlistGeneration": 78,
   "harnessMinimumGeneration": {
-    "claude": 76,
-    "opencode": 76,
-    "codex": 77
+    "claude": 78,
+    "opencode": 78,
+    "codex": 78
   }
 }

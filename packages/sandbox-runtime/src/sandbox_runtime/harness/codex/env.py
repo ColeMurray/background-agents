@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ...mcp_tool_access import tool_allowlist
 from ..base import HarnessStartError
 
 CODEX_VERSION = "0.163.0"
@@ -185,5 +186,9 @@ def mcp_configuration(
             headers = server.get("headers") or server.get("env")
             if headers:
                 config["http_headers"] = dict(headers)
+        allowlist = tool_allowlist(server)
+        if allowlist is not None:
+            # Codex hides the server's other tools from the model and refuses calls to them.
+            config["enabled_tools"] = list(allowlist)
         result[name] = config
     return result
