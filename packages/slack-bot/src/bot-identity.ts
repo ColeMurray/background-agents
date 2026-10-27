@@ -20,6 +20,12 @@ const BOT_ID_KV_KEY = "slack:bot-id";
 /** Bot identity is effectively static; cache it for an hour in-process. */
 const BOT_IDENTITY_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * An identity without its bot id drops every bot message, so retry resolving it
+ * after a minute instead of an hour. Its user id keeps serving meanwhile.
+ */
+const INCOMPLETE_BOT_IDENTITY_TTL_MS = 60 * 1000;
+
 /** The bot's own Slack ids. */
 export interface BotIdentity {
   userId: string;
@@ -27,7 +33,12 @@ export interface BotIdentity {
   botId: string | null;
 }
 
-let identityCache: { identity: BotIdentity; timestamp: number } | null = null;
+let identityCache: { identity: BotIdentity; expiresAt: number } | null = null;
+
+function cacheIdentity(identity: BotIdentity): void {
+  const ttlMs = identity.botId ? BOT_IDENTITY_TTL_MS : INCOMPLETE_BOT_IDENTITY_TTL_MS;
+  identityCache = { identity, expiresAt: Date.now() + ttlMs };
+}
 
 /**
  * Resolve the bot's own Slack ids via `auth.test`, cached in-process and in KV
@@ -39,7 +50,7 @@ let identityCache: { identity: BotIdentity; timestamp: number } | null = null;
  * require a known id, so it is never safe to proceed without one.
  */
 export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIdentity | null> {
-  if (identityCache && Date.now() - identityCache.timestamp < BOT_IDENTITY_TTL_MS) {
+  if (identityCache && Date.now() < identityCache.expiresAt) {
     return identityCache.identity;
   }
 
@@ -47,7 +58,7 @@ export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIde
   const result = await authTest(env.SLACK_BOT_TOKEN);
   if (result.ok && result.user_id) {
     const identity = { userId: result.user_id, botId: result.bot_id ?? null };
-    identityCache = { identity, timestamp: Date.now() };
+    cacheIdentity(identity);
     try {
       await Promise.all([
         kv.put(BOT_USER_ID_KV_KEY, identity.userId),
@@ -78,7 +89,7 @@ export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIde
   ]);
   if (!userId) return null;
   const identity = { userId, botId };
-  identityCache = { identity, timestamp: Date.now() };
+  cacheIdentity(identity);
   return identity;
 }
 

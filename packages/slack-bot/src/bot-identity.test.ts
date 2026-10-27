@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as SlackModule from "@open-inspect/shared/slack";
 import type { Env } from "./types";
 
@@ -31,6 +31,10 @@ describe("getBotIdentity", () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("resolves both ids from one auth.test call and persists them to KV", async () => {
     mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
     const kv = kvWith();
@@ -48,6 +52,34 @@ describe("getBotIdentity", () => {
     await getBotIdentity(env);
 
     expect(mockAuthTest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a complete identity for the hour", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    const env = makeEnv(kvWith());
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+
+    await getBotIdentity(env);
+    now.mockReturnValue(59 * 60 * 1000);
+    await getBotIdentity(env);
+
+    expect(mockAuthTest).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an identity without a bot id after a minute, serving its user id meanwhile", async () => {
+    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
+    const env = makeEnv(kvWith({ "slack:bot-user-id": "UCACHED" }));
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+
+    expect(await getBotIdentity(env)).toEqual({ userId: "UCACHED", botId: null });
+    now.mockReturnValue(30 * 1000);
+    expect(await getBotIdentity(env)).toEqual({ userId: "UCACHED", botId: null });
+    expect(mockAuthTest).toHaveBeenCalledTimes(1);
+
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    now.mockReturnValue(61 * 1000);
+    expect(await getBotIdentity(env)).toEqual({ userId: "UBOT123", botId: "BBOT123" });
+    expect(mockAuthTest).toHaveBeenCalledTimes(2);
   });
 
   it("reports an unknown bot id as null without persisting one", async () => {
