@@ -60,14 +60,49 @@ describe("known service actor profile claims", () => {
     return users.resolveOrCreateUser({ provider, providerUserId });
   }
 
-  it("completes a Slack actor's profile after a nameless first contact", async () => {
-    const firstContact = await serviceFetch(SESSIONS_URL, {
+  it("refuses to enroll a new Slack actor without an attested email and writes nothing", async () => {
+    const claimLess = await serviceFetch(SESSIONS_URL, {
       service: "slack-bot",
-      actor: "slack:U-NAMELESS-FIRST",
+      actor: "slack:U-NO-EMAIL",
     });
+    const empty = await enrollActor("slack:U-NO-EMAIL", { displayName: "Ada" });
+    const blank = await enrollActor("slack:U-NO-EMAIL", { email: "   " });
+
+    for (const response of [claimLess, empty, blank]) {
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: "actor_email_required" });
+    }
+    await expect(users.getIdentity("slack", "U-NO-EMAIL")).resolves.toBeNull();
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<{ count: number }>()
+    ).resolves.toEqual({ count: 0 });
+  });
+
+  it("admits a known Slack actor without an email", async () => {
+    await enrollNameless("slack", "U-KNOWN-NO-EMAIL");
+
+    expect((await enrollActor("slack:U-KNOWN-NO-EMAIL", {})).status).toBe(204);
+    const read = await serviceFetch(SESSIONS_URL, {
+      service: "slack-bot",
+      actor: "slack:U-KNOWN-NO-EMAIL",
+    });
+    expect(read.status).toBe(200);
+  });
+
+  it("still enrolls a new Linear actor on a claim-less first contact", async () => {
+    const firstContact = await serviceFetch(SESSIONS_URL, {
+      service: "linear-bot",
+      actor: "linear:U-NAMELESS-FIRST",
+    });
+
     expect(firstContact.status).toBe(200);
-    const identity = await users.getIdentity("slack", "U-NAMELESS-FIRST");
-    await expect(users.getUserById(identity!.userId)).resolves.toMatchObject({
+    await expect(users.getIdentity("linear", "U-NAMELESS-FIRST")).resolves.not.toBeNull();
+  });
+
+  it("completes a legacy nameless Slack actor's profile", async () => {
+    // Slack actors enrolled without claims before enrollment required an email.
+    const legacy = await enrollNameless("slack", "U-NAMELESS-FIRST");
+    await expect(users.getUserById(legacy.id)).resolves.toMatchObject({
       displayName: null,
       email: null,
     });
@@ -79,7 +114,7 @@ describe("known service actor profile claims", () => {
     });
 
     expect(created.status).toBe(201);
-    await expect(users.getUserById(identity!.userId)).resolves.toMatchObject({
+    await expect(users.getUserById(legacy.id)).resolves.toMatchObject({
       displayName: "Ada Lovelace",
       avatarUrl: "https://avatars.slack.test/ada.png",
       email: "ada@corp.test",
@@ -138,9 +173,7 @@ describe("known service actor profile claims", () => {
   });
 
   it("refuses an unknown field from a known actor and claims nothing from it", async () => {
-    expect((await enrollActor("slack:U-KNOWN", {})).status).toBe(204);
-    const identity = await users.getIdentity("slack", "U-KNOWN");
-    expect(identity).not.toBeNull();
+    const known = await enrollNameless("slack", "U-KNOWN");
 
     // Admission skips a known actor's refused claims, so the handler answers.
     const unknownField = await enrollActor("slack:U-KNOWN", {
@@ -149,7 +182,7 @@ describe("known service actor profile claims", () => {
     });
     expect(unknownField.status).toBe(400);
 
-    await expect(users.getUserById(identity!.userId)).resolves.toMatchObject({ email: null });
+    await expect(users.getUserById(known.id)).resolves.toMatchObject({ email: null });
   });
 
   it("claims an attested email over a legacy blank stored email", async () => {

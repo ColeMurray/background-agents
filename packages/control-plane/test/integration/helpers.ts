@@ -223,6 +223,26 @@ export async function serviceFetch(url: string, init?: ServiceRequestInit): Prom
   });
 }
 
+/**
+ * Enroll a Slack actor the way the Slack bot does before any other request:
+ * `POST /actors/me` with its attested email. A new Slack actor is refused
+ * without one.
+ */
+export async function enrollSlackActor(
+  actor: `slack:${string}`,
+  email = `${actor.slice("slack:".length).toLowerCase()}@slack.test`
+): Promise<void> {
+  const response = await serviceFetch("https://test.local/actors/me", {
+    service: "slack-bot",
+    method: "POST",
+    actor,
+    body: JSON.stringify({ email }),
+  });
+  if (response.status !== 204) {
+    throw new Error(`Enrolling ${actor} failed with ${response.status}: ${await response.text()}`);
+  }
+}
+
 /** Create a production-shaped D1 session and DO, then return the stub and IDs. */
 export async function initSession(overrides?: {
   sessionName?: string;
