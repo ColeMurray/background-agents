@@ -15,7 +15,7 @@ import { executionDenialReason } from "./launch-admission";
 import type { CreateAutomationSessionInput } from "./launch-contracts";
 
 export interface AutomationSessionServiceDeps {
-  store: Pick<AutomationStore, "setRunExecutionDeadline">;
+  store: Pick<AutomationStore, "setRunExecutionDeadline" | "getById">;
   createRequestContext(automation: AutomationRow, run: AutomationRunRow): RequestContext;
   resolveTarget(run: AutomationRunRow, ctx: RequestContext): Promise<AutomationSessionTarget>;
   resolveSettings(
@@ -81,12 +81,14 @@ export class AutomationSessionService {
 
     const scmEnrichment = executionPrincipal.scmEnrichment;
 
-    // Re-authorize with admission's requirements, and re-read the team's current policy, as the
-    // last step before creation: the principal may have left the team, been suspended, or lost a
-    // permission, and the team's default visibility may have changed since admission.
-    const [team, authorized] = await Promise.all([
+    // Re-authorize with admission's requirements, and re-read the team's current policy and the
+    // personal-memory consent, as the last step before creation: the principal may have left the
+    // team, been suspended, or lost a permission, the team's default visibility may have changed,
+    // and the executor may have opted out or been replaced since admission.
+    const [team, authorized, current] = await Promise.all([
       automation.owner_team_id === null ? null : this.deps.teams.getById(automation.owner_team_id),
       this.deps.isAuthorized(admission.authorization),
+      this.deps.store.getById(automation.id),
     ]);
     if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
 
@@ -100,8 +102,8 @@ export class AutomationSessionService {
       repositories: scopeMembers,
       environmentId: target.environmentId,
       includePersonalMemories:
-        automation.include_personal_memories === 1 &&
-        executionPrincipal.platformUserId === automation.user_id,
+        current?.include_personal_memories === 1 &&
+        executionPrincipal.platformUserId === current.user_id,
     });
 
     const sessionInput: SessionInitInput = {

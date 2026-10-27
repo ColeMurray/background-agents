@@ -32,8 +32,10 @@ Automation runs ignore the personal default. Each automation stores its own opt-
 (`automations.include_personal_memories`), off by default. Only the executor can turn it on (the
 write is guarded on `user_id` at commit time). Anyone with manage access can turn it off. Executor
 reassignment and account merges clear it. A run includes the executor's personal memories only when
-the opt-in is set and the run's execution principal is the executor, so a **Trigger Now** by a lead
-or administrator never includes the triggering person's or the executor's personal memories.
+the opt-in is set and the run's execution principal is the executor, so a **Trigger Now** by anyone
+other than the executor never includes the triggering person's or the executor's personal memories.
+An executor who triggers their own opted-in automation, including a lead or administrator, does get
+their personal memories.
 
 ### Facts, directives and approval
 

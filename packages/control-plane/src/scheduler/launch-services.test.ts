@@ -257,6 +257,9 @@ function sessionHarness() {
       setRunExecutionDeadline: vi
         .fn<AutomationSessionServiceDeps["store"]["setRunExecutionDeadline"]>()
         .mockResolvedValue(true),
+      getById: vi
+        .fn<AutomationSessionServiceDeps["store"]["getById"]>()
+        .mockResolvedValue(automation),
     },
     createRequestContext: () => ctx,
     resolveTarget: vi.fn<AutomationSessionServiceDeps["resolveTarget"]>().mockResolvedValue(target),
@@ -372,7 +375,7 @@ describe("AutomationSessionService", () => {
     "includes personal memories only on the executor's opt-in (opt-in $optIn, run as $runAs)",
     async ({ optIn, runAs, included }) => {
       const { deps, service, input, ctx } = sessionHarness();
-      input.automation = { ...automation, include_personal_memories: optIn };
+      deps.store.getById.mockResolvedValue({ ...automation, include_personal_memories: optIn });
       input.executionPrincipal = { ...input.executionPrincipal, platformUserId: runAs };
       await service.create(input);
       expect(deps.selectMemory).toHaveBeenCalledWith(
@@ -381,6 +384,28 @@ describe("AutomationSessionService", () => {
           principal: { userId: runAs, ownerTeamId: null },
           includePersonalMemories: included,
         })
+      );
+    }
+  );
+
+  it.each([
+    { change: "opted out", current: { ...automation, include_personal_memories: 0 } },
+    {
+      change: "reassigned",
+      current: { ...automation, include_personal_memories: 0, user_id: "user-2" },
+    },
+    { change: "deleted", current: null },
+  ])(
+    "excludes personal memories when the executor $change since admission",
+    async ({ current }) => {
+      const { deps, service, input, ctx } = sessionHarness();
+      input.automation = { ...automation, include_personal_memories: 1 };
+      deps.store.getById.mockResolvedValue(current);
+      await service.create(input);
+      expect(deps.store.getById).toHaveBeenCalledWith(automation.id);
+      expect(deps.selectMemory).toHaveBeenCalledWith(
+        ctx,
+        expect.objectContaining({ includePersonalMemories: false })
       );
     }
   );
