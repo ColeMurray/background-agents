@@ -9,7 +9,22 @@ cancelled consent screen, return to the login page with an error and a retry opt
 App lacks **Email addresses: Read-only**, the page names the permission to check and the control
 plane logs GitHub's status. Rate limits show a temporary failure instead.
 
+**Slack automations can trigger on bot messages.** Slack Message automations used to ignore every
+message from a bot or integration, so alerts from monitoring or CI tools could never start a run.
+Turn on **Trigger on bot messages** and add a **Slack User** condition listing the bot IDs (`B…`)
+allowed to trigger the automation; saving is refused without one. That list limits people too, so
+add anyone else who should still trigger it. Only a message's `text` is matched. Bots can start at
+most 10 runs of an automation per hour and never continue an existing session, and Open-Inspect's
+own messages never trigger anything. See [Bot messages](docs/AUTOMATIONS.md#bot-messages).
+
 ## October 26, 2026
+
+**Codex sub-agents appear as tasks.** Most Codex models can spawn sub-agents, but their activity was
+dropped and a prompt could finish while they were still running. Each sub-agent now shows as a task
+with its tool calls grouped beneath it and its final message as the result, as on Claude Agent and
+OpenCode. The prompt finishes only after its sub-agents do, and their usage counts toward the
+prompt's tokens and cost. Sub-agents can use Open-Inspect tools. Nesting is limited to one level,
+and at most four threads, the parent included, run at once.
 
 **Fewer memory proposals.** Agents no longer weigh a memory at the end of every task; saving nothing
 is now the expected outcome. They save when you ask them to remember something, correct them, state
@@ -17,6 +32,13 @@ a standing preference, or confirm a non-obvious approach, or when they verify a 
 repository doesn't record and that would change what the next session does first. Work summaries,
 fixes already in the code, sandbox quirks, and guesses are skipped. See
 [Persistent session memory](docs/MEMORY.md).
+
+**Placement settings for the web app and sessions.** Two optional Terraform inputs let you move
+parts of the request path closer to your users and D1. `web_serverless_region` moves the Vercel web
+functions (default `iad1`) and takes effect after the web app is redeployed.
+`session_do_location_hint` asks Cloudflare to create new session Durable Objects in a chosen region,
+such as `weur` or `apac`; existing sessions stay where they are. Both default to current behavior.
+See [Co-locating the request path](terraform/README.md#co-locating-the-request-path).
 
 ## October 25, 2026
 
