@@ -137,6 +137,21 @@ describe("known service actor profile claims", () => {
     ).resolves.toEqual({ count: 0 });
   });
 
+  it("refuses an unknown field from a known actor and claims nothing from it", async () => {
+    expect((await enrollActor("slack:U-KNOWN", {})).status).toBe(204);
+    const identity = await users.getIdentity("slack", "U-KNOWN");
+    expect(identity).not.toBeNull();
+
+    // Admission skips a known actor's refused claims, so the handler answers.
+    const unknownField = await enrollActor("slack:U-KNOWN", {
+      email: "ada@example.com",
+      userId: "forged",
+    });
+    expect(unknownField.status).toBe(400);
+
+    await expect(users.getUserById(identity!.userId)).resolves.toMatchObject({ email: null });
+  });
+
   it("claims an attested email over a legacy blank stored email", async () => {
     const legacy = await enrollNameless("slack", "U-LEGACY-BLANK");
     // Migration 0057 trims a whitespace-only legacy email to ''.
