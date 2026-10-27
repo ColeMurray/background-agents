@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { enrollActorRequestSchema } from "@open-inspect/shared/types/actors";
+import { actorProfileClaimsSchema } from "@open-inspect/shared/types/actors";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { parseBody } from "./body";
@@ -10,14 +10,14 @@ import {
 } from "./shared";
 
 async function extractEnrollActorClaims(request: Request): Promise<ServiceActorClaimsResult> {
-  const body = await parseBody(request, enrollActorRequestSchema);
+  const body = await parseBody(request, actorProfileClaimsSchema);
   if (body instanceof Response) return { kind: "rejected", response: body };
   return { kind: "claims", claims: body };
 }
 
 async function handleEnrollActor(request: Request): Promise<Response> {
   // A known actor's admission ignores a refused body, so answer for it here.
-  const body = await parseBody(request, enrollActorRequestSchema);
+  const body = await parseBody(request, actorProfileClaimsSchema);
   if (body instanceof Response) return body;
   return new Response(null, { status: 204 });
 }

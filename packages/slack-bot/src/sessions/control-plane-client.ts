@@ -5,7 +5,7 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { EnrollActorRequest } from "@open-inspect/shared/types/actors";
+import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -110,7 +110,7 @@ export async function enrollActor(
   traceId?: string
 ): Promise<void> {
   const base = { trace_id: traceId, slack_user_id: actor.userId, outcome: "error" };
-  const body: EnrollActorRequest = { displayName: actor.displayName, email: actor.email };
+  const body: ActorProfileClaims = { displayName: actor.displayName, email: actor.email };
   try {
     const response = await signedControlPlaneFetch(
       env,

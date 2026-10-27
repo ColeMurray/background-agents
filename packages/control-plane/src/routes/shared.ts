@@ -11,6 +11,7 @@ import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
 import type { SessionAction } from "@open-inspect/shared";
+import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -22,13 +23,6 @@ import {
 export type { AutomationRouteAdmission, RequestContext } from "../http/request-context";
 export { error, HttpError, json } from "../http/responses";
 
-/** Profile data a route can extract from an already verified service request. */
-export interface ServiceActorProfileClaims {
-  displayName?: string;
-  email?: string;
-  avatarUrl?: string;
-}
-
 /**
  * Outcome of preparing a route's actor claims. For an unknown actor a rejected
  * body ends admission with the route's own response, so no user, identity, or
@@ -36,7 +30,7 @@ export interface ServiceActorProfileClaims {
  * actor's request continues to the handler with nothing written.
  */
 export type ServiceActorClaimsResult =
-  { kind: "claims"; claims: ServiceActorProfileClaims } | { kind: "rejected"; response: Response };
+  { kind: "claims"; claims: ActorProfileClaims } | { kind: "rejected"; response: Response };
 
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =

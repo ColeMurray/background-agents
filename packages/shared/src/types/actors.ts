@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 /**
- * Profile a bot attests for the actor it signs as, sent to `POST /actors/me`
- * before any other request that carries that actor. The control plane links
- * a new actor to an existing user only by the email it sees at enrollment.
+ * Profile a bot attests for the actor it signs as. It is the body of
+ * `POST /actors/me`, which a bot sends before any other request that carries
+ * that actor, and the claim set control-plane admission applies to an actor:
+ * a new actor links to an existing user only by the email it sees here.
  */
-export const enrollActorRequestSchema = z
+export const actorProfileClaimsSchema = z
   .object({
     displayName: z.string().optional(),
     email: z.string().optional(),
@@ -13,5 +14,4 @@ export const enrollActorRequestSchema = z
   })
   .strict();
 
-/** Body of `POST /actors/me`. */
-export type EnrollActorRequest = z.infer<typeof enrollActorRequestSchema>;
+export type ActorProfileClaims = z.infer<typeof actorProfileClaimsSchema>;
