@@ -1,3 +1,4 @@
+import { rolePermissionFragment } from "../authorization/permission-sql";
 import { unhandled } from "../memory/errors";
 import type { MemoryPartition } from "../memory/partition";
 import type { MemoryActor } from "../memory/types";
@@ -22,9 +23,22 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
 }
 
 /**
+ * For personal partitions (which `sessionReaches` binds to the session owner `u`), the owner may
+ * still review personal memory. Other partitions need nothing here.
+ */
+function ownerMayReview(partition: MemoryPartition): SqlFragment {
+  if (partition.type !== "personal") return sql`1`;
+  return sql`EXISTS (SELECT 1 FROM user_role_assignments ura
+    JOIN roles r ON r.id = ura.role_id
+    WHERE ura.user_id = u.id AND ${rolePermissionFragment("memories.manage_own")})`;
+}
+
+/**
  * Commit-time preconditions for an agent insert: facts about the writing session itself, which
  * a delayed tool call must not outlive. The session is still live, its owner is not suspended,
- * and the session still reaches the target partition.
+ * the session still reaches the target partition, and for personal writes the owner still holds
+ * `memories.manage_own` (personal facts can auto-save without review, so a revocation racing the
+ * insert must not leave memories the owner cannot see).
  *
  * Repository/team grants are deliberately not re-encoded here. They are checked immediately
  * before the write and rechecked on every read, and agent writes to shared scopes are proposals
@@ -34,7 +48,8 @@ export function agentWriteGuard(actor: AgentActor, partition: MemoryPartition): 
   return sql`EXISTS (SELECT 1 FROM sessions s
     JOIN users u ON u.id = s.user_id AND u.suspended_at IS NULL
     WHERE s.id = ${actor.sessionId} AND s.user_id = ${actor.userId}
-      AND s.status IN ('created', 'active') AND ${sessionReaches(partition)})`;
+      AND s.status IN ('created', 'active') AND ${sessionReaches(partition)}
+      AND ${ownerMayReview(partition)})`;
 }
 
 /**
