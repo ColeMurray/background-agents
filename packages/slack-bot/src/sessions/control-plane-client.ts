@@ -97,19 +97,23 @@ export async function requirePublicationAccess(
     );
 }
 
+/** Outcome of `enrollActor`. Anything but `enrolled` must stop the message. */
+export type EnrollActorResult = "enrolled" | "email_required" | "unavailable";
+
 /**
  * Present the actor's Slack profile before any other request that carries the
- * actor: the control plane links a new actor to an existing user by email
- * only when it enrolls the actor. Best effort, so a failure never blocks the
- * message, but the next request carrying the actor then enrolls it without
- * an email and the resulting split needs an operator merge.
+ * actor. The control plane links a new actor to an existing user by email
+ * only when it enrolls the actor, and refuses a new Slack actor that has no
+ * email (`email_required`); a known actor enrolls with or without one.
+ * Callers stop on any other outcome rather than send requests carrying an
+ * actor the control plane has not linked.
  */
 export async function enrollActor(
   env: ControlPlaneEnv,
   actor: SlackActorIdentity,
   traceId?: string
-): Promise<void> {
-  const base = { trace_id: traceId, slack_user_id: actor.userId, outcome: "error" };
+): Promise<EnrollActorResult> {
+  const base = { trace_id: traceId, slack_user_id: actor.userId };
   const body: ActorProfileClaims = { displayName: actor.displayName, email: actor.email };
   try {
     const response = await signedControlPlaneFetch(
@@ -123,14 +127,23 @@ export async function enrollActor(
       },
       { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
     );
-    if (!response.ok) {
-      log.warn("control_plane.enroll_actor", { ...base, http_status: response.status });
-    }
+    if (response.ok) return "enrolled";
+    const { code } = await readErrorBody(response);
+    const outcome = code === "actor_email_required" ? "email_required" : "unavailable";
+    log.warn("control_plane.enroll_actor", {
+      ...base,
+      outcome,
+      http_status: response.status,
+      error_code: code,
+    });
+    return outcome;
   } catch (e) {
     log.warn("control_plane.enroll_actor", {
       ...base,
+      outcome: "unavailable",
       error: e instanceof Error ? e : new Error(String(e)),
     });
+    return "unavailable";
   }
 }
 

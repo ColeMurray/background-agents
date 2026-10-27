@@ -222,6 +222,7 @@ function makeSessionEnv(
   let promptResponseIndex = 0;
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (new URL(url).pathname === "/actors/me") return new Response(null, { status: 204 });
     if (url.endsWith("/integration-settings/slack")) {
       return Response.json({
         integrationId: "slack",
@@ -1797,22 +1798,94 @@ describe("POST /events", () => {
       slackFetch.mockRestore();
     });
 
-    it("still starts the session when enrollment fails", async () => {
-      const slackFetch = mockSlackFetch();
-      const env = makeSessionEnv([], { teamId: "team-a" });
+    function refuseEnrollment(env: ReturnType<typeof makeEnv>, refusal: () => Response) {
       const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
       env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) =>
-        new URL(String(input)).pathname === "/actors/me"
-          ? new Response("unavailable", { status: 500 })
-          : dispatch(input, init)
+        new URL(String(input)).pathname === "/actors/me" ? refusal() : dispatch(input, init)
       );
+    }
+
+    const emailRequired = () =>
+      Response.json(
+        { error: "Actor enrollment requires an attested email", code: "actor_email_required" },
+        { status: 403 }
+      );
+    const unavailable = () => new Response("unavailable", { status: 500 });
+
+    it.each([
+      ["the control plane needs an email", emailRequired, "Slack Connect"],
+      ["the control plane is unavailable", unavailable, "try again"],
+    ])(
+      "stops a new mention before any actor-carrying request when %s",
+      async (_case, refusal, reply) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], { teamId: "team-a" });
+        refuseEnrollment(env, refusal);
+        const ctx = makeCtx();
+
+        await mentionNewThread(env, ctx);
+        await flushWaitUntil(ctx);
+
+        const requests = controlPlaneRequests(env);
+        expect(requests.filter((request) => request.actor !== null)).toEqual([
+          expect.objectContaining({ path: "/actors/me" }),
+        ]);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({ thread_ts: "111.222", text: expect.stringContaining(reply) }),
+        ]);
+
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each([
+      ["the control plane needs an email", emailRequired, "Slack Connect"],
+      ["the control plane is unavailable", unavailable, "try again"],
+    ])(
+      "stops a follow-up before any actor-carrying request when %s",
+      async (_case, refusal, reply) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv();
+        await putThreadSession(env, "111.222");
+        refuseEnrollment(env, refusal);
+        const ctx = makeCtx();
+
+        await replyInThread(env, ctx, {
+          text: "<@B123> also check logout",
+          user: "U456",
+          files: [IMAGE_FILE],
+        });
+        await flushWaitUntil(ctx);
+
+        expect(controlPlaneRequests(env).filter((request) => request.actor !== null)).toEqual([
+          expect.objectContaining({ path: "/actors/me" }),
+        ]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({ thread_ts: "111.222", text: expect.stringContaining(reply) }),
+        ]);
+
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("lets the control plane decide when Slack returns no email", async () => {
+      mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
       const ctx = makeCtx();
 
       await mentionNewThread(env, ctx);
       await flushWaitUntil(ctx);
 
+      // A known actor enrolls without an email, so the message proceeds.
+      expect(expectEnrolledFirst(env, "/repos")).toEqual({
+        path: "/actors/me",
+        actor: "slack:U123",
+        body: {},
+      });
       expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
-      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
 
       slackFetch.mockRestore();
     });

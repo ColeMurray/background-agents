@@ -42,7 +42,11 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import { checkPublicationAccess, enrollActor } from "../sessions/control-plane-client";
+import {
+  checkPublicationAccess,
+  enrollActor,
+  type EnrollActorResult,
+} from "../sessions/control-plane-client";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -155,19 +159,29 @@ async function resolveThreadSessionAdmission(
   return { kind: "followUp", session, threadTs };
 }
 
+const ENROLLMENT_REFUSAL_MESSAGES: Record<Exclude<EnrollActorResult, "enrolled">, string> = {
+  // Typically an external Slack Connect user, whose profile email is hidden.
+  email_required:
+    "I couldn't read the email on your Slack profile, so I can't link you to an Open-Inspect account. Users from other organizations in Slack Connect channels aren't supported yet.",
+  unavailable: "Sorry, I couldn't verify your account right now. Please try again in a moment.",
+};
+
 /**
  * Resolve the sender's Slack identity and enroll it with its profile. The
  * control plane links a new actor to an existing user by email only when it
- * enrolls the actor, so this must finish before any request carrying the actor.
+ * enrolls the actor, so this must succeed before any request carrying the
+ * actor; otherwise the caller replies with `refusal` and stops.
  */
 async function resolveEnrolledSlackActor(
   env: Env,
   user: string,
   traceId: string | undefined
-): Promise<SlackActorIdentity> {
+): Promise<{ ok: true; actor: SlackActorIdentity } | { ok: false; refusal: string }> {
   const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
-  await enrollActor(env, actor, traceId);
-  return actor;
+  const enrollment = await enrollActor(env, actor, traceId);
+  return enrollment === "enrolled"
+    ? { ok: true, actor }
+    : { ok: false, refusal: ENROLLMENT_REFUSAL_MESSAGES[enrollment] };
 }
 
 /**
@@ -260,7 +274,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
     // The session already has its own turns, so only forward the human
     // discussion that happened in the thread since the last prompt.
-    const [actor, interimHistory] = await Promise.all([
+    const [enrollment, interimHistory] = await Promise.all([
       resolveEnrolledSlackActor(env, user, traceId),
       existingSession.lastPromptTs
         ? fetchInteractiveThreadContext(
@@ -276,6 +290,11 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           )
         : Promise.resolve(undefined),
     ]);
+    if (!enrollment.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, enrollment.refusal, { thread_ts: threadTs });
+      return;
+    }
+    const { actor } = enrollment;
     const interimContext = interimHistory
       ? formatInterimThreadContext(interimHistory.messages)
       : "";
@@ -406,7 +425,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     scheduleStartingStatus(scheduleBackground, env, channel, threadTs || ts, traceId);
   }
 
-  const [actor, threadHistory] = await Promise.all([
+  const [enrollment, threadHistory] = await Promise.all([
     resolveEnrolledSlackActor(env, user, traceId),
     threadTs
       ? fetchInteractiveThreadContext(
@@ -418,6 +437,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         )
       : undefined,
   ]);
+  if (!enrollment.ok) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, enrollment.refusal, {
+      thread_ts: threadTs || ts,
+    });
+    return;
+  }
+  const { actor } = enrollment;
   const previousMessages = threadHistory?.messages;
 
   const result = await createClassifier(env).classify(
