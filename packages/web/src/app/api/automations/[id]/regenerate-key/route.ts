@@ -1,12 +1,16 @@
 import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 // Key rotation accepts only an optional client secret, not a bulk payload.
 const MAX_REGENERATE_KEY_BODY_BYTES = 16 * 1024;
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const rejection = rejectMissingBrowserSessionCookie(request);
+  if (rejection) return rejection;
+
   const { id } = await params;
 
   try {

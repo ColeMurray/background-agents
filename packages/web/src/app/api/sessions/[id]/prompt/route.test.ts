@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/control-plane", () => ({
@@ -15,9 +16,12 @@ describe("session prompt API route", () => {
 
   it("rejects blank prompts without attachments before proxying", async () => {
     const response = await POST(
-      new Request("http://localhost/api/sessions/session-1/prompt", {
+      new NextRequest("http://localhost/api/sessions/session-1/prompt", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Cookie: "openinspect.session_token=test-session",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ content: " \n" }),
       }) as never,
       { params: Promise.resolve({ id: "session-1" }) }
@@ -30,8 +34,9 @@ describe("session prompt API route", () => {
 
   it("reports oversized content before proxying", async () => {
     const response = await POST(
-      new Request("http://localhost/api/sessions/session-1/prompt", {
+      new NextRequest("http://localhost/api/sessions/session-1/prompt", {
         method: "POST",
+        headers: { Cookie: "openinspect.session_token=test-session" },
         body: JSON.stringify({ content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1) }),
       }) as never,
       { params: Promise.resolve({ id: "session-1" }) }
@@ -47,9 +52,12 @@ describe("session prompt API route", () => {
 
   it("rejects malformed attachment references before proxying", async () => {
     const response = await POST(
-      new Request("http://localhost/api/sessions/session-1/prompt", {
+      new NextRequest("http://localhost/api/sessions/session-1/prompt", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Cookie: "openinspect.session_token=test-session",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           content: "Look",
           attachments: [{ name: "remote.png", url: "https://example.com/image.png" }],
@@ -69,9 +77,12 @@ describe("session prompt API route", () => {
     );
 
     const response = await POST(
-      new Request("http://localhost/api/sessions/session-1/prompt", {
+      new NextRequest("http://localhost/api/sessions/session-1/prompt", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Cookie: "openinspect.session_token=test-session",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           content: "Look",
           attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
@@ -104,9 +115,12 @@ describe("session prompt API route", () => {
     );
 
     const response = await POST(
-      new Request("http://localhost/api/sessions/session-1/prompt", {
+      new NextRequest("http://localhost/api/sessions/session-1/prompt", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Cookie: "openinspect.session_token=test-session",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ content: "Continue" }),
       }) as never,
       { params: Promise.resolve({ id: "session-1" }) }

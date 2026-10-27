@@ -22,6 +22,7 @@ function request(path: string) {
 
 function postRequest(body: unknown) {
   return {
+    cookies: { getAll: () => [{ name: "openinspect.session_token", value: "test-session" }] },
     json: async () => body,
   } as unknown as NextRequest;
 }
@@ -175,6 +176,7 @@ describe("sessions API route (POST)", () => {
     const response = await POST(
       new NextRequest("http://localhost/api/sessions", {
         method: "POST",
+        headers: { Cookie: "openinspect.session_token=test-session" },
         body: JSON.stringify({
           teamId: "team-1",
           visibility: "team",

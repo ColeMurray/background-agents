@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared/types/prompts";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const promptRequestSchema = z
@@ -23,6 +24,9 @@ const promptRequestSchema = z
   });
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const rejection = rejectMissingBrowserSessionCookie(request);
+  if (rejection) return rejection;
+
   const { id: sessionId } = await params;
 
   try {

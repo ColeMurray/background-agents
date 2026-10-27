@@ -14,7 +14,10 @@ it("omits ownership and unknown fields from configuration updates", async () => 
   await PUT(
     new NextRequest("http://localhost/api/environments/env-1", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Cookie: "openinspect.session_token=test-session",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         name: "Stack",
         teamId: "team-2",
@@ -34,7 +37,10 @@ it.each([null, [], "name"])("rejects a non-object update body %j", async (body) 
   const response = await PUT(
     new NextRequest("http://localhost/api/environments/env-1", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Cookie: "openinspect.session_token=test-session",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ id: "env-1" }) }
