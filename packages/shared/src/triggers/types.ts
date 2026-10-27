@@ -244,20 +244,19 @@ export const slackAutomationEventSchema = z
     /** The triggering message's own ts. */
     ts: z.string().min(1),
     /**
-     * Slack user id of the author. An app bot posts as its bot user, so it has
-     * one too; only a legacy integration's `bot_message` carries none.
+     * Slack user id of the person who posted the message. Never set for a bot,
+     * even an app bot that posts as a bot user: every control plane that
+     * predates `botId` requires this field, so it rejects a bot's event rather
+     * than admitting it as a person's.
      */
     actorUserId: z.string().min(1).optional(),
-    /**
-     * `bot_id` of the bot or integration that posted the message; absent for a
-     * person, including events from a slack-bot that predates the field.
-     */
+    /** `bot_id` of the bot or integration that posted the message; absent for a person. */
     botId: z.string().min(1).optional(),
     /** Bot-mention token stripped and length-capped. */
     text: z.string(),
   })
-  .refine((event) => event.actorUserId !== undefined || event.botId !== undefined, {
-    message: "A Slack event needs an actorUserId or a botId",
+  .refine((event) => (event.actorUserId === undefined) !== (event.botId === undefined), {
+    message: "A Slack event needs exactly one of actorUserId or botId",
   });
 
 export const automationEventSchema = z.discriminatedUnion("source", [

@@ -108,7 +108,7 @@ function slackHarness() {
 
 const botEvent: SlackAutomationEvent = {
   ...slackEvent,
-  actorUserId: "UALERTS",
+  actorUserId: undefined,
   botId: "BALERTS",
   text: "Cost anomaly",
 };

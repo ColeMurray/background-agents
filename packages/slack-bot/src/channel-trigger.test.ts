@@ -259,7 +259,7 @@ describe("channel-message automation triggers (POST /events)", () => {
       );
     }
 
-    it("forwards another app bot's message with both its user id and bot id", async () => {
+    it("forwards another app bot's message identified by its bot id alone", async () => {
       const env = makeEnv({ watched: ["C123"] });
       const ctx = makeCtx();
 
@@ -272,7 +272,10 @@ describe("channel-message automation triggers (POST /events)", () => {
 
       const forwarded = forwardedFrom(env);
       expect(forwarded).toHaveLength(1);
-      expect(forwarded[0]).toMatchObject({ actorUserId: "UALERTS", botId: "BALERTS" });
+      expect(forwarded[0]).toMatchObject({ botId: "BALERTS" });
+      // A control plane that predates botId requires actorUserId, so it rejects
+      // this event instead of admitting the bot as a person.
+      expect(forwarded[0]).not.toHaveProperty("actorUserId");
       expect(String(forwarded[0].contextBlock)).toContain("by bot BALERTS.");
     });
 

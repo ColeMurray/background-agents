@@ -8,11 +8,11 @@ import type { SlackAutomationEvent } from "../types";
 export const SLACK_TEXT_MAX_LENGTH = 8 * 1024;
 
 /**
- * Who posted a Slack message, as Slack reports it: a person (`user`), an app bot
- * (its bot `user` and `bot_id`), or a legacy integration (`bot_id` alone).
+ * Who posted a Slack message: a person by `user`, or a bot or integration by
+ * `bot_id` alone, even when Slack also reports the app bot's bot user.
  */
 export type SlackMessageAuthor =
-  { user: string; bot_id?: string } | { user?: undefined; bot_id: string };
+  { user: string; bot_id?: undefined } | { user?: undefined; bot_id: string };
 
 /** Minimal shape of the Slack `message` event fields the normalizer consumes. */
 export type SlackMessageInput = SlackMessageAuthor & {

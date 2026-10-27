@@ -351,12 +351,9 @@ describe("Scheduler slack event handling (integration)", () => {
       );
       expect(rootResult.triggered).toBe(1);
 
-      // U1 is linked to an Open-Inspect user (beforeEach); posting as a bot still
-      // must not steer, because the message is bot output.
       const replyResult = await sendEvent(
         makeSlackEvent({
-          actorUserId: "U1",
-          botId: "BALERTS",
+          ...fromBot,
           text: "deploy finished",
           concurrencyKey,
           triggerKey: "slack:msg:C1:bot-reply-opted-in",

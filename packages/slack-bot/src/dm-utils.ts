@@ -73,10 +73,11 @@ function mentionsUser(text: string, userId: string): boolean {
  * - messages that @mention the bot — those are explicit requests dispatched by
  *   the `app_mention` path; processing them here too would double-handle.
  *
- * Messages from other bots and integrations pass with their `bot_id`: whether
- * one may trigger is a per-automation setting the control plane applies. App
- * bots post with a `user` too; legacy integrations post a `bot_message` with
- * only a `bot_id`.
+ * Messages from other bots and integrations pass identified by their `bot_id`
+ * alone, even an app bot that also carries a `user`: whether one may trigger is
+ * a per-automation setting the control plane applies, and a control plane that
+ * predates bot messages rejects an author without a user rather than taking the
+ * bot for a person.
  *
  * `identity` must be the bot's own ids (from `auth.test`); the caller resolves
  * it and fails closed when it cannot, so mention suppression and
@@ -106,5 +107,5 @@ export function channelTriggerAuthor(
   if (mentionsUser(event.text, identity.userId)) return null;
   if (!event.bot_id) return event.user ? { user: event.user } : null;
   if (!identity.botId || event.bot_id === identity.botId) return null;
-  return event.user ? { user: event.user, bot_id: event.bot_id } : { bot_id: event.bot_id };
+  return { bot_id: event.bot_id };
 }

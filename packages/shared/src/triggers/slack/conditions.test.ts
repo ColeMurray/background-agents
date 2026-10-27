@@ -170,15 +170,6 @@ describe("slack_actor condition", () => {
     expect(
       match(
         { type: "slack_actor", operator: "include", value: ["B1"] },
-        slackEvent({ actorUserId: "U9", botId: "B1" })
-      )
-    ).toBe(true);
-  });
-
-  it("include matches a legacy integration that has only a bot id", () => {
-    expect(
-      match(
-        { type: "slack_actor", operator: "include", value: ["B1"] },
         slackEvent({ actorUserId: undefined, botId: "B1" })
       )
     ).toBe(true);
@@ -188,7 +179,7 @@ describe("slack_actor condition", () => {
     expect(
       match(
         { type: "slack_actor", operator: "exclude", value: ["B1"] },
-        slackEvent({ actorUserId: "U9", botId: "B1" })
+        slackEvent({ actorUserId: undefined, botId: "B1" })
       )
     ).toBe(false);
   });

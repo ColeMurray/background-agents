@@ -5,6 +5,7 @@ import {
   slackChannelLabel,
   SLACK_TEXT_MAX_LENGTH,
 } from "./normalizer";
+import { z } from "zod";
 import { slackAutomationEventSchema } from "../types";
 
 const baseInput = {
@@ -41,14 +42,7 @@ describe("normalizeSlackEvent", () => {
     expect(event!.contextBlock).toContain("by user U999.");
   });
 
-  it("keeps both ids of an app bot's message and names the bot", () => {
-    const event = normalizeSlackEvent({ ...baseInput, user: "U042", bot_id: "B042" }, "UBOT");
-    expect(event!.actorUserId).toBe("U042");
-    expect(event!.botId).toBe("B042");
-    expect(event!.contextBlock).toContain("by bot B042.");
-  });
-
-  it("normalizes a legacy integration's message that carries only a bot id", () => {
+  it("identifies a bot by its bot id alone and names it in the context block", () => {
     const { user: _user, ...withoutUser } = baseInput;
     const event = normalizeSlackEvent({ ...withoutUser, bot_id: "B042" }, "UBOT");
     expect(event!.actorUserId).toBeUndefined();
@@ -56,11 +50,27 @@ describe("normalizeSlackEvent", () => {
     expect(event!.contextBlock).toContain("by bot B042.");
   });
 
-  it("produces events the schema accepts, and the schema needs a user or bot id", () => {
-    const event = normalizeSlackEvent({ ...baseInput, user: "U042", bot_id: "B042" }, "UBOT")!;
+  it("produces events the schema accepts, and the schema needs exactly one author id", () => {
+    const { user: _user, ...withoutUser } = baseInput;
+    const event = normalizeSlackEvent({ ...withoutUser, bot_id: "B042" }, "UBOT")!;
     expect(slackAutomationEventSchema.safeParse(event).success).toBe(true);
-    const { actorUserId: _actor, botId: _bot, ...anonymous } = event;
+    const { botId: _bot, ...anonymous } = event;
     expect(slackAutomationEventSchema.safeParse(anonymous).success).toBe(false);
+    expect(slackAutomationEventSchema.safeParse({ ...event, actorUserId: "U042" }).success).toBe(
+      false
+    );
+  });
+
+  it("produces bot events that a control plane predating botId rejects", () => {
+    // Every earlier receiver required actorUserId and stripped unknown keys, so a
+    // bot event carrying a user id would have been admitted as a person's.
+    const legacyReceiver = slackAutomationEventSchema.safeExtend({
+      actorUserId: z.string().min(1),
+    });
+    const { user: _user, ...withoutUser } = baseInput;
+    const botEvent = normalizeSlackEvent({ ...withoutUser, bot_id: "B042" }, "UBOT")!;
+    expect(legacyReceiver.safeParse(botEvent).success).toBe(false);
+    expect(legacyReceiver.safeParse(normalizeSlackEvent(baseInput, "UBOT")).success).toBe(true);
   });
 
   it("uses thread_ts for the concurrency key on a thread reply", () => {
