@@ -107,18 +107,32 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
       const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
       if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
       try {
-        const client = await getLinearClientOrThrow(env, webhook.organizationId, webhook.appUserId);
-        const refusal = await enrollLinearActor(env, client, actorUserId, traceId);
-        if (refusal) {
-          await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
-          return;
-        }
-        const stopRes = await signedControlPlaneFetch(env, {
+        const stopRequest = {
           method: "POST",
           url: stopUrl.toString(),
           actor: `linear:${actorUserId}`,
           traceId,
-        });
+        };
+        // Known actors can stop without relying on Linear's API or token issuance.
+        let stopRes = await signedControlPlaneFetch(env, stopRequest);
+        if (
+          stopRes.status === 403 &&
+          z
+            .object({ code: z.literal("actor_email_required") })
+            .safeParse(await stopRes.json().catch(() => null)).success
+        ) {
+          const client = await getLinearClientOrThrow(
+            env,
+            webhook.organizationId,
+            webhook.appUserId
+          );
+          const refusal = await enrollLinearActor(env, client, actorUserId, traceId);
+          if (refusal) {
+            await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+            return;
+          }
+          stopRes = await signedControlPlaneFetch(env, stopRequest);
+        }
         if (!stopRes.ok) {
           log.error("agent_session.stop_failed", {
             trace_id: traceId,

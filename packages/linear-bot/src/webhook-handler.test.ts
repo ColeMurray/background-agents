@@ -1062,6 +1062,11 @@ describe("handleAgentSessionEvent environment targets", () => {
       controlPlaneFetch.mockResolvedValue(
         Response.json({ code: "actor_admission_denied" }, { status: 403 })
       );
+      if (action === "stopped") {
+        controlPlaneFetch.mockResolvedValueOnce(
+          Response.json({ code: "actor_email_required" }, { status: 403 })
+        );
+      }
       const webhook = makeWebhook();
       webhook.action = action;
       webhook.agentActivity = {
@@ -1072,9 +1077,12 @@ describe("handleAgentSessionEvent environment targets", () => {
       await handleAgentSessionEvent(webhook, env, "trace-enrollment-denied");
 
       expect(controlPlaneFetch.mock.calls.map(([url]) => String(url))).toEqual([
+        ...(action === "stopped"
+          ? ["https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1"]
+          : []),
         "https://internal/actors/me",
       ]);
-      const enrollmentInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit;
+      const enrollmentInit = controlPlaneFetch.mock.calls.at(-1)?.[1] as RequestInit;
       expect(new Headers(enrollmentInit.headers).get("X-OpenInspect-Actor")).toBe(
         "linear:new-collaborator"
       );
@@ -1227,41 +1235,102 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body.content).not.toContain("Previous agent response");
   });
 
-  it("stops an existing session when Linear sends a stop signal", async () => {
-    const { kv, store } = createFakeKV({
-      "issue:issue-1": JSON.stringify({
-        sessionId: "session-xyz",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-42",
-        model: "anthropic/claude-haiku-4-5",
-        createdAt: Date.now(),
-      }),
-    });
-    const env = makeLinearBotEnv(kv);
-    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
-      .fetch;
-    controlPlaneFetch.mockResolvedValue(Response.json({ status: "stopping" }));
-    const webhook = makeWebhook();
-    webhook.action = "prompted";
-    webhook.agentActivity = {
-      userId: "follow-up-human-user",
-      signal: "stop",
-      content: { type: "prompt", body: "stop" },
-    };
+  it.each([200, 403, 503])(
+    "handles a stop response of %s without Linear API calls when credential issuance is unavailable",
+    async (status) => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Linear API unavailable")));
+      const { kv, store } = createFakeKV({
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      controlPlaneFetch.mockResolvedValue(
+        Response.json({ status: "stopping", code: "not_member" }, { status })
+      );
+      const webhook = makeWebhook();
+      webhook.action = "prompted";
+      webhook.agentActivity = {
+        userId: "follow-up-human-user",
+        signal: "stop",
+        content: { type: "prompt", body: "stop" },
+      };
 
-    await handleAgentSessionEvent(webhook, env, "trace-stop");
+      await handleAgentSessionEvent(webhook, env, "trace-stop");
 
-    expect(controlPlaneFetch).toHaveBeenCalledTimes(2);
-    expect(controlPlaneFetch).toHaveBeenCalledWith(
-      "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1",
-      expect.objectContaining({ method: "POST" })
-    );
-    const stopInit = controlPlaneFetch.mock.calls[1]?.[1] as RequestInit | undefined;
-    expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe(
-      "linear:follow-up-human-user"
-    );
-    expect(store.has("issue:issue-1")).toBe(false);
-  });
+      expect(controlPlaneFetch).toHaveBeenCalledOnce();
+      expect(controlPlaneFetch).toHaveBeenCalledWith(
+        "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1",
+        expect.objectContaining({ method: "POST" })
+      );
+      const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe(
+        "linear:follow-up-human-user"
+      );
+      expect(store.has("issue:issue-1")).toBe(status !== 200);
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([200, 403])(
+    "enrolls a new stop author before retrying and receiving %s",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        createLinearFetchMock({
+          identity: () => linearIdentityResponse(),
+          graphql: () =>
+            Response.json({
+              data: { user: { id: "new-author", name: "Ada", email: "ada@corp.test" } },
+            }),
+        })
+      );
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      controlPlaneFetch
+        .mockResolvedValueOnce(Response.json({ code: "actor_email_required" }, { status: 403 }))
+        .mockResolvedValueOnce(new Response(null, { status: 204 }))
+        .mockResolvedValueOnce(Response.json({ status: "stopping" }, { status }));
+      const webhook = makeWebhook();
+      webhook.agentActivity = { userId: "new-author", signal: "stop" };
+
+      await handleAgentSessionEvent(webhook, env, "trace-new-stop-author");
+
+      const stopUrl = "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1";
+      expect(controlPlaneFetch.mock.calls.map(([url]) => String(url))).toEqual([
+        stopUrl,
+        "https://internal/actors/me",
+        stopUrl,
+      ]);
+      expect(JSON.parse(String(controlPlaneFetch.mock.calls[1]?.[1]?.body))).toEqual({
+        displayName: "Ada",
+        email: "ada@corp.test",
+      });
+      for (const [, init] of controlPlaneFetch.mock.calls) {
+        expect(new Headers(init.headers).get("X-OpenInspect-Actor")).toBe("linear:new-author");
+      }
+      expect(store.has("issue:issue-1")).toBe(status !== 200);
+    }
+  );
 
   it("fails closed and retains the session mapping when a stop author is missing", async () => {
     const { kv, store } = createFakeKV({
@@ -1321,7 +1390,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       `https://internal/sessions/session-xyz/stop${query}`,
       expect.objectContaining({ method: "POST" })
     );
-    const stopInit = controlPlaneFetch.mock.calls[1]?.[1] as RequestInit | undefined;
+    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe("linear:human-user-1");
     expect(store.has("issue:issue-1")).toBe(false);
   });

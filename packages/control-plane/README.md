@@ -80,8 +80,9 @@ nothing. A known actor is admitted with or without one. This keeps an email-less
 giving someone a second account with the default role and none of their existing account's
 restrictions. Known limitation: new Slack users whose profile email the bot cannot read, typically
 external Slack Connect users, cannot start using the bot; Slack users it already knows keep working.
-Linear's catalog reads are actorless, session creation carries its actor's email, and follow-up and
-stop authors enroll with their profiles before any actor-bearing reads or writes.
+Linear's catalog reads are actorless, session creation carries its actor's email, and follow-up
+authors enroll with their profiles before actor-bearing requests. Stops go directly to the control
+plane; only an `actor_email_required` refusal triggers profile-backed enrollment and a retry.
 
 Before creating a new canonical user, bot enrollment applies the same deployment admission policy as
 web sign-in. An attested Slack or Linear email must match `ALLOWED_EMAILS` or
