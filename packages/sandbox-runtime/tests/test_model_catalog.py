@@ -1,6 +1,7 @@
 """Catalog publication and recovery without relying on disposable cache state."""
 
 import asyncio
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ import httpx
 import pytest
 
 from sandbox_runtime import model_catalog
+from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.model_catalog import (
     catalog_is_usable,
     configure_model_catalog,
@@ -129,4 +131,79 @@ async def test_invalid_source_is_nonfatal(tmp_path):
     log = MagicMock()
     environment = {"HOME": str(tmp_path), "OPENCODE_MODELS_URL": "https://models.test:not-a-port"}
     assert not await ensure_model_catalog(environment, log)
-    assert isinstance(log.warn.call_args.kwargs["exc"], httpx.InvalidURL)
+    assert log.warn.call_args.kwargs["error_type"] == "InvalidURL"
+    assert "exc" not in log.warn.call_args.kwargs
+
+
+@pytest.mark.parametrize("outcome", ["success", "status", "network"])
+async def test_catalog_url_credentials_do_not_reach_logs(tmp_path, monkeypatch, caplog, outcome):
+    source = "https://catalog-user:catalog-password@mirror.test/path-secret?token=query-secret"
+    environment = {"HOME": str(tmp_path), "OPENCODE_MODELS_URL": source}
+
+    def respond(request):
+        if outcome == "network":
+            raise httpx.ConnectError(f"Cannot connect to {request.url}", request=request)
+        return httpx.Response(503 if outcome == "status" else 200, content=CATALOG)
+
+    serve_catalog(monkeypatch, respond)
+    previous_filters = list(logging.getLogger("httpx").filters)
+    with caplog.at_level(logging.INFO):
+        assert await ensure_model_catalog(environment, get_logger("catalog_test")) is (
+            outcome == "success"
+        )
+    assert logging.getLogger("httpx").filters == previous_filters
+    for secret in ("catalog-user", "catalog-password", "path-secret", "query-secret"):
+        assert secret not in caplog.text
+    assert not any(record.name == "httpx" for record in caplog.records)
+    if outcome != "success":
+        [failure] = [r for r in caplog.records if r.message == "model_catalog.refresh_failed"]
+        assert failure.exc_info is None
+        assert failure.error_type == ("HTTPStatusError" if outcome == "status" else "ConnectError")
+        assert failure.status_code == (503 if outcome == "status" else None)
+
+
+async def test_catalog_fetch_does_not_mute_other_httpx_requests(tmp_path, monkeypatch, caplog):
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def respond(request):
+        if request.url.host == "mirror.test":
+            started.set()
+            await release.wait()
+        return httpx.Response(200, content=CATALOG)
+
+    serve_catalog(monkeypatch, respond)
+    environment = {"HOME": str(tmp_path), "OPENCODE_MODELS_URL": "https://mirror.test/secret"}
+    with caplog.at_level(logging.INFO):
+        fetch = asyncio.create_task(ensure_model_catalog(environment, get_logger("catalog_test")))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            async with httpx.AsyncClient() as client:
+                await client.get("https://other.test/during")
+        finally:
+            release.set()
+            assert await fetch
+        async with httpx.AsyncClient() as client:
+            await client.get("https://other.test/after")
+    assert "https://other.test/during" in caplog.text
+    assert "https://other.test/after" in caplog.text
+    assert "https://mirror.test/secret" not in caplog.text
+
+
+async def test_relative_override_is_shared_across_working_directories(tmp_path, monkeypatch):
+    supervisor, repository = tmp_path / "supervisor", tmp_path / "repo"
+    supervisor.mkdir()
+    repository.mkdir()
+    monkeypatch.chdir(supervisor)
+    environment = {"OPENCODE_MODELS_PATH": "models.json"}
+    path = configure_model_catalog(environment)
+    assert path == supervisor / "models.json"
+    assert environment["OPENCODE_MODELS_PATH"] == str(path)
+    serve_catalog(monkeypatch, lambda _: httpx.Response(200, content=CATALOG))
+    assert await ensure_model_catalog(environment, MagicMock())
+
+    monkeypatch.chdir(repository)
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", MagicMock(side_effect=AssertionError))
+    assert await ensure_model_catalog(environment, MagicMock())
+    assert default_catalog_path(environment) == path
+    assert Path(environment["OPENCODE_MODELS_PATH"]).read_bytes() == CATALOG
+    assert not (repository / "models.json").exists()

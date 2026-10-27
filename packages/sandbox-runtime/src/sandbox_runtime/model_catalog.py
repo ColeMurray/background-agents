@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +17,7 @@ import httpx
 from .model_prices import DEFAULT_MODELS_URL, ModelPrice
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
+    from collections.abc import Iterator, MutableMapping
 
 MODEL_CATALOG_FETCH_TIMEOUT_SECONDS = 15.0
 
@@ -24,7 +27,27 @@ def configure_model_catalog(environ: MutableMapping[str, str]) -> Path:
     if not environ.get("OPENCODE_MODELS_PATH"):
         home = Path(environ.get("HOME") or Path.home())
         environ["OPENCODE_MODELS_PATH"] = str(home / ".local/share/openinspect/models.json")
-    return Path(environ["OPENCODE_MODELS_PATH"])
+    path = Path(environ["OPENCODE_MODELS_PATH"]).absolute()
+    environ["OPENCODE_MODELS_PATH"] = str(path)
+    return path
+
+
+@contextmanager
+def _suppress_catalog_request_logs() -> Iterator[None]:
+    """HTTPX logs full URLs; suppress this fetch without muting concurrent requests."""
+    active = ContextVar("catalog_request_logging", default=False)
+
+    def allow_log(_record: logging.LogRecord) -> bool:
+        return not active.get()
+
+    logger = logging.getLogger("httpx")
+    logger.addFilter(allow_log)
+    token = active.set(True)
+    try:
+        yield
+    finally:
+        active.reset(token)
+        logger.removeFilter(allow_log)
 
 
 def validate_catalog(raw: bytes) -> None:
@@ -74,15 +97,16 @@ async def ensure_model_catalog(
         return True
     source = environ.get("OPENCODE_MODELS_URL") or DEFAULT_MODELS_URL
     try:
-        async with (
-            asyncio.timeout(MODEL_CATALOG_FETCH_TIMEOUT_SECONDS),
-            httpx.AsyncClient(timeout=MODEL_CATALOG_FETCH_TIMEOUT_SECONDS) as client,
-        ):
-            response = await client.get(f"{source.rstrip('/')}/api.json")
-            response.raise_for_status()
-            raw = response.content
-            validate_catalog(raw)
-            _publish_catalog(path, raw)
+        with _suppress_catalog_request_logs():
+            async with (
+                asyncio.timeout(MODEL_CATALOG_FETCH_TIMEOUT_SECONDS),
+                httpx.AsyncClient(timeout=MODEL_CATALOG_FETCH_TIMEOUT_SECONDS) as client,
+            ):
+                response = await client.get(f"{source.rstrip('/')}/api.json")
+                response.raise_for_status()
+                raw = response.content
+                validate_catalog(raw)
+                _publish_catalog(path, raw)
     except (
         httpx.HTTPError,
         httpx.InvalidURL,
@@ -91,7 +115,14 @@ async def ensure_model_catalog(
         RecursionError,
         TimeoutError,
     ) as error:
-        log.warn("model_catalog.refresh_failed", path=str(path), exc=error)
+        log.warn(
+            "model_catalog.refresh_failed",
+            path=str(path),
+            error_type=type(error).__name__,
+            status_code=error.response.status_code
+            if isinstance(error, httpx.HTTPStatusError)
+            else None,
+        )
         return usable
     log.info("model_catalog.refreshed", path=str(path))
     return True
