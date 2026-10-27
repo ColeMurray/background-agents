@@ -297,13 +297,13 @@ describe("SessionMemoryService.read", () => {
   });
 
   it("conceals a personal record when the owner opts out while it is being read", async () => {
-    const session = memorySession();
-    const { service, deps } = setup({ session });
-    deps.records.get.mockImplementation(async () => {
-      session.sources = { ...session.sources, personalOwnerUserId: null };
-      return record("mine");
-    });
+    const { service, deps } = setup({ records: [record("mine")] });
+    // Once the preference is off, loading the session drops its personal owner.
+    deps.selections.loadSession
+      .mockResolvedValueOnce(memorySession())
+      .mockResolvedValueOnce(memorySession({ sources: { personalOwnerUserId: null } }));
     await expect(service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    expect(deps.selections.loadSession).toHaveBeenCalledTimes(2);
     expect(deps.audit.recordRead).not.toHaveBeenCalled();
   });
 
