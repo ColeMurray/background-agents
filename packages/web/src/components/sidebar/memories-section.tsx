@@ -120,7 +120,7 @@ export function MemoriesSection({ sessionId }: { sessionId: string }) {
                 Personal · {hiddenPersonalCount}
               </p>
               <p className="text-muted-foreground">
-                The session owner&apos;s personal memories are visible only to them.
+                The session owner&apos;s personal memories aren&apos;t listed here.
               </p>
             </div>
           )}

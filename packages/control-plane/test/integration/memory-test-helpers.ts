@@ -7,7 +7,7 @@ import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionMemorySelector } from "../../src/memory/session-memory-selector";
 import { resolvedPin } from "../../src/session/pinned";
-import { queryDO, seedMessage } from "./helpers";
+import { queryDO } from "./helpers";
 
 interface MemorySessionOptions {
   userId: string;
@@ -107,13 +107,16 @@ export async function seedPrompt(
     canonicalUserId,
     n
   );
-  await seedMessage(stub, {
-    id: `memory-prompt-${n}`,
-    authorId: participantId,
-    content: "Prompt",
-    source: canonicalUserId ? "web" : "github",
+  await queryDO(
+    stub,
+    `INSERT INTO messages (id, author_id, author_canonical_user_id, content, source, status, created_at, started_at)
+     VALUES (?, ?, ?, 'Prompt', ?, ?, ?, ?)`,
+    `memory-prompt-${n}`,
+    participantId,
+    canonicalUserId,
+    canonicalUserId ? "web" : "github",
     status,
-    createdAt: n,
-    startedAt: n,
-  });
+    n,
+    n
+  );
 }

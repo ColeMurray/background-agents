@@ -7,7 +7,9 @@ import { LexicalFactIndex } from "../db/lexical-fact-index";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { toSelectionStatus } from "../memory/dto";
 import { SessionMemoryService } from "../memory/session-memory-service";
+import { UNATTRIBUTED_PROMPT } from "../memory/session-rules";
 import type { MemoryPromptContext } from "../memory/types";
+import { createLogger } from "../logger";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
@@ -31,10 +33,10 @@ import {
   type UserRouteContext,
 } from "./shared";
 
+const logger = createLogger("router:session-memories");
+
 type SandboxMemoryContext = SandboxRouteContext & { sessionRuntime: SessionRuntimeClient };
 
-/** Treated as someone else's prompt: no personal reads, writes, or auto-save. */
-const NO_OWNER_PROMPT: MemoryPromptContext = { authorUserId: null, othersPrompted: true };
 /** Spawn depth is capped well below this; it only bounds a malformed parent chain. */
 const MAX_PARENT_HOPS = 8;
 
@@ -49,32 +51,44 @@ async function view(_request: Request, _env: Env, params: { id: string }, ctx: U
     : error("Session not found", 404);
 }
 
-/** Compose the service from D1-backed dependencies for one admitted sandbox request. */
-function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
+/** Compose the service from D1-backed and session-runtime dependencies for one sandbox request. */
+function sessionMemoryService(ctx: SandboxMemoryContext): SessionMemoryService {
   return new SessionMemoryService({
     selections: new SessionMemorySelectionStore(ctx.db),
     records: new MemoryRecordStore(ctx.db),
     factIndex: new LexicalFactIndex(ctx.db),
     access: createSessionMemoryAccessPolicy(ctx),
+    prompts: { current: (sessionId) => promptContext(ctx, sessionId) },
     audit: new PersonalMemoryAuditStore(ctx.db),
     requestId: ctx.request_id,
   });
 }
 
+/** One session runtime's answer, or null when it gave none it could use. */
 async function runtimePromptContext(
   ctx: SandboxMemoryContext,
   sessionId: string,
   relativeToUserId?: string
 ): Promise<MemoryPromptContextResponse | null> {
-  const response = await ctx.sessionRuntime.fetch(
-    sessionId,
-    SessionInternalPaths.memoryPromptContext,
-    undefined,
-    relativeToUserId ? `?${new URLSearchParams({ userId: relativeToUserId })}` : undefined
-  );
-  if (!response.ok) return null;
-  const parsed = memoryPromptContextResponseSchema.safeParse(await response.json());
-  return parsed.success ? parsed.data : null;
+  try {
+    const response = await ctx.sessionRuntime.fetch(
+      sessionId,
+      SessionInternalPaths.memoryPromptContext,
+      undefined,
+      relativeToUserId ? `?${new URLSearchParams({ userId: relativeToUserId })}` : undefined
+    );
+    if (!response.ok) return null;
+    const parsed = memoryPromptContextResponseSchema.safeParse(await response.json());
+    return parsed.success ? parsed.data : null;
+  } catch (cause) {
+    logger.warn("memory.prompt_context_unavailable", {
+      event: "memory.prompt_context_unavailable",
+      session_id: sessionId,
+      request_id: ctx.request_id,
+      error: cause instanceof Error ? cause : String(cause),
+    });
+    return null;
+  }
 }
 
 /**
@@ -88,7 +102,7 @@ async function promptContext(
   sessionId: string
 ): Promise<MemoryPromptContext> {
   const session = await runtimePromptContext(ctx, sessionId);
-  if (!session) return NO_OWNER_PROMPT;
+  if (!session) return UNATTRIBUTED_PROMPT;
   const { authorUserId } = session;
   if (authorUserId === null || session.othersPrompted)
     return { authorUserId, othersPrompted: true };
@@ -104,7 +118,7 @@ async function promptContext(
 
 /** Run one sandbox operation, translating expected memory failures. */
 async function sandboxCall(
-  ctx: SandboxRouteContext,
+  ctx: SandboxMemoryContext,
   operation: (service: SessionMemoryService) => Promise<unknown>,
   status = 200
 ): Promise<Response> {
@@ -119,7 +133,7 @@ async function renderedContext(
   _request: Request,
   _env: Env,
   params: { id: string },
-  ctx: SandboxRouteContext
+  ctx: SandboxMemoryContext
 ) {
   return sandboxCall(ctx, (service) => service.renderedContext(params.id));
 }
@@ -130,8 +144,7 @@ async function read(
   params: { id: string; memoryId: string },
   ctx: SandboxMemoryContext
 ) {
-  const prompt = await promptContext(ctx, params.id);
-  return sandboxCall(ctx, (service) => service.read(params.id, params.memoryId, prompt));
+  return sandboxCall(ctx, (service) => service.read(params.id, params.memoryId));
 }
 
 async function write(
@@ -142,8 +155,7 @@ async function write(
 ) {
   const body = await parseBody(request, sandboxMemoryWriteSchema, "Invalid memory");
   if (body instanceof Response) return body;
-  const prompt = await promptContext(ctx, params.id);
-  return sandboxCall(ctx, (service) => service.write(params.id, body, prompt), 201);
+  return sandboxCall(ctx, (service) => service.write(params.id, body), 201);
 }
 
 async function search(
@@ -154,8 +166,7 @@ async function search(
 ) {
   const body = await parseBody(request, memorySearchSchema, "Invalid memory search");
   if (body instanceof Response) return body;
-  const prompt = await promptContext(ctx, params.id);
-  return sandboxCall(ctx, (service) => service.search(params.id, body, prompt));
+  return sandboxCall(ctx, (service) => service.search(params.id, body));
 }
 
 export const sessionMemoryRoutes = new Hono<ControlPlaneHonoEnv>();
@@ -174,7 +185,7 @@ sessionMemoryRoutes.get(
   (c) => dispatch(c, view)
 );
 sessionMemoryRoutes.get("/sessions/:id/sandbox-memory", sandbox, (c) =>
-  dispatch(c, renderedContext)
+  dispatchSession(c, renderedContext)
 );
 sessionMemoryRoutes.get("/sessions/:id/sandbox-memory/:memoryId", sandbox, (c) =>
   dispatchSession(c, read)

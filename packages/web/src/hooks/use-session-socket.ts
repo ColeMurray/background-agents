@@ -64,7 +64,10 @@ interface UseSessionSocketReturn {
    * because opening them would switch off the session owner's personal memory.
    */
   sandboxConnectRequired: boolean;
-  connectSandbox: () => void;
+  sandboxConnecting: boolean;
+  /** The last `connectSandbox` attempt failed; calling it again retries. */
+  sandboxConnectFailed: boolean;
+  connectSandbox: () => Promise<void>;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
   /** The latest sandbox boot: its last phase and completed-phase timings. */
@@ -152,6 +155,8 @@ export function useSessionSocket(
   const {
     sandboxAccess,
     connectRequired: sandboxConnectRequired,
+    connecting: sandboxConnecting,
+    connectFailed: sandboxConnectFailed,
     connect: connectSandbox,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
@@ -510,6 +515,8 @@ export function useSessionSocket(
     capabilities: transport.sessionGone ? resolveSessionCapabilities(undefined) : capabilities,
     sessionState,
     sandboxConnectRequired,
+    sandboxConnecting,
+    sandboxConnectFailed,
     connectSandbox,
     sandboxError: state.sandboxError,
     boot: state.boot,

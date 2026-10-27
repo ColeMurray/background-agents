@@ -729,7 +729,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   );
   const memoryPromptContextHandler = new MemoryPromptContextHandler(
     messageRepository,
-    participantRepository,
     sessionCoreRepository
   );
   const childSummaryHandler = new ChildSummaryHandler(

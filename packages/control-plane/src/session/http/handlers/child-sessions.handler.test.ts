@@ -71,6 +71,7 @@ function createHandler() {
     getProcessingMessageAuthor: vi.fn<() => { author_id: string } | null>(() => ({
       author_id: "participant-1",
     })),
+    getProcessingPromptAccount: vi.fn<() => string | null>(() => null),
     getParticipantById: vi.fn<(id: string) => ParticipantRow | null>(() => createParticipant()),
   };
   const getSession = vi.fn<() => SessionRow | null>();
@@ -401,7 +402,24 @@ describe("ChildSessionsHandler", () => {
         scmName: "The Octocat",
         scmEmail: "octocat@example.com",
       },
+      promptAccountUserId: null,
     });
+  });
+
+  it("carries the account the spawning prompt was queued under, not its author's current one", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.getParticipantById.mockReturnValue(
+      createParticipant({ user_id: "github:7", canonical_user_id: "canonical-2" })
+    );
+    // An Autofix turn: its reviewer maps to an account, but the turn was queued under none.
+    repository.getProcessingPromptAccount.mockReturnValue(null);
+
+    const response = handler.getSpawnContext();
+
+    const body = await response.json<Record<string, unknown>>();
+    expect(body.promptAuthor).toMatchObject({ canonicalUserId: "canonical-2" });
+    expect(body.promptAccountUserId).toBeNull();
   });
 
   it("maps repo-less spawn context from session and processing prompt author", async () => {

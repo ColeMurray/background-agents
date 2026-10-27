@@ -111,6 +111,7 @@ export class ChildSessionsHandler {
         scmName: promptAuthor.scm_name,
         scmEmail: promptAuthor.scm_email,
       },
+      promptAccountUserId: this.messageRepository.getProcessingPromptAccount(),
     };
 
     return Response.json(context);

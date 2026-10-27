@@ -207,6 +207,9 @@ export class SessionMessageQueue {
           });
           return participant.id;
         },
+        // Review feedback relayed from GitHub is never anyone's own prompt, whatever account its
+        // reviewer maps to.
+        authorCanonicalUserId: null,
         content: command.prompt,
         source: "github",
         status: "pending",
@@ -922,6 +925,7 @@ export class SessionMessageQueue {
         {
           id: messageId,
           authorId: data.participant.id,
+          authorCanonicalUserId: data.participant.canonical_user_id ?? null,
           content: data.content,
           source: data.source,
           model: messageModel,

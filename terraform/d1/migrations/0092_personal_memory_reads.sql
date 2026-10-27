@@ -6,12 +6,9 @@
 ALTER TABLE session_memory_manifests ADD COLUMN personal_reads_eligible INTEGER NOT NULL DEFAULT 1
   CHECK (personal_reads_eligible IN (0, 1));
 
--- Automation runs and sessions the GitHub or Linear integration starts no longer select personal
--- memory. Those created earlier, and their children, keep the personal owner they pinned; switch
--- off live personal reads and auto-save there so their own later prompts cannot read that store.
+-- Sessions created before this change cannot show who already holds their sandbox credentials
+-- (the web fetched them for every viewer with sandbox access), and automation and integration
+-- sessions may have pinned a personal owner they no longer select. Switch off live personal reads
+-- and auto-save in all of them; their pinned context is unchanged, and new sessions start eligible.
 UPDATE session_memory_manifests SET personal_reads_eligible = 0, personal_auto_save_eligible = 0
-WHERE personal_owner_user_id IS NOT NULL AND session_id IN (
-  SELECT s.id FROM sessions s
-  JOIN sessions root ON root.id = COALESCE(s.root_session_id, s.id)
-  WHERE root.spawn_source IN ('automation', 'github-bot', 'linear-bot')
-);
+WHERE personal_owner_user_id IS NOT NULL;

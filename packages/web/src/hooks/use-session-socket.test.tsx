@@ -178,7 +178,7 @@ describe("useSessionSocket", () => {
           ? Response.json({ tunnelUrls: { "3000": "https://app.example" } })
           : Response.json({ token: "ws-token" })
     );
-    const { result } = renderSessionSocket();
+    const { result, unmount } = renderSessionSocket();
 
     await waitFor(() => expect(result.current.sandboxConnectRequired).toBe(true));
     expect(result.current.sessionState?.tunnelUrls).toEqual({ "3000": "https://app.example" });
@@ -194,11 +194,12 @@ describe("useSessionSocket", () => {
           })
         : Response.json({ token: "ws-token" })
     );
-    act(() => result.current.connectSandbox());
+    await act(() => result.current.connectSandbox());
 
-    await waitFor(() => expect(result.current.sessionState?.ttydToken).toBe("terminal-token"));
+    expect(result.current.sessionState?.ttydToken).toBe("terminal-token");
     expect(result.current.sandboxConnectRequired).toBe(false);
     expect(urls()).toContain("/api/sessions/session-1/sandbox-access?connect=1");
+    unmount();
   });
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {

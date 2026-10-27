@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import type { MemoryContent } from "@open-inspect/shared/types/memories";
+import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
 import { MemoryRecordStore, type NewMemory } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
 import type { MemoryActor } from "../../src/memory/types";
@@ -183,6 +184,15 @@ describe("memory persistence", () => {
       .run();
     await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
     expect((await store.create(memory(), agent)).status).toBe("proposed");
+  });
+  it("fences agent personal writes, active or proposed, once the owner opts out", async () => {
+    const store = new MemoryRecordStore(env.DB);
+    await new MemoryPreferenceStore(env.DB).set("user_a", { includePersonalMemories: false });
+    await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
+    await expect(store.create(memory(), agent)).rejects.toThrow(/session access/);
+    expect(await store.list(owner, { ...page, status: "proposed" })).toEqual([]);
+    await new MemoryPreferenceStore(env.DB).set("user_a", { includePersonalMemories: true });
+    expect((await store.create(memory(), agent, AUTO_SAVE)).status).toBe("active");
   });
   it("does not let an auto-saved fact bypass directive approval through supersession", async () => {
     const store = new MemoryRecordStore(env.DB);

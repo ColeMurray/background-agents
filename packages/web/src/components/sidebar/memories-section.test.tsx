@@ -111,7 +111,7 @@ describe("MemoriesSection", () => {
 
     expect(screen.getByText("Personal · 2")).toBeInTheDocument();
     expect(
-      screen.getByText("The session owner's personal memories are visible only to them.")
+      screen.getByText("The session owner's personal memories aren't listed here.")
     ).toBeInTheDocument();
     expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["Use pnpm"]);
   });

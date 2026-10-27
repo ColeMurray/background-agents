@@ -1,5 +1,11 @@
 import type { MemoryPromptContext, MemorySession } from "./types";
 
+/** Treated as someone else's prompt: no personal reads, writes, or auto-save. */
+export const UNATTRIBUTED_PROMPT: MemoryPromptContext = {
+  authorUserId: null,
+  othersPrompted: true,
+};
+
 const PERSONAL_EXCLUDED = "Personal memory is excluded from this session";
 const PERSONAL_OWNER_PROMPTS_ONLY =
   "Personal memory is available only on the session owner's own prompts";

@@ -57,6 +57,8 @@ interface SessionRightSidebarProps {
   onToggleTerminal?: () => void;
   /** The sandbox's credentials wait for `onConnectSandbox`; see `useSandboxAccess`. */
   sandboxConnectRequired?: boolean;
+  sandboxConnecting?: boolean;
+  sandboxConnectFailed?: boolean;
   onConnectSandbox?: () => void;
   onOpenMedia: (artifactId: string) => void;
   diffState?: SessionDiffState | null;
@@ -118,6 +120,8 @@ export function SessionRightSidebarContent({
   terminalOpen,
   onToggleTerminal,
   sandboxConnectRequired = false,
+  sandboxConnecting = false,
+  sandboxConnectFailed = false,
   onConnectSandbox,
   onOpenMedia,
   diffState,
@@ -422,7 +426,13 @@ export function SessionRightSidebarContent({
           </p>
         )}
 
-        {connectSandbox && <SandboxConnectSection onConnect={connectSandbox} />}
+        {connectSandbox && (
+          <SandboxConnectSection
+            onConnect={connectSandbox}
+            pending={sandboxConnecting}
+            failed={sandboxConnectFailed}
+          />
+        )}
 
         {/* Code Server */}
         {capabilities.sandboxAccess && !sandboxConnectRequired && sessionState?.codeServerUrl && (

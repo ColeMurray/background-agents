@@ -42,6 +42,12 @@ export const spawnContextSchema = z.object({
   sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
   finalSnapshotBufferMs: finalSnapshotBufferMsSchema.optional(),
   promptAuthor: promptAuthorSchema,
+  /**
+   * The account the spawning prompt was queued under; null for an Autofix turn or an author
+   * without an account, and absent from a parent that predates it. Only this account's personal
+   * memory may carry over to the child.
+   */
+  promptAccountUserId: z.string().nullable().optional(),
 });
 
 export type SpawnContext = z.infer<typeof spawnContextSchema>;

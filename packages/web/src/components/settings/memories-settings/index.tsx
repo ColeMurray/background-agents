@@ -52,8 +52,8 @@ function PersonalMemoryDefault() {
       </div>
       <p className="text-xs text-muted-foreground">
         Applies to sessions you start on the web or in a Slack direct message. Turning it off also
-        stops your existing sessions from searching, reading or saving them. Automations and
-        sessions started from Slack channels, Linear or GitHub never use them.
+        stops your existing sessions from searching, reading or saving them. Sessions started from
+        now on by automations, Slack channels, Linear or GitHub don&apos;t include them.
       </p>
       <p className="text-xs text-muted-foreground">{PERSONAL_MEMORY_DISCLOSURE}</p>
       {(saveError || loadError) && (

@@ -17,7 +17,12 @@ import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError, unhandle
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
-import { personalReadAccess, personalReadDenial, personalWriteDenial } from "./session-rules";
+import {
+  personalReadAccess,
+  personalReadDenial,
+  personalWriteDenial,
+  UNATTRIBUTED_PROMPT,
+} from "./session-rules";
 import { repositoryPartition, sourcePartitions } from "./sources";
 import type { MemoryPromptContext, MemorySession } from "./types";
 
@@ -26,6 +31,16 @@ const OUTSIDE_SESSION = "Memory scope is outside this session";
 const REPOSITORY_OUTSIDE_SESSION = "Repository is outside this session";
 const NO_ENVIRONMENT = "This session has no associated environment";
 const SESSION_NOT_FOUND = "Session not found";
+
+/** Whether the active prompt may read a personal record, pinned in the session or not. */
+function personalReadable(
+  session: MemorySession,
+  prompt: MemoryPromptContext,
+  pinned: boolean
+): boolean {
+  const access = personalReadAccess(session, prompt);
+  return access === "all" || (access === "pinned" && pinned);
+}
 
 /**
  * Dependencies injected into SessionMemoryService. Each is the narrowest slice the service uses,
@@ -43,6 +58,12 @@ export interface SessionMemoryServiceDeps {
   factIndex: FactSearchIndex;
   /** Whether the session principal may currently read shared partitions; rechecked per operation. */
   access: Pick<SessionMemoryAccessPolicy, "check">;
+  /**
+   * Who the session's agent is serving, from the session runtime. Asked only when personal memory
+   * is involved, and again, with the session, before personal records are returned. It answers
+   * `UNATTRIBUTED_PROMPT` rather than failing.
+   */
+  prompts: { current(sessionId: string): Promise<MemoryPromptContext> };
   /** Records each read that returns personal memory, with the prompt it served. */
   audit: Pick<PersonalMemoryAuditStore, "recordRead">;
   /** Recorded as provenance on agent writes and personal-read audits. */
@@ -53,8 +74,7 @@ export interface SessionMemoryServiceDeps {
  * Agent-facing memory operations for one authenticated sandbox session. Identity and scope are
  * always derived from the session, never from request bodies; every operation rechecks the
  * session principal's current access to shared partitions. Personal memory additionally depends on
- * the prompt being processed, which the caller resolves from the session runtime. Throws
- * `MemoryError`s.
+ * the prompt being processed, rechecked before personal records leave. Throws `MemoryError`s.
  */
 export class SessionMemoryService {
   constructor(private readonly deps: SessionMemoryServiceDeps) {}
@@ -84,24 +104,20 @@ export class SessionMemoryService {
    * personal records the active prompt may not read, and unpinned personal records in children are
    * concealed.
    */
-  async read(
-    sessionId: string,
-    memoryId: string,
-    prompt: MemoryPromptContext
-  ): Promise<SandboxMemoryReadResult> {
-    const session = await this.loadSession(sessionId);
-    const [record, pinned] = await Promise.all([
+  async read(sessionId: string, memoryId: string): Promise<SandboxMemoryReadResult> {
+    const [session, record, pinned] = await Promise.all([
+      this.loadSession(sessionId),
       this.deps.records.get(memoryId),
       this.deps.selections.isPinned(sessionId, memoryId),
     ]);
     if (!record || record.status === "proposed") throw new MemoryNotFoundError();
-    if (record.partition.type === "personal") {
-      const access = personalReadAccess(session, prompt);
-      if (access === "none" || (access === "pinned" && !pinned)) throw new MemoryNotFoundError();
-    }
+    const personal = record.partition.type === "personal";
+    if (personal && !personalReadable(session, await this.promptFor(session), pinned))
+      throw new MemoryNotFoundError();
     if (record.status === "archived") {
       if (!pinned || !(await this.mayAccessShared(session, [record.partition])))
         throw new MemoryNotFoundError();
+      if (personal) await this.releasePersonal(sessionId, pinned, record.id);
       return {
         id: record.id,
         status: "archived",
@@ -119,8 +135,7 @@ export class SessionMemoryService {
       !(await this.mayAccessShared(session, [record.partition]))
     )
       throw new MemoryNotFoundError();
-    if (record.partition.type === "personal")
-      await this.auditPersonalRead(session, prompt, [record.id]);
+    if (personal) await this.releasePersonal(sessionId, pinned, record.id);
     return {
       id: record.id,
       status: "active",
@@ -145,10 +160,11 @@ export class SessionMemoryService {
    */
   async write(
     sessionId: string,
-    input: SandboxMemoryWriteInput,
-    prompt: MemoryPromptContext
+    input: SandboxMemoryWriteInput
   ): Promise<SandboxMemoryWriteResult> {
     const session = await this.loadSession(sessionId);
+    const prompt =
+      input.scopeType === "personal" ? await this.promptFor(session) : UNATTRIBUTED_PROMPT;
     const { partition, scope } = this.writeTarget(session, input, prompt);
     if (!(await this.mayAccessShared(session, [partition])))
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
@@ -177,28 +193,35 @@ export class SessionMemoryService {
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
   }
 
-  /** Search current facts in the session's partitions, checking access before and after SQL. */
-  async search(
-    sessionId: string,
-    input: MemorySearchInput,
-    prompt: MemoryPromptContext
-  ): Promise<MemorySearchResponse> {
+  /**
+   * Search current facts in the session's partitions, checking access before and after SQL. Personal
+   * hits are dropped if the session may no longer read them once the query returns.
+   */
+  async search(sessionId: string, input: MemorySearchInput): Promise<MemorySearchResponse> {
     const session = await this.loadSession(sessionId);
+    const prompt =
+      !input.scopeType || input.scopeType === "personal"
+        ? await this.promptFor(session)
+        : UNATTRIBUTED_PROMPT;
     const partitions = this.searchPartitions(session, input, prompt);
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    const hits = await this.deps.factIndex.search({
+    let hits = await this.deps.factIndex.search({
       terms: memorySearchTerms(input.query),
       partitions,
       limit: input.limit,
     });
     if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    // The query already kept a child to its pinned records.
+    const current = hits.some((hit) => hit.partition.type === "personal")
+      ? await this.personalStillReadable(sessionId, true)
+      : null;
+    if (!current) hits = hits.filter((hit) => hit.partition.type !== "personal");
     const response = factSearchResponse(hits, input.limit);
     const personal = response.results.filter((result) => result.scope.type === "personal");
-    if (personal.length)
+    if (current && personal.length)
       await this.auditPersonalRead(
-        session,
-        prompt,
+        current,
         personal.map((result) => result.id)
       );
     return response;
@@ -210,10 +233,37 @@ export class SessionMemoryService {
     return session;
   }
 
-  /** Record personal records returned to the agent, before they leave the service. */
+  /**
+   * Reread the session, its owner's preference and the prompt just before personal records leave
+   * the service, since a sandbox connect, an opt-out or another prompt may have landed while the
+   * query ran. Returns that current view while personal records may still be read.
+   */
+  private async personalStillReadable(
+    sessionId: string,
+    pinned: boolean
+  ): Promise<{ session: MemorySession; prompt: MemoryPromptContext } | null> {
+    const session = await this.loadSession(sessionId);
+    const prompt = await this.promptFor(session);
+    return personalReadable(session, prompt, pinned) ? { session, prompt } : null;
+  }
+
+  /** The prompt the agent is serving; the session runtime is asked only when personal memory applies. */
+  private promptFor(session: MemorySession): Promise<MemoryPromptContext> {
+    return session.sources.personalOwnerUserId
+      ? this.deps.prompts.current(session.id)
+      : Promise.resolve(UNATTRIBUTED_PROMPT);
+  }
+
+  /** Conceal a personal record that may no longer be read; otherwise audit returning it. */
+  private async releasePersonal(sessionId: string, pinned: boolean, memoryId: string) {
+    const current = await this.personalStillReadable(sessionId, pinned);
+    if (!current) throw new MemoryNotFoundError();
+    await this.auditPersonalRead(current, [memoryId]);
+  }
+
+  /** Record personal records returned to the agent, with the prompt they served. */
   private async auditPersonalRead(
-    session: MemorySession,
-    prompt: MemoryPromptContext,
+    { session, prompt }: { session: MemorySession; prompt: MemoryPromptContext },
     memoryIds: string[]
   ): Promise<void> {
     await this.deps.audit.recordRead({

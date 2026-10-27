@@ -80,6 +80,42 @@ async function eligibility(sessionId: string) {
 
 const asUser = (userId: string) => ({ as: { userId, role: "member" as const } });
 
+/** Review feedback for the session runtime's Autofix endpoint, from GitHub reviewer 7. */
+const AUTOFIX_FEEDBACK = {
+  type: "enqueue_feedback",
+  feedbackKey: "github:review:1",
+  pullRequest: { repositoryId: "12345", number: 1, artifactId: "pull-request" },
+  prompt: "Address the review",
+  author: { id: "7", login: "reviewer" },
+  origin: {
+    kind: "review",
+    authorType: "human",
+    feedbackUrl: "https://github.com/acme/web-app/pull/1#pullrequestreview-1",
+  },
+  attemptLimit: 10,
+};
+
+/** Make the Autofix turn the one processing, as if reviewer 7's GitHub account mapped to OWNER. */
+async function processAutofixMappedToOwner(stub: DurableObjectStub) {
+  const response = await stub.fetch("http://internal/internal/autofix", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(AUTOFIX_FEEDBACK),
+  });
+  expect(response.status).toBe(200);
+  await queryDO(
+    stub,
+    `UPDATE messages SET status = CASE WHEN autofix_feedback_key IS NOT NULL
+       THEN 'processing' ELSE 'completed' END, started_at = COALESCE(started_at, ?)`,
+    Date.now()
+  );
+  await queryDO(
+    stub,
+    "UPDATE participants SET canonical_user_id = ? WHERE user_id = 'github:7'",
+    OWNER
+  );
+}
+
 /** Make the session's sandbox ready with a terminal and an editor whose credentials it hands out. */
 async function readySandboxWithTools(stub: DurableObjectStub) {
   await queryDO(
@@ -176,7 +212,12 @@ describe("personal memory follows the session owner's prompts", () => {
     expect((await sandbox("", "POST", personalWrite)).status).toBe(403);
 
     // That prompt could have left something running, so the owner's later prompts stop reading
-    // and what the agent saves needs review.
+    // and what the agent saves needs review, even once its author is linked to the owner's account.
+    await queryDO(
+      sandbox.stub,
+      "UPDATE participants SET canonical_user_id = ? WHERE canonical_user_id IS NULL",
+      OWNER
+    );
     await seedPrompt(sandbox.stub, OWNER);
     expect((await sandbox(`/${record.id}`)).status).toBe(404);
     expect(await searchIds(sandbox, "personal")).toBe(403);
@@ -372,37 +413,15 @@ describe("personal memory follows the session owner's prompts", () => {
       parentSessionId: null,
     });
 
-    const autofix = await sandbox.stub.fetch("http://internal/internal/autofix", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "enqueue_feedback",
-        feedbackKey: "github:review:1",
-        pullRequest: { repositoryId: "12345", number: 1, artifactId: "pull-request" },
-        prompt: "Address the review",
-        author: { id: "7", login: "reviewer" },
-        origin: {
-          kind: "review",
-          authorType: "human",
-          feedbackUrl: "https://github.com/acme/web-app/pull/1#pullrequestreview-1",
-        },
-        attemptLimit: 10,
-      }),
-    });
-    expect(autofix.status).toBe(200);
-    await processLatest();
     // Even a reviewer whose GitHub account maps to the owner relays feedback, not a prompt.
-    await queryDO(
-      sandbox.stub,
-      "UPDATE participants SET canonical_user_id = ? WHERE user_id = 'github:7'",
-      OWNER
-    );
+    await processAutofixMappedToOwner(sandbox.stub);
     expect(await memoryPromptContext(sandbox.stub)).toEqual({
       authorUserId: null,
       othersPrompted: true,
       parentSessionId: null,
     });
   });
+
   it("applies the owner's preference to existing sessions", async () => {
     const record = await personalMemory();
     const sandbox = await ownedSession("preference");
@@ -549,6 +568,7 @@ describe("child sessions spawned through the route", () => {
     });
     await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
     await seedPrompt(stub, promptBy);
+    return stub;
   }
 
   async function spawn(parentId: string) {
@@ -573,5 +593,14 @@ describe("child sessions spawned through the route", () => {
     const teammateChild = await spawn("spawned-by-teammate");
     expect(teammateChild.personalOwnerUserId).toBeNull();
     expect(teammateChild.items).toEqual([]);
+  });
+
+  it("never carries personal memory into a child spawned on an Autofix turn", async () => {
+    await personalMemory();
+    const stub = await parent("spawned-by-autofix", OWNER);
+    await processAutofixMappedToOwner(stub);
+    const autofixChild = await spawn("spawned-by-autofix");
+    expect(autofixChild.personalOwnerUserId).toBeNull();
+    expect(autofixChild.items).toEqual([]);
   });
 });

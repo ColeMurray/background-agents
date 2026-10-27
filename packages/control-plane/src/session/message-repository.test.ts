@@ -235,6 +235,7 @@ describe("MessageRepository", () => {
     repository.createMessage({
       id: "msg-1",
       authorId: "p-1",
+      authorCanonicalUserId: "user-1",
       content: "Hello",
       source: "web",
       model: "claude-sonnet-4",
@@ -247,6 +248,7 @@ describe("MessageRepository", () => {
     expect(mock.calls[0].params).toEqual([
       "msg-1",
       "p-1",
+      "user-1",
       "Hello",
       "web",
       "claude-sonnet-4",
@@ -273,6 +275,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -296,6 +299,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -319,6 +323,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -336,6 +341,7 @@ describe("MessageRepository", () => {
     expect(inserted?.params).toEqual([
       "msg-new",
       "p-1",
+      null,
       "Fix feedback",
       "github",
       null,
@@ -360,6 +366,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -427,6 +434,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -484,6 +492,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -508,6 +517,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -537,6 +547,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",

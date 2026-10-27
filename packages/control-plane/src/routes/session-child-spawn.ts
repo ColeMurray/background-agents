@@ -323,7 +323,7 @@ export async function handleSpawnChild(
     memory: {
       kind: "inherited",
       parentSessionId: parentId,
-      promptAuthorUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
+      promptAuthorUserId: spawnContext.promptAccountUserId ?? null,
     },
     providerAuth: providerAuth.map((auth) => ({
       ...auth,

@@ -83,6 +83,7 @@ Your personal memories work for you, not for whoever is using a session. Setting
 - **Someone else's prompt ends searching.** A prompt can leave a program running in the sandbox, so once someone else has prompted the session, or a session that started it, the agent stops searching and reading your personal memories there for good. Your later prompts can still save new ones for you to review.
 - **Opening the sandbox counts.** Nothing ties a terminal to a prompt, so once someone else opens the session's terminal, editor, or desktop, the agent stops searching and reading your personal memories for the rest of the session and in its child sessions. They have to choose **Open terminal, editor and desktop** first, which says so.
 - **Turning the switch off** reaches existing sessions too: their agents stop searching, reading, and saving your personal memories at once. What a session loaded when it started stays in its context.
+- **Sessions started before these rules** keep the personal memories they loaded, automation runs and Slack channel, Linear, or GitHub sessions included. Their agents no longer search or read your personal memories, and what they save waits for your review.
 
 Session visibility changes none of this: a team- or workspace-visible session you prompt yourself uses your personal memories exactly as a private one does.
 

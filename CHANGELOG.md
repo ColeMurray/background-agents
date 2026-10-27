@@ -28,9 +28,8 @@ no longer include personal memories; Slack DMs work like the web. A child sessio
 else's prompt leaves out the parent owner's personal memories. Turning off **Use my personal
 memories in my sessions**, or suspending the account, now reaches existing sessions too. Only the
 owner sees personal items in a session's memory sidebar, and reads of personal memories are audited
-as `memory.personal_read`. Sessions that started earlier keep what they pinned, but the prompt rules
-apply to them at once, and earlier automation, GitHub and Linear sessions stop reading personal
-memories. Requires D1 migration 0092. See [Persistent session memory](docs/MEMORY.md).
+as `memory.personal_read`. Sessions that started earlier keep the personal memories they loaded but
+stop searching them. Requires D1 migration 0092. See [Persistent session memory](docs/MEMORY.md).
 
 **Opening someone else's sandbox asks first.** When opening a session's terminal, editor, or desktop
 would switch off its owner's personal memories, the Tools tab asks with **Open terminal, editor and

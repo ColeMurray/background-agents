@@ -8,9 +8,13 @@ type AgentActor = Extract<MemoryActor, { kind: "agent" }>;
 function sessionReaches(partition: MemoryPartition): SqlFragment {
   switch (partition.type) {
     case "personal":
+      // The owner's preference is live: once they turn personal memory off, no write lands.
       return sql`EXISTS (SELECT 1 FROM session_memory_manifests manifest
         WHERE manifest.session_id = s.id AND manifest.personal_owner_user_id = s.user_id
-          AND manifest.personal_owner_user_id = ${partition.userId})`;
+          AND manifest.personal_owner_user_id = ${partition.userId}
+          AND NOT EXISTS (SELECT 1 FROM memory_preferences preference
+            WHERE preference.user_id = manifest.personal_owner_user_id
+              AND preference.include_personal_memories = 0))`;
     case "repository":
       return sql`EXISTS (SELECT 1 FROM session_repositories sr
         WHERE sr.session_id = s.id AND sr.repo_id = ${partition.repoId})`;
@@ -24,7 +28,8 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
 /**
  * Commit-time preconditions for an agent insert: facts about the writing session itself, which
  * a delayed tool call must not outlive. The session is still live, its owner is not suspended,
- * and the session still reaches the target partition.
+ * and the session still reaches the target partition (for personal memory, with the owner's
+ * preference still on).
  *
  * Repository/team grants are deliberately not re-encoded here. They are checked immediately
  * before the write and rechecked on every read, and agent writes to shared scopes are proposals
