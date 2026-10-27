@@ -169,6 +169,23 @@ describe("automation read, update, and delete routes", () => {
     });
   });
 
+  describe("personal memories", () => {
+    it("reports a conflict and applies nothing when the executor changed before the write", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+      mockBatch.mockRejectedValueOnce(
+        new Error(
+          "D1_ERROR: NOT NULL constraint failed: automations.include_personal_memories: SQLITE_CONSTRAINT"
+        )
+      );
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { name: "Renamed", includePersonalMemories: true },
+      });
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ code: "automation_conflict" });
+      expect(mockStore.bindPersonalMemoriesUpdate).toHaveBeenCalledWith("auto-1", true, "user-1");
+    });
+  });
+
   describe("one-shot schedule updates", () => {
     it("moves an enabled one-shot to its new future slot", async () => {
       const at = Date.now() + 3_600_000;

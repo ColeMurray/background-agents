@@ -35,6 +35,7 @@ import {
 import { isValidModel, normalizeModelId } from "@open-inspect/shared/models";
 import {
   AutomationStore,
+  isPersonalMemoriesConsentConflict,
   parseAutomationTriggerFields,
   type AutomationRow,
   type AutomationRepositoryInsert,
@@ -879,13 +880,13 @@ async function handleUpdateAutomation(
   const resyncSlackChannels =
     existingTriggerType === "slack_event" && body.triggerConfig !== undefined;
   const statements: SqlStatement[] = [];
-  const updateStatement = store.bindAutomationUpdate(id, updateFields);
-  if (updateStatement) statements.push(updateStatement);
   if (personalMemoriesChanged && viewer.kind === "user") {
     statements.push(
       store.bindPersonalMemoriesUpdate(id, body.includePersonalMemories === true, viewer.userId)
     );
   }
+  const updateStatement = store.bindAutomationUpdate(id, updateFields);
+  if (updateStatement) statements.push(updateStatement);
   if (replacementRepositories !== null) {
     statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
   }
@@ -904,7 +905,15 @@ async function handleUpdateAutomation(
     );
   }
   if (statements.length > 0) {
-    await ctx.db.batch(statements);
+    try {
+      await ctx.db.batch(statements);
+    } catch (e) {
+      // The executor changed after admission, so nothing in the edit was applied.
+      if (isPersonalMemoriesConsentConflict(e)) {
+        return json({ error: "Automation changed concurrently", code: "automation_conflict" }, 409);
+      }
+      throw e;
+    }
   }
   const updated = await store.getById(id);
   if (!updated) return error("Automation not found", 404);

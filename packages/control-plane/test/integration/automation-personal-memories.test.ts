@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AutomationStore } from "../../src/db/automation-store";
+import { AutomationStore, isPersonalMemoriesConsentConflict } from "../../src/db/automation-store";
+import { SessionIndexStore } from "../../src/db/session-index";
+import { resolvedPin } from "../../src/session/pinned";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
 import { assignCustomRole as customRole, seedTeam } from "./ownership-test-helpers";
@@ -123,17 +125,95 @@ describe("automation personal-memory opt-in (integration)", () => {
     expect(await storedOptIn()).toBe(0);
   });
 
-  it("applies an opt-in write only while the actor is still the executor", async () => {
+  it("rolls back an edit whose opt-in no longer comes from the executor", async () => {
+    // Admission saw the lead as executor; the executor changed before the edit's batch.
     await saveAutomation();
     const store = new AutomationStore(env.DB);
-    const [lead] = await sqlDatabase(env.DB).batch([
-      store.bindPersonalMemoriesUpdate(AUTOMATION, true, LEAD),
-    ]);
-    expect(lead.meta.changes).toBe(0);
-    const [executor] = await sqlDatabase(env.DB).batch([
-      store.bindPersonalMemoriesUpdate(AUTOMATION, true, EXECUTOR),
-    ]);
-    expect(executor.meta.changes).toBe(1);
-    expect(await storedOptIn()).toBe(1);
+    const edit = (actorUserId: string) =>
+      sqlDatabase(env.DB).batch([
+        store.bindPersonalMemoriesUpdate(AUTOMATION, true, actorUserId),
+        store.bindAutomationUpdate(AUTOMATION, { name: "Renamed" })!,
+      ]);
+    const conflict = await edit(LEAD).catch((error: unknown) => error);
+    expect(isPersonalMemoriesConsentConflict(conflict)).toBe(true);
+    expect(await store.getById(AUTOMATION)).toMatchObject({
+      name: "Personal memories",
+      include_personal_memories: 0,
+    });
+
+    await edit(EXECUTOR);
+    expect(await store.getById(AUTOMATION)).toMatchObject({
+      name: "Renamed",
+      include_personal_memories: 1,
+    });
+  });
+
+  describe("session memory pinning", () => {
+    const SESSION = "automation-personal-memory-session";
+
+    function createSession(personalOwnerUserId: string | null) {
+      return new SessionIndexStore(env.DB).create({
+        id: SESSION,
+        title: null,
+        userId: EXECUTOR,
+        ownerTeamId: TEAM,
+        visibility: "team",
+        repoOwner: null,
+        repoName: null,
+        environmentId: null,
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "created",
+        spawnSource: "automation",
+        automationId: AUTOMATION,
+        createdAt: 1,
+        updatedAt: 1,
+        memory: resolvedPin({
+          selectionVersion: 1,
+          manifestSha256: "manifest",
+          resolvedAt: 1,
+          personalOwnerUserId,
+          directiveChars: 0,
+          catalogChars: 0,
+          estimatedTokens: 0,
+          omittedCount: 0,
+          items: [],
+        }),
+      });
+    }
+
+    async function pinnedOwner() {
+      return env.DB.prepare(
+        "SELECT personal_owner_user_id FROM session_memory_manifests WHERE session_id = ?"
+      )
+        .bind(SESSION)
+        .first<{ personal_owner_user_id: string | null }>();
+    }
+
+    it("pins the executor's personal memories while their opt-in is live", async () => {
+      await saveAutomation(1);
+      await createSession(EXECUTOR);
+      expect(await pinnedOwner()).toEqual({ personal_owner_user_id: EXECUTOR });
+    });
+
+    it.each([
+      ["opted out", "UPDATE automations SET include_personal_memories = 0"],
+      ["reassigned", `UPDATE automations SET user_id = '${CANDIDATE}'`],
+      ["deleted", "UPDATE automations SET deleted_at = 2"],
+    ])("does not create the session when the executor %s after selection", async (_change, sql) => {
+      await saveAutomation(1);
+      await env.DB.prepare(sql).run();
+      await expect(createSession(EXECUTOR)).rejects.toThrow(/NOT NULL constraint failed/);
+      expect(
+        await env.DB.prepare("SELECT id FROM sessions WHERE id = ?").bind(SESSION).first()
+      ).toBeNull();
+    });
+
+    it("pins without consent when personal memory is excluded", async () => {
+      await saveAutomation(0);
+      await createSession(null);
+      expect(await pinnedOwner()).toEqual({ personal_owner_user_id: null });
+    });
   });
 });

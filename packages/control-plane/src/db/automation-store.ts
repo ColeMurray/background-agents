@@ -827,17 +827,20 @@ export class AutomationStore {
   }
 
   /**
-   * Opt runs in or out of the executor's personal memories. Opting in applies only while
-   * `actorUserId` is still the executor at write time, so no one can consent for someone else.
+   * Opt runs in or out of the executor's personal memories. Opting in when `actorUserId` is no
+   * longer the executor at write time writes NULL, which fails the column's NOT NULL constraint
+   * and rolls back the whole batch (see {@link isPersonalMemoriesConsentConflict}): no one can
+   * consent for someone else, and an edit carrying an opt-in applies entirely or not at all.
    */
   bindPersonalMemoriesUpdate(id: string, include: boolean, actorUserId: string): SqlStatement {
-    const value = include ? 1 : 0;
     return this.db
       .prepare(
-        `UPDATE automations SET include_personal_memories = ?, updated_at = ?
-         WHERE id = ? AND deleted_at IS NULL AND (? = 0 OR user_id = ?)`
+        `UPDATE automations
+         SET include_personal_memories = CASE WHEN ? = 0 THEN 0 WHEN user_id = ? THEN 1 END,
+           updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL`
       )
-      .bind(value, Date.now(), id, value, actorUserId);
+      .bind(include ? 1 : 0, actorUserId, Date.now(), id);
   }
 
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
@@ -2296,6 +2299,12 @@ export class AutomationStore {
  * exact message formatting, while unrelated UNIQUE violations keep surfacing
  * as real errors instead of being swallowed as duplicates.
  */
+/** Whether a batch failed because its personal-memory opt-in no longer came from the executor. */
+export function isPersonalMemoriesConsentConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("NOT NULL constraint failed: automations.include_personal_memories");
+}
+
 export function isDuplicateKeyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   if (!message.includes("UNIQUE constraint failed")) return false;

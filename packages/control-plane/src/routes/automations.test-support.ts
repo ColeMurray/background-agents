@@ -42,6 +42,7 @@ export const mockStore = {
   getEnvironmentsForAutomationIds: vi.fn(),
   bindAutomationInsert: vi.fn(),
   bindAutomationUpdate: vi.fn(),
+  bindPersonalMemoriesUpdate: vi.fn(),
   bindSoftDelete: vi.fn(),
   bindPause: vi.fn(),
   bindResume: vi.fn(),
@@ -198,6 +199,7 @@ export function applyMockDefaults(): void {
   mockProviderAuthStore.listForAutomationIds.mockResolvedValue(new Map());
   mockStore.bindAutomationInsert.mockReturnValue({ sql: "insert-automation" });
   mockStore.bindAutomationUpdate.mockReturnValue({ sql: "update-automation" });
+  mockStore.bindPersonalMemoriesUpdate.mockReturnValue({ sql: "update-personal-memories" });
   mockStore.bindSoftDelete.mockReturnValue({ sql: "delete-automation" });
   mockStore.bindPause.mockReturnValue({ sql: "pause-automation" });
   mockStore.bindResume.mockReturnValue({ sql: "resume-automation" });

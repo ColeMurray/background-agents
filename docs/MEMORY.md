@@ -35,7 +35,10 @@ reassignment and account merges clear it. A run includes the executor's personal
 the opt-in is set and the run's execution principal is the executor, so a **Trigger Now** by anyone
 other than the executor never includes the triggering person's or the executor's personal memories.
 An executor who triggers their own opted-in automation, including a lead or administrator, does get
-their personal memories.
+their personal memories. Both guards run at commit time: an edit whose opt-in no longer comes from
+the executor rolls back entirely (HTTP 409), and the session insert pins an automation's personal
+owner only while the live automation is still opted in and executed by that owner, otherwise the
+session batch rolls back and the launch fails without a session.
 
 ### Facts, directives and approval
 

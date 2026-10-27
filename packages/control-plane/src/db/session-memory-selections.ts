@@ -72,19 +72,32 @@ export class SessionMemorySelectionStore {
       : this.bindCopy(sessionId, pinned.parentSessionId);
   }
 
+  /**
+   * An automation session may pin its executor's personal memories only while, at commit time, the
+   * automation is live, still opted in, and still executed by that owner. Otherwise the hash is
+   * NULL, which fails its NOT NULL constraint and rolls back the whole session batch, so a launch
+   * racing an opt-out or reassignment never creates the session.
+   */
   private bindInsert(sessionId: string, manifest: SessionMemorySelection): SqlStatement[] {
     return [
       this.db
         .prepare(
           `INSERT INTO session_memory_manifests
       (session_id, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count, personal_auto_save_eligible)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN visibility = 'private' AND parent_session_id IS NULL
+      SELECT ?, ?,
+        CASE WHEN ? IS NULL OR spawn_source <> 'automation' OR EXISTS (
+          SELECT 1 FROM automations a WHERE a.id = sessions.automation_id AND a.deleted_at IS NULL
+            AND a.include_personal_memories = 1 AND a.user_id = ?
+        ) THEN ? END,
+        ?, ?, ?, ?, ?, ?, CASE WHEN visibility = 'private' AND parent_session_id IS NULL
         AND NOT EXISTS (SELECT 1 FROM session_collaborators WHERE session_id = sessions.id AND user_id <> sessions.user_id)
         THEN 1 ELSE 0 END FROM sessions WHERE id = ?`
         )
         .bind(
           sessionId,
           manifest.selectionVersion,
+          manifest.personalOwnerUserId,
+          manifest.personalOwnerUserId,
           manifest.manifestSha256,
           manifest.resolvedAt,
           manifest.personalOwnerUserId,
