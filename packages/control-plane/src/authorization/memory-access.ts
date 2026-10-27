@@ -21,7 +21,7 @@ import { AuthorizationError, type AuthorizationService } from "./service";
 /**
  * The memory access policy. Three questions, one module:
  * - can a human read/manage a scope ({@link MemoryManagementPolicy});
- * - can a session's principal read shared partitions right now ({@link SessionMemoryAccessPolicy}),
+ * - can a session's principal read memory partitions right now ({@link SessionMemoryAccessPolicy}),
  *   asked when a session's memory is selected and again on every sandbox read, search, write,
  *   and boot;
  * - which agent writes remain valid at commit time (`db/session-memory-write-guard.ts`, which
@@ -341,7 +341,11 @@ export type SessionMemoryAccessDecision =
   | {
       kind: "denied";
       reason:
-        "team_inactive" | "repository_ungranted" | "owner_unavailable" | "environment_unavailable";
+        | "team_inactive"
+        | "repository_ungranted"
+        | "owner_unavailable"
+        | "environment_unavailable"
+        | "personal_unavailable";
       /** The partition that failed, when a single one can be identified. */
       partition?: MemoryPartition;
     };
@@ -358,12 +362,14 @@ export interface SessionMemoryAccessPolicyDeps {
 const SESSION_ACCESS_GRANTED: SessionMemoryAccessDecision = { kind: "granted" };
 
 /**
- * Whether a session's principal may read shared memory partitions right now. A pinned manifest
- * or an issued sandbox token never freezes access: team activity, repository grants, owner
- * suspension, and environment ownership are evaluated on every check. Personal partitions are
- * governed by the session's pinned owner and opt-out instead, and always pass here.
+ * Whether a session's principal may read memory partitions right now. A pinned manifest or an
+ * issued sandbox token never freezes access: team activity, repository grants, owner suspension,
+ * environment ownership, and the personal owner's `memories.manage_own` are evaluated on every
+ * check. Which personal store a session reaches is governed by its pinned owner and opt-out; this
+ * only decides whether that owner may still use it, so agents never write memories the owner
+ * cannot review in Settings.
  *
- * Instances are request-scoped; a workspace owner's authorization is loaded once per instance.
+ * Instances are request-scoped; each user's authorization is loaded once per instance.
  */
 export class SessionMemoryAccessPolicy {
   private readonly ownerAuthorizations = new Map<string, Promise<EffectiveAuthorization | null>>();
@@ -380,6 +386,11 @@ export class SessionMemoryAccessPolicy {
       : await this.ownerRepositoryAccess(principal.userId, repositories);
     if (repositoryDecision.kind === "denied") return repositoryDecision;
     for (const partition of partitions) {
+      if (partition.type === "personal") {
+        if (!(await this.mayUsePersonalMemory(partition.userId)))
+          return { kind: "denied", reason: "personal_unavailable", partition };
+        continue;
+      }
       if (partition.type !== "environment") continue;
       const environment = await this.deps.environments.getById(partition.environmentId);
       if (
@@ -420,6 +431,16 @@ export class SessionMemoryAccessPolicy {
     return ungranted
       ? { kind: "denied", reason: "repository_ungranted", partition: ungranted }
       : SESSION_ACCESS_GRANTED;
+  }
+
+  /** The same permission that gates the owner's personal catalog in Settings. */
+  private async mayUsePersonalMemory(userId: string): Promise<boolean> {
+    const authorization = await this.ownerAuthorization(userId);
+    return (
+      authorization !== null &&
+      authorization.suspendedAt === null &&
+      authorization.permissions.includes("memories.manage_own")
+    );
   }
 
   private ownerAuthorization(userId: string): Promise<EffectiveAuthorization | null> {

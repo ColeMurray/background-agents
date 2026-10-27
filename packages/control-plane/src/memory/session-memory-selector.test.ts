@@ -55,6 +55,23 @@ describe("SessionMemorySelector", () => {
     expect(deps.preferences.get).not.toHaveBeenCalled();
   });
 
+  it("excludes personal memory when its owner may no longer use it", async () => {
+    const { selector: subject, deps } = selector(true);
+    const personal: MemoryPartition = { type: "personal", userId: "owner" };
+    deps.access.check.mockImplementation(async (_principal, [partition]) =>
+      partition.type === "personal"
+        ? { kind: "denied", reason: "personal_unavailable", partition }
+        : { kind: "granted" }
+    );
+    const manifest = await subject.select(request);
+    expect(deps.access.check).toHaveBeenCalledWith(request.principal, [personal]);
+    expect(manifest.personalOwnerUserId).toBeNull();
+    expect(deps.records.listCandidates).toHaveBeenCalledWith([
+      { type: "environment", environmentId: "dev" },
+      { type: "repository", repoId: 1 },
+    ]);
+  });
+
   it("omits unreadable or unidentified partitions instead of rejecting the session", async () => {
     const { selector: subject, deps } = selector(false);
     deps.access.check.mockImplementation(async (_principal, [partition]) =>

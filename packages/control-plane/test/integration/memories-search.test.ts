@@ -66,6 +66,7 @@ describe("session memory discovery", () => {
       "repositories.use",
       "repositories.read",
       "environments.read",
+      "memories.manage_own",
     ]);
     await seedTeam("engineering", [[OWNER, "member"]]);
     await seedGrant("engineering", {
@@ -246,6 +247,23 @@ describe("session memory discovery", () => {
     });
     expect((await excluded({ query: "needle", scopeType: "personal" })).status).toBe(403);
     expect((await excluded({ query: "needle", scopeType: "environment" })).status).toBe(403);
+  });
+
+  it("denies the pinned personal store once its owner loses memories.manage_own", async () => {
+    await seedSearchFacts(env.DB, OWNER, [
+      { id: "mine", title: "needle" },
+      { id: "shared", title: "needle", partition: repoPartition },
+    ]);
+    const call = await sandbox("revoked-personal", { repositories: [repo] });
+    await env.DB.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?")
+      .bind(`role_custom_${OWNER}`, "memories.manage_own")
+      .run();
+    expect((await call({ query: "needle" })).status).toBe(403);
+    expect((await call({ query: "needle", scopeType: "personal" })).status).toBe(403);
+    expect((await call(null, "/mine")).status).toBe(404);
+    expect(await (await call({ query: "needle", scopeType: "repository" })).json()).toMatchObject({
+      results: [{ id: "shared" }],
+    });
   });
 
   it.each(["before", "during"])(

@@ -176,6 +176,17 @@ describe("SessionMemoryService.write", () => {
     );
     expect(deps.records.create).not.toHaveBeenCalled();
   });
+
+  it("checks the personal store before writing to it", async () => {
+    const { service, deps } = setup({ readable: [false] });
+    await expect(service.write("session", { ...fact, scopeType: "personal" })).rejects.toThrow(
+      MemoryAccessError
+    );
+    expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
+      { type: "personal", userId: "owner" },
+    ]);
+    expect(deps.records.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("SessionMemoryService.read", () => {

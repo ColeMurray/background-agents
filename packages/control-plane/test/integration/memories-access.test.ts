@@ -63,6 +63,7 @@ describe("memory shared-scope authorization", () => {
         "environments.read",
         "environments.manage",
         "environments.settings.manage",
+        "memories.manage_own",
       ]);
     }
     await seedTeam("engineering", [[MEMBER, "member"]]);
