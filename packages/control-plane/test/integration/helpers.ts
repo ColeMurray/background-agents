@@ -183,6 +183,8 @@ export interface ServiceRequestInit {
   actor?: string;
   initialUserRole?: InitialUserRole;
   as?: { userId: string; role: BuiltInRoleKey };
+  /** Defaults to following redirects, like `fetch`. */
+  redirect?: RequestRedirect;
 }
 
 /**
@@ -220,6 +222,7 @@ export async function serviceFetch(url: string, init?: ServiceRequestInit): Prom
     method: init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD,
     headers: await serviceRequestHeaders(url, init),
     body: init?.body,
+    redirect: init?.redirect,
   });
 }
 

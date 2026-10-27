@@ -42,11 +42,11 @@ exports[`route admission matrix > admits only the named bot on every exact-servi
 exports[`route admission matrix > admits the workspace owner through every browser-reachable route 1`] = `
 [
   "POST /api/auth/sign-in/social owner=403",
-  "GET /api/auth/callback/github owner=401",
-  "GET /api/auth/callback/google owner=401",
+  "GET /api/auth/callback/github owner=302",
+  "GET /api/auth/callback/google owner=302",
   "GET /api/auth/get-session owner=200",
   "POST /api/auth/sign-out owner=403",
-  "GET /api/auth/error owner=200",
+  "GET /api/auth/error owner=302",
   "GET /internal/auth/sign-in-providers owner=200",
   "GET /teams/:id/channel-bindings owner=200",
   "PUT /teams/:id/channel-bindings/:provider/:externalId owner=400",
