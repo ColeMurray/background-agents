@@ -496,7 +496,7 @@ async def test_native_mcp_tool_allowlist_hides_and_refuses_unselected_tools(
         "type": "local",
         "command": [
             sys.executable,
-            str(Path(__file__).parent / "fixtures" / "codex_mcp_server.py"),
+            str(Path(__file__).parents[1] / "fixtures" / "codex_mcp_server.py"),
         ],
     }
     if allowlist is not None:
