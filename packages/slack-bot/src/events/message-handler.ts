@@ -58,7 +58,7 @@ import {
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
 import { targetId } from "../targets";
 import type { BackgroundTaskScheduler, Env, ThreadSession } from "../types";
-import { resolveSlackActorIdentity } from "../user-identity";
+import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   hasInlinePromptOptions,
@@ -156,6 +156,21 @@ async function resolveThreadSessionAdmission(
 }
 
 /**
+ * Resolve the sender's Slack identity and enroll it with its profile. The
+ * control plane links a new actor to an existing user by email only when it
+ * enrolls the actor, so this must finish before any request carrying the actor.
+ */
+async function resolveEnrolledSlackActor(
+  env: Env,
+  user: string,
+  traceId: string | undefined
+): Promise<SlackActorIdentity> {
+  const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
+  await enrollActor(env, actor, traceId);
+  return actor;
+}
+
+/**
  * Route one user message: follow up on the thread's existing session when there
  * is one, otherwise classify the target and launch a new session (or ask for
  * clarification). Image files are forwarded as session attachments, and the
@@ -246,7 +261,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     // The session already has its own turns, so only forward the human
     // discussion that happened in the thread since the last prompt.
     const [actor, interimHistory] = await Promise.all([
-      resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
+      resolveEnrolledSlackActor(env, user, traceId),
       existingSession.lastPromptTs
         ? fetchInteractiveThreadContext(
             env,
@@ -261,7 +276,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           )
         : Promise.resolve(undefined),
     ]);
-    await enrollActor(env, actor, traceId);
     const interimContext = interimHistory
       ? formatInterimThreadContext(interimHistory.messages)
       : "";
@@ -393,7 +407,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   }
 
   const [actor, threadHistory] = await Promise.all([
-    resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
+    resolveEnrolledSlackActor(env, user, traceId),
     threadTs
       ? fetchInteractiveThreadContext(
           env,
@@ -404,7 +418,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         )
       : undefined,
   ]);
-  await enrollActor(env, actor, traceId);
   const previousMessages = threadHistory?.messages;
 
   const result = await createClassifier(env).classify(

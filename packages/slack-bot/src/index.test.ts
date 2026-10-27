@@ -1606,18 +1606,36 @@ describe("POST /events", () => {
   });
 
   describe("first-contact actor enrollment", () => {
+    const IMAGE_FILE = {
+      id: "F1",
+      name: "screenshot.png",
+      mimetype: "image/png",
+      url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+      size: 16,
+    };
+
     function controlPlaneRequests(env: ReturnType<typeof makeEnv>) {
       return env.CONTROL_PLANE.fetch.mock.calls.map(([input, init]) => ({
         path: new URL(String(input)).pathname,
         actor: new Headers(init?.headers).get("X-OpenInspect-Actor"),
-        body: init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined,
+        // Attachment uploads send multipart bytes rather than JSON.
+        body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
       }));
     }
 
-    function firstIndex(paths: string[], matches: (path: string) => boolean): number {
-      const index = paths.findIndex(matches);
-      if (index === -1) throw new Error(`no matching request in ${paths.join(", ")}`);
-      return index;
+    /**
+     * Return the enrollment request, after asserting that no request before it
+     * carried an actor: any such request would enroll the actor without its
+     * email and split it from the user who owns that email.
+     */
+    function expectEnrolledFirst(env: ReturnType<typeof makeEnv>, laterPath: string) {
+      const requests = controlPlaneRequests(env);
+      const paths = requests.map((request) => request.path);
+      const enrollment = paths.indexOf("/actors/me");
+      if (enrollment === -1) throw new Error(`no enrollment in ${paths.join(", ")}`);
+      expect(requests.slice(0, enrollment).filter((request) => request.actor !== null)).toEqual([]);
+      expect(paths.slice(enrollment + 1)).toContain(laterPath);
+      return requests[enrollment];
     }
 
     function mentionNewThread(env: ReturnType<typeof makeEnv>, ctx: ReturnType<typeof makeCtx>) {
@@ -1628,6 +1646,38 @@ describe("POST /events", () => {
           user: "U123",
           channel: "C123",
           ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+    }
+
+    async function putThreadSession(env: ReturnType<typeof makeEnv>, lastPromptTs?: string) {
+      await env.SLACK_KV.put(
+        "thread:C123:111.222",
+        JSON.stringify({
+          sessionId: "session-1",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+          lastPromptTs,
+        })
+      );
+    }
+
+    function replyInThread(
+      env: ReturnType<typeof makeEnv>,
+      ctx: ReturnType<typeof makeCtx>,
+      event: Record<string, unknown>
+    ) {
+      return app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          channel: "C123",
+          ts: "333.444",
+          thread_ts: "111.222",
+          ...event,
         }),
         env,
         ctx
@@ -1649,13 +1699,7 @@ describe("POST /events", () => {
       expect((await mentionNewThread(env, ctx)).status).toBe(200);
       await flushWaitUntil(ctx);
 
-      const requests = controlPlaneRequests(env);
-      const paths = requests.map((request) => request.path);
-      const enrollment = firstIndex(paths, (path) => path === "/actors/me");
-      expect(enrollment).toBeLessThan(
-        firstIndex(paths, (path) => path === "/repos" || path === "/environments")
-      );
-      expect(requests[enrollment]).toEqual({
+      expect(expectEnrolledFirst(env, "/repos")).toEqual({
         path: "/actors/me",
         actor: "slack:U123",
         body: { displayName: "Ada", email: "ada@example.com" },
@@ -1670,43 +1714,85 @@ describe("POST /events", () => {
     it("enrolls a new person in an existing thread before delivering their prompt", async () => {
       const slackFetch = mockSlackFetch();
       const env = makeSessionEnv();
-      await env.SLACK_KV.put(
-        "thread:C123:111.222",
-        JSON.stringify({
-          sessionId: "session-1",
-          repoId: "acme/app",
-          repoFullName: "acme/app",
-          model: "anthropic/claude-haiku-4-5",
-          createdAt: Date.now(),
-        })
-      );
+      await putThreadSession(env);
       const ctx = makeCtx();
 
-      await app.fetch(
-        slackEventRequest({
-          type: "app_mention",
-          text: "<@B123> also check the logout path",
-          user: "U456",
-          channel: "C123",
-          ts: "333.444",
-          thread_ts: "111.222",
-        }),
-        env,
-        ctx
-      );
+      await replyInThread(env, ctx, { text: "<@B123> also check the logout path", user: "U456" });
       await flushWaitUntil(ctx);
 
-      const requests = controlPlaneRequests(env);
-      const paths = requests.map((request) => request.path);
-      const enrollment = firstIndex(paths, (path) => path === "/actors/me");
-      expect(enrollment).toBeLessThan(
-        firstIndex(paths, (path) => path.endsWith("/attachments") || path.endsWith("/prompt"))
-      );
-      expect(requests[enrollment]).toEqual({
+      expect(expectEnrolledFirst(env, "/sessions/session-1/prompt")).toEqual({
         path: "/actors/me",
         actor: "slack:U456",
         body: { displayName: "Ada", email: "ada@example.com" },
       });
+
+      slackFetch.mockRestore();
+    });
+
+    it("enrolls before a flagged image mention reads settings or uploads the image", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, {
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 fix the auth tests",
+        user: "U123",
+        files: [IMAGE_FILE],
+      });
+      await flushWaitUntil(ctx);
+
+      expect(expectEnrolledFirst(env, "/sessions/session-1/attachments")).toMatchObject({
+        actor: "slack:U123",
+      });
+
+      slackFetch.mockRestore();
+    });
+
+    it("enrolls before a flagged image follow-up uploads the image", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv();
+      await putThreadSession(env, "111.222");
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, {
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 also check logout",
+        user: "U456",
+        files: [IMAGE_FILE],
+      });
+      await flushWaitUntil(ctx);
+
+      expect(expectEnrolledFirst(env, "/sessions/session-1/attachments")).toMatchObject({
+        actor: "slack:U456",
+      });
+
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["a new mention in a thread", undefined],
+      ["a follow-up", "111.222"],
+    ])("enrolls while the thread history of %s is still loading", async (_case, lastPromptTs) => {
+      const slackFetch = mockSlackFetch();
+      const slackDispatch = slackFetch.getMockImplementation()!;
+      const history = createDeferred<void>();
+      slackFetch.mockImplementation(async (input, init) => {
+        const url = String(input);
+        // Admission also reads the thread; only the history fetch has limit=200.
+        if (url.includes("conversations.replies") && url.includes("limit=200")) {
+          await history.promise;
+        }
+        return slackDispatch(input, init);
+      });
+      const env = lastPromptTs ? makeSessionEnv() : makeSessionEnv([], { teamId: "team-a" });
+      if (lastPromptTs) await putThreadSession(env, lastPromptTs);
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, { text: "<@B123> fix the auth tests", user: "U123" });
+      await vi.waitFor(() =>
+        expect(controlPlaneRequests(env).map((request) => request.path)).toContain("/actors/me")
+      );
+      history.resolve();
+      await flushWaitUntil(ctx);
 
       slackFetch.mockRestore();
     });
