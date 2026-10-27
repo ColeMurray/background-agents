@@ -13,6 +13,7 @@ relatedCode:
   - packages/control-plane/src/mcp/tool-discovery.ts
   - packages/sandbox-runtime/src/sandbox_runtime/mcp_tool_access.py
   - packages/sandbox-runtime/src/sandbox_runtime/opencode_tool_access.py
+  - packages/sandbox-runtime/src/sandbox_runtime/plugins/mcp-tool-guard.js
   - packages/sandbox-runtime/src/sandbox_runtime/harness/claude_mcp_policy.py
   - docs/HOW_IT_WORKS.md
   - docs/CLAUDE_AGENT.md
@@ -95,7 +96,7 @@ The list shows the number of selected tools next to each restricted server.
 
 How each harness applies the selection:
 
-- OpenCode: tools outside the selection are left out of every request, so they take no context.
+- OpenCode: tools outside the selection are left out of every request, so they take no context, and calls to them are refused, even when an agent defined in the repository allows them. Other tools whose names start with the server's name and an underscore, such as a repository's own tools in `.opencode/tool/docs.ts` while `docs` is limited, are left out too.
 - Claude Agent: only the selected tools are allowed, and calls to any other tool of that server are refused, even when Claude settings in the repository allow them. Those tools still appear in Claude Agent's tool list, so a selection saves no context there.
 - Codex: tools outside the selection are hidden from the agent, and calls to them are refused.
 

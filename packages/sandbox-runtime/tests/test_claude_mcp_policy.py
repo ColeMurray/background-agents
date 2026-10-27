@@ -75,3 +75,20 @@ class TestClaudeToolPolicy:
     ):
         policy = claude_tool_policy([server("docs"), server("docs__extra", ["search"])])
         assert await self.decision(policy, tool_name) == expected
+
+    @pytest.mark.parametrize(
+        ("tool_name", "expected"),
+        [
+            # docs' extra__search, and docs__extra's unselected search.
+            ("mcp__docs__extra__search", "deny"),
+            ("mcp__docs__extra__query", "deny"),
+            ("mcp__docs__other", "deny"),
+        ],
+    )
+    async def test_guard_needs_every_overlapping_restricted_server_to_allow_a_name(
+        self, tool_name, expected
+    ):
+        policy = claude_tool_policy(
+            [server("docs", ["extra__search"]), server("docs__extra", ["query"])]
+        )
+        assert await self.decision(policy, tool_name) == expected

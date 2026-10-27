@@ -67,19 +67,26 @@ def claude_tool_policy(servers: Iterable[Mapping[str, Any]]) -> ClaudeToolPolicy
 
 def _claude_tool_guard(restricted: dict[str, tuple[str, ...]]) -> HookCallback:
     """A ``PreToolUse`` hook refusing every ``mcp__<restricted>__*`` tool outside
-    its allowlist."""
-    prefixes = tuple(f"mcp__{namespace}__" for namespace in restricted)
-    allowed = frozenset(
-        f"mcp__{namespace}__{mcp_name_segment(tool)}"
+    its allowlist.
+
+    A name can fall under several restricted servers (``mcp__docs__extra__search``
+    is ``docs``' ``extra__search`` and ``docs__extra``'s ``search``), so every one
+    of them must allow it.
+    """
+    selected = {
+        f"mcp__{namespace}__": frozenset(
+            f"mcp__{namespace}__{mcp_name_segment(tool)}" for tool in allowlist
+        )
         for namespace, allowlist in restricted.items()
-        for tool in allowlist
-    )
+    }
 
     async def guard(
         hook_input: HookInput, _tool_use_id: str | None, _context: HookContext
     ) -> SyncHookJSONOutput:
         tool_name = str(hook_input.get("tool_name", ""))
-        if not tool_name.startswith(prefixes) or tool_name in allowed:
+        if all(
+            tool_name in names for prefix, names in selected.items() if tool_name.startswith(prefix)
+        ):
             return {}
         return {
             "hookSpecificOutput": {

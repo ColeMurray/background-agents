@@ -384,8 +384,10 @@ describe("MCP server schemas", () => {
     expect(mcpServerCredentialMapSchema.safeParse({ DEBUG: 1 }).success).toBe(false);
   });
 
-  it("normalizes a tool allowlist to sorted, unique, trimmed names", () => {
-    expect(mcpToolAllowlistSchema.parse([" search ", "fetch", "search"])).toEqual([
+  it("keeps tool names exactly, sorted and unique", () => {
+    // " search " and "search" can be different tools, so neither is rewritten.
+    expect(mcpToolAllowlistSchema.parse(["search", " search ", "fetch", "search"])).toEqual([
+      " search ",
       "fetch",
       "search",
     ]);

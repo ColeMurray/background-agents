@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -254,7 +255,7 @@ class TestNpmPackageRegex:
 # ─── Tool allowlists in the OpenCode config ──────────────────────────────────
 
 
-async def _start_and_capture_config(sup, installed_paths=frozenset()):
+async def _start_and_capture_env(sup, installed_paths=frozenset()):
     with (
         patch.object(sup, "_setup_managed_oauth"),
         patch.object(sup, "_install_mcp_packages", new_callable=AsyncMock),
@@ -271,7 +272,10 @@ async def _start_and_capture_config(sup, installed_paths=frozenset()):
         ),
     ):
         await sup.start((), sup.workspace_path)
-    return json.loads(spawn.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"])
+    return spawn.call_args.kwargs["env"]
+
+
+GUARD_PLUGIN = Path(".opencode/plugins/mcp-tool-guard.js")
 
 
 class TestToolAllowlistConfig:
@@ -281,11 +285,15 @@ class TestToolAllowlistConfig:
             {"mcp_servers": [{"name": "docs", "type": "remote", "url": "https://mcp.docs"}]}
         )
         sup.workspace_path = tmp_path
-        config = await _start_and_capture_config(sup)
-        assert config["permission"] == {"*": {"*": "allow"}}
+        env = await _start_and_capture_env(sup)
+        assert json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"] == {"*": {"*": "allow"}}
+        assert json.loads(env["OPENINSPECT_MCP_TOOL_RULES"]) == []
+        assert not (tmp_path / GUARD_PLUGIN).exists()
 
     @pytest.mark.asyncio
-    async def test_restricted_server_rules_follow_the_global_allow(self, tmp_path):
+    async def test_restricted_server_rules_follow_the_global_allow_and_reach_the_guard(
+        self, tmp_path
+    ):
         sup = _make_supervisor(
             {
                 "mcp_servers": [
@@ -298,54 +306,19 @@ class TestToolAllowlistConfig:
                 ]
             }
         )
-        sup.workspace_path = tmp_path / "repo"
-        # Open-Inspect's tools and the repository's own share the project tool directory.
-        project_tools = sup.workspace_path / ".opencode" / "tool"
-        project_tools.mkdir(parents=True)
-        for name, source in (
-            ("memory_read.js", "export default tool({})"),
-            ("spawn-child.js", "export default tool({})"),
-            ("memory_local.ts", "export const notes = tool({})"),
-            ("memory_notes.md", "export default tool({})"),
-        ):
-            (project_tools / name).write_text(source)
-        global_tools = tmp_path / "global" / "tools"
-        global_tools.mkdir(parents=True)
-        (global_tools / "memory_global.js").write_text("export default tool({})")
-        scanned = {
-            "memory_read.js": ["default"],
-            "spawn-child.js": ["default"],
-            "memory_local.ts": ["notes"],
-            "memory_global.js": ["default"],
-        }
-
-        async def read_tool_exports(paths):
-            return {str(path): scanned[path.name] for path in paths}
-
-        with (
-            patch.dict(os.environ, {"OPENCODE_CONFIG_DIR": str(tmp_path / "global")}),
-            patch("sandbox_runtime.opencode_tool_access._read_tool_exports", read_tool_exports),
-        ):
-            config = await _start_and_capture_config(sup)
+        sup.workspace_path = tmp_path
+        env = await _start_and_capture_env(sup)
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         assert list(config["permission"].items()) == [
             ("*", {"*": "allow"}),
             ("memory_*", "deny"),
             ("memory_recall", "allow"),
-            ("memory_global", "allow"),
-            ("memory_local_notes", "allow"),
-            ("memory_read", "allow"),
         ]
         assert config["mcp"]["memory"]["url"] == "https://mcp.memory"
-
-    @pytest.mark.asyncio
-    async def test_custom_tools_are_not_scanned_without_a_restricted_server(self, tmp_path):
-        sup = _make_supervisor(
-            {"mcp_servers": [{"name": "docs", "type": "remote", "url": "https://mcp.docs"}]}
-        )
-        sup.workspace_path = tmp_path
-        (tmp_path / ".opencode" / "tool").mkdir(parents=True)
-        (tmp_path / ".opencode" / "tool" / "docs_local.js").write_text("export default 1")
-        with patch("sandbox_runtime.opencode_tool_access._read_tool_exports") as read_tool_exports:
-            config = await _start_and_capture_config(sup)
-        read_tool_exports.assert_not_called()
-        assert config["permission"] == {"*": {"*": "allow"}}
+        # A repository agent's permission rules come after these, so the guard
+        # plugin refuses denied calls too.
+        assert json.loads(env["OPENINSPECT_MCP_TOOL_RULES"]) == [
+            ["memory_*", "deny"],
+            ["memory_recall", "allow"],
+        ]
+        assert (tmp_path / GUARD_PLUGIN).is_file()

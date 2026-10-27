@@ -11,11 +11,7 @@ import {
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import {
-  McpToolDiscoveryError,
-  discoverRemoteMcpTools,
-  discoveryFailureDetail,
-} from "../mcp/tool-discovery";
+import { McpToolDiscoveryError, discoverRemoteMcpTools } from "../mcp/tool-discovery";
 import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -203,7 +199,14 @@ async function handleDiscoverMcpTools(
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
       id,
-      error: discoveryFailureDetail(err),
+      // Only our own status-only message, or else the error's class: SDK
+      // messages and causes can quote the server's response, credentials included.
+      error:
+        err instanceof McpToolDiscoveryError
+          ? err.message
+          : err instanceof Error
+            ? err.name
+            : typeof err,
     });
     const reason = err instanceof McpToolDiscoveryError ? `: ${err.message}` : "";
     return error(`Could not load tools from the MCP server${reason}`, 502);

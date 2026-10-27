@@ -65,8 +65,9 @@ async function listTools(transport: Transport, signal: AbortSignal): Promise<Mcp
     }
     const byName = new Map<string, McpToolMetadata>();
     for (const tool of tools) {
-      const name = tool.name.trim();
-      if (!name || byName.has(name)) continue;
+      // Names stay exact: trimming " search " could select another tool, "search".
+      const { name } = tool;
+      if (!name.trim() || byName.has(name)) continue;
       const description = tool.description?.trim().slice(0, MAX_TOOL_DESCRIPTION_LENGTH);
       byName.set(name, description ? { name, description } : { name });
     }
@@ -152,16 +153,4 @@ export async function discoverRemoteMcpTools(
       throw statusError(status, new AggregateError([streamableError, sseError]));
     }
   }
-}
-
-/**
- * A failure and every error underneath it, for logs only: the underlying
- * messages can quote the server's response.
- */
-export function discoveryFailureDetail(err: unknown): string {
-  if (err instanceof AggregateError) return err.errors.map(discoveryFailureDetail).join("; ");
-  if (!(err instanceof Error)) return String(err);
-  return err.cause === undefined
-    ? err.message
-    : `${err.message} (${discoveryFailureDetail(err.cause)})`;
 }

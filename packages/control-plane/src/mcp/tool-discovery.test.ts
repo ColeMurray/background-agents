@@ -5,7 +5,6 @@ import {
   McpToolDiscoveryError,
   authenticatedFetch,
   discoverRemoteMcpTools,
-  discoveryFailureDetail,
   type RemoteMcpServer,
 } from "./tool-discovery";
 
@@ -148,9 +147,10 @@ describe("authenticatedFetch", () => {
 });
 
 describe("discoverRemoteMcpTools", () => {
-  it("lists tools trimmed, deduplicated and sorted, sending the stored headers", async () => {
+  it("lists tools with exact names, deduplicated and sorted, sending the stored headers", async () => {
     const { fetchMock, requestHeaders } = streamableServer([
-      { name: " zebra ", description: "  Last tool  " },
+      { name: "zebra", description: "  Last tool  " },
+      { name: " zebra ", description: "A different tool" },
       { name: "alpha", description: "First tool" },
       { name: "alpha", description: "Duplicate" },
       { name: "   " },
@@ -158,6 +158,7 @@ describe("discoverRemoteMcpTools", () => {
     ]);
 
     await expect(discoverRemoteMcpTools(remoteServer, { fetch: fetchMock })).resolves.toEqual([
+      { name: " zebra ", description: "A different tool" },
       { name: "alpha", description: "First tool" },
       { name: "plain" },
       { name: "zebra", description: "Last tool" },
@@ -310,17 +311,5 @@ describe("discoverRemoteMcpTools", () => {
       )
     ).rejects.toBeInstanceOf(McpToolDiscoveryError);
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("discoveryFailureDetail", () => {
-  it("lists every underlying error of a failure", () => {
-    const failure = new McpToolDiscoveryError("The server returned HTTP 404", {
-      cause: new AggregateError([new Error("streamable: 404"), "sse: closed"]),
-    });
-
-    expect(discoveryFailureDetail(failure)).toBe(
-      "The server returned HTTP 404 (streamable: 404; sse: closed)"
-    );
   });
 });

@@ -518,7 +518,7 @@ describe("MCP Servers API", () => {
       const server = await createRemote();
       const set = await serviceFetch(`https://test.local/mcp-servers/${server.id}`, {
         method: "PUT",
-        body: JSON.stringify({ toolAllowlist: ["search", " fetch_page ", "search"], revision: 1 }),
+        body: JSON.stringify({ toolAllowlist: ["search", "fetch_page", "search"], revision: 1 }),
       });
       expect(set.status).toBe(200);
       expect((await set.json<McpServerMetadata>()).toolAllowlist).toEqual(["fetch_page", "search"]);

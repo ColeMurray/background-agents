@@ -39,5 +39,8 @@ for line in sys.stdin:
                 ]
             },
         )
+    elif method == "tools/call":
+        name = message["params"]["name"]
+        reply(message["id"], {"content": [{"type": "text", "text": f"wire tool {name} ran"}]})
     else:
         reply(message["id"], {})

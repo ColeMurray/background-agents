@@ -29,11 +29,10 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
-from sandbox_runtime.opencode_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_tool_rules
+from sandbox_runtime.opencode_tool_access import opencode_tool_policy
 from tests.test_prompt_stream import make_stream
 
 pytest_plugins = ["tests.test_reasoning_config"]
@@ -42,6 +41,7 @@ BINARY = os.environ.get("OPENCODE_TEST_BINARY")
 pytestmark = pytest.mark.skipif(not BINARY, reason="set OPENCODE_TEST_BINARY for wire tests")
 CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
 MCP_FIXTURE_SERVER = Path(__file__).parent / "fixtures/mcp_stdio_server.py"
+MCP_TOOL_GUARD_PLUGIN = Path(__file__).parents[1] / "src/sandbox_runtime/plugins/mcp-tool-guard.js"
 
 
 def openai_events(model):
@@ -82,6 +82,41 @@ def openai_events(model):
     ]
 
 
+def anthropic_tool_call_events(model, tool_name):
+    return [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_tool",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": model,
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 1},
+        },
+        {"type": "message_stop"},
+    ]
+
+
 def anthropic_events(model):
     return [
         {
@@ -113,6 +148,8 @@ def anthropic_events(model):
 async def wire_server(tmp_path, reasoning_config, request):
     assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
     captured = []
+    # Responses to send, in order, before falling back to a plain "OK".
+    scripted = []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -130,14 +167,16 @@ async def wire_server(tmp_path, reasoning_config, request):
                         "output_config",
                         "system",
                         "tools",
+                        "messages",
                     )
                 }
             )
-            events = (
-                anthropic_events(body["model"])
-                if self.path.endswith("/messages")
-                else openai_events(body["model"])
-            )
+            if self.path.endswith("/messages"):
+                events = (
+                    scripted.pop(0)(body["model"]) if scripted else anthropic_events(body["model"])
+                )
+            else:
+                events = openai_events(body["model"])
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
@@ -154,6 +193,7 @@ async def wire_server(tmp_path, reasoning_config, request):
     process = None
     try:
         config = reasoning_config
+        tool_rules = "[]"
         if getattr(request, "param", None) == "memory":
             memory_file = tmp_path / "config/opencode/oi-memory.md"
             memory_file.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +211,7 @@ async def wire_server(tmp_path, reasoning_config, request):
                 "_bridge-client.js",
             ):
                 shutil.copy(source / name, destination / name)
-        if getattr(request, "param", None) == "mcp":
+        if getattr(request, "param", None) in ("mcp", "mcp_agent_override"):
             # "docs" allows one of its tools. "docs_extra" extends its name, so
             # OpenCode cannot tell its tools from docs' own extra_* tools and it
             # gets none. "my.\U0001f600notes" checks name sanitization, including a
@@ -180,6 +220,8 @@ async def wire_server(tmp_path, reasoning_config, request):
                 "docs": ["search", "fetch_page", "extra_delete_everything"],
                 "docs_extra": ["ping"],
                 "my.\U0001f600notes": ["read/page", "write"],
+                # OpenCode would name "patch" apply_patch, replacing the built-in.
+                "apply": ["safe", "patch"],
             }
             config["mcp"] = {
                 name: {
@@ -192,6 +234,7 @@ async def wire_server(tmp_path, reasoning_config, request):
                 {"name": "docs", "toolAllowlist": ["search"]},
                 {"name": "docs_extra"},
                 {"name": "my.\U0001f600notes", "toolAllowlist": ["read/page"]},
+                {"name": "apply", "toolAllowlist": ["safe"]},
             ]
             # A repository's own tools whose names start like a restricted server's:
             # OpenCode names a default export after its file and a named export
@@ -212,12 +255,22 @@ async def wire_server(tmp_path, reasoning_config, request):
                     'import { tool } from "@opencode-ai/plugin"; '
                     f"/* export const fetch_page = 1; */ export {export} {definition};\n"
                 )
-            log = MagicMock()
-            policy = await opencode_tool_rules(
-                servers, (tmp_path / ".opencode", tmp_path / "config/opencode"), log
-            )
-            log.warn.assert_not_called()
+            policy = opencode_tool_policy(servers)
             config["permission"].update(policy.rules)
+            plugins = tmp_path / ".opencode/plugins"
+            plugins.mkdir(parents=True)
+            shutil.copy(MCP_TOOL_GUARD_PLUGIN, plugins / MCP_TOOL_GUARD_PLUGIN.name)
+            tool_rules = json.dumps(list(policy.rules.items()))
+        if getattr(request, "param", None) == "mcp_agent_override":
+            # A repository agent re-allows all of docs' tools; its rules follow
+            # the global ones, so only the guard plugin can refuse the call.
+            (tmp_path / ".opencode/opencode.json").write_text(
+                json.dumps({"agent": {"build": {"permission": {"docs_*": "allow"}}}})
+            )
+            for tool_name in ("docs_fetch_page", "apply_patch"):
+                scripted.append(
+                    lambda model, tool_name=tool_name: anthropic_tool_call_events(model, tool_name)
+                )
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
         for provider in ("openai", "anthropic"):
             config["provider"].setdefault(provider, {})["options"] = {
@@ -240,6 +293,7 @@ async def wire_server(tmp_path, reasoning_config, request):
                 "ANTHROPIC_API_KEY": "test-only",
                 "SANDBOX_AUTH_TOKEN": "test-only",
                 "SESSION_CONFIG": '{"session_id":"wire-test"}',
+                "OPENINSPECT_MCP_TOOL_RULES": tool_rules,
             }
         )
         with socket.socket() as sock:
@@ -320,23 +374,46 @@ async def test_memory_text_and_tool_contract_reach_real_opencode_provider_reques
 async def test_mcp_tool_allowlist_reaches_real_opencode_provider_request(wire_server):
     call, captured = wire_server
     custom_ids = {"docs_local", "docs_notes_lookup", "docs_local_index"}
-    assert set(call("/experimental/tool/ids")) == {
-        *OPENCODE_BUILTIN_TOOL_IDS,
-        *custom_ids,
-        "invalid",
-    }
+    assert custom_ids <= set(call("/experimental/tool/ids"))
 
     sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
     names = {tool["name"] for tool in sent["tools"]}
-    assert {"docs_search", "my___notes_read_page", *custom_ids} <= names
+    assert {"docs_search", "my___notes_read_page", "apply_safe"} <= names
     hidden = {
         "docs_fetch_page",
         "docs_extra_delete_everything",
         "docs_extra_ping",
         "my___notes_write",
+        # A deny pattern also hides the repository tools named like docs'
+        # tools: an unselected MCP tool could take any of their ids.
+        *custom_ids,
     }
     assert not hidden & names
+    # OpenCode judges whether apply_patch is listed by its edit permission, so
+    # apply's unselected "patch", which takes that id, is still listed; calling
+    # it is refused (see the agent override test).
+    tools = {tool["name"]: tool for tool in sent["tools"]}
+    assert tools["apply_patch"]["description"] == "Wire test tool patch"
     assert {"bash", "read", "edit", "write", "glob", "grep"} <= names
+
+
+@pytest.mark.parametrize("wire_server", ["mcp_agent_override"], indirect=True)
+async def test_mcp_tool_guard_refuses_unselected_tools_the_permission_rules_miss(wire_server):
+    call, captured = wire_server
+    sent, _ = submit(call, captured, "anthropic/claude-sonnet-4-6", None)
+    results = [
+        block
+        for message in sent["messages"]
+        if isinstance(message["content"], list)
+        for block in message["content"]
+        if block.get("type") == "tool_result"
+    ]
+    assert len(results) == 2
+    output = json.dumps(results)
+    assert "docs_fetch_page tool is not enabled for this session" in output
+    # apply's unselected "patch" tool, which OpenCode names apply_patch.
+    assert "apply_patch tool is not enabled for this session" in output
+    assert " ran" not in output
 
 
 async def test_all_fixture_efforts_reach_provider(wire_server):

@@ -16,7 +16,7 @@ from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
 from .mcp_packages import McpPackageInstaller
 from .memories import memory_path
-from .opencode_tool_access import opencode_tool_rules
+from .opencode_tool_access import opencode_tool_policy
 from .process_output import iter_process_lines
 from .sandbox_bin import install_bin_scripts
 
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
+MCP_TOOL_GUARD_PLUGIN = Path(__file__).parent / "plugins" / "mcp-tool-guard.js"
 
 
 def resolve_opencode_global_config_dir() -> Path:
@@ -432,11 +433,15 @@ class OpenCodeServer:
         # Working directory: the repo for single-repo sessions, /workspace
         # for multi-repo (every member visible) and repo-less sessions.
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir, repositories)
-        tool_policy = await opencode_tool_rules(
-            mcp_servers, (workdir / ".opencode", resolve_opencode_global_config_dir()), self.log
-        )
+        tool_policy = opencode_tool_policy(mcp_servers)
         if tool_policy.rules:
             opencode_config["permission"].update(tool_policy.rules)
+            # A repository's agent config can re-allow what these rules deny;
+            # the guard plugin refuses those calls regardless.
+            guard_dir = workdir / ".opencode" / "plugins"
+            guard_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(MCP_TOOL_GUARD_PLUGIN, guard_dir / MCP_TOOL_GUARD_PLUGIN.name)
+            installed_runtime_paths.add(f".opencode/plugins/{MCP_TOOL_GUARD_PLUGIN.name}")
             self.log.info("mcp.tool_allowlists_applied", rules=tool_policy.rules)
         if tool_policy.shadowed:
             self.log.warn("mcp.tool_allowlist_shadowed_servers", namespaces=tool_policy.shadowed)
@@ -471,6 +476,7 @@ class OpenCodeServer:
         env = {
             **os.environ,
             "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
+            "OPENINSPECT_MCP_TOOL_RULES": json.dumps(list(tool_policy.rules.items())),
             # Disable OpenCode's question tool in headless mode. The tool blocks
             # on a Promise waiting for user input via the HTTP API, but the bridge
             # has no channel to relay questions to the web client and back. Without

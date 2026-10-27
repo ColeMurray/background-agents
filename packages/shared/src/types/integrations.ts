@@ -710,9 +710,17 @@ export interface McpServerConfig {
 export const DEFAULT_MCP_SERVER_ENABLED = true;
 /** Most tools an allowlist may name; discovery fails for a server that advertises more. */
 export const MAX_MCP_SERVER_TOOLS = 1000;
-/** Allowlisted tool names: trimmed, non-empty, deduplicated and sorted. */
+/**
+ * Allowlisted tool names, exactly as the server advertises them (a rewritten
+ * name could select a different tool), non-blank, deduplicated and sorted.
+ */
 export const mcpToolAllowlistSchema = z
-  .array(z.string().trim().min(1).max(256))
+  .array(
+    z
+      .string()
+      .max(256)
+      .refine((name) => name.trim() !== "", "Tool names cannot be blank")
+  )
   .max(MAX_MCP_SERVER_TOOLS)
   .transform((tools) => [...new Set(tools)].sort());
 export const mcpServerTypeSchema = z.enum(["local", "remote"]);

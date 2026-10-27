@@ -430,17 +430,20 @@ The sandbox runtime applies the allowlist per harness. `mcp_tool_access.py` hold
 - **OpenCode** (`opencode_tool_access.py`) names MCP tools `<server>_<tool>`. A restricted server
   gets a `<server>_*` deny rule followed by an allow rule per selected tool, after the global allow.
   OpenCode leaves denied tools out of the model request. Rules are ordered by name length so a
-  restricted server whose name extends another keeps its own rules, and OpenCode's built-in tools
-  and custom tools (Open-Inspect's and the repository's `.opencode/tool` files) that a deny pattern
-  would match are re-allowed. The rules must be in OpenCode's config before it loads those files, so
-  the runtime lists each file's exports with Bun's parser (`Bun.Transpiler.scan`, which reads a
-  module without running it) and names them as OpenCode does: `<file>` for the default export and
-  `<file>_<export>` for each named one. A CommonJS file, or one the parser rejects, falls back to
-  its file name. A tool re-exported with `export * from` cannot be listed and stays hidden if a deny
-  pattern matches it. If the scan fails, the runtime falls back to file names and logs
-  `opencode.custom_tool_scan_failed`. An unrestricted server whose name extends a restricted one
-  (`docs_extra` next to a restricted `docs`) gets no allow rule, because `docs_extra_*` would also
-  match `docs`' own `extra_*` tools; the runtime logs `mcp.tool_allowlist_shadowed_servers`.
+  restricted server whose name extends another keeps its own rules; a name both claim
+  (`docs_extra_search` for `docs` and `docs_extra`) must be allowed by the longer one too. An
+  unrestricted server whose name extends a restricted one (`docs_extra` next to a restricted `docs`)
+  gets no allow rule, because `docs_extra_*` would also match `docs`' own `extra_*` tools; the
+  runtime logs `mcp.tool_allowlist_shadowed_servers`. An MCP tool replaces a built-in or custom tool
+  with the same id, so a deny pattern also hides the other tools it matches (Open-Inspect's
+  `memory_*` tools while a server named `memory` is restricted, or a repository's
+  `.opencode/tool/docs.ts` exports while `docs` is): re-allowing them would expose an unselected MCP
+  tool that takes their id. OpenCode applies an agent's permission rules after the global ones, so a
+  repository's agent config could re-allow denied tools; the `mcp-tool-guard.js` plugin, given the
+  same rules in `OPENINSPECT_MCP_TOOL_RULES`, refuses those calls in `tool.execute.before`. OpenCode
+  decides whether to list `edit`, `write` and `apply_patch` by its `edit` permission, and its MCP
+  resource tools by `read`, so an unselected MCP tool that takes one of those ids (an `apply`
+  server's `patch`) stays listed; calls to it are refused.
 - **Claude Agent** (`harness/claude_mcp_policy.py`) runs in `dontAsk` mode, so a restricted server's
   `mcp__<server>__*` approval is replaced by one `mcp__<server>__<tool>` approval per selected tool
   and other calls are refused. Claude Code removes a tool from context only when a deny rule names
@@ -455,11 +458,8 @@ The sandbox runtime applies the allowlist per harness. `mcp_tool_access.py` hold
 - Servers whose names differ only in characters OpenCode and Claude Agent replace with `_`
   (`my.docs` and `my_docs`) produce the same tool names there. They are treated as one: restricted
   if any of them is, to the tools every restricted one allows.
-- Tools whose names render identically cannot be told apart by OpenCode or Claude Agent, with or
-  without an allowlist: an MCP tool that renders as a built-in, Open-Inspect or repository tool name
-  (an `apply` server's `patch` tool versus OpenCode's `apply_patch`, or a `docs` server's `search`
-  tool versus a `search` export in `.opencode/tool/docs.ts`, tool or not), or as another server's
-  selected tool. That name stays allowed, so the MCP tool does too.
+- Claude Agent cannot tell apart an MCP tool that renders as another server's selected tool name;
+  that name stays allowed, so the MCP tool does too.
 
 ### When Snapshots Are Taken
 
