@@ -15,3 +15,9 @@ export const actorProfileClaimsSchema = z
   .strict();
 
 export type ActorProfileClaims = z.infer<typeof actorProfileClaimsSchema>;
+
+/** Error code the control plane returns when a new actor must enroll with an attested email. */
+export const ACTOR_EMAIL_REQUIRED_CODE = "actor_email_required";
+
+/** How a bot's `POST /actors/me` ended. Anything but `enrolled` must stop the request. */
+export type EnrollActorResult = "enrolled" | "email_required" | "unavailable";

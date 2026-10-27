@@ -5,7 +5,11 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
+import {
+  ACTOR_EMAIL_REQUIRED_CODE,
+  type ActorProfileClaims,
+  type EnrollActorResult,
+} from "@open-inspect/shared/types/actors";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -97,9 +101,6 @@ export async function requirePublicationAccess(
     );
 }
 
-/** Outcome of `enrollActor`. Anything but `enrolled` must stop the message. */
-export type EnrollActorResult = "enrolled" | "email_required" | "unavailable";
-
 /**
  * Present the actor's Slack profile before any other request that carries the
  * actor. The control plane links a new actor to an existing user by email
@@ -129,7 +130,7 @@ export async function enrollActor(
     );
     if (response.ok) return "enrolled";
     const { code } = await readErrorBody(response);
-    const outcome = code === "actor_email_required" ? "email_required" : "unavailable";
+    const outcome = code === ACTOR_EMAIL_REQUIRED_CODE ? "email_required" : "unavailable";
     log.warn("control_plane.enroll_actor", {
       ...base,
       outcome,

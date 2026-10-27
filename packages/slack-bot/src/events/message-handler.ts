@@ -42,11 +42,8 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import {
-  checkPublicationAccess,
-  enrollActor,
-  type EnrollActorResult,
-} from "../sessions/control-plane-client";
+import type { EnrollActorResult } from "@open-inspect/shared/types/actors";
+import { checkPublicationAccess, enrollActor } from "../sessions/control-plane-client";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,

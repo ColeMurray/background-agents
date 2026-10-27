@@ -1,5 +1,6 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
+import { ACTOR_EMAIL_REQUIRED_CODE } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
 import {
@@ -430,7 +431,7 @@ async function finalizeServiceActor(
       });
       return {
         response: json(
-          { error: "Actor enrollment requires an attested email", code: "actor_email_required" },
+          { error: "Actor enrollment requires an attested email", code: ACTOR_EMAIL_REQUIRED_CODE },
           403
         ),
       };
