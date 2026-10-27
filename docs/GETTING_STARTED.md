@@ -1026,7 +1026,8 @@ the worker's `/events` and `/interactions` endpoints.
    - `files:write`
    - `reactions:write`
    - `users:read`
-   - `users:read.email`
+   - `users:read.email` (required: the bot links each new Slack user to an account by profile email
+     and won't act for users it can't link)
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
