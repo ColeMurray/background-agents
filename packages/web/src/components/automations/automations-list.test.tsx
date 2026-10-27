@@ -14,8 +14,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-
 vi.mock("next/link", () => ({
   default: ({ children, ...props }: ComponentProps<"a">) => <a {...props}>{children}</a>,
 }));
@@ -63,6 +61,40 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     ...overrides,
   };
 }
+
+describe("AutomationsList navigation", () => {
+  it.each([undefined, "team/one"])(
+    "provides independent native row and title links with team scope %s",
+    (teamId) => {
+      render(
+        <AutomationsList
+          teamId={teamId}
+          canCreate
+          automations={[makeAutomation({ id: "auto/1" })]}
+          emptyState={{ kind: "no-automations" }}
+          onPause={noop}
+          onResume={noop}
+          onTrigger={noop}
+          onDelete={noop}
+        />
+      );
+
+      const rowLink = screen.getByRole("link", { name: "View Nightly review" });
+      const titleLink = screen.getByRole("link", { name: "Nightly review" });
+      const href = `/automations/auto%2F1${teamId ? "?teamId=team%2Fone" : ""}`;
+      expect(rowLink).toHaveAttribute("href", href);
+      expect(titleLink).toHaveAttribute("href", href);
+      expect(rowLink).not.toContainElement(titleLink);
+      expect(rowLink).not.toContainElement(screen.getByRole("button", { name: "Pause" }));
+
+      const onRowClick = vi.fn();
+      rowLink.addEventListener("click", onRowClick);
+      titleLink.addEventListener("click", (event) => event.preventDefault(), { once: true });
+      fireEvent.click(titleLink);
+      expect(onRowClick).not.toHaveBeenCalled();
+    }
+  );
+});
 
 describe("AutomationsList repository labels", () => {
   const renderList = (automations: AutomationListItem[]) =>
@@ -219,6 +251,8 @@ describe("AutomationsList actions", () => {
       />
     );
 
+    const onRowClick = vi.fn();
+    screen.getByRole("link", { name: "View Nightly review" }).addEventListener("click", onRowClick);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Actions for Nightly review" }), {
       button: 0,
       ctrlKey: false,
@@ -226,6 +260,35 @@ describe("AutomationsList actions", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Trigger now" }));
 
     expect(onTrigger).toHaveBeenCalledWith("auto-1");
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("keeps desktop actions independent when enabled is %s", (enabled) => {
+    const onPause = vi.fn();
+    const onResume = vi.fn();
+    const onTrigger = vi.fn();
+    render(
+      <AutomationsList
+        canCreate
+        automations={[makeAutomation({ enabled })]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={onPause}
+        onResume={onResume}
+        onTrigger={onTrigger}
+        onDelete={noop}
+      />
+    );
+
+    const onRowClick = vi.fn();
+    screen.getByRole("link", { name: "View Nightly review" }).addEventListener("click", onRowClick);
+    fireEvent.click(screen.getByRole("button", { name: enabled ? "Pause" : "Resume" }));
+    fireEvent.click(screen.getByRole("button", { name: "Trigger" }).querySelector("svg")!);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(enabled ? onPause : onResume).toHaveBeenCalledWith("auto-1");
+    expect(onTrigger).toHaveBeenCalledWith("auto-1");
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(onRowClick).not.toHaveBeenCalled();
   });
 
   it("confirms deletion selected from the compact menu", async () => {

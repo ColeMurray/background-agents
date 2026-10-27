@@ -34,7 +34,6 @@ vi.mock("swr", () => ({ useSWRConfig: () => mocks }));
 vi.mock("next/link", () => ({
   default: ({ children, ...props }: React.ComponentProps<"a">) => <a {...props}>{children}</a>,
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const automation: AutomationListItem = {
   id: "auto-1",

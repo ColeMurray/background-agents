@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { describeAutomationSchedule } from "@/lib/automation-schedule";
 import { GITHUB_WEBHOOK_EVENT_CATALOG } from "@open-inspect/shared/triggers";
 import type { Automation, AutomationListItem } from "@open-inspect/shared/types/automations";
@@ -96,7 +95,6 @@ export function AutomationsList({
   teamId,
   canCreate,
 }: AutomationsListProps) {
-  const router = useRouter();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const { environments } = useEnvironments({ ownerTeamId: teamId });
   const navigation = automationNavigation(teamId);
@@ -144,29 +142,28 @@ export function AutomationsList({
           return (
             <div
               key={automation.id}
-              className="cursor-pointer px-4 py-4 transition-colors hover:bg-muted/50 focus-within:bg-muted/50"
-              onClick={(event) => {
-                if (
-                  event.defaultPrevented ||
-                  (event.target as Element).closest("a, button, [role='menu']")
-                )
-                  return;
-                router.push(navigation.detail(automation.id));
-              }}
+              className="relative px-4 py-4 transition-colors hover:bg-muted/50 focus-within:bg-muted/50"
             >
+              <Link
+                href={navigation.detail(automation.id)}
+                aria-label={`View ${automation.name}`}
+                className="absolute inset-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              />
               {/* Header: Name + badge | Actions */}
               <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-4">
                 <div className="flex min-w-0 items-center gap-2">
                   <Link
                     href={navigation.detail(automation.id)}
-                    className="font-medium text-foreground hover:text-accent transition truncate"
+                    className="relative z-10 font-medium text-foreground hover:text-accent transition truncate"
                   >
                     {automation.name}
                   </Link>
                   <AutomationStatusBadge automation={automation} />
-                  <ExecutionActivity executions={automation.recentExecutions} />
+                  <div className="relative z-10 shrink-0">
+                    <ExecutionActivity executions={automation.recentExecutions} />
+                  </div>
                 </div>
-                <div className="hidden flex-shrink-0 items-center gap-1 sm:flex">
+                <div className="relative z-10 hidden flex-shrink-0 items-center gap-1 sm:flex">
                   {canManage &&
                     (automation.enabled ? (
                       <Button variant="ghost" size="xs" onClick={() => onPause(automation.id)}>
@@ -201,7 +198,7 @@ export function AutomationsList({
                       <button
                         type="button"
                         aria-label={`Actions for ${automation.name}`}
-                        className="-mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground sm:hidden"
+                        className="relative z-10 -mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground sm:hidden"
                       >
                         <MoreIcon className="h-4 w-4" aria-hidden="true" />
                       </button>
