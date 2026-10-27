@@ -20,6 +20,7 @@ export * from "./app-name";
 export * from "./user-id";
 export * from "./browser-auth-routes";
 export * from "./sign-in-provider";
+export * from "./sign-in-failure";
 export * from "./slack";
 export * from "./pull-request-tool";
 export * from "./rbac";

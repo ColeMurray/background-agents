@@ -1,8 +1,7 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
-import { createAuthMiddleware } from "better-auth/api";
-import { SIGN_IN_PROVIDERS } from "@open-inspect/shared/sign-in-provider";
-import { signInFailureLocation } from "./sign-in-failure";
+import { SIGN_IN_FAILURE_PATH } from "@open-inspect/shared/sign-in-failure";
+import { createSignInFailureRedirectHook } from "./sign-in-failure";
 import { createCanonicalBetterAuthAdapter } from "../../db/better-auth-adapter";
 import type { SqlDatabase } from "../../db/sql-database";
 import { generateId } from "../crypto";
@@ -44,43 +43,16 @@ export interface UserAuthConfig {
  * redirects and host-only cookies remain scoped to the web application.
  */
 export function createUserAuth(config: UserAuthConfig) {
+  const signInFailureURL = `${config.publicWebOrigin}${SIGN_IN_FAILURE_PATH}`;
   return betterAuth({
     baseURL: config.publicWebOrigin,
     database: createCanonicalBetterAuthAdapter(config.database),
     secret: config.secret,
     trustedOrigins: [config.publicWebOrigin],
     telemetry: { enabled: false },
-    hooks: {
-      before: createAuthMiddleware(async (ctx) => {
-        if (ctx.path !== "/callback/:id") return;
-        const providerId = SIGN_IN_PROVIDERS.find((id) => id === ctx.params?.id);
-        if (!providerId) return;
-        // Replace the provider only in this callback's context. Internal
-        // accountInfo calls must retain admission/integrity failures.
-        return {
-          context: {
-            context: {
-              socialProviders: ctx.context.socialProviders.map((provider) =>
-                provider.id !== providerId
-                  ? provider
-                  : {
-                      ...provider,
-                      getUserInfo: async (tokens: Parameters<typeof provider.getUserInfo>[0]) => {
-                        try {
-                          return await provider.getUserInfo(tokens);
-                        } catch (cause) {
-                          const location = signInFailureLocation(providerId, cause);
-                          if (location) throw ctx.redirect(location);
-                          throw cause;
-                        }
-                      },
-                    }
-              ),
-            },
-          },
-        };
-      }),
-    },
+    // Every failed sign-in, ours or Better Auth's own, lands on the login page.
+    onAPIError: { errorURL: signInFailureURL },
+    hooks: { before: createSignInFailureRedirectHook(signInFailureURL) },
     // Workers do not expose NODE_ENV through process.env under every supported
     // compatibility date. Keep the production security behavior explicit.
     rateLimit: {

@@ -468,7 +468,7 @@ describe("browser auth callback", () => {
   });
 
   it.each([
-    [403, {}, "provider_rejected", "203.0.113.91", GITHUB_PERMISSION_DENIED_MESSAGE],
+    [403, {}, "github_email_permission_missing", "203.0.113.91", GITHUB_PERMISSION_DENIED_MESSAGE],
     [
       403,
       { "x-ratelimit-remaining": "0" },
@@ -524,7 +524,7 @@ describe("browser auth callback", () => {
 
       expect(callbackResponse.status).toBe(302);
       expect(callbackResponse.headers.get("Location")).toBe(
-        `/login?error=${reason}&provider=github`
+        `${PUBLIC_WEB_ORIGIN}/login?error=${reason}`
       );
       expect(
         getSetCookies(callbackResponse.headers).some((cookie) =>
@@ -540,6 +540,48 @@ describe("browser auth callback", () => {
       await expect(env.DB.prepare("SELECT COUNT(*) AS count FROM users").first()).resolves.toEqual({
         count: 0,
       });
+    }
+  );
+
+  it.each([
+    ["the user cancels GitHub consent", "error=access_denied", true, "access_denied"],
+    ["the state cookie is missing", "code=authorization-code", false, "state_mismatch"],
+  ] as const)(
+    "sends Better Auth's own callback errors to login when %s",
+    async (_label, callbackQuery, sendStateCookie, error) => {
+      const clientIp = sendStateCookie ? "203.0.113.95" : "203.0.113.96";
+      const initiationResponse = await handleRequest(
+        await signedWebRequest("/api/auth/sign-in/social", {
+          method: "POST",
+          body: JSON.stringify({
+            provider: "github",
+            callbackURL: "/after-sign-in",
+            disableRedirect: true,
+          }),
+          clientIp,
+        }),
+        env
+      );
+      const providerUrl = new URL((await initiationResponse.json<{ url: string }>()).url);
+      const state = providerUrl.searchParams.get("state");
+      const stateCookie = cookiePair(initiationResponse, "__Secure-openinspect.state");
+
+      const callbackResponse = await handleRequest(
+        await signedWebRequest(
+          `/api/auth/callback/github?${callbackQuery}&state=${encodeURIComponent(state ?? "")}`,
+          {
+            method: "GET",
+            ...(sendStateCookie ? { cookie: stateCookie } : {}),
+            clientIp,
+          }
+        ),
+        env
+      );
+
+      expect(callbackResponse.status).toBe(302);
+      expect(callbackResponse.headers.get("Location")).toBe(
+        `${PUBLIC_WEB_ORIGIN}/login?error=${error}`
+      );
     }
   );
 

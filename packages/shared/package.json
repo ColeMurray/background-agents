@@ -110,6 +110,10 @@
       "import": "./dist/sign-in-provider.js",
       "types": "./dist/sign-in-provider.d.ts"
     },
+    "./sign-in-failure": {
+      "import": "./dist/sign-in-failure.js",
+      "types": "./dist/sign-in-failure.d.ts"
+    },
     "./git": {
       "import": "./dist/git.js",
       "types": "./dist/git.d.ts"

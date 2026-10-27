@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubProviderIdentityResolver } from "./github-identity";
+import { GitHubEmailPermissionError, GitHubProviderIdentityResolver } from "./github-identity";
+
+/** Like a real fetch body, this stalled stream errors once the request signal aborts. */
+function stalledBody(signal: AbortSignal | null | undefined): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      signal?.addEventListener("abort", () => controller.error(signal.reason));
+    },
+  });
+}
 
 describe("GitHubProviderIdentityResolver", () => {
   const config = {
@@ -175,7 +184,7 @@ describe("GitHubProviderIdentityResolver", () => {
         return Response.json({ id: 583_231, login: "octocat" });
       }
       emailSignal = init?.signal;
-      return new Response(new ReadableStream({ start() {} }), { status: 403 });
+      return new Response(stalledBody(init?.signal), { status: 403 });
     });
     const logger = { error: vi.fn() };
     const resolver = new GitHubProviderIdentityResolver(config, {
@@ -188,6 +197,27 @@ describe("GitHubProviderIdentityResolver", () => {
       failure: "provider_unavailable",
     });
     expect(emailSignal?.aborted).toBe(true);
+  });
+
+  it("aborts the request instead of waiting on a stalled GitHub success body", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "https://api.github.com/user") {
+        return new Response(stalledBody(init?.signal), { status: 200 });
+      }
+      return Response.json([
+        { email: "octocat@example.com", primary: true, verified: true, visibility: null },
+      ]);
+    });
+    const resolver = new GitHubProviderIdentityResolver(config, {
+      fetch,
+      logger: { error: vi.fn() },
+      requestTimeoutMs: 10,
+    });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+      message: "GitHub user response was not read",
+    });
   });
 
   it("constructs subsequent GitHub email page URLs locally", async () => {
@@ -282,8 +312,10 @@ describe("GitHubProviderIdentityResolver", () => {
       logger,
     });
 
-    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
-      name: "OAuthProviderError",
+    const lookup = resolver.resolveIdentity("ghu-access");
+    await expect(lookup).rejects.toBeInstanceOf(GitHubEmailPermissionError);
+    await expect(lookup).rejects.toMatchObject({
+      name: "GitHubEmailPermissionError",
       failure: "provider_rejected",
       message:
         "GitHub email lookup was not successful (status 403; Grant the GitHub App the Account -> Email addresses: Read-only permission and approve the installation update (see docs/GETTING_STARTED.md step 7))",
