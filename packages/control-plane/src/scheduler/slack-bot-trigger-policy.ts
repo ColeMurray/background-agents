@@ -16,16 +16,8 @@ export const SLACK_BOT_TRIGGER_LIMIT = 10;
 export const SLACK_BOT_TRIGGER_WINDOW_MS = 60 * 60 * 1000;
 export const SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON = "slack_bot_trigger_limit";
 
-/**
- * Matches the trigger metadata of a firing a bot's message started: the Slack
- * event handler serializes SlackRunMetadata with JSON.stringify, which writes
- * this key only when `botId` is set. A LIKE stays within portable SQL, which
- * has no JSON functions.
- */
-const BOT_FIRING_METADATA_PATTERN = '%"botId":%';
-
 export interface SlackBotTriggerPolicyDeps {
-  store: Pick<AutomationStore, "countEventFiringsSince" | "hasSkippedInvocationSince">;
+  store: Pick<AutomationStore, "countFiringsSince" | "hasSkippedInvocationSince">;
 }
 
 /**
@@ -53,12 +45,11 @@ export class SlackBotTriggerPolicy {
   /** Where a bot message stands against SLACK_BOT_TRIGGER_LIMIT runs in the window. */
   async limitState(automationId: string, now: number): Promise<SlackBotLimitState> {
     const since = now - SLACK_BOT_TRIGGER_WINDOW_MS;
-    const botFirings = await this.deps.store.countEventFiringsSince(
-      automationId,
+    const botFirings = await this.deps.store.countFiringsSince(automationId, {
+      actorKind: "bot",
       since,
-      BOT_FIRING_METADATA_PATTERN,
-      SLACK_BOT_TRIGGER_LIMIT
-    );
+      limit: SLACK_BOT_TRIGGER_LIMIT,
+    });
     if (botFirings < SLACK_BOT_TRIGGER_LIMIT) return "under_limit";
     const recorded = await this.deps.store.hasSkippedInvocationSince(
       automationId,

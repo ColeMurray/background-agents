@@ -406,11 +406,12 @@ Automations:
   unique per `(automation_id, environment_id)`).
 - `automation_repositories`: the live repository selection (0–10 rows per automation), unique per
   `(automation_id, repo_owner, repo_name)`.
-- `automation_invocations`: one thin row per firing — source, firing-scoped `trigger_key` (event
-  dedup, UNIQUE per automation) and `concurrency_key`, `skip_reason` for childless skips, and the
-  `failure_counted_at` compare-and-set stamp that makes auto-pause accounting exactly-once. Status
-  is **not** stored; it is derived from child runs (`DERIVED_INVOCATION_STATUS_SQL` in
-  `src/db/automation-store.ts` is the single definition).
+- `automation_invocations`: one thin row per firing — source, `actor_kind` (who authored the
+  triggering action: `person`, `bot`, `system` or `unknown`; the Slack bot-message limit counts
+  `bot`), firing-scoped `trigger_key` (event dedup, UNIQUE per automation) and `concurrency_key`,
+  `skip_reason` for childless skips, and the `failure_counted_at` compare-and-set stamp that makes
+  auto-pause accounting exactly-once. Status is **not** stored; it is derived from child runs
+  (`DERIVED_INVOCATION_STATUS_SQL` in `src/db/automation-store.ts` is the single definition).
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.

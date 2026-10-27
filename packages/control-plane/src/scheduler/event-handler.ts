@@ -43,6 +43,8 @@ export class AutomationEventHandler {
             automation,
             repositories,
             source: "event",
+            // The normalized GitHub event keeps the sender's login but drops sender.type.
+            actorKind: "unknown",
             triggerKey: event.triggerKey,
             concurrencyKey: event.concurrencyKey,
             eventRepositoryId: event.repositoryId,
@@ -98,6 +100,7 @@ export class AutomationEventHandler {
       const result = await invocations.start({
         automation,
         source: "event",
+        actorKind: "unknown",
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: null,

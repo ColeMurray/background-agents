@@ -199,12 +199,18 @@ describe("AutomationInvocationService", () => {
     const result = await service.start({
       automation,
       source: "event",
+      actorKind: "unknown",
       invocationId: "inv-1",
       triggerKey: "webhook:1",
       webhookFollowUpClaimId: "claim-1",
       instructionsOverrideFactory: instructions,
     });
     expect(result).toMatchObject({ outcome: "started", invocationId: "inv-1", launched: 1 });
+    expect(deps.store.insertInvocationGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invocation: expect.objectContaining({ source: "event", actor_kind: "unknown" }),
+      })
+    );
     expect(deps.store.acceptFollowUpReceipt).toHaveBeenCalledWith(
       automation.id,
       "webhook:1",
@@ -233,6 +239,7 @@ describe("AutomationInvocationService", () => {
     const result = await service.start({
       automation: { ...automation, owner_team_id: "team-1" },
       source: "schedule",
+      actorKind: "system",
       scheduledAt: 100,
       advanceToNextRunAt: 200,
     });
@@ -257,6 +264,7 @@ describe("AutomationInvocationService", () => {
       await service.start({
         automation,
         source: "event",
+        actorKind: "unknown",
         triggerKey: "delivery-1",
         instructionsOverrideFactory: instructions,
       })
@@ -272,7 +280,9 @@ describe("AutomationInvocationService", () => {
       child.status = "failed";
     });
     deps.failures.applyInvocationOutcome.mockRejectedValue(new Error("accounting unavailable"));
-    await expect(service.start({ automation, source: "schedule" })).resolves.toMatchObject({
+    await expect(
+      service.start({ automation, source: "schedule", actorKind: "system" })
+    ).resolves.toMatchObject({
       outcome: "started",
       launched: 0,
     });
@@ -287,6 +297,7 @@ describe("AutomationInvocationService", () => {
     const result = await service.skipEvent(
       {
         automation,
+        actorKind: "bot",
         triggerKey: "slack:msg:C1:1",
         concurrencyKey: "slack:C1:1",
         triggerMetadata: '{"botId":"B1"}',
@@ -297,6 +308,7 @@ describe("AutomationInvocationService", () => {
     expect(deps.store.insertSkippedInvocation).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         source: "event",
+        actor_kind: "bot",
         trigger_key: null,
         concurrency_key: "slack:C1:1",
         trigger_metadata: '{"botId":"B1"}',
@@ -310,9 +322,30 @@ describe("AutomationInvocationService", () => {
     const { deps, service } = invocationHarness();
     deps.store.getInvocationIdByTriggerKey.mockResolvedValue("existing-invocation");
     await expect(
-      service.skipEvent({ automation, triggerKey: "slack:msg:C1:1" }, "slack_bot_trigger_limit")
+      service.skipEvent(
+        { automation, actorKind: "bot", triggerKey: "slack:msg:C1:1" },
+        "slack_bot_trigger_limit"
+      )
     ).resolves.toEqual({ outcome: "deduplicated", invocationId: "existing-invocation" });
     expect(deps.store.insertSkippedInvocation).not.toHaveBeenCalled();
+  });
+
+  it("records an overlap skip under the firing's actor kind", async () => {
+    const { deps, service } = invocationHarness();
+    deps.store.getActiveRunForKey.mockResolvedValue(run());
+    await expect(
+      service.start({
+        automation,
+        source: "event",
+        actorKind: "bot",
+        triggerKey: "slack:msg:C1:1",
+        concurrencyKey: "slack:C1:1",
+      })
+    ).resolves.toMatchObject({ outcome: "skipped" });
+    expect(deps.store.insertSkippedInvocation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ actor_kind: "bot", skip_reason: "concurrent_run_active" }),
+      undefined
+    );
   });
 });
 
