@@ -4,7 +4,7 @@ description: Start a session when a matching message is posted in a watched Slac
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-27"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/integrations/SLACK.md
@@ -13,6 +13,8 @@ relatedCode:
   - packages/web/src/components/automations/condition-builder.tsx
   - packages/control-plane/src/routes/automation-validation.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/scheduler/slack-event-handler.ts
+  - packages/control-plane/src/scheduler/slack-bot-trigger-policy.ts
   - packages/control-plane/src/authorization/slack-post-gate.ts
   - packages/control-plane/src/authorization/teams-enforcement.ts
   - packages/slack-bot/src/channel-trigger.ts
@@ -67,13 +69,24 @@ A Slack automation must have a **Slack Channel** condition; the form blocks savi
 | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Slack Channel | Yes      | The message was posted in one of the selected channels. Pick channels by name from the list; if the list cannot load, type channel ids such as `C0123ABCD`. Channels the bot has not joined are marked "bot not in channel".                                                                |
 | Message Text  | No       | The message text matches. Modes: **contains** (substring), **exact** (whole message), or **regex** (regular expression). A **Case-insensitive** checkbox sets the `i` flag. Regex patterns are limited to 200 characters and the `i` and `m` flags; an invalid pattern is rejected on save. |
-| Slack User    | No       | The posting user's Slack id (for example `U0123ABCD`) is in the list (**include**) or not in the list (**exclude**).                                                                                                                                                                        |
+| Slack User    | No       | The author's Slack user id (for example `U0123ABCD`) or, for a bot, its bot id (for example `B0123ABCD`) is in the list (**include**) or not in the list (**exclude**).                                                                                                                     |
 
 Without a **Message Text** condition, every message in the watched channels starts a run. The bot-mention token is stripped before matching.
 
 ## Text-only ingestion
 
 Only the message text reaches the agent (up to 8 KB). Attachments are not forwarded: a `file_share` message is matched on its text like any other, and an image-only message with no text triggers nothing. Use an @mention or DM when the agent needs image input.
+
+## Bot messages
+
+Messages posted by other bots and integrations, such as alerting tools, CI notifications, and incoming webhooks, are ignored by default. Turn on **Trigger on bot messages** to let them start runs. The automation must also have a **Slack User** include condition listing the bot ids allowed to trigger it; saving is refused without one. That list limits people too, so add the user ids of anyone else who should still trigger the automation. The OpenInspect bot's own messages never trigger an automation.
+
+- Only a bot message's text is read. An integration that posts its content only in attachments or blocks triggers nothing.
+- A bot can start a run but never continues one. Its reply in a thread that already has a session is dropped.
+- Bot messages can start at most 10 runs of one automation per hour. Later bot messages in that hour are skipped, which stops a loop where a run's output makes another bot post in the watched channel. The first skip in the hour appears in the run history; the rest are not recorded. Bot messages that arrive at the same moment can overshoot the limit, since each is checked before the others are counted. Messages from people are not limited.
+- The agent is told the message came from a bot.
+
+No extra Slack scope is needed: bot posts arrive on the same `message.channels` and `message.groups` subscriptions.
 
 ## Thread context
 
@@ -83,7 +96,7 @@ The thread is fetched only after a run is admitted, so unmatched messages, threa
 
 ## What the agent receives
 
-The prompt is your instructions, then a context block, then a guardrail line. The block says which channel and user the message came from, includes a permalink when Slack returns one, includes any thread history, and wraps the message text in a `user_content` tag.
+The prompt is your instructions, then a context block, then a guardrail line. The block says which channel and author (a user or a bot) the message came from, includes a permalink when Slack returns one, includes any thread history, and wraps the message text in a `user_content` tag.
 
 ## Run feedback
 
@@ -121,6 +134,7 @@ Channel triggers widen who can start a coding session. Before enabling one:
 
 - Any member of a watched channel can supply a matching trigger unless conditions restrict them. Treat each watched channel as a source of untrusted requests to the automation's executor; membership and grant checks do not make that message trustworthy.
 - Prefer an allowlist: add a **Slack User** condition with **include** so only specific people can trigger it, and keep watched channels small.
+- Bot output is untrusted input that can start autonomous work. List only bots you trust in the required Slack User include condition. Anyone holding an incoming-webhook URL for the channel can post as that integration.
 - Message text reaches the agent as part of the prompt. Scope the instructions defensively and rely on the deployment's repository access boundary.
 - Regex conditions run without a per-match timeout. Patterns are length-capped and validated on save, but a pathological pattern is the author's responsibility.
 
@@ -133,6 +147,7 @@ Channel triggers widen who can start a coding session. Before enabling one:
 | Messages in the channel start nothing                | The app is not subscribed to `message.channels` / `message.groups`, lacks history scopes, or the message mentioned the bot | Complete the Slack app setup; mentions go to the interactive flow      |
 | An image posted in the channel starts nothing        | Slack automations ingest text only                                                                                         | Add text to the message, or use an @mention                            |
 | The automation replies to every message              | No **Message Text** condition and no `NO_REPLY` instruction                                                                | Add a text condition, and tell the agent when to reply with `NO_REPLY` |
+| Alerts posted by a bot start nothing                 | **Trigger on bot messages** is off, the bot's id is not in the Slack User include list, or it posts only attachments       | Turn the setting on, list the bot id, and make sure it sets text       |
 | The form refuses a regex                             | The pattern exceeds 200 characters, uses a flag other than `i` or `m`, or does not compile                                 | Shorten or fix the pattern                                             |
 
 ## Next steps

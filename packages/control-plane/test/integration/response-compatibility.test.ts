@@ -201,6 +201,8 @@ describe("ordinary HTTP response compatibility", () => {
       environmentId: "env_empty_compat",
       title: "Empty environment compatibility request",
       model: "anthropic/claude-haiku-4-5",
+      // A new Slack actor enrolls only with an attested email.
+      actorEmail: "compat@slack.test",
     });
     const request = await signedRequest({
       url: "https://test.local/sessions",

@@ -9,6 +9,7 @@ import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 import {
+  enrollSlackActor,
   initSession,
   queryDO,
   routeRequest,
@@ -664,6 +665,7 @@ describe("HTTP session access by enforcement mode", () => {
     });
 
     it("leaves other services and Slack collaborate/media routes outside this scope gate", async () => {
+      await enrollSlackActor("slack:U-OUTSIDE-SCOPE");
       const { sessionName, stub } = await initSession({ userId: CREATOR });
       await waitForSandboxStatus(stub, "failed");
       for (const service of ["linear-bot", "github-bot"] as const) {

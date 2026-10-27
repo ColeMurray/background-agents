@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { symmetricEncrypt } from "better-auth/crypto";
-import type { SourceControlAuthContext, SourceControlProvider } from "../../src/source-control";
+import type {
+  BuildGitPushSpecConfig,
+  GitPushSpec,
+  SourceControlAuthContext,
+  SourceControlProvider,
+} from "../../src/source-control";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
@@ -168,11 +173,13 @@ describe("POST /internal/create-pr", () => {
           targetBranch: string;
         }) =>
           `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,
-        buildGitPushSpec: (config: { targetBranch: string }) => ({
+        buildGitPushSpec: (config: BuildGitPushSpecConfig): GitPushSpec => ({
           remoteUrl: "https://example.invalid/repo.git",
           redactedRemoteUrl: "https://example.invalid/<redacted>.git",
           refspec: `HEAD:refs/heads/${config.targetBranch}`,
           targetBranch: config.targetBranch,
+          repoOwner: config.owner,
+          repoName: config.name,
           force: true,
         }),
       } as unknown as SourceControlProvider;
@@ -248,11 +255,13 @@ describe("POST /internal/create-pr", () => {
           targetBranch: string;
         }) =>
           `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,
-        buildGitPushSpec: (config: { targetBranch: string }) => ({
+        buildGitPushSpec: (config: BuildGitPushSpecConfig): GitPushSpec => ({
           remoteUrl: "https://example.invalid/repo.git",
           redactedRemoteUrl: "https://example.invalid/<redacted>.git",
           refspec: `HEAD:refs/heads/${config.targetBranch}`,
           targetBranch: config.targetBranch,
+          repoOwner: config.owner,
+          repoName: config.name,
           force: true,
         }),
       } as unknown as SourceControlProvider;
@@ -346,11 +355,13 @@ describe("POST /internal/create-pr", () => {
           repoOwner: config.owner,
           repoName: config.name,
         }),
-        buildGitPushSpec: (config: { targetBranch: string }) => ({
+        buildGitPushSpec: (config: BuildGitPushSpecConfig): GitPushSpec => ({
           remoteUrl: "https://example.invalid/repo.git",
           redactedRemoteUrl: "https://example.invalid/<redacted>.git",
           refspec: `HEAD:refs/heads/${config.targetBranch}`,
           targetBranch: config.targetBranch,
+          repoOwner: config.owner,
+          repoName: config.name,
           force: true,
         }),
       } as unknown as SourceControlProvider;

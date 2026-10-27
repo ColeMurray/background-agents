@@ -33,7 +33,7 @@ export type AlarmFinding =
   | { outcome: "connecting_timeout"; elapsedMs: number }
   | { outcome: "heartbeat_stale"; ageMs: number; isBooting: boolean }
   | { outcome: "boot_budget_exceeded"; elapsedMs: number }
-  | { outcome: "inactivity_timeout" }
+  | { outcome: "inactivity_timeout"; idleMs: number; timeoutMs: number }
   | { outcome: "inactivity_warning"; extensionMs: number }
   | { outcome: "healthy"; nextCheckMs: number };
 
@@ -79,7 +79,11 @@ export function evaluateAlarmPolicy(
   );
   switch (inactivity.action) {
     case "timeout":
-      return { outcome: "inactivity_timeout" };
+      return {
+        outcome: "inactivity_timeout",
+        idleMs: inactivity.idleMs,
+        timeoutMs: config.inactivity.timeoutMs,
+      };
     case "extend":
       return { outcome: "inactivity_warning", extensionMs: inactivity.extensionMs };
     case "schedule":

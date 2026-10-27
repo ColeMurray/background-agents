@@ -167,6 +167,7 @@ async def test_recovery_retries_empty_and_partial_maps(recovery_environment, tmp
         return httpx.Response(200, json={"tunnelUrls": next(responses)})
 
     environment = recovery_environment(handle)
+    environment.FETCH_RETRY_INTERVAL_SECONDS = 0.005
     assert await environment.wait_until_ready([3000, 5173]) is True
     assert len(requests) == 3
     assert (tmp_path / ".tunnels.env").read_text().splitlines() == [
@@ -174,6 +175,34 @@ async def test_recovery_retries_empty_and_partial_maps(recovery_environment, tmp
         "TUNNEL_3000=https://fresh.example.com",
         "TUNNEL_5173=https://other.example.com",
     ]
+
+
+async def test_recovery_spaces_remote_fetches_while_urls_are_unavailable(recovery_environment):
+    handler = MagicMock(return_value=httpx.Response(200, json={"tunnelUrls": {}}))
+    environment = recovery_environment(handler)
+
+    assert await environment.wait_until_ready([3000]) is False
+    assert handler.call_count == 1
+
+
+async def test_recovery_keeps_polling_local_file_between_remote_fetches(
+    recovery_environment, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("TUNNEL_WAIT_TIMEOUT_SECONDS", "1")
+    handler = MagicMock(return_value=httpx.Response(200, json={"tunnelUrls": {}}))
+    environment = recovery_environment(handler)
+    environment.FETCH_RETRY_INTERVAL_SECONDS = 10
+
+    async def write_file():
+        await asyncio.sleep(0.02)
+        (tmp_path / ".tunnels.env").write_text("TUNNEL_3000=https://fresh.example.com\n")
+
+    writer = asyncio.create_task(write_file())
+    try:
+        assert await environment.wait_until_ready([3000]) is True
+    finally:
+        await writer
+    assert handler.call_count == 1
 
 
 @pytest.mark.parametrize(

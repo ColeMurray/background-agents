@@ -64,6 +64,10 @@ const DEFAULT_NOW = (): number => Date.now();
 /** How job ids are minted, unless a test supplies its own. */
 const DEFAULT_NEW_ID = (): string => crypto.randomUUID();
 
+function isJobKind(kind: string): kind is JobKind {
+  return Object.hasOwn(JOB_KINDS, kind);
+}
+
 export interface NodeJobsOptions {
   store: JobStore;
   /**
@@ -271,7 +275,12 @@ export class NodeJobs implements Jobs {
   }
 
   private async deliver(job: ClaimedJob): Promise<void> {
-    const kind = job.kind as JobKind;
+    if (!isJobKind(job.kind)) {
+      this.bury(job, `Unknown job kind: ${job.kind}`);
+      return;
+    }
+
+    const kind = job.kind;
     const { retry } = JOB_KINDS[kind];
     // Only a recovered claim can arrive over budget: the settlement below
     // buries a job that spends its last attempt, so the normal path never

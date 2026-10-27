@@ -40,6 +40,26 @@ export function isEmailAttestingProvider(provider: ProviderIdentity["provider"])
   return EMAIL_ATTESTING_PROVIDERS.has(provider);
 }
 
+/**
+ * Ingress providers whose unknown actors are enrolled only with an attested
+ * email. An actor links to an existing user by email only at enrollment and
+ * is never relinked, and every new user gets the default role, so an
+ * email-less enrollment would give someone a second account free of the
+ * suspension or role restrictions on their existing one.
+ *
+ * Known limitation: a Slack user whose profile email the bot cannot read,
+ * typically an external Slack Connect user, cannot be enrolled and so cannot
+ * use the bot. Linear is not listed because its bot still sends claim-less
+ * requests before its first claim-bearing one.
+ */
+const ENROLLMENT_EMAIL_REQUIRED_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
+  "slack",
+]);
+
+export function requiresEnrollmentEmail(provider: ProviderIdentity["provider"]): boolean {
+  return ENROLLMENT_EMAIL_REQUIRED_PROVIDERS.has(provider);
+}
+
 export interface ResolvedUser {
   id: string;
   displayName: string | null;

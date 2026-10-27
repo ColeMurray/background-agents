@@ -19,7 +19,13 @@ export async function handleSlackEvent(
 ): Promise<void> {
   if (payload.type !== "event_callback" || !payload.event) return;
   const event = payload.event;
-  if (event.bot_id) return;
+  if (event.bot_id) {
+    // Bots never reach the DM, mention or App Home paths. A bot's channel message
+    // may still trigger an automation that opted in to bot messages; the channel
+    // trigger excludes this bot's own posts.
+    if (event.type === "message") await handleChannelTrigger(event, env, traceId);
+    return;
+  }
   if (event.type === "app_home_opened" && event.tab === "home" && event.user) {
     await publishAppHome(env, event.user);
     return;

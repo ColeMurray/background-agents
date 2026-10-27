@@ -16,7 +16,7 @@ import { createLogger } from "../logger";
 import type { RequestContext } from "../routes/shared";
 import { error, json } from "../routes/shared";
 import type { Env } from "../types";
-import { Scheduler } from "../scheduler/scheduler";
+import { createScheduler } from "../scheduler/factory";
 
 type AutomationEventForSource<S extends AutomationEventSource> = Extract<
   AutomationEvent,
@@ -107,7 +107,7 @@ export async function forwardAutomationEventToScheduler(
 ): Promise<Response> {
   let result;
   try {
-    result = await new Scheduler(ctx.db, env, ctx.executionCtx).event(event);
+    result = await createScheduler(ctx.db, env, ctx.executionCtx).event(event);
   } catch {
     return json({ ok: false, error: "Failed to reach scheduler" }, 502);
   }

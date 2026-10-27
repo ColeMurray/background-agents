@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { relayJsonResponse } from "@/lib/control-plane-json-proxy";
 import {
@@ -33,13 +33,14 @@ function isSameOriginJsonRequest(request: NextRequest): boolean {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
   if (!isSameOriginJsonRequest(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const rejection = rejectMissingBrowserSessionCookie(request, {
+    "Cache-Control": "private, no-store",
+  });
+  if (rejection) return rejection;
 
   let body: SessionInboxMarkReadRequest | null;
   try {

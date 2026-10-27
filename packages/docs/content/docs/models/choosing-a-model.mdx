@@ -4,7 +4,7 @@ description: Enable models for your workspace, pick a model and effort in the co
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/shared/src/models.ts
   - packages/shared/src/harnesses.ts
@@ -42,11 +42,11 @@ The deployment default model is Claude Sonnet 4.6 (`anthropic/claude-sonnet-4-6`
 
 The composer shows one control that reads `<harness>: <model> <effort>`. Open it to see up to three rows:
 
-| Row        | What it does                                                                                                                                                           |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Agent**  | Chooses the harness (OpenCode or Claude Agent). Shown only when you create a session; the harness is fixed afterwards. See [Agent harnesses](/models/agent-harnesses). |
-| **Model**  | Lists the enabled models the chosen harness can run, grouped by provider, with each model's display name and one-line description.                                     |
-| **Effort** | Lists **Default** plus the efforts the model supports (None, Low, Medium, High, XHigh, Max). Hidden for models without reasoning controls.                             |
+| Row        | What it does                                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Agent**  | Chooses the harness (OpenCode, Claude Agent, or Codex). Shown only when you create a session; the harness is fixed afterwards. See [Agent harnesses](/models/agent-harnesses). |
+| **Model**  | Lists the enabled models the chosen harness can run, grouped by provider, with each model's display name and one-line description.                                             |
+| **Effort** | Lists **Default** plus the efforts the model supports on the chosen harness (None, Low, Medium, High, XHigh, Max). Hidden for models without reasoning controls.               |
 
 **Default** effort means the model's own default from the table below. Choosing a specific effort applies it to the prompts you send.
 
@@ -58,7 +58,7 @@ Reasoning efforts and defaults below come from the shared model catalog. A model
 
 ### Anthropic
 
-Runs on both harnesses. Credential: `ANTHROPIC_API_KEY` as a global secret, or on Claude Agent sessions a connected Claude account (see [Provider accounts](/models/provider-accounts)).
+Runs on OpenCode and Claude Agent. Credential: `ANTHROPIC_API_KEY` as a global secret, or on Claude Agent sessions a connected Claude account (see [Provider accounts](/models/provider-accounts)).
 
 | Model ID                      | Display name      | Reasoning efforts             | Default effort |
 | ----------------------------- | ----------------- | ----------------------------- | -------------- |
@@ -78,7 +78,7 @@ Runs on both harnesses. Credential: `ANTHROPIC_API_KEY` as a global secret, or o
 
 ### OpenAI
 
-Runs on OpenCode only. Credential: a connected ChatGPT account, or `OPENAI_API_KEY` in the session's secret scope when the session uses API-key mode.
+Runs on OpenCode, and every model except GPT 5.4 also runs on Codex. Credential: a connected ChatGPT account, or `OPENAI_API_KEY` in the session's secret scope when the session uses API-key mode.
 
 | Model ID               | Display name  | Reasoning efforts                   | Default effort |
 | ---------------------- | ------------- | ----------------------------------- | -------------- |
@@ -93,6 +93,20 @@ Runs on OpenCode only. Credential: a connected ChatGPT account, or `OPENAI_API_K
 | `openai/gpt-6-luna`    | GPT-6 Luna    | none, low, medium, high, xhigh, max | medium         |
 
 "Not set" means the composer shows **Default** and sends no effort unless you choose one.
+
+On Codex, each model has its own effort list and default: never None, and Max on some models that do not offer it on OpenCode.
+
+| Display name  | Codex efforts                 | Codex default |
+| ------------- | ----------------------------- | ------------- |
+| GPT 5.4       | Not on Codex                  | N/A           |
+| GPT 5.5       | low, medium, high, xhigh      | medium        |
+| GPT 5.6 Sol   | low, medium, high, xhigh, max | low           |
+| GPT 5.6 Terra | low, medium, high, xhigh, max | medium        |
+| GPT 5.6 Luna  | low, medium, high, xhigh, max | medium        |
+| GPT-6 Astra   | low, medium, high, xhigh, max | low           |
+| GPT-6 Sol     | low, medium, high, xhigh, max | medium        |
+| GPT-6.1 Sol   | low, medium, high, xhigh, max | low           |
+| GPT-6 Luna    | low, medium, high, xhigh, max | medium        |
 
 ### xAI / SuperGrok
 
@@ -189,12 +203,12 @@ Some models appear more than once because they are reachable through more than o
 
 Automations run on the harness chosen in the automation editor. GitHub, Linear, and Slack sessions run on the **Agent harness** chosen in each integration's settings (OpenCode by default). GitHub and Linear also accept a harness per repository, and Slack users can pick their own harness in the app's **Home** tab. All three preserve the selected harness: if it cannot run the resolved model, the bot replies with a compatibility explanation and creates no session instead of switching to OpenCode. Each surface picks its model from these settings:
 
-| Surface     | Where the default lives                                                                                                                                                                                                                                                                                                 |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub      | Settings › Integrations › GitHub: **Default model** and **Default reasoning effort**, plus per-repository **Repository Overrides**. Falls back to the deployment default model. An `@mention` can start with `!model` and `!reasoning` flags to override them for the session it starts.                                |
-| Linear      | Settings › Integrations › Linear: **Default model and effort** and **Repository Overrides**. A `model:*` issue label wins when **Allow model labels** is on, then a Linear user preference (when allowed), then the repository override or global default, then the deployment default.                                 |
-| Slack       | Settings › Integrations › Slack: **Default model**. A user's **Model** and **Reasoning effort** in the app's **Home** tab win over it, and `!model` and `!reasoning` flags win over both for the session they start. Uses the deployment default when no model is set. Claude Agent requires a Slack **Default model**. |
-| Automations | The automation editor picks a model and effort per automation. The list is limited to enabled models the automation's harness can run.                                                                                                                                                                                  |
+| Surface     | Where the default lives                                                                                                                                                                                                                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub      | Settings › Integrations › GitHub: **Default model** and **Default reasoning effort**, plus per-repository **Repository Overrides**. Falls back to the deployment default model. An `@mention` can start with `!model` and `!reasoning` flags to override them for the session it starts.                                         |
+| Linear      | Settings › Integrations › Linear: **Default model and effort** and **Repository Overrides**. A `model:*` issue label wins when **Allow model labels** is on, then a Linear user preference (when allowed), then the repository override or global default, then the deployment default.                                          |
+| Slack       | Settings › Integrations › Slack: **Default model**. A user's **Model** and **Reasoning effort** in the app's **Home** tab win over it, and `!model` and `!reasoning` flags win over both for the session they start. Uses the deployment default when no model is set. Claude Agent and Codex require a Slack **Default model**. |
+| Automations | The automation editor picks a model and effort per automation. The list is limited to enabled models the automation's harness can run.                                                                                                                                                                                           |
 
 All of these selectors show only models enabled in Settings › Models. Reasoning values must be ones the selected model supports.
 
@@ -227,19 +241,20 @@ For a refused GitHub launch, retry a mention with a compatible `!model`, update 
 </Accordion>
   <Accordion title='"No enabled models can run on Claude Agent."'>
     Claude Agent runs Anthropic models only, and every Anthropic model is disabled. Enable at least
-    one Anthropic model, or switch the Agent row to OpenCode.
+    one Anthropic model, or switch the Agent row to OpenCode. The same message naming Codex means no
+    enabled OpenAI model runs on Codex; enable one from the [OpenAI table](#openai).
 
 </Accordion>
   <Accordion title="A per-message model override was rejected">
     The override named a model the session's harness cannot run (for example an OpenAI model on a
-    Claude Agent session). Send the message with a compatible model, or start a new session on the
-    other harness.
+    Claude Agent session). Send the message with a compatible model, or start a new session on a
+    harness that can run it.
 
 </Accordion>
 </Accordions>
 
 ## Next steps
 
-- [Agent harnesses: OpenCode and Claude Agent](/models/agent-harnesses)
+- [Agent harnesses: OpenCode, Claude Agent, and Codex](/models/agent-harnesses)
 - [Provider accounts and API keys](/models/provider-accounts)
 - [Secrets](/configure/secrets)

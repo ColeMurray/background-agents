@@ -1,12 +1,12 @@
 {
-  "runtimeVersion": "v77-tunnel-environment-recovery",
-  "generation": 77,
+  "runtimeVersion": "v78-tunnel-environment-recovery",
+  "generation": 78,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 77,
+  "minimumRebuildGeneration": 78,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,
-    "codex": 76
+    "codex": 77
   }
 }

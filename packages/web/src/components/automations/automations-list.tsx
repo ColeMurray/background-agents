@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { describeCron } from "@open-inspect/shared/cron";
+import { describeAutomationSchedule } from "@/lib/automation-schedule";
 import { GITHUB_WEBHOOK_EVENT_CATALOG } from "@open-inspect/shared/triggers";
 import type { Automation, AutomationListItem } from "@open-inspect/shared/types/automations";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
@@ -49,8 +49,8 @@ const GITHUB_EVENT_LABELS: Record<string, string> = Object.fromEntries(
 );
 
 function describeTrigger(automation: Automation): string {
-  if (automation.triggerType === "schedule" && automation.scheduleCron) {
-    return describeCron(automation.scheduleCron, automation.scheduleTz);
+  if (automation.triggerType === "schedule") {
+    return describeAutomationSchedule(automation);
   }
 
   const TRIGGER_LABELS: Record<string, string> = {
@@ -82,7 +82,7 @@ function describeCompactTrigger(automation: Automation): string {
     return describeTrigger(automation);
   }
 
-  return describeCron(automation.scheduleCron, automation.scheduleTz, { compact: true });
+  return describeAutomationSchedule(automation, { compact: true });
 }
 
 export function AutomationsList({

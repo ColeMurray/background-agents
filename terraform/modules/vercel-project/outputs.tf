@@ -22,3 +22,8 @@ output "root_directory" {
   description = "The repository directory the project builds from"
   value       = var.root_directory
 }
+
+output "serverless_region" {
+  description = "The configured function region of the Vercel project"
+  value       = vercel_project.this.serverless_function_region
+}

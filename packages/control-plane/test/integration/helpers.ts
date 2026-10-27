@@ -183,6 +183,8 @@ export interface ServiceRequestInit {
   actor?: string;
   initialUserRole?: InitialUserRole;
   as?: { userId: string; role: BuiltInRoleKey };
+  /** Defaults to following redirects, like `fetch`. */
+  redirect?: RequestInit["redirect"];
 }
 
 /**
@@ -220,7 +222,28 @@ export async function serviceFetch(url: string, init?: ServiceRequestInit): Prom
     method: init?.method ?? DEFAULT_SERVICE_REQUEST_METHOD,
     headers: await serviceRequestHeaders(url, init),
     body: init?.body,
+    redirect: init?.redirect,
   });
+}
+
+/**
+ * Enroll a Slack actor the way the Slack bot does before any other request:
+ * `POST /actors/me` with its attested email. A new Slack actor is refused
+ * without one.
+ */
+export async function enrollSlackActor(
+  actor: `slack:${string}`,
+  email = `${actor.slice("slack:".length).toLowerCase()}@slack.test`
+): Promise<void> {
+  const response = await serviceFetch("https://test.local/actors/me", {
+    service: "slack-bot",
+    method: "POST",
+    actor,
+    body: JSON.stringify({ email }),
+  });
+  if (response.status !== 204) {
+    throw new Error(`Enrolling ${actor} failed with ${response.status}: ${await response.text()}`);
+  }
 }
 
 /** Create a production-shaped D1 session and DO, then return the stub and IDs. */

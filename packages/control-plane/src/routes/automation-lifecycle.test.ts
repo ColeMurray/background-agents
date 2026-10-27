@@ -13,7 +13,7 @@ import { ModelPreferencesStore } from "../db/model-preferences";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
-} from "../scheduler/scheduler";
+} from "../scheduler/contracts";
 import { createTestRequestHandler } from "../router.test-support";
 import { automationRoutes } from "./automations";
 import {
@@ -87,22 +87,10 @@ vi.mock("../session/identity", () => ({
     mockResolveGitHubEnrichmentForRequest(...args),
 }));
 
-vi.mock("../scheduler/scheduler", () => ({
-  AutomationExecutionUnauthorizedError: class AutomationExecutionUnauthorizedError extends Error {
-    constructor() {
-      super("Automation owner is not authorized to execute");
-      this.name = "AutomationExecutionUnauthorizedError";
-    }
-  },
-  AutomationTriggerBlockedError: class AutomationTriggerBlockedError extends Error {
-    constructor(readonly reason = "concurrent_run_active") {
-      super("An active run already exists");
-      this.name = "AutomationTriggerBlockedError";
-    }
-  },
-  Scheduler: vi.fn().mockImplementation(function () {
-    return { trigger: (...args: unknown[]) => mockSchedulerTrigger(...args) };
-  }),
+vi.mock("../scheduler/factory", () => ({
+  createScheduler: vi.fn(() => ({
+    trigger: (...args: unknown[]) => mockSchedulerTrigger(...args),
+  })),
 }));
 
 const callRoute = automationRequest(createTestRequestHandler([automationRoutes]));
@@ -131,6 +119,69 @@ describe("automation lifecycle routes", () => {
   });
 
   describe("POST /automations/:id/resume", () => {
+    it("resumes a cancelled one-shot at its original future time", async () => {
+      const at = Date.now() + 3_600_000;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: at,
+        enabled: 0,
+        next_run_at: null,
+      });
+      const response = await callRoute("POST", "/automations/auto-1/resume");
+      expect(response.status).toBe(200);
+      expect(mockStore.bindResume).toHaveBeenCalledWith("auto-1", at);
+    });
+
+    it("returns conflict when a one-shot changes between admission and resume", async () => {
+      const firstAt = Date.now() + 60_000;
+      const observed = {
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: firstAt,
+        enabled: 0,
+        next_run_at: null,
+      };
+      mockStore.getById.mockResolvedValueOnce(observed).mockResolvedValue({
+        ...observed,
+        schedule_once_at: firstAt + 60_000,
+      });
+      mockBatch.mockResolvedValue([{ meta: { changes: 0 } }]);
+      const response = await callRoute("POST", "/automations/auto-1/resume");
+      expect(response.status).toBe(409);
+      expect(mockStore.bindResume).toHaveBeenCalledWith("auto-1", firstAt);
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining("schedule changed"),
+      });
+    });
+
+    it("returns 404 when a one-shot is deleted during resume", async () => {
+      mockStore.getById
+        .mockResolvedValueOnce({
+          ...sampleRow,
+          schedule_cron: null,
+          schedule_once_at: Date.now() + 60_000,
+          enabled: 0,
+          next_run_at: null,
+        })
+        .mockResolvedValue(null);
+      mockBatch.mockResolvedValue([{ meta: { changes: 0 } }]);
+      expect((await callRoute("POST", "/automations/auto-1/resume")).status).toBe(404);
+    });
+
+    it("refuses to re-arm a one-shot whose scheduled time has passed", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: Date.now() - 1,
+        enabled: 0,
+        next_run_at: null,
+      });
+      const response = await callRoute("POST", "/automations/auto-1/resume");
+      expect(response.status).toBe(400);
+      expect(mockStore.bindResume).not.toHaveBeenCalled();
+    });
+
     it("resumes Codex without querying execution policy", async () => {
       const preferences = vi
         .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")
@@ -290,7 +341,10 @@ describe("automation lifecycle routes", () => {
       const res = await callRoute("POST", "/automations/auto-1/trigger");
 
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "Execution authorization required" });
+      expect(await res.json()).toEqual({
+        error: "Execution authorization required",
+        reason_code: "execution_authorization_denied",
+      });
     });
 
     it("returns 500 when the scheduler cannot launch the automation", async () => {

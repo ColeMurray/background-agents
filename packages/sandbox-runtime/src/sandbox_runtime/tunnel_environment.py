@@ -26,6 +26,7 @@ TUNNEL_FETCH_TIMEOUT_SECONDS = 2.0
 class TunnelEnvironment:
     DEFAULT_WAIT_TIMEOUT_SECONDS = 30
     WAIT_POLL_INTERVAL_SECONDS = 0.2
+    FETCH_RETRY_INTERVAL_SECONDS = 1.0
 
     def __init__(
         self,
@@ -133,6 +134,7 @@ class TunnelEnvironment:
         expected_prefixes = [f"TUNNEL_{port}=" for port in expected_ports]
         start_time = time.monotonic()
         deadline = start_time + timeout_seconds
+        next_fetch_time = start_time
         while time.monotonic() < deadline:
             if path.exists():
                 try:
@@ -150,11 +152,13 @@ class TunnelEnvironment:
                         return True
                 except Exception as error:
                     self.log.warn("tunnel.env_file_read_failed", path=str(path), exc=error)
-            remaining_seconds = deadline - time.monotonic()
-            if await self._restore_from_control_plane(
-                expected_ports, min(TUNNEL_FETCH_TIMEOUT_SECONDS, remaining_seconds)
-            ):
-                return True
+            now = time.monotonic()
+            if self._urls_endpoint is not None and next_fetch_time <= now < deadline:
+                if await self._restore_from_control_plane(
+                    expected_ports, min(TUNNEL_FETCH_TIMEOUT_SECONDS, deadline - now)
+                ):
+                    return True
+                next_fetch_time = time.monotonic() + self.FETCH_RETRY_INTERVAL_SECONDS
             await asyncio.sleep(
                 min(self.WAIT_POLL_INTERVAL_SECONDS, max(0, deadline - time.monotonic()))
             )

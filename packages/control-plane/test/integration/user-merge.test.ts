@@ -253,6 +253,7 @@ describe("mergeUsers", () => {
     expect(preview.counts).toMatchObject({
       identitiesRepointed: 1,
       sessionsRepointed: 1,
+      teamLeadRolesPromoted: 1,
       teamMembershipsDeduped: 1,
       teamMembershipsRepointed: 0,
       sessionCollaboratorsRepointed: 1,
@@ -536,13 +537,101 @@ describe("mergeUsers", () => {
 
     await expect(
       mergeUsers(racingDatabase, { survivorId: SURVIVOR, loserId: LOSER })
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ name: "UserMergeError", code: "preconditions_changed" });
+    expect(await getUserRow(LOSER)).not.toBeNull();
+    // The refusal is the only write, recorded with the write-time reason.
+    expect(
+      await env.DB.prepare(
+        `SELECT operation_result, reason_code FROM authorization_audit_events
+         WHERE action = 'workspace.user_merged'`
+      ).all()
+    ).toMatchObject({
+      results: [{ operation_result: "rejected", reason_code: "preconditions_changed" }],
+    });
+  });
+
+  it("refuses to give a user two GitHub identities, at preflight and at write time", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await insertIdentity({
+      id: "i3111111111111111111111111111111",
+      userId: SURVIVOR,
+      provider: "github",
+      providerUserId: "1001",
+      issuer: "https://github.com",
+    });
+    const loserGitHub = {
+      id: "i3211111111111111111111111111111",
+      userId: LOSER,
+      provider: "github",
+      providerUserId: "1002",
+      issuer: "https://github.com",
+    };
+    await insertIdentity(loserGitHub);
+
+    await expect(
+      mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER, dryRun: true })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+
+    // Linked after preflight: the in-batch decision refuses it too.
+    await env.DB.prepare("DELETE FROM user_identities WHERE id = ?").bind(loserGitHub.id).run();
+    let batchCount = 0;
+    const racingDatabase: SqlDatabase = {
+      prepare(query: string): SqlStatement {
+        return env.DB.prepare(query) as unknown as SqlStatement;
+      },
+      async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+        batchCount += 1;
+        if (batchCount === 2) await insertIdentity(loserGitHub);
+        return env.DB.batch(statements as unknown as D1PreparedStatement[]) as Promise<
+          SqlResult<T>[]
+        >;
+      },
+    };
+    await expect(
+      mergeUsers(racingDatabase, { survivorId: SURVIVOR, loserId: LOSER })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
     expect(await getUserRow(LOSER)).not.toBeNull();
     expect(
       await env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'workspace.user_merged'"
-      ).first()
-    ).toEqual({ count: 0 });
+        "SELECT COUNT(*) AS count FROM user_identities WHERE user_id = ? AND provider = 'github'"
+      )
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ count: 1 });
+  });
+
+  it("rolls back when the loser's email is verified after preflight", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com", emailVerified: 0 });
+    let batchCount = 0;
+    const racingDatabase: SqlDatabase = {
+      prepare(query: string): SqlStatement {
+        return env.DB.prepare(query) as unknown as SqlStatement;
+      },
+      async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
+        batchCount += 1;
+        // Batch 1 is the role preflight; a sign-in proves the email before batch 2 writes.
+        if (batchCount === 2) {
+          await env.DB.prepare("UPDATE users SET email_verified = 1 WHERE id = ?")
+            .bind(LOSER)
+            .run();
+        }
+        return env.DB.batch(statements as unknown as D1PreparedStatement[]) as Promise<
+          SqlResult<T>[]
+        >;
+      },
+    };
+
+    await expect(
+      mergeUsers(racingDatabase, { survivorId: SURVIVOR, loserId: LOSER })
+    ).rejects.toMatchObject({ name: "UserMergeError", code: "source_changed" });
+    expect(await getUserRow(LOSER)).toMatchObject({ email_verified: 1 });
+    expect(
+      await env.DB.prepare("SELECT email, email_verified FROM users WHERE id = ?")
+        .bind(SURVIVOR)
+        .first()
+    ).toEqual({ email: null, email_verified: 0 });
   });
 
   it("rejects a missing survivor and a self-merge", async () => {

@@ -27,11 +27,11 @@
     "user": "root",
     "home": "/root"
   },
-  "opencomputer": {
+  "boat": {
     "os": "debian",
-    "base": "provider-default",
+    "base": "ubuntu:24.04",
     "node": "24",
-    "user": "sandbox",
-    "home": "/home/sandbox"
+    "user": "user",
+    "home": "/home/user"
   }
 }

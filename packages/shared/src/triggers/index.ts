@@ -97,6 +97,7 @@ export type { WebhookDeliveryOptions } from "./webhook";
 export {
   slackSource,
   hasValidSlackChannelCondition,
+  hasSlackActorIncludeList,
   normalizeSlackChannelConditions,
   parseSlackChannelCondition,
   normalizeSlackEvent,
@@ -107,6 +108,7 @@ export {
   ALLOWED_REGEX_FLAGS,
 } from "./slack";
 export type {
+  SlackMessageAuthor,
   SlackMessageInput,
   SlackChannelMeta,
   SlackChannelConditionParseResult,

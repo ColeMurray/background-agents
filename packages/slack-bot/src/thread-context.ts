@@ -17,7 +17,7 @@ import {
 } from "@open-inspect/shared/slack";
 import type { Env } from "./types";
 import { slackFileAnnotations } from "./attachments";
-import { getBotUserId } from "./bot-identity";
+import { getBotIdentity } from "./bot-identity";
 import { collectForwardedMessages } from "./forwarded-messages";
 import { createLogger } from "./logger";
 
@@ -53,10 +53,8 @@ export async function buildThreadContextRecords(
   mode: "interactive" | "automation",
   traceId?: string
 ): Promise<ThreadContextRecord[]> {
-  const botUserId = await getBotUserId(env, traceId);
-  const speakers = messages.map((message) =>
-    classifyThreadSpeaker(message, botUserId ?? undefined)
-  );
+  const botUserId = (await getBotIdentity(env, traceId))?.userId;
+  const speakers = messages.map((message) => classifyThreadSpeaker(message, botUserId));
   const userIds = [
     ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
   ];

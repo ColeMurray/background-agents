@@ -17,8 +17,10 @@ describe("session media API route", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("preserves a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await GET(new Request("http://localhost/api/sessions/session-1/media/a1"), {
       params: Promise.resolve({
@@ -28,15 +30,11 @@ describe("session media API route", () => {
     });
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch media" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
   it("rejects invalid artifact IDs before proxying to the control plane", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
-
     const response = await GET(new Request("http://localhost/api/sessions/session-1/media/bad"), {
       params: Promise.resolve({
         id: "session-1",
@@ -50,10 +48,6 @@ describe("session media API route", () => {
   });
 
   it("rejects invalid session IDs before proxying to the control plane", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
-
     const response = await GET(new Request("http://localhost/api/sessions/bad/media/a1"), {
       params: Promise.resolve({
         id: "../admin",
@@ -67,9 +61,6 @@ describe("session media API route", () => {
   });
 
   it("proxies successful media streams with private no-store caching", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
     const upstreamBody = Uint8Array.from([0x89, 0x50, 0x4e, 0x47]);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response(upstreamBody, {
@@ -101,9 +92,6 @@ describe("session media API route", () => {
   });
 
   it("does not reuse the encoded payload length for a decoded media stream", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response("decoded media", {
         headers: {
@@ -127,9 +115,6 @@ describe("session media API route", () => {
   });
 
   it("forwards range requests and range response headers", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
     const upstreamBody = Uint8Array.from([0x66, 0x74, 0x79, 0x70]);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response(upstreamBody, {
@@ -171,9 +156,6 @@ describe("session media API route", () => {
   });
 
   it("passes through upstream error statuses", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       new Response("not found", {
         status: 404,
@@ -192,9 +174,6 @@ describe("session media API route", () => {
   });
 
   it("returns 500 when the control plane request throws", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "user-1" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockRejectedValue(new Error("boom"));
 
     const response = await GET(new Request("http://localhost/api/sessions/session-1/media/a1"), {
