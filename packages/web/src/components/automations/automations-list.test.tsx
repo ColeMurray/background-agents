@@ -11,6 +11,7 @@ import { AutomationsList } from "./automations-list";
 expect.extend(matchers);
 afterEach(() => {
   cleanup();
+  window.getSelection()?.removeAllRanges();
   vi.useRealTimers();
 });
 
@@ -63,6 +64,45 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
 }
 
 describe("AutomationsList navigation", () => {
+  it.each([false, true])(
+    "prevents metadata navigation only when text is selected: %s",
+    (hasSelection) => {
+      render(
+        <AutomationsList
+          canCreate
+          automations={[makeAutomation()]}
+          emptyState={{ kind: "no-automations" }}
+          onPause={noop}
+          onResume={noop}
+          onTrigger={noop}
+          onDelete={noop}
+        />
+      );
+
+      const metadata = screen.getByText("acme/web-app");
+      const link = metadata.closest("a")!;
+      expect(link).toHaveAttribute("href", "/automations/auto-1");
+      expect(link).toHaveAttribute("draggable", "false");
+      if (hasSelection) {
+        const range = document.createRange();
+        range.selectNodeContents(metadata);
+        window.getSelection()!.addRange(range);
+      }
+
+      let navigationPrevented: boolean | undefined;
+      window.addEventListener(
+        "click",
+        (event) => {
+          navigationPrevented = event.defaultPrevented;
+          event.preventDefault();
+        },
+        { once: true }
+      );
+      fireEvent.click(link);
+      expect(navigationPrevented).toBe(hasSelection);
+    }
+  );
+
   it.each([undefined, "team/one"])(
     "provides independent native row and title links with team scope %s",
     (teamId) => {
