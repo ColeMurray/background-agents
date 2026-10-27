@@ -162,7 +162,9 @@ export function AutomationsList({
                     href={navigation.detail(automation.id)}
                     draggable={false}
                     onClick={(event) => {
-                      if (window.getSelection()?.toString()) event.preventDefault();
+                      if (event.detail > 0 && window.getSelection()?.toString()) {
+                        event.preventDefault();
+                      }
                     }}
                     className="relative z-10 inline-flex"
                   >
@@ -246,7 +248,9 @@ export function AutomationsList({
                 href={navigation.detail(automation.id)}
                 draggable={false}
                 onClick={(event) => {
-                  if (window.getSelection()?.toString()) event.preventDefault();
+                  if (event.detail > 0 && window.getSelection()?.toString()) {
+                    event.preventDefault();
+                  }
                 }}
                 className="relative z-10 mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground"
               >

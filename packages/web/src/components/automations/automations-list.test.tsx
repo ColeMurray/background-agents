@@ -65,13 +65,17 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
 
 describe("AutomationsList navigation", () => {
   it.each([
-    ["acme/web-app", false],
-    ["acme/web-app", true],
-    ["Enabled", false],
-    ["Enabled", true],
+    ["acme/web-app", false, 1],
+    ["acme/web-app", true, 1],
+    ["acme/web-app", false, 0],
+    ["acme/web-app", true, 0],
+    ["Enabled", false, 1],
+    ["Enabled", true, 1],
+    ["Enabled", false, 0],
+    ["Enabled", true, 0],
   ] as const)(
-    "preserves native navigation for %s unless a non-empty text selection exists: %s",
-    (text, hasSelection) => {
+    "preserves native navigation for %s (selected=%s, click detail=%s)",
+    (text, hasSelection, detail) => {
       render(
         <AutomationsList
           canCreate
@@ -103,8 +107,8 @@ describe("AutomationsList navigation", () => {
         },
         { once: true }
       );
-      fireEvent.click(link);
-      expect(navigationPrevented).toBe(hasSelection);
+      fireEvent.click(link, { detail });
+      expect(navigationPrevented).toBe(hasSelection && detail > 0);
     }
   );
 
