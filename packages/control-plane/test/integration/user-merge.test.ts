@@ -293,6 +293,24 @@ describe("mergeUsers", () => {
     ).toEqual({ created_by: "583231", user_id: SURVIVOR });
   });
 
+  it("clears personal-memory consent on automations moved to the survivor", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
+    await insertCanonicalUser({ id: LOSER, email: null });
+    await insertAutomation("auto-opted-in", LOSER, LOSER);
+    await env.DB.prepare(
+      "UPDATE automations SET include_personal_memories = 1 WHERE id = 'auto-opted-in'"
+    ).run();
+
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts.automationsOwnedRepointed).toBe(1);
+    expect(
+      await env.DB.prepare(
+        "SELECT user_id, include_personal_memories FROM automations WHERE id = 'auto-opted-in'"
+      ).first()
+    ).toEqual({ user_id: SURVIVOR, include_personal_memories: 0 });
+  });
+
   it("keeps preview and execution counts aligned for newer user-owned records", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });

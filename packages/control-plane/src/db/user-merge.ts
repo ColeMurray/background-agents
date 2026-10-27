@@ -287,7 +287,17 @@ const BEFORE_SKILL_PROFILE_OPERATIONS = [
   }),
   regularRepoint("sessionsRepointed", "sessions"),
   regularDelete("authSessionsDeleted", "auth_sessions", "userId"),
-  regularRepoint("automationsOwnedRepointed", "automations"),
+  {
+    ...regularRepoint("automationsOwnedRepointed", "automations"),
+    // Personal-memory consent belonged to the loser's account; the survivor has not opted in.
+    execute: (db, survivorId, loserId, gate) =>
+      db
+        .prepare(
+          `UPDATE automations SET user_id = ?, include_personal_memories = 0
+           WHERE user_id = ? AND ${gate.sql}`
+        )
+        .bind(survivorId, loserId, ...gate.values),
+  },
   regularRepoint("automationsCreatedRepointed", "automations", "created_by"),
   regularRepoint("scmTokensRepointed", "user_scm_tokens"),
 ] as const satisfies readonly MergeOperation[];
