@@ -230,6 +230,30 @@ async def test_build_boot_refreshes_models_catalog_before_reporting_success(tmp_
     )
 
 
+async def test_build_without_usable_catalog_reports_failure_instead_of_success(
+    tmp_path, monkeypatch
+):
+    supervisor, *_ = _supervisor(tmp_path, [])
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    supervisor_module.ensure_model_catalog.return_value = False
+    supervisor._report_fatal_error = AsyncMock()
+    callback = MagicMock()
+
+    async def report_success(**_kwargs):
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=report_success)
+    callback.report_failure = AsyncMock(return_value=True)
+
+    assert await supervisor.run(callback) is False
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_awaited_once_with("Model price catalog unavailable")
+    assert not any(
+        call.args == ("image_build.complete",) for call in supervisor.log.info.mock_calls
+    )
+
+
 async def test_session_boot_checks_catalog_without_forcing_refresh(tmp_path, monkeypatch):
     supervisor, *_ = _supervisor(tmp_path, [])
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)

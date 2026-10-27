@@ -714,9 +714,11 @@ class SandboxSupervisor:
 
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
-                await self._run_until_shutdown(
+                catalog_ready = await self._run_until_shutdown(
                     lambda: ensure_model_catalog(os.environ, self.log, refresh=True)
                 )
+                if not catalog_ready:
+                    raise RuntimeError("Model price catalog unavailable")
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
