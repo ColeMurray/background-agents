@@ -447,7 +447,9 @@ created. It applies to recurring and one-shot schedules alike.
   one that exhausts its retries counts as a single failure. A waiting run counts as active for
   concurrency.
 - **Cancellation**: pausing or deleting the automation, or lowering **Retries** below the attempts a
-  waiting run has made, fails that run within a minute.
+  waiting run has made, prevents that run from relaunching. The scheduler marks it **Failed** during
+  its once-per-minute retry sweeps. Sweeps process a limited batch, so a backlog can delay the
+  status change across multiple sweeps.
 
 ---
 

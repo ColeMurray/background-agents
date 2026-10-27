@@ -102,7 +102,7 @@ A transient outage can stop a scheduled run from starting, for example when its 
 - The first retry waits 2 minutes, and the wait doubles for each later attempt. Meanwhile the row shows **Retrying** with the launch error and the time of the next attempt.
 - Each attempt opens a new session under the same run row, which shows the attempt number once the run has relaunched. Access is checked again before each attempt, as at the original firing.
 - A run that relaunches successfully counts as a success. A run that uses up its retries fails with its last error and counts as one failure toward [auto-pause](/automations#auto-pause-after-failures). When another target of the same firing fails, that failure counts once the waiting run finishes, so it can't pause the automation out from under the retry.
-- Pausing or deleting the automation, or lowering its retries below the attempts a waiting run has made, fails that run within a minute.
+- Pausing or deleting the automation, or lowering its retries below the attempts a waiting run has made, prevents that run from relaunching. The scheduler marks it **Failed** during its once-per-minute retry sweeps. Sweeps process a limited batch, so a backlog can delay the status change across multiple sweeps.
 - A one-shot consumes its scheduled time when its invocation is admitted. Retries reuse that invocation and run; they do not schedule another firing. The automation stays enabled while its runs are active or waiting to retry, then disables once they finish.
 - Rescheduling a one-shot withdraws waiting retries for its previous scheduled time. A future schedule remains eligible to run.
 
