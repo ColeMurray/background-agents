@@ -187,20 +187,21 @@ flowchart TD
 
 #### Model catalog
 
-OpenCode reads its provider and model catalog from `~/.cache/opencode/models.json` when that file
-exists, and otherwise from the catalog compiled into the pinned OpenCode binary. It downloads a
-newer catalog in the background, but only the next OpenCode process reads it. Without a file on
-disk, a fresh sandbox would never know about a model published after the pinned OpenCode release.
+OpenCode and native Codex share a model catalog at `~/.local/share/openinspect/models.json`, outside
+the disposable cache directory. The runtime sets `OPENCODE_MODELS_PATH` to this location unless an
+explicit path is configured. Both `OPENCODE_MODELS_PATH` and `OPENCODE_MODELS_URL` overrides apply
+to catalog downloads.
 
-The build runs `opencode models --refresh`, which writes the published catalog to that file, so
-every session started from the image resolves models as of the build and session boots do no extra
-work. The step is best-effort: a failure is logged and the build continues. OpenCode's own
-environment variables (`OPENCODE_MODELS_URL`, `OPENCODE_MODELS_PATH`) apply to the refresh as they
-do to sessions.
+Base and prepared-image builds download and validate the published catalog before atomically
+replacing the file. A failed refresh keeps any previous valid prices. Base-image installation and
+post-deployment image verification require a catalog with usable OpenAI prices; verification does
+not download anything, so it also detects a file lost during snapshot capture.
 
-Codex sessions price their token usage from the same file, so a model published after the image was
-built has no price there: its turns are recorded as $0 with a timeline warning until the image is
-rebuilt.
+Before starting OpenCode or Codex, session boot checks the catalog and attempts a bounded download
+if it is missing or invalid. A healthy boot makes no catalog request. If recovery fails, the session
+can still run, and native Codex shows the missing-prices warning and records $0. A model published
+after the image was built may still have no listed price until the catalog is refreshed or the image
+is rebuilt. Existing saved sessions keep their installed runtime until they move to a newer image.
 
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
@@ -379,9 +380,9 @@ Things to know:
   with every clone and everything `setup.sh` put there) and changes under `/etc`, `/usr`, `/opt`,
   `/var`, `/root` and `/srv` are saved; `/tmp` and `~/.cache` are not. A setup script that warms a
   cache under `~/.cache` (pip, uv, Playwright browsers) does not carry it into the image — point
-  such caches somewhere under the workspace instead. OpenCode's refreshed
-  [model catalog](#model-catalog) lives under `~/.cache` too, so sessions from a Boat image resolve
-  models from the pinned binary's catalog until OpenCode's own background refresh lands.
+  such caches somewhere under the workspace instead. The shared [model catalog](#model-catalog)
+  lives under `~/.local/share/openinspect`, so both OpenCode model resolution and native Codex
+  pricing survive snapshot capture and resume.
 - **Build state stays out of the image.** The Boat launcher keeps an image build's lock, log and
   runtime state under `/tmp`, so the saved disk carries the workspace and nothing of the build that
   produced it; a session's first boot from the image creates its own state under
