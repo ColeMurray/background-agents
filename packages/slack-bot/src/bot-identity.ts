@@ -59,18 +59,11 @@ export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIde
   if (result.ok && result.user_id) {
     const identity = { userId: result.user_id, botId: result.bot_id ?? null };
     cacheIdentity(identity);
-    try {
-      await Promise.all([
-        kv.put(BOT_USER_ID_KV_KEY, identity.userId),
-        // A stale bot id must not outlive the identity that reported none.
-        identity.botId ? kv.put(BOT_ID_KV_KEY, identity.botId) : kv.delete(BOT_ID_KV_KEY),
-      ]);
-    } catch (e) {
-      log.warn("kv.put", {
-        key_prefix: "bot_identity",
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
-    }
+    // A stale bot id must not outlive the identity that reported none.
+    await Promise.all([
+      writeStoredId(kv, BOT_USER_ID_KV_KEY, identity.userId),
+      writeStoredId(kv, BOT_ID_KV_KEY, identity.botId),
+    ]);
     return identity;
   }
 
@@ -92,6 +85,22 @@ export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIde
   const identity = { userId, botId };
   cacheIdentity(identity);
   return identity;
+}
+
+/** Store a last-known-good id in KV, or delete it when null; failures are only logged. */
+async function writeStoredId(
+  kv: ReturnType<typeof createKvCacheStore>,
+  key: string,
+  id: string | null
+): Promise<void> {
+  try {
+    await (id ? kv.put(key, id) : kv.delete(key));
+  } catch (e) {
+    log.warn(id ? "kv.put" : "kv.delete", {
+      key_prefix: key,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  }
 }
 
 /** A last-known-good id from KV, or null when it is absent or cannot be read. */
