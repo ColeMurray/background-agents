@@ -160,9 +160,10 @@ async function resolveThreadSessionAdmission(
 }
 
 const ENROLLMENT_REFUSAL_MESSAGES: Record<Exclude<EnrollActorResult, "enrolled">, string> = {
-  // Typically an external Slack Connect user, whose profile email is hidden.
+  // A hidden profile email (e.g. Slack Connect), a missing scope, or a failed
+  // users.info lookup all look the same here, so the reply names none of them.
   email_required:
-    "I couldn't read the email on your Slack profile, so I can't link you to an Open-Inspect account. Users from other organizations in Slack Connect channels aren't supported yet.",
+    "I couldn't read the email on your Slack profile, so I can't link you to an Open-Inspect account. Please try again, or ask an admin to check that the bot can read Slack profile emails.",
   unavailable: "Sorry, I couldn't verify your account right now. Please try again in a moment.",
 };
 

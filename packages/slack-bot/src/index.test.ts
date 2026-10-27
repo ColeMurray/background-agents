@@ -1813,7 +1813,7 @@ describe("POST /events", () => {
     const unavailable = () => new Response("unavailable", { status: 500 });
 
     it.each([
-      ["the control plane needs an email", emailRequired, "Slack Connect"],
+      ["the control plane needs an email", emailRequired, "read Slack profile emails"],
       ["the control plane is unavailable", unavailable, "try again"],
     ])(
       "stops a new mention before any actor-carrying request when %s",
@@ -1840,7 +1840,7 @@ describe("POST /events", () => {
     );
 
     it.each([
-      ["the control plane needs an email", emailRequired, "Slack Connect"],
+      ["the control plane needs an email", emailRequired, "read Slack profile emails"],
       ["the control plane is unavailable", unavailable, "try again"],
     ])(
       "stops a follow-up before any actor-carrying request when %s",
