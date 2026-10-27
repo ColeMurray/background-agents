@@ -35,7 +35,7 @@ describe("withdrawn launch retries with a backlog (D1 integration)", () => {
         await store.insertInvocationGuarded({
           invocation,
           children: [child],
-          overlapScope: "automation",
+          overlapScope: { kind: "automation" },
         })
       ).toEqual({ inserted: true });
       expect(
