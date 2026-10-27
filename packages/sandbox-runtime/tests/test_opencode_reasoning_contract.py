@@ -33,8 +33,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sandbox_runtime.mcp_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_tool_policy
-from sandbox_runtime.opencode_server import _custom_tool_ids
+from sandbox_runtime.opencode_tool_access import OPENCODE_BUILTIN_TOOL_IDS, opencode_tool_rules
 from tests.test_prompt_stream import make_stream
 
 pytest_plugins = ["tests.test_reasoning_config"]
@@ -111,7 +110,7 @@ def anthropic_events(model):
 
 
 @pytest.fixture
-async def wire_server(tmp_path, reasoning_config, request, monkeypatch):
+async def wire_server(tmp_path, reasoning_config, request):
     assert subprocess.check_output([BINARY, "--version"], text=True).strip() == "1.18.29"
     captured = []
 
@@ -213,11 +212,11 @@ async def wire_server(tmp_path, reasoning_config, request, monkeypatch):
                     'import { tool } from "@opencode-ai/plugin"; '
                     f"/* export const fetch_page = 1; */ export {export} {definition};\n"
                 )
-            monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "config/opencode"))
             log = MagicMock()
-            custom_tool_ids = await _custom_tool_ids(tmp_path, log)
+            policy = await opencode_tool_rules(
+                servers, (tmp_path / ".opencode", tmp_path / "config/opencode"), log
+            )
             log.warn.assert_not_called()
-            policy = opencode_tool_policy(servers, (*OPENCODE_BUILTIN_TOOL_IDS, *custom_tool_ids))
             config["permission"].update(policy.rules)
         config["agent"] = {"build": {"options": {"reasoningEffort": "high"}}}
         for provider in ("openai", "anthropic"):
