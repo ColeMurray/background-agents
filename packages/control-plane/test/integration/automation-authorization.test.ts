@@ -225,7 +225,11 @@ describe("automation router authorization", () => {
       code: "target_team_missing_grant",
       repository: "acme/api",
     });
-    expect(await store.getById(row.id)).toEqual({ ...row, max_retries: 0 });
+    expect(await store.getById(row.id)).toEqual({
+      ...row,
+      max_retries: 0,
+      include_personal_memories: 0,
+    });
     expect(
       (await store.getEnvironmentsForAutomation(row.id)).map((member) => member.environment_id)
     ).toEqual(["env_original"]);
