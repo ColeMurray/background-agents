@@ -184,7 +184,7 @@ export interface ServiceRequestInit {
   initialUserRole?: InitialUserRole;
   as?: { userId: string; role: BuiltInRoleKey };
   /** Defaults to following redirects, like `fetch`. */
-  redirect?: RequestRedirect;
+  redirect?: RequestInit["redirect"];
 }
 
 /**
