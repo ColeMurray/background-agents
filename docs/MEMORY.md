@@ -4,11 +4,14 @@ Memory carries useful knowledge between sessions without changing repository fil
 embedding store or semantic search: the agent sees a compact fact catalog, discovers additional
 facts with lexical `memory_search`, and reads relevant bodies with `memory_read`.
 
-Every session receives memory workflow guidance, even with an empty catalog. Before finishing a
-task, agents are prompted to consider saving verified discoveries such as build/test/setup gotchas,
-corrected assumptions, or difficult failure diagnoses, checking for duplicates first. Routine
-progress and guesses should not become memories. A `memory_write` result of `proposed` awaits human
-review in Settings → Memories or Settings → Shared memories; it is not yet active memory.
+Every session receives memory workflow guidance, even with an empty catalog. It tells agents that
+most sessions should save nothing. They write only when the user asked them to remember something,
+corrected them or stated a standing preference, or confirmed a non-obvious approach, or when they
+verified a hard-won fact that the repository does not record and that would change what the next
+session does first. Work summaries and status, fixes already in the code, facts the repository
+already records, sandbox quirks, guesses and task-only details are excluded, and agents check for an
+existing fact to supersede before writing. A `memory_write` result of `proposed` awaits human review
+in Settings → Memories or Settings → Shared memories; it is not yet active memory.
 
 ## User experience
 

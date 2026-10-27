@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 26, 2026
+
+**Fewer memory proposals.** Agents no longer weigh a memory at the end of every task; saving nothing
+is now the expected outcome. They save when you ask them to remember something, correct them, state
+a standing preference, or confirm a non-obvious approach, or when they verify a hard-won fact the
+repository doesn't record. Work summaries, fixes already in the code, sandbox quirks, and guesses
+are skipped. See [Persistent session memory](docs/MEMORY.md).
+
 ## October 25, 2026
 
 **Boat saved snapshot API.** Base builds, prebuilt image builds, and image cleanup now use Boat's

@@ -25,7 +25,7 @@ relatedCode:
   - packages/web/src/lib/memories.ts
 ---
 
-Memories carry useful knowledge from one session to the next without changing repository files: a build gotcha the agent discovered, the cause of a hard-to-diagnose failure, or a standing preference such as how you like commit messages written. You manage your own under Settings › Memories, and repository and environment memories under Settings › Shared memories.
+Memories carry useful knowledge from one session to the next without changing repository files: a correction you gave the agent, a standing preference such as how you like commit messages written, or a hard-won fact about a repository that isn't written down anywhere. You manage your own under Settings › Memories, and repository and environment memories under Settings › Shared memories.
 
 Agents can propose memories as they work. Apart from one narrow case for personal facts, nothing an agent writes is used by other sessions until a person approves it.
 
@@ -62,7 +62,7 @@ When a session is created, OpenInspect selects the active memories that apply to
 
 - Directives are included in full. Facts appear as a catalog of titles and descriptions.
 - The agent has three memory tools: `memory_search` finds active facts by keyword, including facts that did not fit in the catalog; `memory_read` reads a fact's current content; and `memory_write` saves or proposes a new memory.
-- Every session is prompted, before finishing a task, to consider saving verified, non-obvious knowledge such as a build, test, or setup gotcha, a corrected assumption, or the cause of a difficult failure. Agents are told to check for duplicates first and to skip routine progress and guesses. They write a directive only when you ask them to remember a preference.
+- Agents are told that most sessions should save nothing. They save a memory when you ask them to remember something, correct them, state a standing preference, or confirm a non-obvious approach, or when they verify a hard-won fact that the repository doesn't record and that would change what the next session does first. They skip work summaries, status, fixes already in the code, anything the repository already says, sandbox quirks, and guesses, and they check for an existing memory to update before writing. They write a directive only when you ask them to remember a preference.
 - Editing or archiving a memory does not change text already given to a running session. Start a new session to pick up changes.
 - Child sessions inherit their parent's exact selection.
 
