@@ -363,6 +363,94 @@ describe("known service actor profile claims", () => {
     ).resolves.toEqual({ userId: nameless.id });
   });
 
+  it("converges to the same known-actor state when enrollment lands after authentication", async () => {
+    const nameless = await enrollNameless("slack", "U-SPLIT-LATE");
+    const webUser = await users.createUser({
+      displayName: "Web User",
+      email: "split@corp.test",
+      emailVerified: true,
+    });
+    // Simulate a request that authenticated before the concurrent nameless
+    // enrollment wrote the identity, so finalizeServiceActor takes the
+    // canonicalUserId === null -> resolveOrCreateUser (outcome: "existing") path.
+    vi.spyOn(UserStore.prototype, "getIdentity").mockResolvedValueOnce(null);
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const created = await createSession("slack-bot", "slack:U-SPLIT-LATE", {
+      actorDisplayName: "Split Person",
+      actorEmail: "split@corp.test",
+      actorAvatarUrl: "https://avatars.slack.test/split.png",
+    });
+
+    expect(created.status).toBe(201);
+    expect(warnings.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+      expect.objectContaining({
+        event: "auth.subject_email_collision",
+        provider: "slack",
+        subject: "U-SPLIT-LATE",
+        subject_user_id: nameless.id,
+        email_owner_user_id: webUser.id,
+      })
+    );
+    await expect(users.getUserById(nameless.id)).resolves.toMatchObject({
+      displayName: "Split Person",
+      avatarUrl: "https://avatars.slack.test/split.png",
+      email: null,
+      emailVerified: false,
+    });
+    await expect(users.getIdentity("slack", "U-SPLIT-LATE")).resolves.toMatchObject({
+      userId: nameless.id,
+      providerEmail: null,
+    });
+    await expect(users.getUserById(webUser.id)).resolves.toMatchObject({
+      displayName: "Web User",
+    });
+    await expect(
+      env.DB.prepare("SELECT user_id AS userId FROM sessions").first<{ userId: string }>()
+    ).resolves.toEqual({ userId: nameless.id });
+
+    // A second late-enrolled request with different claims preserves the
+    // existing display name and avatar, matching the known-actor rule.
+    vi.spyOn(UserStore.prototype, "getIdentity").mockResolvedValueOnce(null);
+    const second = await createSession("slack-bot", "slack:U-SPLIT-LATE", {
+      actorDisplayName: "Overwritten Name",
+      actorEmail: "split@corp.test",
+      actorAvatarUrl: "https://avatars.slack.test/overwritten.png",
+    });
+
+    expect(second.status).toBe(201);
+    await expect(users.getUserById(nameless.id)).resolves.toMatchObject({
+      displayName: "Split Person",
+      avatarUrl: "https://avatars.slack.test/split.png",
+      email: null,
+      emailVerified: false,
+    });
+  });
+
+  it("admits the request when late profile enrichment fails in finalizeServiceActor", async () => {
+    const nameless = await enrollNameless("slack", "U-LATE-FAIL");
+    vi.spyOn(UserStore.prototype, "getIdentity").mockResolvedValueOnce(null);
+    vi.spyOn(UserStore.prototype, "fillMissingProfile").mockRejectedValueOnce(
+      new Error("d1 transient failure")
+    );
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const created = await createSession("slack-bot", "slack:U-LATE-FAIL", {
+      actorDisplayName: "Transient Failure",
+      actorEmail: "transient@corp.test",
+    });
+
+    expect(created.status).toBe(201);
+    expect(warnings.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+      expect.objectContaining({
+        event: "auth.service_actor_profile_failed",
+      })
+    );
+    await expect(
+      env.DB.prepare("SELECT user_id AS userId FROM sessions").first<{ userId: string }>()
+    ).resolves.toEqual({ userId: nameless.id });
+  });
+
   it("never claims an email from a provider that does not attest it", async () => {
     const created = await serviceFetch(SESSIONS_URL, {
       service: "github-bot",

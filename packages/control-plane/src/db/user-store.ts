@@ -63,11 +63,13 @@ export function requiresEnrollmentEmail(provider: ProviderIdentity["provider"]):
   return ENROLLMENT_EMAIL_REQUIRED_PROVIDERS.has(provider);
 }
 
+export type ResolveUserOutcome = "existing" | "linked" | "created";
+
 export interface ResolvedUser {
   id: string;
   displayName: string | null;
   email: string | null;
-  isNew: boolean;
+  outcome: ResolveUserOutcome;
 }
 
 export interface User {
@@ -441,62 +443,18 @@ export class UserStore {
     const existing = await this.getIdentity(identity.provider, identity.providerUserId);
 
     if (existing) {
-      // Step 2: Existing identity → load linked user, update if needed
+      // Step 2: Existing identity → return linked user; profile claims for
+      // known actors are applied by KnownActorProfileClaim.
       const user = await this.getUserById(existing.userId);
       if (!user) {
         throw new Error(`Orphaned identity ${existing.id}: user ${existing.userId} not found`);
       }
 
-      // Step 2a: Refresh identity-level metadata (provider_login, provider_email)
-      // so getIdentity() and getIdentitiesForUser() return current values.
-      await this.refreshIdentityMetadata(existing, identity.providerLogin, normalizedEmail);
-
-      // Step 2b: User-level updates (display_name, avatar_url)
-      const updates: UserUpdate = {};
-      if (identity.displayName && identity.displayName !== user.displayName) {
-        updates.displayName = identity.displayName;
-      }
-      if (identity.avatarUrl && identity.avatarUrl !== user.avatarUrl) {
-        updates.avatarUrl = identity.avatarUrl;
-      }
-
-      // Step 2c: Backfill email if user has none and provider now has one.
-      // The check-then-update is racy (a concurrent writer could claim the email
-      // between the SELECT and UPDATE), but the outer retry in resolveOrCreateUser
-      // handles this: on retry, emailOwner is non-null and we re-link instead.
-      if (!user.email && normalizedEmail) {
-        const emailOwner = await this.getUserByEmail(normalizedEmail);
-        if (!emailOwner) {
-          updates.email = normalizedEmail;
-          updates.emailVerified = EMAIL_ATTESTING_PROVIDERS.has(identity.provider);
-        } else if (emailOwner.id !== user.id) {
-          // Another user owns this email — re-link this identity to that user.
-          // This prevents permanent identity splits when e.g. a Slack identity
-          // (created without email) later discovers the same email that a GitHub
-          // identity already registered. Same principle as step 3 (email-based
-          // cross-provider linking) but for existing identities.
-          await this.db
-            .prepare("UPDATE user_identities SET user_id = ? WHERE id = ?")
-            .bind(emailOwner.id, existing.id)
-            .run();
-          return {
-            id: emailOwner.id,
-            displayName: emailOwner.displayName,
-            email: emailOwner.email,
-            isNew: false,
-          };
-        }
-      }
-
-      if (Object.keys(updates).length > 0) {
-        await this.updateUser(user.id, updates);
-      }
-
       return {
         id: user.id,
-        displayName: updates.displayName ?? user.displayName,
-        email: updates.email ?? user.email,
-        isNew: false,
+        displayName: user.displayName,
+        email: user.email,
+        outcome: "existing",
       };
     }
 
@@ -515,7 +473,7 @@ export class UserStore {
           id: emailUser.id,
           displayName: emailUser.displayName,
           email: emailUser.email,
-          isNew: false,
+          outcome: "linked",
         };
       }
     }
@@ -560,38 +518,7 @@ export class UserStore {
       id: userId,
       displayName,
       email: normalizedEmail,
-      isNew: true,
+      outcome: "created",
     };
-  }
-
-  /**
-   * Update identity-level metadata (provider_login, provider_email) if
-   * the provider now reports newer values than what's stored. This keeps
-   * getIdentity() and getIdentitiesForUser() accurate across repeat sign-ins.
-   */
-  private async refreshIdentityMetadata(
-    existing: UserIdentity,
-    providerLogin: string | undefined,
-    normalizedEmail: string | null
-  ): Promise<void> {
-    const sets: string[] = [];
-    const values: (string | null)[] = [];
-
-    if (providerLogin && providerLogin !== existing.providerLogin) {
-      sets.push("provider_login = ?");
-      values.push(providerLogin);
-    }
-    if (normalizedEmail && normalizedEmail !== existing.providerEmail) {
-      sets.push("provider_email = ?");
-      values.push(normalizedEmail);
-    }
-
-    if (sets.length === 0) return;
-
-    values.push(existing.id);
-    await this.db
-      .prepare(`UPDATE user_identities SET ${sets.join(", ")} WHERE id = ?`)
-      .bind(...values)
-      .run();
   }
 }

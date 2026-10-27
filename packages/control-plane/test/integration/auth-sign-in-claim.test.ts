@@ -372,7 +372,7 @@ describe("register, linking, and steady state", () => {
       () => {}
     );
     expect(resolved.id).toBe(webUserId);
-    expect(resolved.isNew).toBe(false);
+    expect(resolved.outcome).toBe("existing");
     expect(await countTableRows("users")).toBe(1);
   });
 

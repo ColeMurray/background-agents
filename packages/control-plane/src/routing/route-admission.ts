@@ -5,6 +5,7 @@ import {
   ACTOR_EMAIL_REQUIRED_CODE,
 } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
+import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import type { Principal } from "../auth/principal";
 import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
 import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
@@ -464,9 +465,13 @@ async function finalizeServiceActor(
         admissionPolicy.requireBotEnrollment(attestedEmail ? [attestedEmail] : []);
       }
     );
+    const knownActor: KnownActor = { ...actor, canonicalUserId: user.id };
+    if (user.outcome === "existing" && claims) {
+      await claimKnownActorProfile(ctx, knownActor, claims);
+    }
     ctx.principal = {
       ...principal,
-      actor: { ...actor, canonicalUserId: user.id },
+      actor: knownActor,
     };
     return null;
   } catch (cause) {
@@ -510,14 +515,22 @@ async function completeKnownActorProfile(
   actor: KnownActor
 ): Promise<void> {
   if (!policy.serviceActorClaims) return;
+  const prepared = await policy.serviceActorClaims(request.clone(), ctx);
+  if (prepared.kind === "rejected") return;
+  await claimKnownActorProfile(ctx, actor, prepared.claims);
+}
+
+async function claimKnownActorProfile(
+  ctx: RequestContext,
+  actor: KnownActor,
+  claims: ActorProfileClaims
+): Promise<void> {
   try {
-    const prepared = await policy.serviceActorClaims(request.clone(), ctx);
-    if (prepared.kind === "rejected") return;
     const profileClaim = new KnownActorProfileClaim(
       new UserStore(ctx.db),
       new IdentityClaimStore(ctx.db)
     );
-    await profileClaim.claim(actor, prepared.claims);
+    await profileClaim.claim(actor, claims);
   } catch (cause) {
     logger.warn("Failed to complete known service actor profile", {
       event: "auth.service_actor_profile_failed",
