@@ -10,6 +10,7 @@ import {
   createLinearFetchMock,
   linearClientCredentialsResponse,
   linearIdentityResponse,
+  linearUserResponse,
   makeLinearBotEnv,
 } from "./test-helpers";
 
@@ -188,6 +189,8 @@ describe("handleAgentSessionEvent environment targets", () => {
       createLinearFetchMock({
         clientCredentials: () => linearClientCredentialsResponse("transitioned-runtime-token"),
         identity: () => linearIdentityResponse(),
+        user: () =>
+          linearUserResponse({ id: "linear-user", name: "Linear User", email: "user@example.com" }),
         graphql: () => Response.json({ data: {} }),
       })
     );
@@ -368,6 +371,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return eventsResponse;
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
@@ -1019,6 +1023,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
@@ -1082,6 +1087,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
@@ -1163,12 +1169,15 @@ describe("handleAgentSessionEvent environment targets", () => {
 
     await handleAgentSessionEvent(webhook, env, "trace-stop");
 
-    expect(controlPlaneFetch).toHaveBeenCalledOnce();
-    expect(controlPlaneFetch).toHaveBeenCalledWith(
-      "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1",
-      expect.objectContaining({ method: "POST" })
+    const stopCalls = controlPlaneFetch.mock.calls.filter(([input]) =>
+      String(input).includes("/stop")
     );
-    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(stopCalls).toHaveLength(1);
+    expect(stopCalls[0]?.[0]).toBe(
+      "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1"
+    );
+    const stopInit = stopCalls[0]?.[1] as RequestInit | undefined;
+    expect(stopInit?.method).toBe("POST");
     expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe(
       "linear:follow-up-human-user"
     );
@@ -1233,7 +1242,9 @@ describe("handleAgentSessionEvent environment targets", () => {
       `https://internal/sessions/session-xyz/stop${query}`,
       expect.objectContaining({ method: "POST" })
     );
-    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const stopInit = controlPlaneFetch.mock.calls.find(([input]) =>
+      String(input).includes("/stop")
+    )?.[1] as RequestInit | undefined;
     expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe("linear:human-user-1");
     expect(store.has("issue:issue-1")).toBe(false);
   });
@@ -1255,6 +1266,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input).split("?")[0];
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url === "https://internal/environments") {
         return Response.json({ environments: [environment], total: 1 });
       }
@@ -1311,6 +1323,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });

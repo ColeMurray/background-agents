@@ -8,6 +8,7 @@ import {
   createLinearFetchMock,
   linearClientCredentialsResponse,
   linearIdentityResponse,
+  linearUserResponse,
   makeLinearBotEnv,
 } from "./test-helpers";
 
@@ -111,6 +112,7 @@ async function delegate(options: {
   const fetchMock = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const path = new URL(String(input)).pathname;
+    if (path === "/actors/me") return new Response(null, { status: 204 });
     if (path.startsWith("/channel-bindings/linear/")) return Response.json({ teamId: null });
     if (path.startsWith("/integration-settings/linear/resolved/")) {
       return Response.json({ config });
@@ -176,6 +178,12 @@ describe("handleAgentSessionEvent harness selection", () => {
       createLinearFetchMock({
         clientCredentials: () => linearClientCredentialsResponse("runtime-token"),
         identity: () => linearIdentityResponse(),
+        user: () =>
+          linearUserResponse({
+            id: "human-user-1",
+            name: "Human User",
+            email: "human@example.com",
+          }),
         graphql: () => Response.json({ data: {} }),
       })
     );
