@@ -32,9 +32,12 @@ def build_image(root: Path, provider: str) -> dict[str, Any]:
             ["uv", "run", "--frozen", "python", "build-template.py"],
         ),
         "vercel": (root, ["node", "packages/vercel-infra/dist/build-base-snapshot.js"]),
-        "opencomputer": (root, ["node", "packages/opencomputer-infra/dist/build-template.js"]),
+        "boat": (
+            root / "packages/boat-infra",
+            ["uv", "run", "--frozen", "python", "build-template.py"],
+        ),
     }
-    if provider in ("vercel", "opencomputer"):
+    if provider == "vercel":
         subprocess.run(["npm", "run", "build", "-w", "@open-inspect/shared"], cwd=root, check=True)
         subprocess.run(
             ["npm", "run", "build", "-w", f"@open-inspect/{provider}-infra"], cwd=root, check=True

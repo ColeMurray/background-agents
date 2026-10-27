@@ -1,6 +1,5 @@
 import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared/types/session-diffs";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 /**
@@ -15,8 +14,6 @@ export async function GET(
     params: Promise<{ id: string; revisionId: string; fileId: string }>;
   }
 ): Promise<Response> {
-  const session = await getServerAuthSession();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id, revisionId, fileId } = await params;
   if (![id, revisionId, fileId].every((value) => SESSION_DIFF_ID_PATTERN.test(value))) {
     return NextResponse.json({ error: "Invalid diff file identity" }, { status: 400 });

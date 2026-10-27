@@ -12,7 +12,7 @@ import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { REPOS_CACHE_KEY, reposCacheIdentity } from "../../src/routes/repos";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth } from "./helpers";
+import { enrollSlackActor, initNamedSession, seedSandboxAuth } from "./helpers";
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
   web: "test-service-secret-web",
@@ -295,6 +295,8 @@ describe("sig1 service-credential authentication", () => {
   });
 
   it("persists bot creator attribution and permits cross-actor collaboration", async () => {
+    await enrollSlackActor("slack:U0001");
+    await enrollSlackActor("slack:U0002");
     const created = await signedFetch({
       service: "slack-bot",
       method: "POST",
@@ -428,6 +430,7 @@ describe("sig1 service-credential authentication", () => {
   });
 
   it("denies suspended canonical bot actors and actorless broad requests", async () => {
+    await enrollSlackActor("slack:U-SUSPENDED");
     await signedFetch({
       service: "slack-bot",
       method: "POST",
@@ -459,6 +462,7 @@ describe("sig1 service-credential authentication", () => {
   });
 
   it("intersects an actor role with the service ceiling", async () => {
+    await enrollSlackActor("slack:U-VIEWER");
     await signedFetch({
       service: "slack-bot",
       method: "GET",

@@ -37,6 +37,41 @@ const DEFAULT_SESSION_GROUP_EXPANDED_STATE: Record<SessionGroupId, boolean> = {
   recent: true,
 };
 const SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX = "open-inspect-session-sidebar-expanded:";
+/** Varied title widths so the placeholder rows read as a list rather than a block. */
+const SESSION_SKELETON_TITLE_WIDTHS = [
+  "w-3/4",
+  "w-1/2",
+  "w-2/3",
+  "w-5/6",
+  "w-3/5",
+  "w-2/3",
+  "w-1/2",
+];
+
+/** Mirrors a group header followed by `SessionListItem` rows so loading doesn't shift the list. */
+function SessionListSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading sessions"
+      className="animate-pulse motion-reduce:animate-none"
+    >
+      <div className="flex min-h-10 items-center px-4">
+        <div className="h-3 w-24 rounded bg-muted" />
+      </div>
+      {SESSION_SKELETON_TITLE_WIDTHS.map((titleWidth, index) => (
+        <div key={index} className="border-l-2 border-l-transparent px-4 py-2.5">
+          <div className="flex h-5 items-center">
+            <div className={`h-3.5 rounded bg-muted ${titleWidth}`} />
+          </div>
+          <div className="mt-0.5 flex h-4 items-center">
+            <div className="h-3 w-32 rounded bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 interface SidebarActionButtonProps {
   onClick?: () => void;
@@ -91,7 +126,7 @@ export function SessionSidebar({
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
-  const { activeTeamId, scope, teams } = useActiveTeam();
+  const { activeTeamId, scope, teams, loading: loadingTeams } = useActiveTeam();
   const teamQuery = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
@@ -123,6 +158,7 @@ export function SessionSidebar({
     inProgress,
     finished,
     childrenMap,
+    unreadDescendantRootIds,
     loading,
     sessionsError,
     refreshSnapshot,
@@ -131,6 +167,7 @@ export function SessionSidebar({
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
+    handleMarkHierarchyRead,
     handleMarkAllAttentionRead,
   } = useSidebarSessions();
   const activeTeamName = teams.find((team) => team.id === activeTeamId)?.name;
@@ -248,11 +285,13 @@ export function SessionSidebar({
                       : undefined
                   }
                   childrenMap={childrenMap}
+                  hasUnreadDescendants={unreadDescendantRootIds.has(session.id)}
                   currentSessionId={currentSessionId}
                   isMobile={isMobile}
                   onArchive={handleArchivedSession}
                   onSessionSelect={onSessionSelect}
                   onMarkLatestMessageRead={handleMarkLatestMessageRead}
+                  onMarkHierarchyRead={handleMarkHierarchyRead}
                 />
               ))}
               {Boolean(pagination.error) && (
@@ -373,9 +412,7 @@ export function SessionSidebar({
       {/* Session List */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-          </div>
+          <SessionListSkeleton />
         ) : (
           <>
             {needsAttention.length === 0 && inProgress.length === 0 && finished.length === 0 ? (
@@ -399,7 +436,9 @@ export function SessionSidebar({
                   needsAttention,
                   sectionPagination.needsAttention,
                   true,
-                  needsAttention.length > 0 && (
+                  // Rows can come from the stored selection before memberships confirm the
+                  // scope this confirmation names.
+                  needsAttention.length > 0 && !loadingTeams && (
                     <MarkAllReadButton
                       count={sectionPagination.needsAttention.hasMore ? null : attentionUnreadCount}
                       scopeLabel={attentionScopeLabel}

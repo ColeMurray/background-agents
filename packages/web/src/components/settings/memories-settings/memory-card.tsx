@@ -2,6 +2,7 @@
 
 import {
   MEMORY_CONTENT_LIMITS,
+  memoryScopeLabel,
   type MemoryAction,
   type MemoryContent,
   type MemoryDto,
@@ -13,6 +14,7 @@ import {
   memoryTypeLabel,
 } from "@/lib/memories";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { MemoryHistory } from "./memory-history";
 import type { MemoryPanel } from "./memory-collection";
@@ -23,6 +25,9 @@ export function MemoryCard({
   panel,
   busy,
   canCreate,
+  showScope = false,
+  selected = false,
+  onSelectedChange,
   onPanelChange,
   onAction,
   onRevertToRevision,
@@ -31,6 +36,10 @@ export function MemoryCard({
   panel: MemoryPanel;
   busy: boolean;
   canCreate: boolean;
+  showScope?: boolean;
+  selected?: boolean;
+  /** Offered only for records that can join a bulk action. */
+  onSelectedChange?: (selected: boolean) => void;
   onPanelChange: (panel: MemoryPanel) => void;
   onAction: (action: MemoryAction, archiveNote?: string) => void;
   /** Revert content to an earlier revision (saved as a new revision; unrelated to un-archiving). */
@@ -40,21 +49,46 @@ export function MemoryCard({
   const historyOpen = panel.kind === "history" && panel.memoryId === record.id;
   return (
     <article id={record.id} className="space-y-3 rounded-sm border border-border p-4">
-      <div>
-        <h3 className="font-medium">{record.title}</h3>
-        <p className="text-xs text-muted-foreground">
-          {memoryTypeLabel(record.memoryType)} · Revision {record.revisionNumber} ·{" "}
-          {record.authorKind === "agent" && record.authorSessionId ? (
-            <a
-              className="underline"
-              href={`/session/${encodeURIComponent(record.authorSessionId)}`}
-            >
-              Agent session
-            </a>
-          ) : (
-            "User-authored"
-          )}
-        </p>
+      <div className="flex items-start gap-3">
+        {onSelectedChange && (
+          <Checkbox
+            className="mt-1"
+            checked={selected}
+            disabled={busy}
+            aria-label={`Select “${record.title}”`}
+            onCheckedChange={(checked) => onSelectedChange(checked === true)}
+          />
+        )}
+        <div className="min-w-0">
+          <h3 className="font-medium">{record.title}</h3>
+          {/* Repository links resolve to this All view, so only environments link to their scope. */}
+          {showScope &&
+            (record.scope.type === "environment" ? (
+              <a
+                href={memorySettingsLink(record.scope, record.id)}
+                className="block break-words text-xs text-muted-foreground underline"
+              >
+                {memoryScopeLabel(record.scope)}
+              </a>
+            ) : (
+              <p className="break-words text-xs text-muted-foreground">
+                {memoryScopeLabel(record.scope)}
+              </p>
+            ))}
+          <p className="text-xs text-muted-foreground">
+            {memoryTypeLabel(record.memoryType)} · Revision {record.revisionNumber} ·{" "}
+            {record.authorKind === "agent" && record.authorSessionId ? (
+              <a
+                className="underline"
+                href={`/session/${encodeURIComponent(record.authorSessionId)}`}
+              >
+                Agent session
+              </a>
+            ) : (
+              "User-authored"
+            )}
+          </p>
+        </div>
       </div>
       <p className="text-sm text-muted-foreground">{record.description}</p>
       <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words text-sm">

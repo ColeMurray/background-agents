@@ -536,4 +536,207 @@ describe("github-app utilities", () => {
       ).rejects.toThrow("Failed to list branches: invalid response");
     });
   });
+
+  describe("listRepositoryBranches pagination", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const endpoint = "https://api.github.com/repos/acme/widgets/branches";
+    const branchPage = (page: number, count = 100) =>
+      Array.from({ length: count }, (_, index) => ({ name: `page-${page}-branch-${index}` }));
+    const deferredResponse = () => {
+      let resolve!: (response: Response) => void;
+      const promise = new Promise<Response>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    };
+
+    it("dispatches later pages concurrently and preserves page order on out-of-order completion", async () => {
+      const cacheStore = new FakeCacheStore();
+      const config = cachedTokenConfig("branches-concurrent");
+      await cacheInstallationToken(cacheStore, config);
+      const first = branchPage(1);
+      const second = branchPage(2);
+      const third = branchPage(3, 2);
+      const secondResponse = deferredResponse();
+      const thirdResponse = deferredResponse();
+      const thirdBody = Response.json(third);
+      const thirdJson = vi.spyOn(thirdBody, "json");
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Unexpected branch request"))
+        .mockResolvedValueOnce(
+          Response.json(first, {
+            headers: {
+              Link: `<${endpoint}?per_page=100&page=2>; rel="next", <${endpoint}?per_page=100&page=3>; rel="last"`,
+            },
+          })
+        )
+        .mockReturnValueOnce(secondResponse.promise)
+        .mockReturnValueOnce(thirdResponse.promise);
+
+      const result = listRepositoryBranches(config, "acme", "widgets", { cacheStore });
+      try {
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+        thirdResponse.resolve(thirdBody);
+        await vi.waitFor(() => expect(thirdJson).toHaveBeenCalledOnce());
+        expect(await thirdJson.mock.results[0].value).toEqual(third);
+      } finally {
+        secondResponse.resolve(Response.json(second));
+        thirdResponse.resolve(thirdBody);
+        await result;
+      }
+
+      expect(await result).toEqual([...first, ...second, ...third]);
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${endpoint}?per_page=100&page=1`,
+        `${endpoint}?per_page=100&page=2`,
+        `${endpoint}?per_page=100&page=3`,
+      ]);
+    });
+
+    it("uses only the last page number, keeps the existing endpoint, and stops at a full last page", async () => {
+      const cacheStore = new FakeCacheStore();
+      const config = cachedTokenConfig("branches-link-endpoint");
+      await cacheInstallationToken(cacheStore, config);
+      const first = branchPage(1);
+      const second = branchPage(2);
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => Response.json([]))
+        .mockResolvedValueOnce(
+          Response.json(first, {
+            headers: {
+              Link: '<https://example.com/repos/acme/widgets/branches?per_page=1&page=2>; rel="last"; type="application/json", <https://example.com/repos/acme/widgets/branches?page=99>; rel="next"',
+            },
+          })
+        )
+        .mockResolvedValueOnce(Response.json(second));
+
+      expect(
+        await listRepositoryBranches(config, "acme", "widgets", {
+          cacheStore,
+          userAgent: "branch-test",
+        })
+      ).toEqual([...first, ...second]);
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${endpoint}?per_page=100&page=1`,
+        `${endpoint}?per_page=100&page=2`,
+      ]);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(init).toEqual({
+          headers: {
+            Authorization: "Bearer cached-token",
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "branch-test",
+          },
+          signal: expect.any(AbortSignal),
+        });
+      }
+    });
+
+    it.each([
+      ["missing Link", undefined],
+      ["no last relation", `<${endpoint}?page=3>; rel="next"`],
+      ["invalid URL", '<not-a-url>; rel="last"'],
+      ["missing page", `<${endpoint}?per_page=100>; rel="last"`],
+      ["invalid page", `<${endpoint}?page=3oops>; rel="last"`],
+      ["zero page", `<${endpoint}?page=0>; rel="last"`],
+      ["negative page", `<${endpoint}?page=-3>; rel="last"`],
+      ["fractional page", `<${endpoint}?page=3.5>; rel="last"`],
+      ["unsafe page", `<${endpoint}?page=9007199254740992>; rel="last"`],
+    ])("falls back to sequential pagination with %s", async (_label, link) => {
+      const cacheStore = new FakeCacheStore();
+      const config = cachedTokenConfig(`branches-fallback-${_label}`);
+      await cacheInstallationToken(cacheStore, config);
+      const first = branchPage(1);
+      const second = branchPage(2);
+      const third = branchPage(3, 1);
+      const secondResponse = deferredResponse();
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Unexpected branch request"))
+        .mockResolvedValueOnce(Response.json(first, { headers: link ? { Link: link } : {} }))
+        .mockReturnValueOnce(secondResponse.promise)
+        .mockResolvedValueOnce(Response.json(third));
+
+      const result = listRepositoryBranches(config, "acme", "widgets", { cacheStore });
+      try {
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+          `${endpoint}?per_page=100&page=1`,
+          `${endpoint}?per_page=100&page=2`,
+        ]);
+      } finally {
+        secondResponse.resolve(Response.json(second));
+        await result;
+      }
+
+      expect(await result).toEqual([...first, ...second, ...third]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([
+      ["without Link", undefined, 100],
+      ["with Link", `<${endpoint}?per_page=100&page=999>; rel="last"`, 100],
+      ["with oversized pages", `<${endpoint}?per_page=100&page=999>; rel="last"`, 101],
+    ])("caps pagination at five pages and 500 branches %s", async (_label, link, count) => {
+      const cacheStore = new FakeCacheStore();
+      const config = cachedTokenConfig(`branches-cap-${_label}`);
+      await cacheInstallationToken(cacheStore, config);
+      const pages = Array.from({ length: 5 }, (_, index) => branchPage(index + 1, count));
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const page = Number(new URL(String(input)).searchParams.get("page"));
+        return Response.json(pages[page - 1] ?? [], {
+          headers: page === 1 && link ? { Link: link } : {},
+        });
+      });
+
+      expect(await listRepositoryBranches(config, "acme", "widgets", { cacheStore })).toEqual(
+        pages.flat().slice(0, 500)
+      );
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+        pages.map((_, index) => `${endpoint}?per_page=100&page=${index + 1}`)
+      );
+    });
+
+    describe.each([
+      ["concurrent", `<${endpoint}?per_page=100&page=3>; rel="last"`],
+      ["sequential", undefined],
+    ])("later-page failures during %s pagination", (_mode, link) => {
+      it.each([
+        [
+          "HTTP failure",
+          () => new Response("Unauthorized", { status: 401 }),
+          "Failed to list branches: 401 Unauthorized",
+        ],
+        [
+          "malformed branch data",
+          () => Response.json([{ name: 42 }]),
+          "Failed to list branches: invalid response",
+        ],
+        ["invalid JSON", () => new Response("not json"), SyntaxError],
+      ])("rejects on %s rather than returning partial results", async (_label, response, error) => {
+        const cacheStore = new FakeCacheStore();
+        const config = cachedTokenConfig(`branches-failure-${_mode}-${_label}`);
+        await cacheInstallationToken(cacheStore, config);
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockRejectedValue(new Error("Unexpected branch request"))
+          .mockResolvedValueOnce(
+            Response.json(branchPage(1), { headers: link ? { Link: link } : {} })
+          )
+          .mockResolvedValueOnce(Response.json(branchPage(2)))
+          .mockResolvedValueOnce(response());
+
+        await expect(
+          listRepositoryBranches(config, "acme", "widgets", { cacheStore })
+        ).rejects.toThrow(error);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      });
+    });
+  });
 });

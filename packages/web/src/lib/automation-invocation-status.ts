@@ -8,6 +8,7 @@ export const AUTOMATION_INVOCATION_STATUS: Record<
 > = {
   starting: { label: "Starting", tone: "neutral" },
   running: { label: "Running", tone: "info" },
+  retrying: { label: "Retrying", tone: "warning" },
   completed: { label: "Completed", tone: "success" },
   failed: { label: "Failed", tone: "danger" },
   unauthorized: { label: "Unauthorized", tone: "danger" },

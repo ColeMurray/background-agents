@@ -7,6 +7,7 @@
 
 import type { RouteModule } from "../routing/hono-env";
 import { webhookRoutes } from "../webhooks";
+import { actorRoutes } from "./actors";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
@@ -120,4 +121,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Read-only GitHub bot routing hints
   githubRoutingRoutes,
+
+  // Bot actor enrollment with an attested profile
+  actorRoutes,
 ];

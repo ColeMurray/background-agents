@@ -13,13 +13,10 @@
  * (`src/node/cache-database.ts`), the way the host alarm index does. A caller
  * that needs this table on D1 adds the migration then.
  *
- * Expiry is by comparison on read, and reads do not write: a row past its TTL
- * reads as absent and is left where it is. Nothing reclaims it and nothing
- * needs to, because the key space is two singletons — the repositories listing
- * and one GitHub installation token — and the miss it causes goes straight to
- * a refresh that overwrites the same key. The most an unlucky deployment holds
- * is those two rows, inert. A caller that starts writing keys nobody reads back
- * (per-user, per-repo) is the one that would need a sweep; there is none today.
+ * Expiry is by comparison on read, and reads do not write. Each put reclaims
+ * expired rows, including keys that are never read again, so per-repository
+ * cache entries do not accumulate as repositories come and go. Idle caches
+ * retain expired rows until the next write, but cannot grow while idle.
  *
  * The installation token is stored as written, exactly as it is in KV on
  * Cloudflare. On a container that means the host's own `cache.db`, which
@@ -37,14 +34,17 @@ import type { SqlDatabase } from "./sql-database";
 /**
  * The table this store reads and writes, as one statement so any engine can
  * apply it. Values are opaque strings; `expires_at` is epoch milliseconds,
- * NULL for an entry that never expires. No index on it: reads go by primary
- * key and expiry is lazy, so nothing queries the column.
+ * NULL for an entry that never expires. Reads go by primary key; expiry cleanup
+ * uses the companion index.
  */
 export const CACHE_ENTRIES_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS cache_entries (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   expires_at INTEGER
 )`;
+
+export const CACHE_ENTRIES_EXPIRY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS cache_entries_expires_at_idx
+  ON cache_entries (expires_at)`;
 
 interface CacheEntryRow {
   value: string;
@@ -84,14 +84,17 @@ export class SqlCacheStore implements CacheStore {
   async put(key: string, value: string, opts?: CacheStorePutOptions): Promise<void> {
     const ttlMs = opts?.ttlMs;
     if (ttlMs !== undefined) assertValidCacheTtlMs(ttlMs);
-    const expiresAt = ttlMs === undefined ? null : this.now() + ttlMs;
-    await this.db
-      .prepare(
-        `INSERT INTO cache_entries (key, value, expires_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`
-      )
-      .bind(key, value, expiresAt)
-      .run();
+    const now = this.now();
+    const expiresAt = ttlMs === undefined ? null : now + ttlMs;
+    await this.db.batch([
+      this.db.prepare("DELETE FROM cache_entries WHERE expires_at <= ?").bind(now),
+      this.db
+        .prepare(
+          `INSERT INTO cache_entries (key, value, expires_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`
+        )
+        .bind(key, value, expiresAt),
+    ]);
   }
 
   async delete(key: string): Promise<void> {

@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/server-auth-session", () => ({ getServerAuthSession: vi.fn() }));
@@ -14,9 +15,9 @@ function markReadRequest(
     Origin: "http://localhost",
   }
 ) {
-  return new Request("http://localhost/api/sessions/inbox/read-state", {
+  return new NextRequest("http://localhost/api/sessions/inbox/read-state", {
     method: "POST",
-    headers,
+    headers: { Cookie: "openinspect.session_token=test-session", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -24,7 +25,6 @@ function markReadRequest(
 describe("session inbox read-state BFF", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
   it("forwards the inbox filters to the control plane", async () => {
@@ -77,12 +77,16 @@ describe("session inbox read-state BFF", () => {
     expect(response.status).toBe(200);
   });
 
-  it("rejects unauthenticated requests", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(markReadRequest({}) as never);
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 });

@@ -128,6 +128,11 @@ export interface SessionTargetSelection {
   configKey: string;
   /** Request-body fields for the current target, or null when not launchable. */
   buildRequestFields: () => SessionTargetRequestFields | null;
+  /**
+   * Request fields for the confirmed target, or for the default the picker expects to confirm
+   * while its catalogs load. Only for read-only prefetches; never warm or launch from it.
+   */
+  anticipatedRequestFields: SessionTargetRequestFields | null;
   /** Everything SessionTargetPicker needs to render the controls. */
   pickerProps: SessionTargetPickerProps;
 }
@@ -146,6 +151,62 @@ function targetIsAvailable(
       repos.some((repo) => repo.fullName.toLowerCase() === fullName.toLowerCase())
     );
   return true;
+}
+
+/** The stored last selection when it is a restorable target, or null. Storage is optional. */
+function readStoredSessionTarget(): SessionTarget | null {
+  let value: string | null;
+  try {
+    value = localStorage.getItem(LAST_SELECTED_TARGET_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (!value) return null;
+  const target = parseTargetSelectValue(value, null);
+  if (target.kind === "none") return target;
+  if (target.kind === "environment" && target.environmentId) return target;
+  if (target.kind === "repo" && parseRepositoryFullName(target.repoFullName)) return target;
+  return null;
+}
+
+/**
+ * The default target's preferred choices, in precedence order: the team default environment,
+ * then the stored target ("none" only outside a team). A catalog that is still loading counts
+ * as containing the candidate, so the result anticipates the choice before the catalogs
+ * confirm it. Null when the default depends on a loaded catalog (its first repository).
+ */
+function anticipateDefaultTarget({
+  teamId,
+  defaultEnvironmentId,
+  storedTarget,
+  repos,
+  environments,
+  loadingRepos,
+  loadingEnvironments,
+}: {
+  teamId: string | null;
+  defaultEnvironmentId: string | null;
+  storedTarget: SessionTarget | null;
+  repos: Repo[];
+  environments: Environment[];
+  loadingRepos: boolean;
+  loadingEnvironments: boolean;
+}): SessionTarget | null {
+  if (
+    defaultEnvironmentId &&
+    (loadingEnvironments ||
+      environments.some((environment) => environment.id === defaultEnvironmentId))
+  ) {
+    return { kind: "environment", environmentId: defaultEnvironmentId };
+  }
+  if (!storedTarget || (teamId && storedTarget.kind === "none")) return null;
+  const catalogLoading =
+    storedTarget.kind === "repo"
+      ? loadingRepos
+      : storedTarget.kind === "environment" && loadingEnvironments;
+  return catalogLoading || targetIsAvailable(storedTarget, repos, environments)
+    ? storedTarget
+    : null;
 }
 
 /**
@@ -181,6 +242,7 @@ export function useSessionTargetPicker({
   const [selectionContext, setSelectionContext] = useState({ teamId, defaultEnvironmentId });
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
   const [selectionInvalidated, setSelectionInvalidated] = useState(false);
+  const [storedTarget, setStoredTarget] = useState(readStoredSessionTarget);
   const targetCatalogError =
     draftTarget?.kind === "environment"
       ? environmentsError
@@ -217,19 +279,39 @@ export function useSessionTargetPicker({
       : null;
   const pickerTarget =
     hasExplicitSelection || catalogErrorHoldsTarget ? draftTarget : sessionTarget;
+  // Lets target-keyed reads start with the catalogs instead of after them. A catalog that
+  // confirms the guess keeps returning it, so keys don't flip to null before the effect commits.
+  const anticipatedTarget = hasExplicitSelection
+    ? sessionTarget
+    : (sessionTarget ??
+      anticipateDefaultTarget({
+        teamId,
+        defaultEnvironmentId,
+        storedTarget,
+        repos,
+        environments,
+        loadingRepos,
+        loadingEnvironments,
+      }));
 
-  const selectedRepository =
-    sessionTarget?.kind === "repo" ? parseRepositoryFullName(sessionTarget.repoFullName) : null;
+  // The branch selector renders only for a confirmed repository, which is then the
+  // anticipated one too.
+  const anticipatedRepository =
+    anticipatedTarget?.kind === "repo"
+      ? parseRepositoryFullName(anticipatedTarget.repoFullName)
+      : null;
   const { branches, loading: loadingBranches } = useBranches(
-    selectedRepository?.repoOwner ?? "",
-    selectedRepository?.repoName ?? ""
+    anticipatedRepository?.repoOwner ?? "",
+    anticipatedRepository?.repoName ?? ""
   );
 
   // Prebuild status for the repository and environment options: the unified
   // cross-scope feed (repo and environment scopes, failed rows included), one
   // call across all of them, folded to one status per scope. Fetched whenever
-  // there is anything to annotate.
-  const { data: imageBuildsData } = useImageBuilds(environments.length > 0 || repos.length > 0);
+  // there is, or is expected to be, anything to annotate.
+  const { data: imageBuildsData } = useImageBuilds(
+    anticipatedTarget !== null || environments.length > 0 || repos.length > 0
+  );
   const imageStatusByScope = useMemo(
     () => foldImageBuildStatusByScope(imageBuildsData?.images ?? [], imageBuildsData?.units ?? []),
     [imageBuildsData]
@@ -255,27 +337,19 @@ export function useSessionTargetPicker({
     }
     if (sessionTarget || catalogErrorHoldsTarget) return;
 
-    let nextTarget: SessionTarget | null = null;
-    if (
-      defaultEnvironmentId &&
-      environments.some((environment) => environment.id === defaultEnvironmentId)
-    ) {
-      nextTarget = { kind: "environment", environmentId: defaultEnvironmentId };
-    }
-
-    if (!nextTarget) {
-      const storedValue = localStorage.getItem(LAST_SELECTED_TARGET_STORAGE_KEY);
-      const storedTarget = storedValue ? parseTargetSelectValue(storedValue, null) : null;
-      if (
-        targetIsAvailable(storedTarget, repos, environments) &&
-        !(teamId && storedTarget?.kind === "none")
-      ) {
-        nextTarget = storedTarget;
-      } else if (repos[0]) {
-        nextTarget = { kind: "repo", repoFullName: repos[0].fullName };
-      } else if (!teamId) {
-        nextTarget = { kind: "none" };
-      }
+    let nextTarget = anticipateDefaultTarget({
+      teamId,
+      defaultEnvironmentId,
+      storedTarget: readStoredSessionTarget(),
+      repos,
+      environments,
+      loadingRepos,
+      loadingEnvironments,
+    });
+    if (!nextTarget && repos[0]) {
+      nextTarget = { kind: "repo", repoFullName: repos[0].fullName };
+    } else if (!nextTarget && !teamId) {
+      nextTarget = { kind: "none" };
     }
     if (!nextTarget) return;
 
@@ -306,10 +380,12 @@ export function useSessionTargetPicker({
   ]);
 
   // Persist launchable, restorable selections: repos and environments. Ad-hoc
-  // lists and "no repository" keep whatever was stored before them.
+  // lists and "no repository" keep whatever was stored before them. The anticipated
+  // target follows the stored one, so a later context change guesses what the effect restores.
   useEffect(() => {
     if (sessionTarget?.kind !== "repo" && sessionTarget?.kind !== "environment") return;
     localStorage.setItem(LAST_SELECTED_TARGET_STORAGE_KEY, getTargetSelectValue(sessionTarget));
+    setStoredTarget(sessionTarget);
   }, [sessionTarget]);
 
   const onTargetSelectValueChange = useCallback(
@@ -348,6 +424,10 @@ export function useSessionTargetPicker({
     if (!sessionTarget || !isSessionTargetLaunchable(sessionTarget)) return null;
     return buildSessionTargetRequestFields(sessionTarget, selectedBranch);
   }, [sessionTarget, selectedBranch]);
+  const anticipatedRequestFields =
+    anticipatedTarget && isSessionTargetLaunchable(anticipatedTarget)
+      ? buildSessionTargetRequestFields(anticipatedTarget, selectedBranch)
+      : null;
 
   const selectedRepo =
     sessionTarget?.kind === "repo"
@@ -422,6 +502,7 @@ export function useSessionTargetPicker({
     isLaunchable: isSessionTargetLaunchable(sessionTarget),
     configKey: getTargetConfigKey(sessionTarget),
     buildRequestFields,
+    anticipatedRequestFields,
     pickerProps: {
       sessionTarget: pickerTarget,
       targetSelectValue: getTargetSelectValue(pickerTarget),

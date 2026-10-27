@@ -6,6 +6,10 @@ export interface BrowserCookie {
   readonly value: string;
 }
 
+export function hasBrowserSessionCookie(cookies: readonly BrowserCookie[]): boolean {
+  return cookies.some(({ name }) => BROWSER_SESSION_COOKIE_PATTERN.test(name));
+}
+
 function hasInvalidCookieValueCharacter(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0);

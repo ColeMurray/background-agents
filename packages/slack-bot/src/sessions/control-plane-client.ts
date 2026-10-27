@@ -5,6 +5,7 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -13,6 +14,7 @@ import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import type { SlackActorIdentity } from "../user-identity";
 import { z } from "zod";
 
 const log = createLogger("handler");
@@ -93,6 +95,56 @@ export async function requirePublicationAccess(
       `Control plane publication access ${access}`,
       access === "denied" ? 403 : undefined
     );
+}
+
+/** Outcome of `enrollActor`. Anything but `enrolled` must stop the message. */
+export type EnrollActorResult = "enrolled" | "email_required" | "unavailable";
+
+/**
+ * Present the actor's Slack profile before any other request that carries the
+ * actor. The control plane links a new actor to an existing user by email
+ * only when it enrolls the actor, and refuses a new Slack actor that has no
+ * email (`email_required`); a known actor enrolls with or without one.
+ * Callers stop on any other outcome rather than send requests carrying an
+ * actor the control plane has not linked.
+ */
+export async function enrollActor(
+  env: ControlPlaneEnv,
+  actor: SlackActorIdentity,
+  traceId?: string
+): Promise<EnrollActorResult> {
+  const base = { trace_id: traceId, slack_user_id: actor.userId };
+  const body: ActorProfileClaims = { displayName: actor.displayName, email: actor.email };
+  try {
+    const response = await signedControlPlaneFetch(
+      env,
+      {
+        method: "POST",
+        url: "https://internal/actors/me",
+        body: JSON.stringify(body),
+        actor: `slack:${actor.userId}`,
+        traceId,
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+    );
+    if (response.ok) return "enrolled";
+    const { code } = await readErrorBody(response);
+    const outcome = code === "actor_email_required" ? "email_required" : "unavailable";
+    log.warn("control_plane.enroll_actor", {
+      ...base,
+      outcome,
+      http_status: response.status,
+      error_code: code,
+    });
+    return outcome;
+  } catch (e) {
+    log.warn("control_plane.enroll_actor", {
+      ...base,
+      outcome: "unavailable",
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+    return "unavailable";
+  }
 }
 
 export async function createSession(

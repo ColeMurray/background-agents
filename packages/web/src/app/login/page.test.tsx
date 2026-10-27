@@ -32,6 +32,10 @@ import LoginPage, { dynamic } from "./page";
 
 expect.extend(matchers);
 
+function noSearchParams() {
+  return { searchParams: Promise.resolve({}) };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.getServerAuthSession.mockResolvedValue(null);
@@ -42,11 +46,39 @@ afterEach(cleanup);
 
 describe("LoginPage", () => {
   it("renders the request-time provider choices in the React application", async () => {
-    render(await LoginPage());
+    render(await LoginPage(noSearchParams()));
 
     expect(screen.getByRole("heading", { name: "Sign in to Open-Inspect" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in with Google" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["admission_denied", "Your account is not authorized"],
+    ["github_email_permission_missing", "Email addresses: Read-only"],
+    ["provider_unavailable", "Please try again in a moment"],
+    ["admission_unavailable", "Please try again in a moment"],
+    ["provider_rejected", "An error occurred during sign in"],
+    // Better Auth's own code when a user cancels consent; not an admission denial.
+    ["access_denied", "An error occurred during sign in"],
+    ["sensitive-unexpected-error", "An error occurred during sign in"],
+  ])("explains %s and keeps sign-in available", async (error, message) => {
+    render(await LoginPage({ searchParams: Promise.resolve({ error }) }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
+    expect(screen.queryByText(/sensitive-unexpected-error/)).not.toBeInTheDocument();
+  });
+
+  it("ignores a repeated error parameter", async () => {
+    render(
+      await LoginPage({
+        searchParams: Promise.resolve({ error: ["github_email_permission_missing", "x"] }),
+      })
+    );
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
   });
 
   it("redirects an authenticated user before querying providers", async () => {
@@ -57,7 +89,7 @@ describe("LoginPage", () => {
       throw new Error("NEXT_REDIRECT");
     });
 
-    await expect(LoginPage()).rejects.toThrow("NEXT_REDIRECT");
+    await expect(LoginPage(noSearchParams())).rejects.toThrow("NEXT_REDIRECT");
     expect(mocks.redirect).toHaveBeenCalledWith("/");
     expect(mocks.getEnabledSignInProviders).not.toHaveBeenCalled();
   });
@@ -75,7 +107,7 @@ describe("LoginPage", () => {
         );
       }
 
-      render(await LoginPage());
+      render(await LoginPage(noSearchParams()));
 
       expect(screen.getByRole("alert")).toHaveTextContent("Sign-in is temporarily unavailable.");
       expect(screen.getByRole("link", { name: "Try again" })).toHaveAttribute("href", "/login");
@@ -93,7 +125,7 @@ describe("LoginPage", () => {
         mocks.getEnabledSignInProviders.mockRejectedValue(unexpectedError);
       }
 
-      await expect(LoginPage()).rejects.toBe(unexpectedError);
+      await expect(LoginPage(noSearchParams())).rejects.toBe(unexpectedError);
     }
   );
 

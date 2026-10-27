@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   sessionReadActionSchema,
@@ -8,10 +8,10 @@ import {
 } from "@open-inspect/shared/types/sessions";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const rejection = rejectMissingBrowserSessionCookie(request, {
+    "Cache-Control": "private, no-store",
+  });
+  if (rejection) return rejection;
 
   let body: SessionReadAction | null;
   try {
@@ -26,7 +26,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const { id } = await params;
   try {
-    const response = await controlPlaneUserFetch(`/sessions/${id}/read-state`, {
+    const response = await controlPlaneUserFetch(`/sessions/${encodeURIComponent(id)}/read-state`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

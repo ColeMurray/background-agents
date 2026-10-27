@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { NextRequest } from "next/server";
+import { NextRequest } from "next/server";
 import { dispatchControlPlaneFetch } from "@/lib/control-plane-transport";
 import { createLogger } from "@/lib/logger";
 
@@ -11,9 +11,6 @@ const batchModulePath = new URL(
 ).pathname;
 const { archiveSessionBatch } = await import(batchModulePath);
 
-vi.mock("@/lib/server-auth-session", () => ({
-  getServerAuthSession: vi.fn(async () => ({ user: { id: "test-user" } })),
-}));
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: (path: string, options: RequestInit) =>
     dispatchControlPlaneFetch(`https://cp.test${path}`, options, {}),
@@ -58,8 +55,9 @@ it("returns ordered partial outcomes for a maximum slow batch before the proxy d
     });
   });
   const pending = POST(
-    new Request("https://web.test/api/sessions/batch-archive", {
+    new NextRequest("https://web.test/api/sessions/batch-archive", {
       method: "POST",
+      headers: { Cookie: "openinspect.session_token=test-session" },
       body: JSON.stringify({ sessionIds: Array.from({ length: 25 }, (_, i) => `session-${i}`) }),
     }) as NextRequest
   );

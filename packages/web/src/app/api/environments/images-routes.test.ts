@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
+
 import type * as SandboxProviderModuleNamespace from "@/lib/sandbox-provider";
 
 type SandboxProviderModule = typeof SandboxProviderModuleNamespace;
@@ -68,6 +70,7 @@ describe("POST /api/environments/[id]/images/trigger", () => {
     const response = await triggerBuild(request, params);
 
     expect(response.status).toBe(200);
+    expect(getServerAuthSession).not.toHaveBeenCalled();
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/image-builds/trigger/environment/env-1", {
       method: "POST",
     });

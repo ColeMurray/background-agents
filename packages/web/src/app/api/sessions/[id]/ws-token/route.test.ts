@@ -31,24 +31,19 @@ describe("ws-token API route", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("preserves a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(request(), params("sess1"));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Failed to generate token" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
-  it("does not copy profile data into the websocket token request", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: {
-        id: "0123456789abcdef0123456789abcdef",
-        name: "Ada Lovelace",
-        email: "ada@example.com",
-        image: "https://avatars.githubusercontent.com/u/12345",
-      },
-    } as never);
+  it("sends an empty token request without resolving a user profile", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ token: "ws-tok" }, { status: 200 })
     );
@@ -61,24 +56,6 @@ describe("ws-token API route", () => {
       expect.objectContaining({ method: "POST" })
     );
     expect(sentBody()).toEqual({});
-  });
-
-  it("uses the same empty body regardless of sign-in provider", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: {
-        id: "fedcba9876543210fedcba9876543210",
-        name: "Pat PM",
-        email: "pm@gmail.com",
-        image: "https://lh3.googleusercontent.com/a/pat",
-      },
-    } as never);
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ token: "ws-tok" }, { status: 200 })
-    );
-
-    const response = await POST(request(), params("sess2"));
-
-    expect(response.status).toBe(200);
-    expect(sentBody()).toEqual({});
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 });

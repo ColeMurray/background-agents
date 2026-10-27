@@ -2,6 +2,7 @@ import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
+import { automationApiPath } from "@/lib/automation-navigation";
 import { usableFetchData } from "@/lib/swr-fetch-error";
 import {
   DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
@@ -87,15 +88,17 @@ export function useAutomations(nameSearch: string, teamId?: string | null) {
 }
 
 export function useAutomation(id: string | undefined) {
-  const { data: session } = useAuthSession();
+  const { data: session, status } = useAuthSession();
 
   const { data, error, isLoading, mutate } = useSWR<{ automation: AutomationView }>(
-    session && id ? `/api/automations/${id}` : null
+    session && id ? automationApiPath(id) : null
   );
 
   return {
     automation: usableFetchData(data, error)?.automation ?? null,
-    loading: isLoading,
+    // The fetch is gated on the auth session, so a requested automation is still
+    // loading while the session itself resolves — don't report it missing.
+    loading: Boolean(id) && (status === "loading" || isLoading),
     mutate,
   };
 }
@@ -104,7 +107,7 @@ export function useAutomationInvocations(id: string | undefined, limit = 20, off
   const { data: session } = useAuthSession();
 
   const { data, error, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
-    session && id ? `/api/automations/${id}/invocations?limit=${limit}&offset=${offset}` : null
+    session && id ? `${automationApiPath(id)}/invocations?limit=${limit}&offset=${offset}` : null
   );
   const visible = usableFetchData(data, error);
 

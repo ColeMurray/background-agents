@@ -156,6 +156,15 @@ describe("automation invocations (D1 integration)", () => {
           ],
           expected: "partial_failed",
         },
+        {
+          children: [{ status: "retrying" }, { status: "completed", completed_at: 5 }],
+          expected: "retrying",
+        },
+        { children: [{ status: "retrying" }, { status: "running" }], expected: "running" },
+        {
+          children: [{ status: "retrying" }, { status: "failed", completed_at: 5 }],
+          expected: "retrying",
+        },
         // Legacy backfill shapes: skipped children exist only in old data.
         { children: [{ status: "unauthorized", completed_at: 8 }], expected: "unauthorized" },
         { children: [{ status: "skipped" }], expected: "skipped" },
@@ -188,6 +197,7 @@ describe("automation invocations (D1 integration)", () => {
             unauthorized: testCase.children.filter((child) => child.status === "unauthorized")
               .length,
             starting,
+            retrying: testCase.children.filter((child) => child.status === "retrying").length,
           })
         ).toBe(testCase.expected);
       }
@@ -561,16 +571,24 @@ describe("automation invocations (D1 integration)", () => {
       });
       const stuck = makeChild("auto-bulkfail", {
         status: "running",
+        started_at: 1,
         repo_owner: "acme",
         repo_name: "web",
       });
+      // No deadline of its own, and started too recently for the default one to have passed.
+      const withinDeadline = makeChild("auto-bulkfail", {
+        status: "running",
+        started_at: 900,
+        repo_owner: "acme",
+        repo_name: "docs",
+      });
       await store.insertInvocationGuarded({
         invocation,
-        children: [done, stuck],
+        children: [done, stuck, withinDeadline],
         overlapScope: { kind: "automation" },
       });
 
-      await store.bulkFailRunningRuns([done.id, stuck.id], "timeout", 999);
+      await store.bulkFailRunningRuns([done.id, stuck.id, withinDeadline.id], "timeout", 999, 500);
 
       const statuses = await env.DB.prepare(
         `SELECT id, status FROM automation_runs WHERE invocation_id = ?`
@@ -580,6 +598,7 @@ describe("automation invocations (D1 integration)", () => {
       const byId = new Map(statuses.results!.map((row) => [row.id, row.status]));
       expect(byId.get(done.id)).toBe("completed");
       expect(byId.get(stuck.id)).toBe("failed");
+      expect(byId.get(withinDeadline.id)).toBe("running");
     });
 
     it("does not fail a run claimed after the orphan sweep reads it", async () => {
@@ -603,7 +622,7 @@ describe("automation invocations (D1 integration)", () => {
       await expect(store.claimRunSession(child.id, "session-1", 500, 500 + 1000)).resolves.toBe(
         true
       );
-      await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999);
+      await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999, 2);
 
       const row = await env.DB.prepare(
         `SELECT status, session_id FROM automation_runs WHERE id = ?`
@@ -611,6 +630,37 @@ describe("automation invocations (D1 integration)", () => {
         .bind(child.id)
         .first<{ status: string; session_id: string | null }>();
       expect(row).toEqual({ status: "running", session_id: "session-1" });
+    });
+
+    it("does not fail a retry relaunched after the orphan sweep read its earlier attempt", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-relaunch-race", max_retries: 1 }));
+      const invocation = makeInvocation("auto-relaunch-race");
+      const child = makeChild("auto-relaunch-race", {
+        status: "starting",
+        created_at: 1,
+        repo_owner: "acme",
+        repo_name: "web",
+      });
+      await store.insertInvocationGuarded({
+        invocation,
+        children: [child],
+        overlapScope: { kind: "automation" },
+      });
+
+      const [staleOrphan] = await store.getOrphanedStartingRuns(0, 10);
+      // The launch the sweep read fails, waits, and relaunches as attempt 2.
+      await expect(store.failLaunchOrRetry(child.id, "init failed", 10, 20)).resolves.toBe(
+        "retrying"
+      );
+      const waiting = await store.getRunById("auto-relaunch-race", child.id);
+      await expect(store.claimRetry(waiting!, 30)).resolves.toMatchObject({ attempt: 2 });
+      await store.bulkFailStartingRuns([staleOrphan!.id], "session_creation_timeout", 999, 5);
+
+      expect(await store.getRunById("auto-relaunch-race", child.id)).toMatchObject({
+        status: "starting",
+        attempt: 2,
+      });
     });
 
     it("getUncountedFailedInvocations finds exactly the crash-window invocations", async () => {

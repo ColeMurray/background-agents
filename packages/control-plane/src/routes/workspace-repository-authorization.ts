@@ -65,11 +65,11 @@ export async function authorizeTeamRepositories(
 async function findUngrantedRepository<T extends { repoId: number | null }>(
   ctx: RequestContext,
   authorization: EffectiveAuthorization,
-  target: { repositories: readonly T[]; requireLead?: boolean }
+  target: { repositories: readonly T[]; requireLead?: boolean },
+  store: Pick<TeamRepositoryGrantStore, "listTeamsForRepository">,
+  teams: Pick<TeamStore, "isActive">
 ): Promise<T | null> {
   if (isWorkspaceAdmin(authorization.role.key)) return null;
-  const store = new TeamRepositoryGrantStore(ctx.db);
-  const teams = new TeamStore(ctx.db);
   for (const repository of target.repositories) {
     const repoId = repository.repoId;
     if (repoId === null || !Number.isSafeInteger(repoId) || repoId <= 0) return repository;
@@ -105,7 +105,13 @@ export async function authorizeWorkspaceRepositories(
   if (!authorization) {
     return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
   }
-  const ungranted = await findUngrantedRepository(ctx, authorization, target);
+  const ungranted = await findUngrantedRepository(
+    ctx,
+    authorization,
+    target,
+    new TeamRepositoryGrantStore(ctx.db),
+    new TeamStore(ctx.db)
+  );
   return ungranted ? deniedRepository(ungranted) : null;
 }
 
@@ -115,7 +121,39 @@ export async function authorizeWorkspaceRepositories(
  * reused only when the principal is the caller.
  */
 export class RepositoryGrantAuthorizer {
-  constructor(private readonly ctx: RequestContext) {}
+  private readonly owners = new Map<number, string[]>();
+  private readonly activeTeams = new Map<string, boolean>();
+
+  constructor(
+    private readonly ctx: RequestContext,
+    private readonly grants: Pick<
+      TeamRepositoryGrantStore,
+      "listTeamsForRepository" | "listOwnersForRepositories"
+    >,
+    private readonly teams: Pick<TeamStore, "isActive">
+  ) {}
+
+  /** One request-local metadata snapshot for aggregate read and lead checks. */
+  async preload(
+    authorization: EffectiveAuthorization,
+    repositories: readonly { repoId: number | null }[]
+  ): Promise<void> {
+    if (isWorkspaceAdmin(authorization.role.key)) return;
+    const ids = repositories
+      .map((repo) => repo.repoId)
+      .filter(
+        (id): id is number =>
+          id !== null && Number.isSafeInteger(id) && id > 0 && !this.owners.has(id)
+      );
+    if (!ids.length) return;
+    for (const [repoId, owners] of await this.grants.listOwnersForRepositories(ids)) {
+      this.owners.set(
+        repoId,
+        owners.map((owner) => owner.teamId)
+      );
+      for (const owner of owners) this.activeTeams.set(owner.teamId, owner.active);
+    }
+  }
 
   /**
    * The first repository `authorization` lacks a grant for, or null when all are allowed. Only
@@ -131,6 +169,17 @@ export class RepositoryGrantAuthorizer {
       authorization.userId === this.ctx.authorization?.userId
         ? this.ctx
         : { ...this.ctx, sessionMemberships: undefined };
-    return findUngrantedRepository(ctx, authorization, { repositories, ...options });
+    return findUngrantedRepository(
+      ctx,
+      authorization,
+      { repositories, ...options },
+      {
+        listTeamsForRepository: async (repoId) =>
+          this.owners.get(repoId) ?? this.grants.listTeamsForRepository(repoId),
+      },
+      {
+        isActive: async (teamId) => this.activeTeams.get(teamId) ?? this.teams.isActive(teamId),
+      }
+    );
   }
 }

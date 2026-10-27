@@ -12,18 +12,22 @@ import { POST } from "./route";
 describe("session diff retry API route", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("requires authentication", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
     const response = await POST(new Request("http://local"), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
   it("proxies retry responses and preserves the upstream explanation", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Sandbox is not connected" }, { status: 409 })
     );

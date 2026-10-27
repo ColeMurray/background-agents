@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { automationApiPath } from "@/lib/automation-navigation";
 
 type AutomationAction = "pause" | "resume" | "trigger" | "delete";
 
@@ -12,7 +13,7 @@ export function useAutomationActions() {
   async function act(id: string, action: AutomationAction): Promise<boolean> {
     setActionError(null);
     const path: BrowserApiPath =
-      action === "delete" ? `/api/automations/${id}` : `/api/automations/${id}/${action}`;
+      action === "delete" ? automationApiPath(id) : `${automationApiPath(id)}/${action}`;
     try {
       const response = await browserApiFetch(path, {
         method: action === "delete" ? "DELETE" : "POST",

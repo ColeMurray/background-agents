@@ -676,3 +676,94 @@ async def test_generation_reauthentication_waits_for_the_stopped_turn_to_unwind(
         await turn
     await reauth
     assert h._factory.call_count == opens + 1
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "expected", "cancelled"),
+    [
+        ("failed", {"message": "boom", "codexErrorInfo": "unauthorized"}, "OPENAI_API_KEY", False),
+        ("failed", {"message": "stream broke"}, "stream broke", False),
+        ("failed", None, "Codex turn failed", False),
+        ("interrupted", {"message": "stopped"}, "Codex turn interrupted", True),
+    ],
+)
+async def test_terminal_outcome_carries_native_failure_detail(
+    tmp_path, status, error, expected, cancelled
+):
+    harness, client = build(tmp_path)
+    await harness.open()
+    harness.session_id = "thread"
+    client.request.return_value = {"turn": {"id": "turn"}}
+    client.next_notification = AsyncMock(
+        return_value={
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread",
+                "turn": {"id": "turn", "status": status, "error": error},
+            },
+        }
+    )
+    emit = AsyncMock()
+    outcome = await harness.run_prompt(HarnessPrompt("message", "hello"), emit)
+    assert not outcome.success
+    assert outcome.cancelled is cancelled
+    assert expected in outcome.error
+    errors = [call.args[0] for call in emit.await_args_list if call.args[0]["type"] == "error"]
+    assert errors == (
+        [] if cancelled else [{"type": "error", "error": outcome.error, "messageId": "message"}]
+    )
+
+
+FATAL_ERROR_FRAME = {
+    "method": "error",
+    "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "willRetry": False,
+        "error": {"message": "quota", "codexErrorInfo": "usageLimitExceeded"},
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("ending", "fallback"),
+    [("transport", "Codex transport failed"), ("inactivity", "no output")],
+)
+@pytest.mark.parametrize("fatal", [True, False])
+async def test_turn_ending_without_completion_keeps_recorded_native_error(
+    tmp_path, ending, fallback, fatal
+):
+    h, client = build(tmp_path)
+    h.limits = PromptLimits(0.05, 30, 5)
+    await h.open()
+    h.session_id = "thread"
+
+    async def request(method, params):
+        if method == "turn/start":
+            return {"turn": {"id": "turn"}}
+        return {"account": {"type": "apiKey"}}
+
+    frames = [FATAL_ERROR_FRAME] if fatal else []
+
+    async def notifications():
+        if frames:
+            return frames.pop()
+        if ending == "transport":
+            raise CodexTransportError("broken pipe")
+        await asyncio.Event().wait()
+
+    client.request.side_effect = request
+    client.next_notification = notifications
+    client.handling_requests = False
+    h.stop_execution = AsyncMock(return_value=True)
+    emit = AsyncMock()
+    async with asyncio.timeout(2):
+        outcome = await h.run_prompt(HarnessPrompt("m", "work"), emit)
+    assert not outcome.success
+    errors = [call.args[0] for call in emit.await_args_list if call.args[0]["type"] == "error"]
+    if fatal:
+        assert outcome.error == "OpenAI usage limit reached; retry after it resets."
+        assert errors == [{"type": "error", "error": outcome.error, "messageId": "m"}]
+    else:
+        assert fallback in outcome.error
+        assert errors == []

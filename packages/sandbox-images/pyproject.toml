@@ -9,7 +9,7 @@ dependencies = []
 dev = ["pytest>=8.0", "ruff>=0.9.0"]
 
 [build-system]
-requires = ["hatchling==1.27.0"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

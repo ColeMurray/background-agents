@@ -34,6 +34,7 @@ def update_locks(root: Path, *, check: bool = False) -> None:
                     "private": True,
                     "type": "module",
                     "dependencies": dependencies,
+                    "overrides": tools["npmOverrides"],
                 },
                 indent=2,
             )
@@ -59,6 +60,14 @@ def update_locks(root: Path, *, check: bool = False) -> None:
             lock = read_json(directory / "package-lock.json")
             if lock["packages"][""]["dependencies"] != manifests[name]:
                 raise ValueError(f"{name} npm lock is stale; run sandbox:images lock")
+            # The root lock entry does not record overrides, so check resolved versions.
+            for package_name, pin in tools["npmOverrides"].items():
+                for key, entry in lock["packages"].items():
+                    if key.endswith(f"node_modules/{package_name}") and entry["version"] != pin:
+                        raise ValueError(
+                            f"{name} npm lock resolves {package_name} to {entry['version']}; "
+                            "run sandbox:images lock"
+                        )
         else:
             subprocess.run(
                 [

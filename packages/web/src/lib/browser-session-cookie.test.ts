@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { serializeBrowserSessionCookies } from "./browser-session-cookie";
+import { hasBrowserSessionCookie, serializeBrowserSessionCookies } from "./browser-session-cookie";
+
+describe("hasBrowserSessionCookie", () => {
+  it.each([
+    "openinspect.session_token",
+    "__Secure-openinspect.session_token",
+    "openinspect.session_token.0",
+    "__Secure-openinspect.session_token.1",
+  ])("recognizes %s without validating the supplied credential", (name) => {
+    expect(hasBrowserSessionCookie([{ name, value: "invalid-session" }])).toBe(true);
+  });
+
+  it("rejects unrelated, transaction, and lookalike cookies", () => {
+    expect(hasBrowserSessionCookie([])).toBe(false);
+    expect(
+      hasBrowserSessionCookie([
+        { name: "theme", value: "dark" },
+        { name: "openinspect.state", value: "transaction" },
+        { name: "openinspect.session_token.attacker", value: "lookalike" },
+      ])
+    ).toBe(false);
+  });
+});
 
 describe("serializeBrowserSessionCookies", () => {
   it("forwards only the opaque Better Auth session cookie", () => {

@@ -3,12 +3,13 @@
  */
 
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import type { ClassificationEnv } from "@open-inspect/shared/classification";
 import { z } from "zod";
 
 /**
  * Cloudflare Worker environment bindings.
  */
-export interface Env {
+export interface Env extends ClassificationEnv {
   // KV namespace for config, runtime-token cache, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
@@ -32,16 +33,6 @@ export interface Env {
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
-  /**
-   * Classifier provider credentials. The deployment binds exactly the one
-   * `CLASSIFICATION_MODEL` selects, so each is optional on its own and the
-   * classifier guards the branch it needs.
-   */
-  ANTHROPIC_API_KEY?: string;
-  CLASSIFICATION_MODEL?: string; // Optional override; defaults to DEFAULT_CLASSIFICATION_MODEL
-  CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
-  OPENAI_API_KEY?: string;
-  BEDROCK_API_KEY?: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }
