@@ -158,7 +158,16 @@ export function AutomationsList({
                   >
                     {automation.name}
                   </Link>
-                  <AutomationStatusBadge automation={automation} />
+                  <Link
+                    href={navigation.detail(automation.id)}
+                    draggable={false}
+                    onClick={(event) => {
+                      if (window.getSelection()?.toString()) event.preventDefault();
+                    }}
+                    className="relative z-10 inline-flex"
+                  >
+                    <AutomationStatusBadge automation={automation} />
+                  </Link>
                   <div className="relative z-10 shrink-0">
                     <ExecutionActivity executions={automation.recentExecutions} />
                   </div>

@@ -64,9 +64,14 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
 }
 
 describe("AutomationsList navigation", () => {
-  it.each([false, true])(
-    "prevents metadata navigation only when text is selected: %s",
-    (hasSelection) => {
+  it.each([
+    ["acme/web-app", false],
+    ["acme/web-app", true],
+    ["Enabled", false],
+    ["Enabled", true],
+  ] as const)(
+    "preserves native navigation for %s unless a non-empty text selection exists: %s",
+    (text, hasSelection) => {
       render(
         <AutomationsList
           canCreate
@@ -79,13 +84,13 @@ describe("AutomationsList navigation", () => {
         />
       );
 
-      const metadata = screen.getByText("acme/web-app");
-      const link = metadata.closest("a")!;
+      const content = screen.getByText(text);
+      const link = content.closest("a")!;
       expect(link).toHaveAttribute("href", "/automations/auto-1");
       expect(link).toHaveAttribute("draggable", "false");
       if (hasSelection) {
         const range = document.createRange();
-        range.selectNodeContents(metadata);
+        range.selectNodeContents(content);
         window.getSelection()!.addRange(range);
       }
 
