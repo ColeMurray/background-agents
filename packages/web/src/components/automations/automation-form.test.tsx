@@ -1422,7 +1422,14 @@ describe("slack_event automation", () => {
     expect(onSubmit.mock.calls[0][0].triggerConfig).not.toHaveProperty("slack");
   });
 
-  it("submits includeBotMessages after bot messages are switched on", () => {
+  const botAllowList = {
+    conditions: [
+      ...validConditions.conditions,
+      { type: "slack_actor" as const, operator: "include" as const, value: ["BALERTS"] },
+    ],
+  };
+
+  it("blocks bot messages until a Slack User include condition exists", () => {
     const onSubmit = vi.fn();
     const { container } = render(
       <AutomationForm
@@ -1435,10 +1442,31 @@ describe("slack_event automation", () => {
 
     fireEvent.click(screen.getByRole("switch", { name: "Trigger on bot messages" }));
     expect(screen.getByText(/Bot messages are untrusted input/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Add a Slack User condition that includes the bots allowed/)
+    ).toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits includeBotMessages after bot messages are switched on", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: botAllowList }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Trigger on bot messages" }));
+    expect(screen.queryByText(/Add a Slack User condition that includes/)).not.toBeInTheDocument();
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit.mock.calls[0][0].triggerConfig).toEqual({
-      ...validConditions,
+      ...botAllowList,
       slack: { includeBotMessages: true },
     });
   });
@@ -1452,7 +1480,7 @@ describe("slack_event automation", () => {
         onSubmit={onSubmit}
         initialValues={{
           ...slackBase,
-          triggerConfig: { ...validConditions, slack: { includeBotMessages: true } },
+          triggerConfig: { ...botAllowList, slack: { includeBotMessages: true } },
         }}
       />
     );

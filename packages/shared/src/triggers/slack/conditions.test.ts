@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { matchesConditions, validateConditions } from "../conditions";
 import {
+  hasSlackActorIncludeList,
   hasValidSlackChannelCondition,
   normalizeSlackChannelConditions,
   parseSlackChannelCondition,
@@ -377,5 +378,28 @@ describe("validateConditions (slack)", () => {
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("does not apply to github");
+  });
+});
+
+describe("hasSlackActorIncludeList", () => {
+  const channel: TriggerCondition = { type: "slack_channel", operator: "any_of", value: ["C1"] };
+
+  it("needs a non-empty Slack User include condition", () => {
+    expect(hasSlackActorIncludeList([channel])).toBe(false);
+    expect(
+      hasSlackActorIncludeList([
+        channel,
+        { type: "slack_actor", operator: "exclude", value: ["B1"] },
+      ])
+    ).toBe(false);
+    expect(
+      hasSlackActorIncludeList([channel, { type: "slack_actor", operator: "include", value: [] }])
+    ).toBe(false);
+    expect(
+      hasSlackActorIncludeList([
+        channel,
+        { type: "slack_actor", operator: "include", value: ["B1"] },
+      ])
+    ).toBe(true);
   });
 });

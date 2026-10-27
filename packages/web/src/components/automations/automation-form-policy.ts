@@ -1,6 +1,7 @@
 import { isValidTimeZone, validateAutomationCron } from "@open-inspect/shared/cron";
 import {
   conditionRegistry,
+  hasSlackActorIncludeList,
   hasValidSlackChannelCondition,
   triggerSources,
   validateTriggerConditions,
@@ -86,6 +87,7 @@ type AutomationFormInvalidReason =
   | "event-type-required"
   | "invalid-conditions"
   | "slack-channel-required"
+  | "slack-bot-allow-list-required"
   | "sentry-secret-required";
 
 export type AutomationFormEvaluation =
@@ -312,9 +314,11 @@ function isValidEventType(triggerType: AutomationTriggerType, eventType: string)
 
 function getConditionRequirementError(
   trigger: AutomationTriggerDraft
-): "slack-channel-required" | null {
-  if (trigger.type === "slack_event" && !hasValidSlackChannelCondition(trigger.conditions)) {
-    return "slack-channel-required";
+): "slack-channel-required" | "slack-bot-allow-list-required" | null {
+  if (trigger.type !== "slack_event") return null;
+  if (!hasValidSlackChannelCondition(trigger.conditions)) return "slack-channel-required";
+  if (trigger.includeBotMessages && !hasSlackActorIncludeList(trigger.conditions)) {
+    return "slack-bot-allow-list-required";
   }
   return null;
 }

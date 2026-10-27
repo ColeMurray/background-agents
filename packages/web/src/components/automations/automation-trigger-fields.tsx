@@ -78,6 +78,7 @@ interface AutomationTriggerFieldsProps {
 interface AutomationTriggerConfigurationFieldsProps extends AutomationTriggerFieldsProps {
   eventTypeError: string;
   slackChannelError: string;
+  slackBotAllowListError: string;
   conditionErrors: string[];
 }
 
@@ -132,6 +133,7 @@ export function AutomationTriggerConfigurationFields({
   onChange,
   eventTypeError,
   slackChannelError,
+  slackBotAllowListError,
   conditionErrors,
 }: AutomationTriggerConfigurationFieldsProps) {
   const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>([]);
@@ -382,9 +384,9 @@ export function AutomationTriggerConfigurationFields({
                 Trigger on bot messages
               </span>
               <span className="block text-xs text-muted-foreground">
-                Let messages posted by other bots and integrations start runs. To accept only some
-                bots, add a Slack User condition with their bot IDs. This app&apos;s own messages
-                never trigger.
+                Let messages posted by other bots and integrations start runs. Requires a Slack User
+                include condition listing the bot IDs (and any people) allowed to trigger it. This
+                app&apos;s own messages never trigger.
               </span>
             </span>
             <Switch
@@ -395,9 +397,12 @@ export function AutomationTriggerConfigurationFields({
           </label>
           {value.includeBotMessages && (
             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              Bot messages are untrusted input and can start autonomous work. Scope this automation
-              to channels where you trust every bot that posts.
+              Bot messages are untrusted input and can start autonomous work. List only bots you
+              trust in the Slack User condition.
             </p>
+          )}
+          {slackBotAllowListError && (
+            <p className="mt-1 text-xs text-destructive">{slackBotAllowListError}</p>
           )}
         </div>
       )}

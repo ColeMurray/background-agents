@@ -95,6 +95,21 @@ export function hasValidSlackChannelCondition(conditions: unknown[]): boolean {
   return conditions.some((condition) => parseSlackChannelCondition(condition).success);
 }
 
+/**
+ * True when the conditions hold a non-empty Slack User include list, which then
+ * names every author that may trigger the automation. An automation that
+ * accepts bot messages must have one, so an unlisted bot (such as one that
+ * reacts to the automation's own output) cannot start runs.
+ */
+export function hasSlackActorIncludeList(conditions: TriggerCondition[]): boolean {
+  return conditions.some(
+    (condition) =>
+      condition.type === "slack_actor" &&
+      condition.operator === "include" &&
+      condition.value.length > 0
+  );
+}
+
 /** Normalize validated Slack Channel conditions before persistence. */
 export function normalizeSlackChannelConditions(
   conditions: TriggerCondition[]

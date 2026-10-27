@@ -95,7 +95,10 @@ function slackHarness() {
     users: { getIdentity: vi.fn().mockResolvedValue({ userId: "slack-user" }) },
     attribution: { resolve: vi.fn().mockResolvedValue(null) },
     scmProvider: "github" as const,
-    botFirings: { countEventFiringsSince: vi.fn().mockResolvedValue(0) },
+    botFirings: {
+      countEventFiringsSince: vi.fn().mockResolvedValue(0),
+      hasSkippedInvocationSince: vi.fn().mockResolvedValue(false),
+    },
     clock: { now: () => 100 },
     log,
   };
@@ -113,12 +116,18 @@ const botEvent: SlackAutomationEvent = {
   text: "Cost anomaly",
 };
 
-function optedIn(row: AutomationRow): AutomationRow {
+/** Opted in to bot messages, with the include list that requires (the bot and person U1). */
+function optedIn(row: AutomationRow, actors = ["BALERTS", "U1"]): AutomationRow {
   return {
     ...row,
     trigger_type: "slack_event",
     event_type: "message.posted",
-    trigger_config: JSON.stringify({ conditions: [], slack: { includeBotMessages: true } }),
+    trigger_config: JSON.stringify({
+      conditions: actors.length
+        ? [{ type: "slack_actor", operator: "include", value: actors }]
+        : [],
+      slack: { includeBotMessages: true },
+    }),
   };
 }
 
@@ -212,6 +221,21 @@ describe("Slack bot messages", () => {
     });
   });
 
+  it("ignores bot messages for an opted-in automation without a Slack User include list", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation, [])]);
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(botEvent)).resolves.toEqual({
+      triggered: 0,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [],
+    });
+    expect(deps.continuity.continueSession).not.toHaveBeenCalled();
+    expect(deps.invocations.start).not.toHaveBeenCalled();
+  });
+
   it("starts below the hourly limit", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
@@ -245,6 +269,28 @@ describe("Slack bot messages", () => {
       expect.objectContaining({ triggerKey: botEvent.triggerKey }),
       SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON
     );
+    expect(deps.invocations.start).not.toHaveBeenCalled();
+  });
+
+  it("counts later over-limit messages without recording another skip", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
+    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
+    deps.botFirings.hasSkippedInvocationSince.mockResolvedValue(true);
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(botEvent)).resolves.toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: [],
+    });
+    expect(deps.botFirings.hasSkippedInvocationSince).toHaveBeenCalledExactlyOnceWith(
+      "auto-1",
+      SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON,
+      100 - SLACK_BOT_TRIGGER_WINDOW_MS
+    );
+    expect(deps.invocations.skipEvent).not.toHaveBeenCalled();
     expect(deps.invocations.start).not.toHaveBeenCalled();
   });
 

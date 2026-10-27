@@ -157,9 +157,16 @@ describe("Scheduler slack event handling (integration)", () => {
 
   describe("bot-authored messages", () => {
     const fromBot = { actorUserId: undefined, botId: "BALERTS", text: "Cost anomaly" };
+    // Accepting bots requires a Slack User include list; U1 keeps the person's
+    // messages triggering alongside the listed bot.
     const botTriggerConfig = (includeBotMessages?: boolean) =>
       JSON.stringify({
-        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+        conditions: [
+          { type: "slack_channel", operator: "any_of", value: ["C1"] },
+          ...(includeBotMessages
+            ? [{ type: "slack_actor", operator: "include", value: ["BALERTS", "U1"] }]
+            : []),
+        ],
         ...(includeBotMessages === undefined ? {} : { slack: { includeBotMessages } }),
       });
 
@@ -233,6 +240,15 @@ describe("Scheduler slack event handling (integration)", () => {
       );
       expect(skip).toBeDefined();
       expect(botResult.invocationIds).toEqual([skip!.id]);
+
+      // Later refusals in the window are counted but leave no further rows.
+      const laterResult = await sendEvent(makeSlackEvent(fromBot));
+      expect(laterResult).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
+      expect(
+        (await fetchInvocations(store, id)).filter(
+          (invocation) => invocation.skipReason === "slack_bot_trigger_limit"
+        )
+      ).toHaveLength(1);
 
       // People are not limited.
       const personResult = await sendEvent(makeSlackEvent({ text: "Cost anomaly" }));
@@ -317,6 +333,29 @@ describe("Scheduler slack event handling (integration)", () => {
       expect(await store.countEventFiringsSince(id, since, '%"botId":%', 10)).toBe(2);
       // Stops scanning once the limit is reached.
       expect(await store.countEventFiringsSince(id, since, '%"botId":%', 1)).toBe(1);
+    });
+
+    it("ignores bot messages when the opted-in automation has no Slack User include list", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, {
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+          slack: { includeBotMessages: true },
+        }),
+      });
+
+      const result = await sendEvent(makeSlackEvent(fromBot));
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(await fetchRuns(id)).toHaveLength(0);
+    });
+
+    it("does not trigger on a bot missing from the include list", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      const result = await sendEvent(makeSlackEvent({ ...fromBot, botId: "BOTHER" }));
+      expect(result.triggered).toBe(0);
+      expect(await fetchRuns(id)).toHaveLength(0);
     });
 
     it("does not let a bot's thread reply reach an excluded automation's session", async () => {

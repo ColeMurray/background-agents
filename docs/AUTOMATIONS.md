@@ -348,10 +348,11 @@ stripped before matching, and messages that `@mention` the bot are handled by th
 
 By default, messages posted by other bots and integrations (alerting tools, CI notifications,
 incoming webhooks) do not trigger a Slack automation. Turn on **Trigger on bot messages** on the
-automation to let them start runs; the agent is told the message came from a bot. To accept only
-some bots, also add a **Slack User** include condition with their bot IDs (`B…`). A Slack User
-condition matches a message's author by user ID or, for a bot, by bot ID, so it works for app bots
-and for legacy integrations that post without a user. The Open-Inspect bot's own messages never
+automation to let them start runs; the agent is told the message came from a bot. The automation
+must also have a **Slack User** include condition listing the bot IDs (`B…`) allowed to trigger it,
+and saving is refused without one. A bot matches by its bot ID, which works for app bots and for
+legacy integrations that post without a user. The list limits people too, so add the user IDs of
+anyone else who should still trigger the automation. The Open-Inspect bot's own messages never
 trigger an automation.
 
 Only a bot message's `text` is read. An integration that posts its content only in attachments or
@@ -363,13 +364,14 @@ linked to an Open-Inspect account, so a bot's reply in a thread that already has
 dropped.
 
 Bot messages can start at most 10 runs of one automation per hour; later bot messages in that hour
-are skipped and appear in the automation's run history. This stops a loop in which a run makes
-another bot post in the watched channel, which starts the automation again. The limit can be
-overshot by a burst of bot messages that arrive at the same moment, but not by such a loop. Messages
-from people are not limited.
+are skipped. The first skip in the hour appears in the automation's run history, and the rest are
+not recorded, so a busy bot does not flood it. This stops a loop in which a run makes another bot
+post in the watched channel, which starts the automation again. The limit can be overshot by a burst
+of bot messages that arrive at the same moment, but not by such a loop. Messages from people are not
+limited.
 
-Bot output is untrusted input that can start autonomous work, so allow it only in channels where you
-trust every bot that posts.
+Bot output is untrusted input that can start autonomous work, so list only bots you trust. Anyone
+holding an incoming-webhook URL can post as that integration.
 
 ### Run feedback
 

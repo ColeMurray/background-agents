@@ -30,7 +30,7 @@ export interface SlackEventHandlerDeps {
   invocations: Pick<AutomationInvocationService, "start" | "skipEvent">;
   continuity: Pick<SessionContinuityService, "continueSession">;
   policies: Pick<SlackContinuationPolicyFactory, "create">;
-  bots: Pick<SlackBotTriggerPolicy, "accepts" | "limitReached">;
+  bots: Pick<SlackBotTriggerPolicy, "accepts" | "limitState">;
   clock: Pick<DateConstructor, "now">;
   log: Logger;
 }
@@ -87,7 +87,13 @@ export class SlackEventHandler {
       if (!matchesConditions(config.conditions, event, conditionRegistry)) continue;
 
       const triggerMetadata = serializeSlackTriggerMetadata(event);
-      if (event.botId !== undefined && (await deps.bots.limitReached(automation.id, now))) {
+      const botLimit =
+        event.botId === undefined ? "under_limit" : await deps.bots.limitState(automation.id, now);
+      if (botLimit === "over_limit_recorded") {
+        summary.skipped++;
+        continue;
+      }
+      if (botLimit === "over_limit") {
         deps.log.warn("Skipped a bot-triggered Slack firing over the hourly limit", {
           event: "scheduler.slack_bot_trigger_limited",
           automation_id: automation.id,

@@ -840,9 +840,9 @@ async function handleUpdateAutomation(
     }
   }
 
-  // trigger_config is a single source-interpreted JSON blob (the conditions),
-  // so a PUT replaces it wholesale (null clears it). The caller owns the full
-  // blob; the web form always re-submits the conditions within triggerConfig.
+  // trigger_config is a single source-interpreted JSON blob (the conditions and
+  // any source options, such as `slack`), so a PUT replaces it wholesale (null
+  // clears it). The caller owns the full blob; the web form always re-submits it.
   if (body.triggerConfig === null) {
     updateFields.trigger_config = null;
   } else if (body.triggerConfig !== undefined) {

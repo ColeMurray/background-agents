@@ -97,6 +97,7 @@ export type { WebhookDeliveryOptions } from "./webhook";
 export {
   slackSource,
   hasValidSlackChannelCondition,
+  hasSlackActorIncludeList,
   normalizeSlackChannelConditions,
   parseSlackChannelCondition,
   normalizeSlackEvent,

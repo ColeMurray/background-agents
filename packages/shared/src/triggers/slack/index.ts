@@ -14,6 +14,7 @@ export type { SlackMessageAuthor, SlackMessageInput, SlackChannelMeta } from "./
 export {
   slackConditions,
   hasValidSlackChannelCondition,
+  hasSlackActorIncludeList,
   normalizeSlackChannelConditions,
   parseSlackChannelCondition,
   REGEX_PATTERN_MAX_LENGTH,

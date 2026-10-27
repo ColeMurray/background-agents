@@ -1752,6 +1752,23 @@ export class AutomationStore {
     return row?.count ?? 0;
   }
 
+  /** Whether the automation recorded a firing skipped for `skipReason` at or after `since`. */
+  async hasSkippedInvocationSince(
+    automationId: string,
+    skipReason: string,
+    since: number
+  ): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        `SELECT 1 AS found FROM automation_invocations
+         WHERE automation_id = ? AND skip_reason = ? AND created_at >= ?
+         LIMIT 1`
+      )
+      .bind(automationId, skipReason, since)
+      .first<{ found: number }>();
+    return row !== null;
+  }
+
   /** Claim an explicit webhook key before either continuation or invocation work is admitted. */
   async claimFollowUpReceipt(params: {
     automationId: string;

@@ -347,7 +347,10 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
       }),
     });
     await store.create(auto);
-    const conditions = [{ type: "slack_channel", operator: "any_of", value: ["C1"] }];
+    const conditions = [
+      { type: "slack_channel", operator: "any_of", value: ["C1"] },
+      { type: "slack_actor", operator: "include", value: ["BALERTS"] },
+    ];
 
     const optIn = await putAutomation(auto.id, {
       triggerConfig: { conditions, slack: { includeBotMessages: true } },
@@ -359,6 +362,30 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     const reset = await putAutomation(auto.id, { triggerConfig: { conditions } });
     expect(reset.status).toBe(200);
     config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
+    expect(config.slack).toBeUndefined();
+  });
+
+  it("rejects bot messages without a Slack User include list (400)", async () => {
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+      }),
+    });
+    await store.create(auto);
+    const channel = { type: "slack_channel", operator: "any_of", value: ["C1"] };
+
+    for (const conditions of [
+      [channel],
+      [channel, { type: "slack_actor", operator: "exclude", value: ["BALERTS"] }],
+    ]) {
+      const res = await putAutomation(auto.id, {
+        triggerConfig: { conditions, slack: { includeBotMessages: true } },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("slack_actor include condition");
+    }
+    const config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
     expect(config.slack).toBeUndefined();
   });
 

@@ -79,11 +79,11 @@ Only the message text reaches the agent (up to 8 KB). Attachments are not forwar
 
 ## Bot messages
 
-Messages posted by other bots and integrations, such as alerting tools, CI notifications, and incoming webhooks, are ignored by default. Turn on **Trigger on bot messages** to let them start runs. To accept only some bots, add a **Slack User** include condition with their bot ids. The OpenInspect bot's own messages never trigger an automation.
+Messages posted by other bots and integrations, such as alerting tools, CI notifications, and incoming webhooks, are ignored by default. Turn on **Trigger on bot messages** to let them start runs. The automation must also have a **Slack User** include condition listing the bot ids allowed to trigger it; saving is refused without one. That list limits people too, so add the user ids of anyone else who should still trigger the automation. The OpenInspect bot's own messages never trigger an automation.
 
 - Only a bot message's text is read. An integration that posts its content only in attachments or blocks triggers nothing.
 - A bot can start a run but never continues one. Its reply in a thread that already has a session is dropped.
-- Bot messages can start at most 10 runs of one automation per hour. Later bot messages in that hour are skipped and appear in the run history, which stops a loop where a run's output makes another bot post in the watched channel. Messages from people are not limited.
+- Bot messages can start at most 10 runs of one automation per hour. Later bot messages in that hour are skipped, which stops a loop where a run's output makes another bot post in the watched channel. The first skip in the hour appears in the run history; the rest are not recorded. Messages from people are not limited.
 - The agent is told the message came from a bot.
 
 No extra Slack scope is needed: bot posts arrive on the same `message.channels` and `message.groups` subscriptions.
@@ -134,7 +134,7 @@ Channel triggers widen who can start a coding session. Before enabling one:
 
 - Any member of a watched channel can supply a matching trigger unless conditions restrict them. Treat each watched channel as a source of untrusted requests to the automation's executor; membership and grant checks do not make that message trustworthy.
 - Prefer an allowlist: add a **Slack User** condition with **include** so only specific people can trigger it, and keep watched channels small.
-- Bot output is untrusted input that can start autonomous work. Turn on **Trigger on bot messages** only in channels where you trust every bot that posts, and prefer an include list of bot ids. Anyone holding an incoming-webhook URL for the channel can post as that integration.
+- Bot output is untrusted input that can start autonomous work. List only bots you trust in the required Slack User include condition. Anyone holding an incoming-webhook URL for the channel can post as that integration.
 - Message text reaches the agent as part of the prompt. Scope the instructions defensively and rely on the deployment's repository access boundary.
 - Regex conditions run without a per-match timeout. Patterns are length-capped and validated on save, but a pathological pattern is the author's responsibility.
 
@@ -147,7 +147,7 @@ Channel triggers widen who can start a coding session. Before enabling one:
 | Messages in the channel start nothing                | The app is not subscribed to `message.channels` / `message.groups`, lacks history scopes, or the message mentioned the bot | Complete the Slack app setup; mentions go to the interactive flow      |
 | An image posted in the channel starts nothing        | Slack automations ingest text only                                                                                         | Add text to the message, or use an @mention                            |
 | The automation replies to every message              | No **Message Text** condition and no `NO_REPLY` instruction                                                                | Add a text condition, and tell the agent when to reply with `NO_REPLY` |
-| Alerts posted by a bot start nothing                 | **Trigger on bot messages** is off, or the integration posts its content only in attachments or blocks                     | Turn the setting on; make sure the integration sets message text       |
+| Alerts posted by a bot start nothing                 | **Trigger on bot messages** is off, the bot's id is not in the Slack User include list, or it posts only attachments       | Turn the setting on, list the bot id, and make sure it sets text       |
 | The form refuses a regex                             | The pattern exceeds 200 characters, uses a flag other than `i` or `m`, or does not compile                                 | Shorten or fix the pattern                                             |
 
 ## Next steps
