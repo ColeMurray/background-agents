@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
 import type { AutomationListItem } from "@open-inspect/shared/types/automations";
@@ -267,6 +267,7 @@ describe("AutomationsList actions", () => {
     const onPause = vi.fn();
     const onResume = vi.fn();
     const onTrigger = vi.fn();
+    const onDelete = vi.fn();
     render(
       <AutomationsList
         canCreate
@@ -275,7 +276,7 @@ describe("AutomationsList actions", () => {
         onPause={onPause}
         onResume={onResume}
         onTrigger={onTrigger}
-        onDelete={noop}
+        onDelete={onDelete}
       />
     );
 
@@ -288,6 +289,19 @@ describe("AutomationsList actions", () => {
     expect(enabled ? onPause : onResume).toHaveBeenCalledWith("auto-1");
     expect(onTrigger).toHaveBeenCalledWith("auto-1");
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(onRowClick).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" })
+    );
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("auto-1");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(onRowClick).not.toHaveBeenCalled();
   });
 
