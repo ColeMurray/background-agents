@@ -746,5 +746,12 @@ describe("Scheduler slack event handling (integration)", () => {
       invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
     ).toBeUndefined();
     expect(invocations).toHaveLength(1);
+
+    // The follow-up queues another spawn after the first stubbed attempt fails.
+    // Keep it inside the test's lifetime, just like the init warming attempt.
+    await waitForSandboxStatus(
+      env.SESSION.get(env.SESSION.idFromName(rootRun.session_id!)),
+      "failed"
+    );
   });
 });
