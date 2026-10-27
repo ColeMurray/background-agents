@@ -1,10 +1,10 @@
 ---
 title: Schedules
-description: Schedule presets, custom cron expressions, timezones, next-run behavior, and how Trigger Now interacts with the schedule.
+description: One-shot and recurring schedules, timezones, launch retries, and next-run behavior.
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-25"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/MULTI_REPO_AUTOMATIONS.md
@@ -17,11 +17,19 @@ relatedCode:
   - packages/control-plane/src/automation/authorization-guard.ts
 ---
 
-A Schedule automation fires on a cron cadence in the timezone you choose; this page covers the picker, the cron rules, and what happens around each firing.
+A Schedule automation runs once at a future time or repeats on a cron cadence.
 
-## Presets
+## Run once
 
-The **Schedule** picker offers four presets and a custom mode. Every preset builds a standard cron expression for you.
+Choose **Run once** in the **Schedule** field and enter a future date and time in your browser's timezone. The automation becomes eligible at that instant and starts on an eligible scheduler tick.
+
+One-shot schedules support the same [launch retries](#retries) as recurring schedules. Pause or delete the automation to cancel pending starts, including retries. To resume a one-shot whose scheduled time has passed, choose a new future time first.
+
+Schedule mode is fixed after creation. You can edit a one-shot's time, but cannot convert it to a recurring schedule.
+
+## Recurring presets
+
+The recurring schedule picker offers four presets and a custom mode. Every preset builds a standard cron expression for you.
 
 | Preset     | Runs                                      | Controls                                       |
 | ---------- | ----------------------------------------- | ---------------------------------------------- |
@@ -63,9 +71,9 @@ The **Timezone** field defaults to your browser's timezone when you create an au
 
 ![An automation detail page showing the configuration: trigger schedule, timezone, agent, model, reasoning, next run, and instructions](/images/automations/automation-detail.webp "An automation detail page. The schedule, timezone, and next run are shown under Configuration, above the run history.")
 
-- Saving a change to the schedule or timezone recalculates the next run automatically.
-- **Resume** on a paused schedule automation computes the next run from the current moment rather than catching up on missed slots.
-- A schedule slot that comes due while a previous run is still active is skipped (see below) and the schedule advances to the following slot.
+- Saving a change to a recurring schedule or its timezone recalculates the next run automatically.
+- **Resume** on a paused recurring automation computes the next run from the current moment rather than catching up on missed slots. A one-shot resumes at its configured future time.
+- A schedule slot that comes due while a previous run is still active is skipped (see below). A recurring schedule advances to the following slot; a one-shot consumes that slot.
 - Execution authorization denial records a **Skipped** invocation and immediately pauses the automation, clearing the next run time without adding a failure strike. Restore the required executor/team/target access or [reassign the executor](/automations#reassigning-an-executor), then click **Resume**; restoring access or reassigning alone does not restart the schedule.
 
 ## Trigger Now
@@ -82,9 +90,21 @@ Both scheduled and manual runs keep the automation's team ownership and use the 
 
 ## One active run at a time
 
-For scheduled and manual firings, only one run per automation can be active. When the schedule comes due during an active run, the firing is recorded in **Run History** as **Skipped** with the note "Skipped because a previous run is still active". Skipped firings never count toward [auto-pause](/automations#auto-pause-after-failures).
+For scheduled and manual firings, only one run per automation can be active. A run waiting to [retry](#retries) counts as active. When the schedule comes due during an active run, the firing is recorded in **Run History** as **Skipped** with the note "Skipped because a previous run is still active". Skipped firings never count toward [auto-pause](/automations#auto-pause-after-failures).
 
 Event-driven triggers use per-event concurrency keys instead; see each trigger's page.
+
+## Retries
+
+A transient outage can stop a scheduled run from starting, for example when its session cannot be created. Set **Retries** (none by default, up to 5) to launch such a run again instead of failing it. This applies to both recurring and one-shot schedules:
+
+- Only a run that failed before its instructions reached a session is retried. A run that fails after it starts, a run whose configuration can't run (for example a model its harness doesn't support), and a **Trigger Now** run fail as usual.
+- The first retry waits 2 minutes, and the wait doubles for each later attempt. Meanwhile the row shows **Retrying** with the launch error and the time of the next attempt.
+- Each attempt opens a new session under the same run row, which shows the attempt number once the run has relaunched. Access is checked again before each attempt, as at the original firing.
+- A run that relaunches successfully counts as a success. A run that uses up its retries fails with its last error and counts as one failure toward [auto-pause](/automations#auto-pause-after-failures). When another target of the same firing fails, that failure counts once the waiting run finishes, so it can't pause the automation out from under the retry.
+- Pausing or deleting the automation, or lowering its retries below the attempts a waiting run has made, fails that run within a minute.
+- A one-shot consumes its scheduled time when its invocation is admitted. Retries reuse that invocation and run; they do not schedule another firing. The automation stays enabled while its runs are active or waiting to retry, then disables once they finish.
+- Rescheduling a one-shot withdraws waiting retries for its previous scheduled time. A future schedule remains eligible to run.
 
 ## Multi-repository schedules
 

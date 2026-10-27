@@ -251,7 +251,8 @@ per `boot_seq`; the copy the bridge resends on reconnect is dropped at debug lev
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
 Dashboards and alerts must migrate `sandbox.spawned` and `sandbox.spawn_failed` to `sandbox.spawn`
-outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
+outcomes, `sandbox.restored` to `sandbox.restore` outcomes, and `sandbox.timeout` to
+`sandbox.inactivity_timeout` (now emitted for every provider).
 
 | Event                          | Level       | Key Fields                                                                                                              | Description                                                             |
 | ------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -260,7 +261,7 @@ outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
 | `sandbox.snapshot`             | info        | `reason`, `modal_object_id`                                                                                             | Snapshot attempt started                                                |
 | `sandbox.snapshot_saved`       | info        | `image_id`, `reason`                                                                                                    | Snapshot saved                                                          |
 | `sandbox.heartbeat_stale`      | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed                                                        |
-| `sandbox.timeout`              | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached                                              |
+| `sandbox.inactivity_timeout`   | info        | `spawn_source`, `timeout_ms`, `idle_ms`                                                                                 | Inactivity stop decided                                                 |
 | `sandbox.connecting_timeout`   | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
 | `sandbox.boot_budget`          | warn        | `elapsed_ms`, `timeout_ms`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `warning`                   | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
 | `sandbox.fatal_runtime_error`  | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |

@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { Env } from "../types";
+import { SourceControlProviderError } from "../source-control";
 import { REPOS_CACHE_KEY, reposCacheIdentity, reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
 import {
   createTestRequestHandler,
+  authorizationDatabase,
   ownerAuthorizationDatabase,
   TEST_BACKGROUND_TASK_CONTEXT,
   TEST_SERVICE_SECRETS,
@@ -16,6 +18,7 @@ const {
   mockCacheGet,
   mockCachePut,
   mockGetBatch,
+  mockListBranches,
   mockListRepositories,
   mockLogger,
   mockUpsert,
@@ -24,6 +27,7 @@ const {
   mockCacheGet: vi.fn(),
   mockCachePut: vi.fn(),
   mockGetBatch: vi.fn(),
+  mockListBranches: vi.fn(),
   mockListRepositories: vi.fn(),
   mockLogger: {
     debug: vi.fn(),
@@ -56,6 +60,7 @@ vi.mock("./shared", async () => {
   return {
     ...actual,
     createRouteSourceControlProvider: vi.fn(() => ({
+      listBranches: mockListBranches,
       listRepositories: mockListRepositories,
     })),
   };
@@ -227,6 +232,119 @@ describe("repository list route", () => {
       cached: false,
       repos: [{ metadata: { description: "Updated description" } }],
     });
+  });
+});
+
+describe("repository branch route", () => {
+  const result = {
+    branches: [{ name: "main" }, { name: "feature/widgets" }],
+    cached: false,
+    cachedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.authenticate.mockImplementation(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    }));
+    mockListBranches.mockResolvedValue(result);
+  });
+
+  it.each([true, false])("forwards provider branch metadata with cached=%s", async (cached) => {
+    const providerResult = { ...result, cached };
+    mockListBranches.mockResolvedValue(providerResult);
+    const backgroundTasks = createTestBackgroundTasks();
+
+    const response = await handleRequest(
+      request("/repos/Acme/Widgets/branches"),
+      createEnv(),
+      backgroundTasks
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(providerResult);
+    expect(mockListBranches).toHaveBeenCalledExactlyOnceWith(
+      { owner: "Acme", name: "Widgets" },
+      {
+        backgroundTasks: expect.objectContaining({ submit: expect.any(Function) }),
+        metrics: expect.objectContaining({ time: expect.any(Function) }),
+        traceId: "trace-1",
+      }
+    );
+    expect(mockCacheGet).not.toHaveBeenCalled();
+    expect(mockCachePut).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+    expect(backgroundTasks.submissions).toHaveLength(0);
+    expect(mockListBranches.mock.calls[0][1].metrics.spans).toEqual({});
+  });
+
+  it("includes provider-recorded timings in the HTTP request log", async () => {
+    mockListBranches.mockImplementationOnce(async (_repository, { metrics }) => {
+      await metrics.time("kv_read", async () => null);
+      await metrics.time("scm_api", async () => result.branches);
+      return result;
+    });
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      createEnv(),
+      createTestBackgroundTasks()
+    );
+
+    expect(response.status).toBe(200);
+    const { spans } = mockListBranches.mock.calls[0][1].metrics;
+    expect(spans).toEqual({ kv_read: expect.any(Number), scm_api: expect.any(Number) });
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      "http.request",
+      expect.objectContaining({ kv_read_ms: spans.kv_read, scm_api_ms: spans.scm_api })
+    );
+  });
+
+  it.each([
+    { failure: new Error("Provider unavailable"), message: "Failed to list branches" },
+    {
+      failure: new SourceControlProviderError("Not configured", "permanent"),
+      message: "SCM provider not configured",
+    },
+    {
+      failure: new SourceControlProviderError("Not found", "permanent", 404),
+      message: "Failed to list branches",
+    },
+  ])("maps provider failures to 500 ($message)", async ({ failure, message }) => {
+    mockListBranches.mockRejectedValue(failure);
+    const backgroundTasks = createTestBackgroundTasks();
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      createEnv(),
+      backgroundTasks
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockCacheGet).not.toHaveBeenCalled();
+    expect(mockCachePut).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+    expect(backgroundTasks.submissions).toHaveLength(0);
+  });
+
+  it("checks route permissions before calling the provider or cache", async () => {
+    const env = { ...createEnv(), DB: authorizationDatabase({ permissions: [] }) };
+    const backgroundTasks = createTestBackgroundTasks();
+
+    const response = await handleRequest(
+      request("/repos/acme/widgets/branches"),
+      env,
+      backgroundTasks
+    );
+
+    expect(response.status).toBe(403);
+    expect(mockListBranches).not.toHaveBeenCalled();
+    expect(mockCacheGet).not.toHaveBeenCalled();
+    expect(mockCachePut).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+    expect(backgroundTasks.submissions).toHaveLength(0);
   });
 });
 

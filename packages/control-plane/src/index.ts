@@ -18,6 +18,7 @@ import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
 import { createCloudflareEnv, type WorkerBindings } from "./cloudflare/platform";
 import { findScheduledJob } from "./scheduled-jobs";
+import type { Env } from "./types";
 
 const logger = createLogger("worker");
 
@@ -31,6 +32,7 @@ export default {
     ctx: ExecutionContext
   ): Promise<Response> {
     const url = new URL(request.url);
+    const env = createCloudflareEnv(bindings);
 
     // WebSocket upgrade for session
     const upgradeHeader = request.headers.get("Upgrade");
@@ -38,12 +40,12 @@ export default {
       const metrics = createRequestMetrics();
       // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
       const db = instrumentSqlDatabase(bindings.DB, metrics);
-      return handleWebSocket(request, bindings, url, db, metrics);
+      return handleWebSocket(request, env, url, db, metrics);
     }
 
     // Regular API request — Hono owns HTTP route selection while the neutral
     // admission/dispatch pipeline retains authentication and authorization.
-    return handleControlPlaneHttp(request, createCloudflareEnv(bindings), ctx);
+    return handleControlPlaneHttp(request, env, ctx);
   },
 
   /**
@@ -96,7 +98,7 @@ export default {
  */
 async function handleWebSocket(
   request: Request,
-  env: WorkerBindings,
+  env: Env,
   url: URL,
   db: SqlDatabase,
   metrics: RequestMetrics
@@ -127,14 +129,9 @@ async function handleWebSocket(
     ...metrics.summarize(),
   });
 
-  // Forward the upgrade to the Durable Object directly rather than through
-  // SessionRuntimeClient: the 101 must carry the object's own `webSocket`,
-  // which only this Cloudflare-side hop can return. Stays here by design.
-  const doId = env.SESSION.idFromName(sessionId);
-  const stub = env.SESSION.get(doId);
-
-  // Forward the WebSocket upgrade request to the DO
-  const response = await stub.fetch(request);
+  // Raw dispatch preserves the upgrade request and the object's own webSocket,
+  // while sharing the placement options used by every session runtime call.
+  const response = await env.SESSION(sessionId, request);
 
   // If it's a WebSocket upgrade response, return it directly
   // Add CORS headers for the upgrade response

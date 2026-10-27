@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sandbox_runtime import supervisor as supervisor_module
+from sandbox_runtime.constants import BOOT_COMPLETE_MARKER_ENV_VAR
 from sandbox_runtime.repository_boot import RepositoryBootResult
 from sandbox_runtime.runtime_config import BootMode, RuntimeConfig
 from sandbox_runtime.supervisor import SandboxSupervisor
@@ -82,6 +83,49 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
         "opencode",
         "bridge",
     ]
+
+
+def _session_boot_with_marker(tmp_path, monkeypatch):
+    marker = tmp_path / "state" / "boot-complete"
+    monkeypatch.setenv(BOOT_COMPLETE_MARKER_ENV_VAR, str(marker))
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
+    monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
+    supervisor, repository, *_ = _supervisor(tmp_path, [])
+    return supervisor, repository, marker
+
+
+async def test_completed_boot_records_the_marker_a_provider_asked_for(tmp_path, monkeypatch):
+    supervisor, _repository, marker = _session_boot_with_marker(tmp_path, monkeypatch)
+
+    assert await supervisor.run() is True
+
+    assert marker.is_file()
+
+
+async def test_interrupted_boot_leaves_no_marker(tmp_path, monkeypatch):
+    supervisor, repository, marker = _session_boot_with_marker(tmp_path, monkeypatch)
+    repository.boot = AsyncMock(side_effect=RuntimeError("git sync failed for acme/repo"))
+    supervisor._report_fatal_error = AsyncMock()
+
+    assert await supervisor.run() is False
+
+    # The next start on this disk boots fresh and repeats the clone and setup.
+    assert not marker.exists()
+
+
+async def test_boot_that_continued_past_a_failed_setup_still_records_the_marker(
+    tmp_path, monkeypatch
+):
+    supervisor, repository, marker = _session_boot_with_marker(tmp_path, monkeypatch)
+    repository.boot = AsyncMock(
+        return_value=RepositoryBootResult(True, [], False, True, (), Path(tmp_path))
+    )
+
+    assert await supervisor.run() is True
+
+    # A session ran here; a later fresh boot would check out over its work.
+    assert marker.is_file()
 
 
 async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, monkeypatch):

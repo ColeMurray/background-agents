@@ -161,6 +161,39 @@ describe("controlPlaneUserFetch", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "/mcp-servers/../autofix/activity",
+    "/mcp-servers/./server-1",
+    "/mcp-servers/%2e%2e/autofix/activity",
+    "/mcp-servers/.%2E/autofix/activity",
+    "/mcp-servers/%2e./autofix/activity",
+    "/mcp-servers/..\\autofix\\activity",
+    "/mcp-servers/.\n./autofix/activity",
+    "/environments/..",
+    "/sessions/../diff",
+    "/sessions/session-1/diff/../files/file-1",
+    "/repos/../web/branches",
+    "/secrets/..",
+  ])("rejects path normalization before signing or dispatch: %s", async (path) => {
+    const response = await controlPlaneUserFetch(path);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid control-plane path" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "/repos/group%2Fsubgroup/web/branches",
+    "/mcp-servers/..%2Fautofix%2Factivity",
+    "/mcp-servers/%252e%252e%2Fautofix%2Factivity",
+    "/sessions/session.1/diff?filter=..%2Fautofix%2Factivity",
+  ])("preserves already encoded resource paths: %s", async (path) => {
+    await controlPlaneUserFetch(path);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`https://control-plane.example${path}`);
+  });
+
   it("forwards the exact bytes of a buffered binary body", async () => {
     const body = new TextEncoder().encode("--boundary\r\nbinary\u0000body\r\n--boundary--").buffer;
     await controlPlaneUserFetch("/sessions/abc/attachments", {

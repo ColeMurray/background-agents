@@ -4,7 +4,7 @@ description: Short answers to the questions people ask most about OpenInspect se
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/shared/src/types/team-access.ts
@@ -18,6 +18,7 @@ relatedCode:
   - docs/MANAGED_SKILLS.md
   - docs/AVAILABLE_MODELS.md
   - docs/CLAUDE_AGENT.md
+  - packages/shared/src/harnesses.ts
   - docs/GROK_MODELS.md
   - docs/integrations/SLACK.md
   - docs/integrations/GITHUB.md
@@ -40,7 +41,7 @@ Yes. Each session has its own sandbox. Cost limits apply per session. See [Sessi
 
 ### Why did my session start from a snapshot?
 
-On Modal, a snapshot may be taken after a completed turn, even if execution failed. Modal, modal-vm, Vercel, and OpenComputer can restore saved state after confirmed shutdown; Vercel and modal-vm skip per-turn snapshots. OpenComputer can also wake a retained sandbox if no saved shutdown receipt controls recovery. Daytona and E2B resume theirs in place. Saved work includes uncommitted changes. An incompatible or unknown-version old snapshot is held rather than restored or replaced with a fresh checkout. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
+On Modal, a snapshot may be taken after a completed turn, even if execution failed. Modal, modal-vm, and Vercel can restore saved state after confirmed shutdown; Vercel and modal-vm skip per-turn snapshots. Daytona, E2B, and Boat resume theirs in place. Saved work includes uncommitted changes. An incompatible or unknown-version old snapshot is held rather than restored or replaced with a fresh checkout. See [Lifecycle and statuses](/sessions/lifecycle-and-statuses).
 
 ### Why is setup.sh not running?
 
@@ -90,9 +91,9 @@ Check Settings › Models: opt-in groups (xAI/SuperGrok, OpenCode Zen, OpenCode 
 
 Not necessarily. Connect a ChatGPT or SuperGrok subscription under Settings › Accounts and the session fetches short-lived access tokens from the control plane instead of using a key. API-key mode (`OPENAI_API_KEY` or `XAI_API_KEY` as a secret) remains available. Claude account mode is different: it uses a static setup token in the `claude` process. See [Provider accounts](/models/provider-accounts).
 
-### What is the difference between OpenCode and Claude Agent?
+### What is the difference between OpenCode, Claude Agent, and Codex?
 
-OpenCode is the default harness and runs any catalog model. Claude Agent runs Anthropic models only, can use a connected Claude subscription, and reads the repository's `CLAUDE.md` natively. The harness is chosen at session creation and cannot be changed afterwards. Slack, GitHub, and Linear launches use the harness chosen in their integration settings (Slack users can also pick their own in App Home), and automations use the harness chosen on the automation. Both default to OpenCode. See [Agent harnesses](/models/agent-harnesses).
+OpenCode is the default harness and runs any catalog model. Claude Agent runs Anthropic models only, can use a connected Claude subscription, and reads the repository's `CLAUDE.md` natively. Codex runs the OpenAI models that support it, can use a connected ChatGPT account, and reads the repository's `AGENTS.md` natively. The harness is chosen at session creation and cannot be changed afterwards. Slack, GitHub, and Linear launches use the harness chosen in their integration settings (Slack users can also pick their own in App Home), and automations use the harness chosen on the automation. Both default to OpenCode. See [Agent harnesses](/models/agent-harnesses).
 
 ## Integrations
 

@@ -11,7 +11,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { TeamChannelBindingStore } from "../../src/db/team-channel-bindings";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser } from "./helpers";
 import { fetchRuns, makeRunRow, seedRun } from "./run-helpers";
@@ -49,7 +49,7 @@ function createSteeringScheduler(mode: "off" | "shadow" | "on" = "shadow") {
   });
   const schedulerEnv = createCloudflareEnv({ ...env, TEAMS_ENFORCEMENT: mode });
   schedulerEnv.SESSION = (sessionId, request) => requests(request, sessionId);
-  return { scheduler: new Scheduler(env.DB, schedulerEnv, { submit() {} }), requests };
+  return { scheduler: createScheduler(env.DB, schedulerEnv, { submit() {} }), requests };
 }
 
 async function seedSteerableSession(

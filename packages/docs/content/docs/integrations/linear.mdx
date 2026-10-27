@@ -4,7 +4,7 @@ description: Start OpenInspect sessions by mentioning or assigning the Linear Ag
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/integrations/LINEAR.md
   - packages/shared/src/types/integrations.ts
@@ -162,7 +162,7 @@ OpenInspect does not change labels, assignee, priority, or project; pull request
 
 | Setting                                    | What it controls                                                                                                                                         |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent harness                              | **OpenCode** (default) or **Claude Agent** for new Linear-started sessions                                                                               |
+| Agent harness                              | **OpenCode** (default), **Claude Agent**, or **Codex** for new Linear-started sessions                                                                   |
 | Default model and Default reasoning effort | Model and reasoning depth for Linear-started sessions; the list shows only models the selected harness can run                                           |
 | Repository Scope                           | **All repositories** (Linear events can run against every accessible repository) or **Selected repositories** (only the allowlist)                       |
 | Issue Session Instructions                 | Custom instructions appended to agent prompts for all Linear issue sessions (coding standards, preferred tools, PR conventions); up to 10,000 characters |

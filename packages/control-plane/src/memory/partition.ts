@@ -68,6 +68,20 @@ export function partitionFromColumns(row: PartitionColumns): MemoryPartition {
   }
 }
 
+/** Rebuild a partition from its type and indexed key (the inverse of {@link partitionKey}). */
+export function partitionFromKey(type: MemoryScopeType, key: string): MemoryPartition {
+  switch (type) {
+    case "personal":
+      return { type, userId: key };
+    case "repository":
+      return { type, repoId: Number(key) };
+    case "environment":
+      return { type, environmentId: key };
+    default:
+      return unhandled("memory partition", type);
+  }
+}
+
 export function scopeDisplayColumns(scope: MemoryScope): ScopeDisplayColumns {
   return scope.type === "repository"
     ? { repo_owner: scope.repoOwner, repo_name: scope.repoName }

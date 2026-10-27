@@ -14,7 +14,7 @@ from sandbox_runtime.runtime_config import RuntimeConfig
 
 
 def test_legacy_launch_environment_is_unchanged(tmp_path, monkeypatch):
-    monkeypatch.setenv("VIRTUAL_ENV", "/home/sandbox/.venv")
+    monkeypatch.setenv("VIRTUAL_ENV", "/wrong-worker-venv")
     before = dict(os.environ)
     apply_image_environment(tmp_path / "absent.json")
     assert dict(os.environ) == before
@@ -24,7 +24,7 @@ def test_legacy_launch_environment_is_unchanged(tmp_path, monkeypatch):
 def test_artifact_owns_launch_paths_without_activating_supervisor_venv(tmp_path, monkeypatch, home):
     monkeypatch.setenv("HOME", "/wrong-worker-default")
     monkeypatch.setenv("PATH", "/wrong-worker-path")
-    monkeypatch.setenv("VIRTUAL_ENV", "/home/sandbox/.venv")
+    monkeypatch.setenv("VIRTUAL_ENV", "/wrong-worker-venv")
     monkeypatch.setenv("SANDBOX_TOKEN", "session-token")
     path = tmp_path / "image.json"
     path.write_text(

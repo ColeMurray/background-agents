@@ -8,6 +8,43 @@ import { AutomationsList } from "./automations-list";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 
+const SKELETON_ROW_COUNT = 3;
+
+/** Placeholder rows sized to match `AutomationsList` rows so the list doesn't shift on load. */
+function AutomationsListSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading automations"
+      className="animate-pulse motion-reduce:animate-none border border-border-muted rounded-md bg-card divide-y divide-border-muted"
+    >
+      {Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => (
+        <div key={index} className="px-4 py-4">
+          {/* Header: Name + badge | Actions */}
+          <div className="flex h-8 items-start justify-between gap-3 sm:h-6 sm:items-center sm:gap-4">
+            <div className="flex h-6 min-w-0 items-center gap-2">
+              <div className="h-4 w-40 bg-muted rounded" />
+              <div className="h-5 w-14 bg-muted rounded" />
+            </div>
+            <div className="hidden items-center gap-1 sm:flex">
+              <div className="h-6 w-12 bg-muted rounded" />
+              <div className="h-6 w-16 bg-muted rounded" />
+              <div className="h-6 w-14 bg-muted rounded" />
+            </div>
+            <div className="h-8 w-8 bg-muted rounded sm:hidden" />
+          </div>
+
+          {/* Metadata */}
+          <div className="mt-2 flex h-4 items-center gap-4">
+            <div className="h-3 w-32 bg-muted rounded" />
+            <div className="h-3 w-40 bg-muted rounded" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function AutomationCollection({
   teamId,
   nameSearch = "",
@@ -43,9 +80,7 @@ export function AutomationCollection({
         </ErrorBanner>
       )}
       {loading ? (
-        <div className="flex justify-center py-12" role="status" aria-label="Loading automations">
-          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-        </div>
+        <AutomationsListSkeleton />
       ) : automations.length > 0 || !error ? (
         <AutomationsList
           automations={automations}

@@ -594,6 +594,40 @@ describe("SandboxShutdownCoordinator", () => {
       phase: "unknown",
       error: expect.stringContaining("provider changed"),
     });
+    expect(recoveryActions(f.shutdown)).toEqual([]);
+  });
+
+  it("lets a held session from a removed provider be discarded without touching its source", async () => {
+    const stopSandbox = vi.fn(async () => ({ success: true as const }));
+    const f = fixture(provider({ name: "modal", stopSandbox }));
+    await readyFinite(f);
+    f.store.write({
+      ...f.store.value!,
+      phase: "saved",
+      provider: "opencomputer",
+      sourceRetired: true,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "removed-provider-checkpoint",
+        provider: "opencomputer",
+        savedAtMs: 100_000,
+        runtimeVersion: "runtime-1",
+      },
+    });
+
+    expect(f.shutdown.startupDecision()).toEqual({
+      kind: "hold",
+      reason: "The sandbox provider that saved this session is no longer supported",
+    });
+    expect(recoveryActions(f.shutdown)).toEqual(["discard"]);
+
+    await f.shutdown.recover("discard");
+
+    expect(stopSandbox).not.toHaveBeenCalled();
+    expect(f.deps.sandbox.discardSandboxState).toHaveBeenCalled();
+    expect(f.store.value).toMatchObject({ phase: "running", provider: "modal" });
+    expect(f.store.value?.receipt).toBeUndefined();
+    expect(f.shutdown.startupDecision()).toEqual({ kind: "normal" });
   });
 
   it("allows a fresh-spawn retry after startup fails with a prior provider handle", () => {
@@ -922,7 +956,7 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.store.value?.phase).toBe("saved");
   });
 
-  it("prefers an independent checkpoint for OpenComputer without a hard expiry", async () => {
+  it("prefers an independent snapshot when a persistent-resume provider also snapshots", async () => {
     const takeSnapshot = vi.fn(async () => ({
       success: true,
       imageId: "checkpoint-1",
@@ -931,7 +965,7 @@ describe("SandboxShutdownCoordinator", () => {
     const stopSandbox = vi.fn(async () => ({ success: true }));
     const f = fixture(
       provider({
-        name: "opencomputer",
+        name: "persistent-snapshot-provider",
         capabilities: {
           supportsSandboxTimeout: true,
           supportsSnapshots: true,
@@ -1769,19 +1803,19 @@ describe("SandboxShutdownCoordinator", () => {
     f.store.write({ ...f.store.value!, receipt: { ...receipt, savedAtMs: 90_000 } });
     expect(recoveryActions(f.shutdown)).toEqual(["restore_saved", "discard"]);
 
-    f.store.write({ ...f.store.value!, receipt, provider: "other" });
+    f.store.write({ ...f.store.value!, receipt, provider: "vercel" });
     expect(recoveryActions(f.shutdown)).toEqual([]);
 
     f.store.write({
       ...f.store.value!,
       provider: "modal",
-      receipt: { ...receipt, provider: "other" },
+      receipt: { ...receipt, provider: "vercel" },
     });
     expect(recoveryActions(f.shutdown)).toEqual([]);
     await expect(f.shutdown.recover("restore_saved")).rejects.toThrow(
       "Shutdown recovery is unavailable"
     );
-    expect(f.store.value).toMatchObject({ phase: "unknown", receipt: { provider: "other" } });
+    expect(f.store.value).toMatchObject({ phase: "unknown", receipt: { provider: "vercel" } });
   });
 
   it("does not clear a paused saved continuation with a mismatched receipt provider", async () => {
@@ -1794,7 +1828,7 @@ describe("SandboxShutdownCoordinator", () => {
       receipt: {
         kind: "snapshot",
         artifactId: "saved-image",
-        provider: "other",
+        provider: "vercel",
         savedAtMs: 50_000,
         runtimeVersion: "runtime-1",
       },

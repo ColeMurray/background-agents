@@ -12,6 +12,8 @@ import type {
   SourceControlProvider,
   SourceControlAuthContext,
   GetRepositoryConfig,
+  ListBranchesContext,
+  ListBranchesResult,
   RepositoryAccessResult,
   RepositoryInfo,
   CreatePullRequestConfig,
@@ -34,6 +36,7 @@ import {
   parseProviderResponse,
 } from "../errors";
 import { classifyGitTreeEntry } from "./git-tree";
+import { listBranchesWithCache } from "../branch-cache";
 import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
@@ -212,6 +215,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   private readonly accessToken: string;
   private readonly namespace?: string;
   private readonly userAgent: string;
+  private readonly branchesCache?: GitLabProviderConfig["branchesCache"];
 
   constructor(config: GitLabProviderConfig) {
     const accessToken = config.accessToken.trim();
@@ -221,6 +225,7 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     this.accessToken = accessToken;
     this.namespace = config.namespace;
     this.userAgent = config.userAgent || USER_AGENT;
+    this.branchesCache = config.branchesCache;
   }
 
   private headers(token: string): Record<string, string> {
@@ -548,7 +553,19 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
   /**
    * List branches for a repository.
    */
-  async listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
+  listBranches(
+    config: GetRepositoryConfig,
+    context: ListBranchesContext
+  ): Promise<ListBranchesResult> {
+    return listBranchesWithCache(
+      config,
+      () => this.fetchBranches(config),
+      context,
+      this.branchesCache
+    );
+  }
+
+  private async fetchBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
     const projectPath = encodeProjectPath(config.owner, config.name);
 
     try {

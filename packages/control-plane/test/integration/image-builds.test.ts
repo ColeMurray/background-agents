@@ -67,7 +67,7 @@ function tokenHeaders(token: string): Record<string, string> {
 }
 
 /**
- * The Vercel/OpenComputer shape: a row whose internal columns all carry real
+ * The Vercel shape: a row whose internal columns all carry real
  * values (Modal rows keep a token hash but never bind a provider session).
  * If a status read leaks columns, this is the row that exposes a live
  * callback-token hash and provider ids.

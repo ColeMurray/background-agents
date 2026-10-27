@@ -8,6 +8,7 @@ import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -47,9 +48,13 @@ function getSessionId() {
 }
 
 // Canonical repository manifest written by the supervisor — the single owner
-// of the /workspace checkout layout. Mirrors REPO_MANIFEST_FILE_PATH in
-// sandbox_runtime/constants.py.
-const REPO_MANIFEST_PATH = "/tmp/oi-repo-manifest.json";
+// of the /workspace checkout layout. It lives in the runtime state directory
+// (OPENINSPECT_STATE_DIR, default /tmp), as REPO_MANIFEST_FILE_PATH in
+// sandbox_runtime/constants.py derives it.
+const REPO_MANIFEST_PATH = join(
+  process.env.OPENINSPECT_STATE_DIR || "/tmp",
+  "oi-repo-manifest.json"
+);
 
 // Ordered repository list {owner, name, path} from the supervisor's manifest
 // (empty when the manifest is absent, e.g. tool run outside a sandbox boot).

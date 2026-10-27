@@ -24,7 +24,6 @@ function markReadRequest(
 describe("session inbox read-state BFF", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
   it("forwards the inbox filters to the control plane", async () => {
@@ -77,12 +76,16 @@ describe("session inbox read-state BFF", () => {
     expect(response.status).toBe(200);
   });
 
-  it("rejects unauthenticated requests", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(markReadRequest({}) as never);
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 });

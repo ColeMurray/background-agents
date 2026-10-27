@@ -122,36 +122,19 @@ describe("sessions API route (POST)", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(postRequest({ repoOwner: "o", repoName: "r" }));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      provider: "GitHub",
-      user: {
-        id: "0123456789abcdef0123456789abcdef",
-        name: "Ada Lovelace",
-        email: "ada@example.com",
-        image: "https://avatars.githubusercontent.com/u/12345",
-      },
-    },
-    {
-      provider: "Google",
-      user: {
-        id: "fedcba9876543210fedcba9876543210",
-        name: "Pat PM",
-        email: "pm@gmail.com",
-        image: "https://lh3.googleusercontent.com/a/pat",
-      },
-    },
-  ])("sends the same profile-independent body for a $provider session", async ({ user }) => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user } as never);
+  it("sends a profile-independent body without resolving the user session", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess1" }, { status: 201 })
     );
@@ -167,12 +150,10 @@ describe("sessions API route (POST)", () => {
     );
     const sent = controlPlaneBody();
     expect(sent).toEqual({ repoOwner: "o", repoName: "r", model: "m", harness: "claude" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
   it("forwards environmentId for environment launches", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "0123456789abcdef0123456789abcdef" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess3" }, { status: 201 })
     );
@@ -188,7 +169,6 @@ describe("sessions API route (POST)", () => {
   });
 
   it("forwards team and visibility while stripping adjacent client-controlled fields", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Team archived", code: "team_archived" }, { status: 409 })
     );
@@ -217,9 +197,6 @@ describe("sessions API route (POST)", () => {
   });
 
   it("forwards the repositories list for ad-hoc multi-repo launches", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "0123456789abcdef0123456789abcdef" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess4" }, { status: 201 })
     );
@@ -237,9 +214,6 @@ describe("sessions API route (POST)", () => {
   });
 
   it("forwards only the managed skill selection from the browser", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "0123456789abcdef0123456789abcdef" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess-skills" }, { status: 201 })
     );
@@ -261,9 +235,6 @@ describe("sessions API route (POST)", () => {
   });
 
   it("forwards bounded provider selections without forwarding adjacent hostile fields", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "0123456789abcdef0123456789abcdef" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess-provider" }, { status: 201 })
     );
@@ -291,9 +262,6 @@ describe("sessions API route (POST)", () => {
   });
 
   it("still strips fields outside the allowlist", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "0123456789abcdef0123456789abcdef" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess5" }, { status: 201 })
     );

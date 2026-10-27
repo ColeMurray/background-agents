@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
+
 import type * as SandboxProviderModuleNamespace from "@/lib/sandbox-provider";
 
 type SandboxProviderModule = typeof SandboxProviderModuleNamespace;
@@ -85,6 +87,7 @@ describe.each(routes)("$name", ({ call }) => {
 
     expect(response.status).toBe(200);
     expect(controlPlaneUserFetch).toHaveBeenCalled();
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 });
 

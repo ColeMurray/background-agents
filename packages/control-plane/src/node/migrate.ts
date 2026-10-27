@@ -42,6 +42,20 @@ export interface MigrationFile {
   path: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRecordedMigrationName(row: unknown, version: string): string | undefined {
+  if (row === undefined) return undefined;
+  if (!isRecord(row) || typeof row.name !== "string") {
+    throw new TypeError(
+      `Invalid migration ledger row for version ${version}: expected an object with a string name`
+    );
+  }
+  return row.name;
+}
+
 /**
  * The migration files in `directory`, in filename order, validated as the
  * deploy script validates them.
@@ -95,18 +109,18 @@ export function applyMigrations(db: DatabaseSync, directory: string): string[] {
     // The ledger is read under the write lock, so a migration another
     // process applied meanwhile is found recorded rather than applied twice.
     db.exec("BEGIN IMMEDIATE");
-    let recorded: { name: string } | undefined;
+    let recordedNameValue: string | undefined;
     try {
-      recorded = recordedName.get(file.version) as { name: string } | undefined;
+      recordedNameValue = parseRecordedMigrationName(recordedName.get(file.version), file.version);
     } catch (error) {
       rollbackQuietly(db);
       throw error;
     }
-    if (recorded !== undefined) {
+    if (recordedNameValue !== undefined) {
       db.exec("ROLLBACK");
-      if (recorded.name !== file.name) {
+      if (recordedNameValue !== file.name) {
         throw new Error(
-          `Migration version ${file.version} is already recorded as ${recorded.name}; ` +
+          `Migration version ${file.version} is already recorded as ${recordedNameValue}; ` +
             `renumber ${file.name} before applying it to this installation.`
         );
       }

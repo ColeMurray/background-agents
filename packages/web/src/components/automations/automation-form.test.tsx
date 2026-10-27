@@ -148,6 +148,67 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("automation cron submission", () => {
+  it("submits a one-shot in local time without cron and rejects past times", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "After deploy",
+          instructions: "Investigate deploy",
+          repositories: singleRepository,
+          maxRetries: 2,
+        }}
+      />
+    );
+    await user.click(screen.getByRole("combobox", { name: "Schedule" }));
+    await user.click(await screen.findByRole("option", { name: "Run once" }));
+    expect(screen.getByRole("combobox", { name: "Retries" })).toBeInTheDocument();
+    const input = screen.getByLabelText("Run at");
+    fireEvent.change(input, { target: { value: "2020-01-01T09:00:42.123" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "2099-01-01T09:00" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduleOnceAt: new Date("2099-01-01T09:00").getTime(),
+        maxRetries: 2,
+        triggerType: "schedule",
+        repositories: singleRepository,
+      })
+    );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("scheduleCron");
+  });
+
+  it("allows editing instructions after a one-shot has fired without changing its time", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "After deploy",
+          instructions: "Investigate deploy",
+          repositories: singleRepository,
+          scheduleOnceAt: new Date("2020-01-01T09:00:42.123").getTime(),
+        }}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Schedule" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleOnceAt: new Date("2020-01-01T09:00:42.123").getTime() })
+    );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("scheduleCron");
+  });
+
   it("scopes creation targets and clears selections when the team changes", async () => {
     const user = userEvent.setup();
     environmentsValue = [
@@ -558,6 +619,60 @@ describe("automation cron submission", () => {
 
     expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("submits the launch retry limit chosen for a scheduled automation", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          maxRetries: 2,
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    const retries = screen.getByRole("combobox", { name: "Retries" });
+    expect(retries).toHaveTextContent("Up to 2");
+    await user.click(retries);
+    await user.click(await screen.findByRole("option", { name: "Up to 3" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ maxRetries: 3 }));
+  });
+
+  it("neither shows nor submits launch retries for an event-triggered automation", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: { conditions: [] },
+          maxRetries: 0,
+        }}
+      />
+    );
+
+    expect(screen.queryByRole("combobox", { name: "Retries" })).not.toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("maxRetries");
   });
 
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
@@ -1222,6 +1337,24 @@ describe("slack_event automation", () => {
     expect(
       screen.getByText("Slack Channel requires at least one nonblank channel ID")
     ).toBeInTheDocument();
+  });
+
+  it("drops the previous team's Slack channels when the team changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, teamId: "team-1", triggerConfig: validConditions }}
+      />
+    );
+
+    await chooseTeam(user, "Design");
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
   });
 
   it("submits a valid slack_event", () => {

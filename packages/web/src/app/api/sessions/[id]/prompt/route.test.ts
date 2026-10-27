@@ -1,14 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/server-auth-session", () => ({
-  getServerAuthSession: vi.fn(),
-}));
-
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
@@ -16,7 +11,6 @@ import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 describe("session prompt API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
   it("rejects blank prompts without attachments before proxying", async () => {

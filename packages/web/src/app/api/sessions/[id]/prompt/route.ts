@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import {
   BLANK_PROMPT_MESSAGE,
   isBlankPrompt,
@@ -24,11 +23,6 @@ const promptRequestSchema = z
   });
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const { id: sessionId } = await params;
 
   try {
@@ -43,16 +37,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // authorId is derived by the control plane from the Bearer principal and
     // is rejected in the body under strict enforcement.
-    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/prompt`, {
-      method: "POST",
-      body: JSON.stringify({
-        content,
-        source: "web",
-        model,
-        reasoningEffort,
-        attachments,
-      }),
-    });
+    const response = await controlPlaneUserFetch(
+      `/sessions/${encodeURIComponent(sessionId)}/prompt`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          content,
+          source: "web",
+          model,
+          reasoningEffort,
+          attachments,
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => null);

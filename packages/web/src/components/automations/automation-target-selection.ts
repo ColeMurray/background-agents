@@ -19,7 +19,7 @@ export type AutomationSessionTarget = Extract<SessionTarget, { kind: "repo" | "e
 export type SelectionMode = "single" | "multiple";
 
 /** Selection key for a repository: the lowercase full name, as the API stores it. */
-function repositoryKey(repoOwner: string, repoName: string): string {
+export function repositoryKey(repoOwner: string, repoName: string): string {
   return formatRepositoryFullName({ repoOwner, repoName }).toLowerCase();
 }
 

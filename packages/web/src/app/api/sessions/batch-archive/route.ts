@@ -1,7 +1,6 @@
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { relayJsonResponse } from "@/lib/control-plane-json-proxy";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
@@ -9,10 +8,6 @@ import { NextResponse } from "next/server";
 const MAX_BATCH_ARCHIVE_BODY_BYTES = 48 * 1024;
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
   let body: unknown;
   try {
     const bytes = await readBodyCapped(request.body, MAX_BATCH_ARCHIVE_BODY_BYTES);

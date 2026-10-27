@@ -272,6 +272,31 @@ describe("GitHubIntegrationSettings", () => {
     expect(screen.getByRole("heading", { name: "Connection", level: 3 })).toBeInTheDocument();
   });
 
+  it("saves the selected repository allowlist", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null, availableRepos: [repo("Group/Subgroup/Repository")] });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("radio", { name: /Selected repositories/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Group/Subgroup/Repository" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { autoReviewOnOpen: true },
+            enabledRepos: ["group/subgroup/repository"],
+          },
+        }),
+      })
+    );
+  });
+
   it("renders the default-off Autofix block and persists one complete global policy", async () => {
     const user = userEvent.setup();
     setupSWR({ global: { defaults: { autoReviewOnOpen: true } } });

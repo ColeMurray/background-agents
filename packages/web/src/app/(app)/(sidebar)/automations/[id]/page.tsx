@@ -4,22 +4,24 @@ import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
-import { describeCron } from "@open-inspect/shared/cron";
+import { describeAutomationSchedule } from "@/lib/automation-schedule";
 import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
 import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
+import { AutomationDetailSkeleton } from "@/components/automations/automation-detail-skeleton";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { BackIcon, PencilIcon } from "@/components/ui/icons";
+import { BackIcon, CopyIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -27,7 +29,10 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const { navigation } = useAutomationScope();
+  const { teamId, navigation } = useAutomationScope();
+  // Matches the create page's gate; a copy the viewer can't own in the source's
+  // team starts in this entry scope instead.
+  const { canCreate: canDuplicate } = useCanCreateAutomation(teamId);
   const { automation, loading } = useAutomation(id);
   const { environments } = useEnvironments({ ownerTeamId: automation?.ownerTeamId });
   // "Load more" grows the fetch limit rather than paging by offset: the
@@ -52,7 +57,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
 
-  // Deletion evicts the cached automation before navigation; keep the spinner up
+  // Deletion evicts the cached automation before navigation; keep the skeleton up
   // meanwhile instead of flashing "not found".
   const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
@@ -61,12 +66,23 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     else setDeleting(false);
   };
 
-  if (loading || (deleting && !automation)) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+  const collapsedHeader = !isOpen && (
+    <header className="border-b border-border-muted flex-shrink-0">
+      <div className="px-4 py-3 flex items-center gap-2">
+        <CollapsedSidebarControls />
+        <Link
+          href={navigation.list}
+          className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          aria-label="Back to automations"
+        >
+          <BackIcon className="w-4 h-4" />
+        </Link>
       </div>
-    );
+    </header>
+  );
+
+  if (loading || (deleting && !automation)) {
+    return <AutomationDetailSkeleton header={collapsedHeader} />;
   }
 
   if (!automation) {
@@ -86,20 +102,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <CollapsedSidebarControls />
-            <Link
-              href={navigation.list}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              aria-label="Back to automations"
-            >
-              <BackIcon className="w-4 h-4" />
-            </Link>
-          </div>
-        </header>
-      )}
+      {collapsedHeader}
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-3xl mx-auto">
@@ -133,6 +136,16 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                     <span className="flex items-center gap-1.5">
                       <PencilIcon className="w-3.5 h-3.5" />
                       Edit
+                    </span>
+                  </Button>
+                </Link>
+              )}
+              {canDuplicate && (
+                <Link href={navigation.duplicate(id)} className="w-full sm:w-auto">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
+                    <span className="flex items-center gap-1.5">
+                      <CopyIcon className="w-3.5 h-3.5" />
+                      Duplicate
                     </span>
                   </Button>
                 </Link>
@@ -208,9 +221,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dt className="text-muted-foreground">Trigger</dt>
                 <dd className="text-foreground">
                   {automation.triggerType === "schedule"
-                    ? automation.scheduleCron
-                      ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                      : "Schedule (no cron)"
+                    ? describeAutomationSchedule(automation)
                     : {
                         sentry: "Sentry Alert",
                         webhook: "Inbound Webhook",
@@ -300,7 +311,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <div>
                   <dt className="text-muted-foreground">Next Run</dt>
                   <dd className="text-foreground">
-                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
+                    {automation.nextRunAt
+                      ? new Date(automation.nextRunAt).toLocaleString(undefined, {
+                          timeZone: automation.scheduleTz,
+                        })
+                      : "—"}
                   </dd>
                 </div>
               )}

@@ -9,7 +9,7 @@ import { GitHubAutomationStore } from "../../src/db/github-automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { queryDO, seedActiveUser, sqlDatabase } from "./helpers";
@@ -91,7 +91,7 @@ async function saveAutomation(
 }
 
 function createScheduler() {
-  return new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  return createAutomationScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
 }
 
 async function revokeGrant(teamId: string) {
@@ -677,9 +677,10 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     await expectUnauthorizedRun(id, event);
     const runs = await fetchRuns(id);
     expect(runs).toHaveLength(2);
-    expect(runs.find((run) => run.id === activeRun.id)).toEqual(activeRun);
+    const storedActiveRun = { ...activeRun, attempt: 1, retry_at: null };
+    expect(runs.find((run) => run.id === activeRun.id)).toEqual(storedActiveRun);
     const store = new AutomationStore(env.DB);
-    expect(await store.getActiveRunForKey(id, event.concurrencyKey)).toEqual(activeRun);
+    expect(await store.getActiveRunForKey(id, event.concurrencyKey)).toEqual(storedActiveRun);
     expect((await store.listInvocations(id, { limit: 10, offset: 0 })).total).toBe(2);
     expect(automationRepositories.resolveAutomationRepositories).not.toHaveBeenCalled();
     expect(automationSessionTargets.resolveAutomationSessionTarget).not.toHaveBeenCalled();

@@ -70,6 +70,23 @@ describe("EnvironmentStore", () => {
     expect(await store.getByName("other", null)).toBeNull();
   });
 
+  it("bulk loads unique existing IDs with their canonical owner teams", async () => {
+    const store = new EnvironmentStore(env.DB);
+    const team = await new TeamStore(env.DB).create({
+      slug: "bulk",
+      name: "Bulk",
+      joinPolicy: "open",
+    });
+    const workspace = makeEnv({ name: "Workspace" });
+    const owned = makeEnv({ name: "Owned", owner_team_id: team.id });
+    await store.create(workspace, []);
+    await store.create(owned, []);
+    expect(await store.getByIds([])).toEqual([]);
+    const rows = await store.getByIds([owned.id, "missing", workspace.id, owned.id]);
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(expect.arrayContaining([workspace, owned]));
+  });
+
   it("rejects a case-insensitive duplicate name at the unique index", async () => {
     const store = new EnvironmentStore(env.DB);
     await store.create(makeEnv({ name: "Dup" }), repos(["acme", "web", 1, "main"]));

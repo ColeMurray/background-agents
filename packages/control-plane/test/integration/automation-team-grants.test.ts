@@ -8,7 +8,8 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import * as repositoryResolution from "../../src/repos/resolve";
-import { AutomationExecutionUnauthorizedError, Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
+import { AutomationExecutionUnauthorizedError } from "../../src/scheduler/contracts";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, sqlDatabase } from "./helpers";
@@ -63,7 +64,7 @@ async function saveAutomation(
 async function expectDenied(source: AutomationInvocationSource) {
   const store = new AutomationStore(env.DB);
   const row = (await store.getById(`auto-team-grants-${source}`))!;
-  const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
   if (source === "manual") {
     await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toMatchObject({
       name: AutomationExecutionUnauthorizedError.name,
@@ -194,7 +195,7 @@ describe("automation current team repository grants (integration)", () => {
           .run();
         return covered;
       });
-      const scheduler = new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
+      const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
         submit() {},
       });
       if (source === "manual") {
@@ -216,6 +217,59 @@ describe("automation current team repository grants (integration)", () => {
       expect((await store.getById(row.id))?.next_run_at).toBe(row.next_run_at);
     }
   );
+
+  it("refuses a retry's relaunch when grants are revoked after its coverage check", async () => {
+    await seedGrant(TEAM, WEB);
+    const row = await saveAutomation("schedule");
+    await env.DB.prepare("UPDATE automations SET max_retries = 2 WHERE id = ?").bind(row.id).run();
+    vi.mocked(sessionInitialization.initializeSession).mockRejectedValueOnce(
+      new Error("D1 unavailable")
+    );
+    const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), {
+      submit() {},
+    });
+    await scheduler.tick();
+    const [waiting] = await fetchRuns(row.id);
+    expect(waiting).toMatchObject({ status: "retrying", attempt: 1 });
+    const makeDue = () =>
+      env.DB.prepare("UPDATE automation_runs SET retry_at = ? WHERE id = ?")
+        .bind(Date.now() - 1, waiting!.id)
+        .run();
+    await makeDue();
+    const covers = TeamRepositoryGrantStore.prototype.covers;
+    vi.mocked(TeamRepositoryGrantStore.prototype.covers).mockImplementationOnce(async function (
+      this: TeamRepositoryGrantStore,
+      teamId,
+      repoIds
+    ) {
+      const covered = await covers.call(this, teamId, repoIds);
+      // A concurrent revocation lands between coverage and the guarded claim.
+      await env.DB.prepare("DELETE FROM team_repository_grants WHERE team_id = ?").bind(TEAM).run();
+      await env.DB.prepare("UPDATE teams SET grants_version = grants_version + 1 WHERE id = ?")
+        .bind(TEAM)
+        .run();
+      return covered;
+    });
+
+    await scheduler.tick();
+
+    expect(await fetchRuns(row.id)).toEqual([
+      expect.objectContaining({ status: "retrying", attempt: 1 }),
+    ]);
+    expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+
+    // Still due, so the next tick admits it against current grants and records the denial.
+    await scheduler.tick();
+
+    expect(await fetchRuns(row.id)).toEqual([
+      expect.objectContaining({
+        status: "unauthorized",
+        attempt: 2,
+        failure_reason: "target_team_missing_grant",
+      }),
+    ]);
+    expect(sessionInitialization.initializeSession).toHaveBeenCalledOnce();
+  });
 
   it("rechecks all environment grants against current resolved member IDs", async () => {
     await seedGrant(TEAM, WEB);
@@ -300,7 +354,9 @@ describe("automation current team repository grants (integration)", () => {
     });
     const schedulerEnv = createCloudflareEnv(env);
     schedulerEnv.SESSION = (_sessionId, request) => runtime(request);
-    expect(await new Scheduler(sqlDatabase(env.DB), schedulerEnv, { submit() {} }).tick()).toEqual({
+    expect(
+      await createScheduler(sqlDatabase(env.DB), schedulerEnv, { submit() {} }).tick()
+    ).toEqual({
       processed: 1,
       skipped: 0,
       failed: 0,

@@ -1,0 +1,18 @@
+{
+  // Node runs these scripts (and everything they import) by stripping types, so only
+  // erasable TypeScript syntax is allowed: no enums, value namespaces, or parameter properties.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["*.ts"]
+}
