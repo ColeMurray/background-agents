@@ -1445,6 +1445,60 @@ describe("instructions character counter", () => {
   });
 });
 
+describe("personal memories", () => {
+  const initialValues = {
+    name: "Daily review",
+    instructions: "Review code",
+    repositories: singleRepository,
+    model: "openai/gpt-5.4",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+  };
+  const personalMemoriesCheckbox = () =>
+    screen.getByRole("checkbox", { name: "Include the executor's personal memories" });
+
+  it("starts excluded and submits the creator's opt-in", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={initialValues}
+      />
+    );
+    expect(personalMemoriesCheckbox()).not.toBeChecked();
+    await user.click(personalMemoriesCheckbox());
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ includePersonalMemories: true })
+    );
+  });
+
+  it("lets a non-executor turn an opt-in off but not back on", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        canIncludePersonalMemories={false}
+        initialValues={{ ...initialValues, includePersonalMemories: true }}
+      />
+    );
+    expect(personalMemoriesCheckbox()).toBeChecked();
+    await user.click(personalMemoriesCheckbox());
+    expect(personalMemoriesCheckbox()).not.toBeChecked();
+    expect(personalMemoriesCheckbox()).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ includePersonalMemories: false })
+    );
+  });
+});
+
 describe("model normalization", () => {
   const baseInitialValues = {
     name: "Daily review",

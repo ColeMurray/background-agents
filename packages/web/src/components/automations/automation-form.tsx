@@ -16,6 +16,7 @@ import { setProviderSelection } from "@/lib/provider-selection";
 import { FieldDescription } from "./automation-form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PERSONAL_MEMORY_DISCLOSURE } from "@/lib/memories";
 import { useAutomationTargets } from "./use-automation-targets";
 import { sameEnvironmentIds } from "./automation-target-selection";
 import { AutomationAgentFields } from "./automation-agent-fields";
@@ -43,6 +44,11 @@ interface AutomationFormProps {
   onSubmit: (values: AutomationFormValues) => void;
   submitting: boolean;
   requireTeam?: boolean;
+  /**
+   * Whether the viewer is the executor and so may include their personal memories. Anyone may
+   * turn an existing opt-in off. Creators are always the executor.
+   */
+  canIncludePersonalMemories?: boolean;
 }
 
 export function AutomationForm({
@@ -51,6 +57,7 @@ export function AutomationForm({
   onSubmit,
   submitting,
   requireTeam = false,
+  canIncludePersonalMemories = true,
 }: AutomationFormProps) {
   const [teamId, setTeamId] = useState(initialValues?.teamId ?? null);
   const scope = useResourceTeams("automation");
@@ -70,6 +77,9 @@ export function AutomationForm({
   const [providerSelections, setProviderSelections] = useState(initialDraft.providerSelections);
   const [agent, setAgent] = useState(initialDraft.agent);
   const [instructions, setInstructions] = useState(initialDraft.instructions);
+  const [includePersonalMemories, setIncludePersonalMemories] = useState(
+    initialDraft.includePersonalMemories
+  );
   const [trigger, setTrigger] = useState(initialDraft.trigger);
   const repositoryRequired = requiresRepositoryContext(trigger.type);
 
@@ -138,6 +148,7 @@ export function AutomationForm({
     draft: {
       name,
       instructions,
+      includePersonalMemories,
       providerSelections,
       agent,
       trigger,
@@ -246,6 +257,25 @@ export function AutomationForm({
             }
           />
         ))}
+      </fieldset>
+
+      <fieldset className="space-y-2 rounded-md border border-border-muted p-4">
+        <legend className="px-1 text-sm font-medium text-foreground">Memory</legend>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={includePersonalMemories}
+            disabled={submitting || (!includePersonalMemories && !canIncludePersonalMemories)}
+            onChange={(e) => setIncludePersonalMemories(e.target.checked)}
+          />
+          Include the executor&apos;s personal memories
+        </label>
+        <FieldDescription>
+          {canIncludePersonalMemories
+            ? "Off by default. Only the executor can turn this on, and it turns off if the executor changes."
+            : "Only the executor can turn this on. You can turn it off."}{" "}
+          {PERSONAL_MEMORY_DISCLOSURE}
+        </FieldDescription>
       </fieldset>
 
       <AutomationTriggerConfigurationFields

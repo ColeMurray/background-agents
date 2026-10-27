@@ -19,7 +19,7 @@ in Settings → Memories or Settings → Shared memories; it is not yet active m
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                                        |
 | Settings → Shared memories | Opens on **All**, every readable repository and environment memory with its scope. Select a scope to narrow it or to create. Readers see the catalog; maintainers manage it.              |
-| Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions, and is available to every session creator.          |
+| Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web and integration-created sessions, and is available to every session creator.                     |
 | Session sidebar → Memories | Pinned memories grouped by repository, environment or personal scope; hover or focus a row for its revision, inclusion and estimate. Flags omitted records and subsequent edits/archives. |
 
 Personal memories can be included in **shared sessions**. Included content may appear in responses
@@ -27,6 +27,13 @@ and be visible to collaborators. This does not give collaborators access to the 
 settings catalog. Opting out excludes personal context and also denies personal reads and writes
 through memory tools. Changing the default affects **new sessions only**; it cannot erase text
 already supplied to an agent or included in a conversation.
+
+Automation runs ignore the personal default. Each automation stores its own opt-in
+(`automations.include_personal_memories`), off by default. Only the executor can turn it on (the
+write is guarded on `user_id` at commit time). Anyone with manage access can turn it off. Executor
+reassignment clears it. A run includes the executor's personal memories only when the opt-in is set
+and the run's execution principal is the executor, so a **Trigger Now** by a lead or administrator
+never includes the triggering person's or the executor's personal memories.
 
 ### Facts, directives and approval
 
@@ -71,7 +78,7 @@ a different participant cannot write to the inherited owner's personal scope.
 | Access policy    | `control-plane/src/authorization/memory-access.ts`                          | `MemoryManagementPolicy` for humans and `SessionMemoryAccessPolicy` for session principals, both returning typed decisions with stores injected; `memory-access-factory.ts` wires D1.                                                                                                                                                 |
 | Stores           | `control-plane/src/db/memory-records.ts`, `session-memory-selections.ts`, … | SQL only: revisioned records and lifecycle, pinned selections, preferences, lexical fact search and the commit-time agent write guard. Queries are built with the `sql` fragment template.                                                                                                                                            |
 | D1               | Migration `0084_memories.sql`                                               | Records keyed by typed identity columns (`owner_user_id` — a foreign key to `users` — `repo_id` or `environment_id`, exactly one per `partition_type`) with a generated, indexed `partition_key`; repository names are display-only. Immutable revisions, per-user default, session manifest headers and ordered revision references. |
-| Session creation | `routes/session-create.ts`, scheduler, child spawn                          | Select and pin the session's memories in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Schedulers use the execution owner's default.                                                                                                                                                     |
+| Session creation | `routes/session-create.ts`, scheduler, child spawn                          | Select and pin the session's memories in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Automations include personal memory only on the executor's per-automation opt-in, never their default.                                                                                            |
 | Runtime boot     | `sandbox-runtime/src/sandbox_runtime/memories.py`                           | Fetch the rendered memory with the session-bound token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory.                                                                                                                                                     |
 | Harness tools    | `tools/_memory.js`, `harness/memory_tools.py`                               | Both harnesses build `memory_read`, `memory_search` and `memory_write` from the generated specs and forward arguments verbatim. OpenCode reads the file via `instructions`; Claude appends it.                                                                                                                                        |
 | Web              | `web/src/hooks/use-memories.ts`, `components/settings/memories-settings/`   | Typed queries and mutations (revision fencing via `If-Match`), owner/shared management pages and session diagnostics.                                                                                                                                                                                                                 |

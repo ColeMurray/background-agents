@@ -386,6 +386,8 @@ async function handleCreateAutomation(
     next_run_at: nextRunAt,
     consecutive_failures: 0,
     max_retries: body.maxRetries ?? 0,
+    // The creator is the executor, so this is their own opt-in.
+    include_personal_memories: body.includePersonalMemories ? 1 : 0,
     created_by: enforced.participantUserId,
     user_id: resolvedUserId,
     created_at: now,
@@ -472,8 +474,7 @@ async function handleUpdateAutomation(
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);
   const providerAuthStore = new AutomationModelProviderAuthStore(db);
-  const admission = admittedAutomation(ctx);
-  const { automation: existing } = admission;
+  const { automation: existing, viewer } = admittedAutomation(ctx);
 
   const rawBody = await parseJsonBody(request);
   if (rawBody instanceof Response) return rawBody;
@@ -506,6 +507,23 @@ async function handleUpdateAutomation(
   }
   if (body.maxRetries && existingTriggerType !== "schedule") {
     return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
+  }
+  // The edit form resubmits the stored value, so only a change is judged.
+  const personalMemoriesChanged =
+    body.includePersonalMemories !== undefined &&
+    body.includePersonalMemories !== (existing.include_personal_memories === 1);
+  if (
+    personalMemoriesChanged &&
+    body.includePersonalMemories &&
+    (viewer.kind !== "user" || viewer.userId !== existing.user_id)
+  ) {
+    return json(
+      {
+        error: "Only the executor can include their personal memories",
+        code: "automation_personal_memories_executor_only",
+      },
+      403
+    );
   }
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
@@ -706,7 +724,7 @@ async function handleUpdateAutomation(
         ctx.db,
         finalEnvironmentIds,
         existing.owner_team_id,
-        admission.viewer,
+        viewer,
         replacementEnvironmentIds !== null
       );
     } catch (e) {
@@ -863,6 +881,11 @@ async function handleUpdateAutomation(
   const statements: SqlStatement[] = [];
   const updateStatement = store.bindAutomationUpdate(id, updateFields);
   if (updateStatement) statements.push(updateStatement);
+  if (personalMemoriesChanged && viewer.kind === "user") {
+    statements.push(
+      store.bindPersonalMemoriesUpdate(id, body.includePersonalMemories === true, viewer.userId)
+    );
+  }
   if (replacementRepositories !== null) {
     statements.push(...store.bindReplaceRepositories(id, replacementRepositories, Date.now()));
   }
@@ -893,7 +916,7 @@ async function handleUpdateAutomation(
     trace_id: ctx.trace_id,
   });
 
-  return json({ automation: await hydrateAutomationResponse(ctx, updated, admission.viewer) });
+  return json({ automation: await hydrateAutomationResponse(ctx, updated, viewer) });
 }
 
 async function handleDeleteAutomation(

@@ -94,6 +94,12 @@ export interface AutomationRow {
    * Optional so rows built for insert may omit it; the column defaults to no retries.
    */
   max_retries?: number;
+  /**
+   * Whether runs include the executor's personal memories (SQLite integer boolean). Only the
+   * executor can opt in, and changing the executor clears it. Optional so rows built for insert
+   * may omit it; the column defaults to excluded.
+   */
+  include_personal_memories?: number;
   created_by: string;
   user_id: string | null;
   owner_team_id: string | null;
@@ -378,6 +384,7 @@ export function toAutomation(
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
     maxRetries: row.max_retries ?? 0,
+    includePersonalMemories: row.include_personal_memories === 1,
     createdBy: row.created_by,
     userId: row.user_id,
     ownerTeamId: row.owner_team_id,
@@ -533,8 +540,9 @@ export class AutomationStore {
          (id, name, instructions,
           trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
-           event_type, trigger_config, trigger_auth_data, owner_team_id, schedule_once_at, max_retries)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           event_type, trigger_config, trigger_auth_data, owner_team_id, schedule_once_at, max_retries,
+           include_personal_memories)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         row.id,
@@ -559,7 +567,8 @@ export class AutomationStore {
         row.trigger_auth_data,
         row.owner_team_id,
         row.schedule_once_at,
-        row.max_retries ?? 0
+        row.max_retries ?? 0,
+        row.include_personal_memories ?? 0
       );
   }
 
@@ -817,6 +826,20 @@ export class AutomationStore {
       .bind(...params);
   }
 
+  /**
+   * Opt runs in or out of the executor's personal memories. Opting in applies only while
+   * `actorUserId` is still the executor at write time, so no one can consent for someone else.
+   */
+  bindPersonalMemoriesUpdate(id: string, include: boolean, actorUserId: string): SqlStatement {
+    const value = include ? 1 : 0;
+    return this.db
+      .prepare(
+        `UPDATE automations SET include_personal_memories = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL AND (? = 0 OR user_id = ?)`
+      )
+      .bind(value, Date.now(), id, value, actorUserId);
+  }
+
   async update(id: string, fields: Partial<AutomationRow>): Promise<AutomationRow | null> {
     const statement = this.bindAutomationUpdate(id, fields);
     if (statement) await statement.run();
@@ -825,7 +848,8 @@ export class AutomationStore {
 
   /**
    * Reassign the executor only if, at write time, the caller still holds reassignment authority
-   * and the candidate can still launch the automation's current targets.
+   * and the candidate can still launch the automation's current targets. The new executor has
+   * not opted in to sharing their personal memories, so the opt-in is cleared.
    */
   bindExecutorChange(automation: AutomationRow, userId: string, actorUserId: string): SqlStatement {
     const manageOwn = rolePermissionPredicate("automations.manage.own");
@@ -838,7 +862,7 @@ export class AutomationStore {
     });
     return this.db
       .prepare(
-        `UPDATE automations SET user_id = ?, updated_at = ?
+        `UPDATE automations SET user_id = ?, include_personal_memories = 0, updated_at = ?
          WHERE id = ? AND deleted_at IS NULL AND user_id IS ? AND owner_team_id IS ?
            AND user_id IS NOT ?
            AND EXISTS (

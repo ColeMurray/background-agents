@@ -148,6 +148,11 @@ const automationSchema = z.object({
    * Defaulted so a web build that deploys before its control plane still parses responses.
    */
   maxRetries: z.number().default(0),
+  /**
+   * Whether runs include the executor's personal memories. Only the executor can opt in, and
+   * changing the executor clears it.
+   */
+  includePersonalMemories: z.boolean().default(false),
   createdBy: z.string(),
   userId: z.string().refine(isCanonicalUserId, "Invalid canonical user ID").nullable(),
   ownerTeamId: z.string().nullable(),
@@ -248,6 +253,8 @@ export const createAutomationRequestSchema = z.object({
    * none.
    */
   maxRetries: maxRetriesSchema.optional(),
+  /** Include the creator's (the executor's) personal memories in runs. Omission excludes them. */
+  includePersonalMemories: z.boolean().optional(),
 });
 export type CreateAutomationRequest = z.input<typeof createAutomationRequestSchema>;
 
@@ -270,6 +277,8 @@ export const updateAutomationRequestSchema = z.object({
   providerSelections: modelProviderSelectionsSchema.optional(),
   /** Launch retries for scheduled runs; only schedule triggers may set above 0. */
   maxRetries: maxRetriesSchema.optional(),
+  /** Only the executor may turn this on; anyone who can manage the automation may turn it off. */
+  includePersonalMemories: z.boolean().optional(),
 });
 export type UpdateAutomationRequest = z.input<typeof updateAutomationRequestSchema>;
 

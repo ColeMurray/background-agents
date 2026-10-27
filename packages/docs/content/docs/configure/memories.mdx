@@ -74,7 +74,9 @@ Expand Memories in the session's right sidebar. It groups the pinned memories by
 
 ## Including personal memories
 
-Settings › Memories has an **Include my personal memories in new sessions** switch. It is on by default and applies to your new web, integration-created, and scheduled sessions. Existing sessions keep their original selection.
+Settings › Memories has an **Include my personal memories in new sessions** switch. It is on by default and applies to your new web and integration-created sessions. Existing sessions keep their original selection.
+
+Automations ignore this switch. Each automation has its own **Include the executor's personal memories** setting, which is off by default. Only the executor can turn it on. Anyone who can manage the automation can turn it off, and it turns off when the executor changes. Runs that someone else starts with **Trigger Now** never include personal memories. See [Ownership and execution](/automations/first-automation#ownership-and-execution).
 
 Turning it off also stops agents in those sessions from reading, searching, or writing your personal memories. Turning it on means personal content may appear in agent responses in sessions you share, though collaborators still cannot open your personal memories in Settings.
 
@@ -211,7 +213,8 @@ The server accepts up to 8 memories per request. The page sends larger selection
   <Accordion title="A memory is not loaded in a new session">
     Check that it is Active, not Proposed or Archived; that the session includes its repository
     or environment; and, for personal memories, that **Include my personal memories in new
-    sessions** is on. If the sidebar shows records "omitted for budget", the session held more
+    sessions** is on (for automation runs, the automation's **Include the executor's personal
+    memories** setting). If the sidebar shows records "omitted for budget", the session held more
     memories than fit; shorten or archive directives, or tighten fact descriptions.
 
 </Accordion>

@@ -88,6 +88,7 @@ vi.mock("@/components/automations/automation-form", () => ({
               reasoningEffort: null,
               triggerType: "schedule",
               instructions: "Review",
+              includePersonalMemories: false,
               repositories: submittedRepositories,
               environmentIds: submittedEnvironmentIds,
               providerSelections: {},
@@ -121,6 +122,7 @@ beforeEach(() => {
   automation.capabilities = NO_CAPABILITIES;
   automation.environmentIds = [];
   automation.repositories = [];
+  automation.userId = "22222222222222222222222222222222";
   submittedEnvironmentIds = ["env-1"];
   submittedRepositories = [{ repoOwner: "acme", repoName: "app" }];
   replace.mockReset();
@@ -252,6 +254,21 @@ describe("EditAutomationPage authorization", () => {
     expect(await screen.findByText("Automation edit form")).toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { executor: CURRENT_USER_ID, canInclude: true },
+    { executor: "22222222222222222222222222222222", canInclude: false },
+  ])(
+    "lets only the executor include personal memories (executor $executor)",
+    async ({ executor, canInclude }) => {
+      automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
+      automation.userId = executor;
+      await renderPage();
+      expect(formProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ canIncludePersonalMemories: canInclude })
+      );
+    }
+  );
 
   it("reports configuration failures without navigating away", async () => {
     automation.capabilities = { canRead: true, canManage: true, canTrigger: false };

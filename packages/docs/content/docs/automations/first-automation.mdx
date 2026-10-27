@@ -152,6 +152,8 @@ At run time, the executor must still be active and permitted to create sessions 
 
 New sessions inherit the automation's owning team and that team's default session visibility at launch. Workspace-owned automations create workspace-visible sessions. The person reading the automation must still pass each linked session's read checks; see [Teams](/administration/teams) for visibility and deployment enforcement details.
 
+Runs include the executor's [personal memories](/configure/memories#including-personal-memories) only when **Include the executor's personal memories** is on. It is off by default, and the executor's account-wide default does not apply. Only the executor can turn it on. Anyone who can manage the automation can turn it off. Changing the executor or duplicating the automation turns it off, and **Trigger Now** runs started by someone other than the executor never include personal memories. Included content may appear in the run's sessions, which the team or workspace can see.
+
 ### Change the executor
 
 Executor reassignment is currently **API-only**, not a control in the automation form. Ask an authorized team lead or workspace Administrator/Owner to [reassign the executor](/automations#reassigning-an-executor) to an active user who qualifies to launch the stored targets. This preserves the automation's ownership and history.

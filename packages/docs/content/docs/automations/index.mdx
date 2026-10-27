@@ -152,7 +152,7 @@ Content-Type: application/json
 { "userId": "<canonical-user-id>" }
 ```
 
-The request must authenticate as an authorized human user. The replacement must be active and able to execute the stored targets; for a team automation they must belong to the active owning team. A successful change records `automation.executor_changed` in the [audit log](/administration/audit-log). This is an API operation, not a documented UI reassignment control.
+The request must authenticate as an authorized human user. The replacement must be active and able to execute the stored targets; for a team automation they must belong to the active owning team. A successful change records `automation.executor_changed` in the [audit log](/administration/audit-log) and turns off **Include the executor's personal memories**, because the new executor has not opted in. This is an API operation, not a documented UI reassignment control.
 
 Reading an automation or its run history does not automatically grant access to generated sessions. When a session is not readable, its ID, title, and artifact summary are redacted from run history. Owner break-glass does not enumerate private session details in run lists; an individual run read can apply audited break-glass. See [Workspace access](/administration/workspace-access#how-automation-access-works) and [Teams](/administration/teams).
 

@@ -18,6 +18,7 @@ import { useSWRConfig } from "swr";
 import { invalidateAutomationCache } from "@/lib/automation-cache";
 import { automationApiPath } from "@/lib/automation-navigation";
 import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import {
   sameEnvironmentIds,
   sameRepositories,
@@ -29,6 +30,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
   const router = useRouter();
   const { navigation } = useAutomationScope();
   const { automation, loading } = useAutomation(id);
+  const viewerId = useCurrentUserAuthorization().authorization?.userId;
   const swr = useSWRConfig();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -129,6 +131,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
             initialValues={automationToFormValues(automation)}
             onSubmit={handleSubmit}
             submitting={submitting}
+            canIncludePersonalMemories={viewerId !== undefined && viewerId === automation.userId}
           />
         </div>
       </div>

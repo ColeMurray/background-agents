@@ -38,6 +38,8 @@ export interface AutomationFormValues {
   scheduleTz?: string;
   /** Launch retries; submitted for schedule triggers only. */
   maxRetries?: number;
+  /** Include the executor's personal memories in runs; only the executor can turn it on. */
+  includePersonalMemories: boolean;
   instructions: string;
   triggerType: AutomationTriggerType;
   eventType?: string;
@@ -67,6 +69,7 @@ export interface AutomationAgentDraft {
 export interface AutomationFormDraft {
   name: string;
   instructions: string;
+  includePersonalMemories: boolean;
   providerSelections: ModelProviderSelections;
   trigger: AutomationTriggerDraft;
   agent: AutomationAgentDraft;
@@ -114,6 +117,7 @@ export function createAutomationFormDraft(
   return {
     name: initialValues.name ?? "",
     instructions: initialValues.instructions ?? "",
+    includePersonalMemories: initialValues.includePersonalMemories ?? false,
     providerSelections: reconcileProviderSelectionsForHarness(
       harness,
       initialValues.providerSelections ?? {}
@@ -152,6 +156,7 @@ export function automationToFormValues(automation: Automation): InitialAutomatio
     scheduleTz: automation.scheduleTz,
     scheduleOnceAt: automation.scheduleOnceAt ?? undefined,
     maxRetries: automation.maxRetries,
+    includePersonalMemories: automation.includePersonalMemories,
     instructions: automation.instructions,
     triggerType: automation.triggerType,
     eventType: automation.eventType ?? undefined,
@@ -233,7 +238,8 @@ export interface AutomationDuplicate {
  * the viewer can create there; otherwise it moves to `fallbackTeamId` as a team change in the
  * form would. Targets missing from the viewer's pickers would block or fail creation, so they are
  * left out. Per-automation credentials aren't part of an automation: the server issues new
- * webhook keys and the form asks for the Sentry client secret again.
+ * webhook keys and the form asks for the Sentry client secret again. The personal-memory opt-in
+ * was the source executor's consent, so the copy starts without it.
  */
 export function createAutomationDuplicate(
   source: Automation,
@@ -250,7 +256,11 @@ export function createAutomationDuplicate(
     usableEnvironmentIds: readonly string[];
   }
 ): AutomationDuplicate {
-  const values = { ...automationToFormValues(source), name: automationCopyName(source.name) };
+  const values = {
+    ...automationToFormValues(source),
+    name: automationCopyName(source.name),
+    includePersonalMemories: false,
+  };
   if (!teamSelectable) {
     return {
       sourceName: source.name,
@@ -434,6 +444,7 @@ function buildSubmissionValues({
       effectiveReasoningEffort(draft.agent.harness, resolvedModel, draft.agent.reasoningEffort) ||
       null,
     instructions: draft.instructions.trim(),
+    includePersonalMemories: draft.includePersonalMemories,
     triggerType: draft.trigger.type,
     providerSelections: draft.providerSelections,
   };

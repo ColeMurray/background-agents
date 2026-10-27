@@ -356,12 +356,34 @@ describe("AutomationSessionService", () => {
       principal: { userId: "user-1", ownerTeamId: team.id },
       repositories: input.admission.target.repositories,
       environmentId: "env-1",
+      includePersonalMemories: false,
     });
     expect(deps.initializeSession).toHaveBeenCalledWith(
       expect.objectContaining({ visibility: "team", ...input.admission.target }),
       ctx
     );
   });
+
+  it.each([
+    { optIn: 0, runAs: "user-1", included: false },
+    { optIn: 1, runAs: "user-1", included: true },
+    { optIn: 1, runAs: "lead-1", included: false },
+  ])(
+    "includes personal memories only on the executor's opt-in (opt-in $optIn, run as $runAs)",
+    async ({ optIn, runAs, included }) => {
+      const { deps, service, input, ctx } = sessionHarness();
+      input.automation = { ...automation, include_personal_memories: optIn };
+      input.executionPrincipal = { ...input.executionPrincipal, platformUserId: runAs };
+      await service.create(input);
+      expect(deps.selectMemory).toHaveBeenCalledWith(
+        ctx,
+        expect.objectContaining({
+          principal: { userId: runAs, ownerTeamId: null },
+          includePersonalMemories: included,
+        })
+      );
+    }
+  );
 
   it("refuses a team launch without an admitted target", async () => {
     const { deps, service, input } = sessionHarness();

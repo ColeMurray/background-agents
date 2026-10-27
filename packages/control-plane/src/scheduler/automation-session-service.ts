@@ -90,6 +90,8 @@ export class AutomationSessionService {
     ]);
     if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
 
+    // Personal memories are the executor's to share: they are included only on their per-automation
+    // opt-in, never from their interactive default, and never for a manual run by someone else.
     const memorySelection = await this.deps.selectMemory(ctx, {
       principal: {
         userId: executionPrincipal.platformUserId,
@@ -97,6 +99,9 @@ export class AutomationSessionService {
       },
       repositories: scopeMembers,
       environmentId: target.environmentId,
+      includePersonalMemories:
+        automation.include_personal_memories === 1 &&
+        executionPrincipal.platformUserId === automation.user_id,
     });
 
     const sessionInput: SessionInitInput = {
