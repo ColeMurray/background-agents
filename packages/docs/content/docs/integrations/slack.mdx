@@ -327,7 +327,7 @@ An automation can start a session when someone posts a matching message in a wat
 - Slack requests are verified before OpenInspect acts on them.
 - The source-control installation is the outer repository boundary, not a per-Slack-user GitHub permission list. Team bindings, memberships, and repository grants further constrain team work.
 - Invite the bot only into trusted channels. Identity linking does not itself grant team membership.
-- The first time someone messages the bot, OpenInspect links them to the account with their Slack profile email. The bot won't act for a new user whose email it can't read, which is why the app needs `users:read.email`. External users in Slack Connect channels often have hidden emails and can't use the bot yet.
+- The first time someone messages the bot, OpenInspect links them to the account with their Slack profile email. The bot won't act for a new user whose email it can't read, which is why the app needs `users:read.email`. External users in Slack Connect channels often have hidden emails, so new ones can't start using the bot yet; people the bot already knows keep working.
 - Bot messages are ignored, so the bot does not respond to itself.
 - Notification text is sanitized and shortened to fit Slack block limits; extremely large raw inputs are rejected.
 
@@ -347,11 +347,12 @@ An automation can start a session when someone posts a matching message in a wat
 </Accordion>
   <Accordion title="The bot couldn't read the email on your Slack profile">
     OpenInspect links each new Slack user to an account by their Slack profile email, and won't
-    start work for someone it can't link. External users in Slack Connect channels often have
-    hidden emails, so they can't use the bot yet. For people in your own workspace, an operator
-    should confirm the app has the `users:read.email` scope and was reinstalled after it was added.
-    If the bot instead says it couldn't verify your account, OpenInspect was briefly unreachable;
-    send the message again.
+    start work for a new user it can't link; people the bot already knows keep working. Try again
+    first, since Slack can briefly fail to return the profile. External users in Slack Connect
+    channels often have hidden emails, so new ones can't use the bot yet. For people in your own
+    workspace, an operator should confirm the app has the `users:read.email` scope and was
+    reinstalled after it was added. If the bot instead says it couldn't verify your account,
+    OpenInspect was briefly unreachable; send the message again.
 
 </Accordion>
   <Accordion title="OpenInspect asks which target to use">
