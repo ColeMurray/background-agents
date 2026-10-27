@@ -58,6 +58,20 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     ).toMatchObject({ type: "rebuild", reason: "missing_image" });
   });
 
+  it.each([
+    "v76-child-output-discovery",
+    "v77-codex-pinned-binary",
+    "v78-tunnel-environment-recovery",
+  ])(
+    "rebuilds outdated Modal image %s even when repository SHAs are unchanged",
+    (runtimeVersion) => {
+      expect(evaluateImageBuildRebuildPolicy(unit, [row({ runtimeVersion })], "modal")).toEqual({
+        type: "rebuild",
+        reason: "runtime_incompatible",
+      });
+    }
+  );
+
   it("rebuilds each provider's pre-wraparound image and keeps the shared new generation", () => {
     const superseded: Array<[ImageBuildProvider, string]> = [
       ["modal", "v58-image-build-stdin-launch-vnc"],
