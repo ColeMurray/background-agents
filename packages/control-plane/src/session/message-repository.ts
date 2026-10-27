@@ -43,6 +43,10 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
+const messageProcessingOriginRowSchema = messageRowSchema.pick({
+  author_id: true,
+  autofix_feedback_key: true,
+});
 const sessionBudgetExhaustedRowSchema = sessionRowSchema.pick({ budget_exhausted: true });
 
 export interface RecordedMessageCompletion {
@@ -530,14 +534,27 @@ export class MessageRepository {
   }
 
   /**
+   * The processing prompt's author, and whether it is an Autofix turn: review feedback relayed from
+   * GitHub, never anyone's own prompt whatever participant carries it.
+   */
+  getProcessingPromptOrigin(): { author_id: string; autofix: boolean } | null {
+    const result = this.sql.exec(
+      `SELECT author_id, autofix_feedback_key FROM messages WHERE status = 'processing' LIMIT 1`
+    );
+    const row = parseStorageRows(result.toArray(), messageProcessingOriginRowSchema)[0];
+    return row ? { author_id: row.author_id, autofix: row.autofix_feedback_key !== null } : null;
+  }
+
+  /**
    * Whether a prompt from anyone but `canonicalUserId` has reached the agent: a dispatched message
-   * whose author has another account, or none (an integration author such as Autofix).
+   * whose author has another account or none, or an Autofix turn.
    */
   hasDispatchedPromptFromOtherUser(canonicalUserId: string): boolean {
     const result = this.sql.exec(
       `SELECT 1 AS present FROM messages m LEFT JOIN participants p ON p.id = m.author_id
        WHERE m.started_at IS NOT NULL
-         AND (p.canonical_user_id IS NULL OR p.canonical_user_id <> ?)
+         AND (m.autofix_feedback_key IS NOT NULL OR p.canonical_user_id IS NULL
+           OR p.canonical_user_id <> ?)
        LIMIT 1`,
       canonicalUserId
     );

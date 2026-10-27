@@ -55,8 +55,8 @@ interface SessionRightSidebarProps {
   artifacts: Artifact[];
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
-  /** Whether the viewer has loaded the sandbox's credentials; they load only on request. */
-  sandboxConnected?: boolean;
+  /** The sandbox's credentials wait for `onConnectSandbox`; see `useSandboxAccess`. */
+  sandboxConnectRequired?: boolean;
   onConnectSandbox?: () => void;
   onOpenMedia: (artifactId: string) => void;
   diffState?: SessionDiffState | null;
@@ -117,7 +117,7 @@ export function SessionRightSidebarContent({
   artifacts,
   terminalOpen,
   onToggleTerminal,
-  sandboxConnected = true,
+  sandboxConnectRequired = false,
   onConnectSandbox,
   onOpenMedia,
   diffState,
@@ -164,14 +164,12 @@ export function SessionRightSidebarContent({
   const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
   const completedTasks = tasks.filter((task) => task.status === "completed").length;
   const connectSandbox =
-    capabilities.sandboxAccess && !sandboxConnected && sessionState?.sandboxStatus === "ready"
-      ? onConnectSandbox
-      : undefined;
+    capabilities.sandboxAccess && sandboxConnectRequired ? onConnectSandbox : undefined;
   const hasSandboxTools =
     capabilities.sandboxAccess &&
     Boolean(
       connectSandbox ||
-      (sandboxConnected && (sessionState?.codeServerUrl || sessionState?.vncUrl)) ||
+      (!sandboxConnectRequired && (sessionState?.codeServerUrl || sessionState?.vncUrl)) ||
       terminalUrl ||
       Object.keys(sessionState?.tunnelUrls ?? {}).length
     );
@@ -427,7 +425,7 @@ export function SessionRightSidebarContent({
         {connectSandbox && <SandboxConnectSection onConnect={connectSandbox} />}
 
         {/* Code Server */}
-        {capabilities.sandboxAccess && sandboxConnected && sessionState?.codeServerUrl && (
+        {capabilities.sandboxAccess && !sandboxConnectRequired && sessionState?.codeServerUrl && (
           <CodeServerSection
             url={sessionState.codeServerUrl}
             password={sessionState.codeServerPassword ?? null}
@@ -436,7 +434,7 @@ export function SessionRightSidebarContent({
         )}
 
         {/* VNC Desktop */}
-        {capabilities.sandboxAccess && sandboxConnected && sessionState?.vncUrl && (
+        {capabilities.sandboxAccess && !sandboxConnectRequired && sessionState?.vncUrl && (
           <VncSection
             url={sessionState.vncUrl}
             password={sessionState.vncPassword ?? null}

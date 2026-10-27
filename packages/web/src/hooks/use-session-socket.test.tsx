@@ -26,21 +26,13 @@ const FULL_CAPABILITIES = {
 
 type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
 
-const { mutateMock, authorizationMock, authSessionMock } = vi.hoisted(() => ({
+const { mutateMock, authorizationMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
   authorizationMock: { canExportTrace: false, hasPermission: vi.fn() },
-  authSessionMock: { userId: null as string | null },
 }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: authorizationMock.hasPermission }),
-}));
-
-vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () =>
-    authSessionMock.userId
-      ? { data: { user: { id: authSessionMock.userId } }, status: "authenticated" }
-      : { data: null, status: "unauthenticated" },
 }));
 
 vi.mock("swr", async () => {
@@ -156,7 +148,6 @@ describe("useSessionSocket", () => {
     FakeWebSocket.instances = [];
     mutateMock.mockReset();
     authorizationMock.canExportTrace = false;
-    authSessionMock.userId = null;
     authorizationMock.hasPermission.mockReset();
     authorizationMock.hasPermission.mockImplementation(
       (permission: string) => permission === "sessions.export" && authorizationMock.canExportTrace
@@ -178,23 +169,36 @@ describe("useSessionSocket", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    ["the session owner", "owner-1", "sandbox-access", "tunnel-urls"],
-    ["anyone else", "teammate-1", "tunnel-urls", "sandbox-access"],
-  ])("loads sandbox credentials on sight only for %s", async (_viewer, userId, loaded, skipped) => {
-    authSessionMock.userId = userId;
-    const snapshot = createSnapshot();
-    snapshot.session.ownerUserId = "owner-1";
+  it("asks for sandbox credentials without connecting until the viewer chooses to", async () => {
     const fetchMock = vi.mocked(fetch);
-
-    renderHook(() => useSessionSocket("session-1", snapshot));
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/session-1/${loaded}`, expect.anything())
+    fetchMock.mockImplementation(async (input) =>
+      String(input).endsWith("/sandbox-access")
+        ? Response.json({ code: "sandbox_connect_required" }, { status: 409 })
+        : String(input).endsWith("/tunnel-urls")
+          ? Response.json({ tunnelUrls: { "3000": "https://app.example" } })
+          : Response.json({ token: "ws-token" })
     );
-    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(
-      `/api/sessions/session-1/${skipped}`
+    const { result } = renderSessionSocket();
+
+    await waitFor(() => expect(result.current.sandboxConnectRequired).toBe(true));
+    expect(result.current.sessionState?.tunnelUrls).toEqual({ "3000": "https://app.example" });
+    const urls = () => fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls()).not.toContain("/api/sessions/session-1/sandbox-access?connect=1");
+
+    fetchMock.mockImplementation(async (input) =>
+      String(input).endsWith("?connect=1")
+        ? Response.json({
+            codeServer: null,
+            vnc: null,
+            ttyd: { url: "https://terminal.example", token: "terminal-token" },
+          })
+        : Response.json({ token: "ws-token" })
     );
+    act(() => result.current.connectSandbox());
+
+    await waitFor(() => expect(result.current.sessionState?.ttydToken).toBe("terminal-token"));
+    expect(result.current.sandboxConnectRequired).toBe(false);
+    expect(urls()).toContain("/api/sessions/session-1/sandbox-access?connect=1");
   });
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {

@@ -980,7 +980,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
     spawnContext: () => childSessionsHandler.getSpawnContext(),
     activePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
-    memoryPromptContext: () => memoryPromptContextHandler.getContext(),
+    memoryPromptContext: (_request, url) =>
+      memoryPromptContextHandler.getContext(url.searchParams.get("userId")),
     childSummary: (_request, url) => childSummaryHandler.getChildSummary(url),
     parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
     cancel: () => sessionLifecycleHandler.cancel(),

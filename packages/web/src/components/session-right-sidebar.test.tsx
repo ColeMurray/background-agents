@@ -949,7 +949,7 @@ describe("SessionRightSidebar", () => {
       tunnelUrls: { "3000": "https://app.example" },
     };
     const { rerender } = render(
-      inspector({ sessionState, sandboxConnected: false, onConnectSandbox })
+      inspector({ sessionState, sandboxConnectRequired: true, onConnectSandbox })
     );
     selectTab("Tools");
     expect(screen.queryByText("Open Editor")).not.toBeInTheDocument();
@@ -967,7 +967,7 @@ describe("SessionRightSidebar", () => {
     rerender(
       inspector({
         sessionState: { ...sessionState, ttydToken: "token", codeServerPassword: "secret" },
-        sandboxConnected: true,
+        sandboxConnectRequired: false,
         onConnectSandbox,
       })
     );

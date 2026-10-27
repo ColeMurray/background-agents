@@ -104,7 +104,7 @@ function SessionContent({
     authError,
     connectionError,
     sessionState,
-    sandboxConnected,
+    sandboxConnectRequired,
     connectSandbox,
     sandboxError,
     boot,
@@ -507,7 +507,7 @@ function SessionContent({
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
                 onToggleTerminal={toggleTerminal}
-                sandboxConnected={sandboxConnected}
+                sandboxConnectRequired={sandboxConnectRequired}
                 onConnectSandbox={connectSandbox}
                 onOpenMedia={setSelectedMediaArtifactId}
                 diffState={diffState}
@@ -547,7 +547,7 @@ function SessionContent({
               artifacts={artifacts}
               terminalOpen={terminalOpen}
               onToggleTerminal={toggleTerminal}
-              sandboxConnected={sandboxConnected}
+              sandboxConnectRequired={sandboxConnectRequired}
               onConnectSandbox={connectSandbox}
               onOpenMedia={setSelectedMediaArtifactId}
               diffState={diffState}
@@ -578,7 +578,7 @@ function SessionContent({
           artifacts={artifacts}
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}
-          sandboxConnected={sandboxConnected}
+          sandboxConnectRequired={sandboxConnectRequired}
           onConnectSandbox={connectSandbox}
           onOpenMedia={setSelectedMediaArtifactId}
           diffState={diffState}

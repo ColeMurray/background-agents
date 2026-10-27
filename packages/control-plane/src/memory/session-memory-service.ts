@@ -10,7 +10,7 @@ import {
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
-import type { MemoryReadAuditStore } from "../db/memory-read-audit";
+import type { PersonalMemoryAuditStore } from "../db/personal-memory-audit";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError, unhandled } from "./errors";
@@ -44,7 +44,7 @@ export interface SessionMemoryServiceDeps {
   /** Whether the session principal may currently read shared partitions; rechecked per operation. */
   access: Pick<SessionMemoryAccessPolicy, "check">;
   /** Records each read that returns personal memory, with the prompt it served. */
-  audit: Pick<MemoryReadAuditStore, "recordPersonalRead">;
+  audit: Pick<PersonalMemoryAuditStore, "recordRead">;
   /** Recorded as provenance on agent writes and personal-read audits. */
   requestId: string;
 }
@@ -216,7 +216,7 @@ export class SessionMemoryService {
     prompt: MemoryPromptContext,
     memoryIds: string[]
   ): Promise<void> {
-    await this.deps.audit.recordPersonalRead({
+    await this.deps.audit.recordRead({
       requestId: this.deps.requestId,
       sessionId: session.id,
       // Personal records are returned only for the owner's own prompts.

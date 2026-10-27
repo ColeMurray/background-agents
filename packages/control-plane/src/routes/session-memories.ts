@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { memorySearchSchema, sandboxMemoryWriteSchema } from "@open-inspect/shared/types/memories";
 import { createSessionMemoryAccessPolicy } from "../authorization/memory-access-factory";
-import { MemoryReadAuditStore } from "../db/memory-read-audit";
 import { MemoryRecordStore } from "../db/memory-records";
+import { PersonalMemoryAuditStore } from "../db/personal-memory-audit";
 import { LexicalFactIndex } from "../db/lexical-fact-index";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { toSelectionStatus } from "../memory/dto";
@@ -11,7 +11,10 @@ import type { MemoryPromptContext } from "../memory/types";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { SessionInternalPaths } from "../session/contracts";
-import { memoryPromptContextSchema } from "../session/memory-prompt-context";
+import {
+  memoryPromptContextResponseSchema,
+  type MemoryPromptContextResponse,
+} from "../session/memory-prompt-context";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import { parseBody } from "./body";
@@ -32,6 +35,8 @@ type SandboxMemoryContext = SandboxRouteContext & { sessionRuntime: SessionRunti
 
 /** Treated as someone else's prompt: no personal reads, writes, or auto-save. */
 const NO_OWNER_PROMPT: MemoryPromptContext = { authorUserId: null, othersPrompted: true };
+/** Spawn depth is capped well below this; it only bounds a malformed parent chain. */
+const MAX_PARENT_HOPS = 8;
 
 /**
  * The pinned selection as people see it, with live drift, under session-read admission. Personal
@@ -51,26 +56,50 @@ function sessionMemoryService(ctx: SandboxRouteContext): SessionMemoryService {
     records: new MemoryRecordStore(ctx.db),
     factIndex: new LexicalFactIndex(ctx.db),
     access: createSessionMemoryAccessPolicy(ctx),
-    audit: new MemoryReadAuditStore(ctx.db),
+    audit: new PersonalMemoryAuditStore(ctx.db),
     requestId: ctx.request_id,
   });
 }
 
+async function runtimePromptContext(
+  ctx: SandboxMemoryContext,
+  sessionId: string,
+  relativeToUserId?: string
+): Promise<MemoryPromptContextResponse | null> {
+  const response = await ctx.sessionRuntime.fetch(
+    sessionId,
+    SessionInternalPaths.memoryPromptContext,
+    undefined,
+    relativeToUserId ? `?${new URLSearchParams({ userId: relativeToUserId })}` : undefined
+  );
+  if (!response.ok) return null;
+  const parsed = memoryPromptContextResponseSchema.safeParse(await response.json());
+  return parsed.success ? parsed.data : null;
+}
+
 /**
- * Who the agent is serving right now, from the session runtime. Anything but a clear answer counts
- * as someone else's prompt, so a shell call between prompts never reaches personal memory.
+ * Who the agent is serving right now, from the session runtime, and whether anyone else has
+ * prompted this session or any session that spawned it: a parent's sandbox can spawn and prompt
+ * its children on the owner's later prompts. Anything but a clear answer counts as someone else's
+ * prompt, so a shell call between prompts never reaches personal memory.
  */
 async function promptContext(
   ctx: SandboxMemoryContext,
   sessionId: string
 ): Promise<MemoryPromptContext> {
-  const response = await ctx.sessionRuntime.fetch(
-    sessionId,
-    SessionInternalPaths.memoryPromptContext
-  );
-  if (!response.ok) return NO_OWNER_PROMPT;
-  const parsed = memoryPromptContextSchema.safeParse(await response.json());
-  return parsed.success ? parsed.data : NO_OWNER_PROMPT;
+  const session = await runtimePromptContext(ctx, sessionId);
+  if (!session) return NO_OWNER_PROMPT;
+  const { authorUserId } = session;
+  if (authorUserId === null || session.othersPrompted)
+    return { authorUserId, othersPrompted: true };
+  let parentSessionId = session.parentSessionId;
+  for (let hop = 0; parentSessionId; hop++) {
+    const parent =
+      hop < MAX_PARENT_HOPS ? await runtimePromptContext(ctx, parentSessionId, authorUserId) : null;
+    if (!parent || parent.othersPrompted) return { authorUserId, othersPrompted: true };
+    parentSessionId = parent.parentSessionId;
+  }
+  return { authorUserId, othersPrompted: false };
 }
 
 /** Run one sandbox operation, translating expected memory failures. */

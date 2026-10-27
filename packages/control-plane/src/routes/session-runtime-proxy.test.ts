@@ -261,6 +261,101 @@ describe("session runtime proxy routes", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
+  describe("sandbox credentials and personal memory", () => {
+    const CREDENTIALS = {
+      codeServer: { url: "https://code.example", password: "code-secret" },
+      vnc: null,
+      ttyd: null,
+    };
+    /** Answers the personal-memory consequence check; `revoke` handles the switch-off batch. */
+    function memoryDatabase(endsPersonal: boolean, revoke = vi.fn(async () => [])): SqlDatabase {
+      return {
+        prepare(sql: string) {
+          const statement: SqlStatement = {
+            bind: () => statement,
+            first: async <T>() =>
+              (sql.includes("SELECT 1 AS present") && endsPersonal ? { present: 1 } : null) as T,
+            all: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
+            run: async <T>() => ({ results: [] as T[], meta: { changes: 0 } }),
+          };
+          return statement;
+        },
+        batch: revoke,
+      };
+    }
+    const access = (search = "") =>
+      new Request(`https://test.local/sessions/session-1/sandbox-access${search}`);
+
+    it("hands out credentials without asking when nothing personal would be switched off", async () => {
+      const revoke = vi.fn(async () => []);
+      const response = await dispatch(
+        access(),
+        createEnv(async () => Response.json(CREDENTIALS), {
+          delegate: memoryDatabase(false, revoke),
+        })
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual(CREDENTIALS);
+      expect(revoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses credentials that would switch off personal memory without an explicit connect", async () => {
+      const revoke = vi.fn(async () => []);
+      const response = await dispatch(
+        access(),
+        createEnv(async () => Response.json(CREDENTIALS), {
+          delegate: memoryDatabase(true, revoke),
+        })
+      );
+      expect(response.status).toBe(409);
+      const body = await response.text();
+      expect(JSON.parse(body)).toMatchObject({ code: "sandbox_connect_required" });
+      expect(body).not.toContain("code-secret");
+      expect(revoke).not.toHaveBeenCalled();
+    });
+
+    it("records the switch-off before returning credentials on an explicit connect", async () => {
+      const revoke = vi.fn(async () => []);
+      const response = await dispatch(
+        access("?connect=1"),
+        createEnv(async () => Response.json(CREDENTIALS), {
+          delegate: memoryDatabase(true, revoke),
+        })
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual(CREDENTIALS);
+      expect(revoke).toHaveBeenCalledOnce();
+    });
+
+    it("withholds credentials when the switch-off cannot be recorded", async () => {
+      const revoke = vi.fn(async () => {
+        throw new Error("D1 unavailable");
+      });
+      const response = await dispatch(
+        access("?connect=1"),
+        createEnv(async () => Response.json(CREDENTIALS), {
+          delegate: memoryDatabase(true, revoke),
+        })
+      );
+      expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain("code-secret");
+    });
+
+    it("never asks when the sandbox has no terminal, editor or desktop", async () => {
+      const revoke = vi.fn(async () => []);
+      const response = await dispatch(
+        access(),
+        createEnv(
+          async () =>
+            Response.json({ codeServer: null, vnc: null, ttyd: null, tunnelUrls: { "3000": "x" } }),
+          { delegate: memoryDatabase(true, revoke) }
+        )
+      );
+      expect(response.status).toBe(200);
+      expect(revoke).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     {
       permissions: ["sessions.read"] as PermissionId[],

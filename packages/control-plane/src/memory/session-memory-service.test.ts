@@ -102,9 +102,7 @@ function setup(
       ),
     },
     audit: {
-      recordPersonalRead: vi.fn<SessionMemoryServiceDeps["audit"]["recordPersonalRead"]>(
-        async () => {}
-      ),
+      recordRead: vi.fn<SessionMemoryServiceDeps["audit"]["recordRead"]>(async () => {}),
     },
     requestId: "request",
   } satisfies SessionMemoryServiceDeps;
@@ -255,7 +253,7 @@ describe("SessionMemoryService.read", () => {
     await expect(teammate.service.read("session", "api", teammatePrompt)).resolves.toMatchObject({
       id: "api",
     });
-    expect(teammate.deps.audit.recordPersonalRead).not.toHaveBeenCalled();
+    expect(teammate.deps.audit.recordRead).not.toHaveBeenCalled();
 
     const sandboxShared = setup({
       records,
@@ -269,7 +267,7 @@ describe("SessionMemoryService.read", () => {
     await expect(owner.service.read("session", "mine", ownerPrompt)).resolves.toMatchObject({
       content: "Start the database",
     });
-    expect(owner.deps.audit.recordPersonalRead).toHaveBeenCalledWith({
+    expect(owner.deps.audit.recordRead).toHaveBeenCalledWith({
       requestId: "request",
       sessionId: "session",
       promptAuthorUserId: "owner",
@@ -352,6 +350,23 @@ describe("SessionMemoryService.search", () => {
     ).rejects.toThrow("someone else opened its sandbox");
   });
 
+  it("stops reading personal memory on the owner's prompts once anyone else has prompted", async () => {
+    const records = [record("mine")];
+    const afterTeammate = { authorUserId: "owner", othersPrompted: true };
+    const { service, deps } = setup({ records });
+    await expect(service.read("session", "mine", afterTeammate)).rejects.toThrow(
+      MemoryNotFoundError
+    );
+    await expect(
+      service.search(
+        "session",
+        { query: "needle", limit: 10, scopeType: "personal" },
+        afterTeammate
+      )
+    ).rejects.toThrow("someone else has prompted it");
+    expect(deps.audit.recordRead).not.toHaveBeenCalled();
+  });
+
   it("audits the personal records a search returns", async () => {
     const { service, deps } = setup();
     deps.factIndex.search.mockResolvedValue([
@@ -373,7 +388,7 @@ describe("SessionMemoryService.search", () => {
       },
     ]);
     await service.search("session", { query: "needle", limit: 10 }, ownerPrompt);
-    expect(deps.audit.recordPersonalRead).toHaveBeenCalledWith(
+    expect(deps.audit.recordRead).toHaveBeenCalledWith(
       expect.objectContaining({ promptAuthorUserId: "owner", memoryIds: ["mine"] })
     );
   });

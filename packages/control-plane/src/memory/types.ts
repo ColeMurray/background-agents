@@ -88,7 +88,8 @@ export interface MemorySession {
   isChildSession: boolean;
   /**
    * Whether the owner's prompts may still search and read their personal store. Cleared for good
-   * once someone else receives the session's sandbox credentials.
+   * once someone else receives the sandbox credentials of this session or one that spawned it.
+   * Someone else's prompt ends reads too (`MemoryPromptContext.othersPrompted`).
    */
   personalReadsEligible: boolean;
   /**
@@ -106,7 +107,10 @@ export interface MemorySession {
 export interface MemoryPromptContext {
   /** Account behind the processing prompt; null when idle or the author has no account. */
   authorUserId: string | null;
-  /** Whether a prompt from anyone else has been dispatched to this session's agent. */
+  /**
+   * Whether a prompt from anyone else has been dispatched to this session's agent, or to the agent
+   * of any session that spawned it.
+   */
   othersPrompted: boolean;
 }
 

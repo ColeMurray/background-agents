@@ -6,7 +6,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionMemorySelector } from "../../src/memory/session-memory-selector";
-import { inheritedMemoryPin, resolvedPin } from "../../src/session/pinned";
+import { resolvedPin } from "../../src/session/pinned";
 import { queryDO, seedMessage } from "./helpers";
 
 interface MemorySessionOptions {
@@ -62,10 +62,12 @@ export async function seedMemorySession(id: string, options: MemorySessionOption
     ...(options.parentSessionId
       ? {
           parentSessionId: options.parentSessionId,
-          memory: inheritedMemoryPin(
-            options.parentSessionId,
-            options.spawnedByUserId === undefined ? options.userId : options.spawnedByUserId
-          ),
+          memory: {
+            kind: "inherited" as const,
+            parentSessionId: options.parentSessionId,
+            promptAuthorUserId:
+              options.spawnedByUserId === undefined ? options.userId : options.spawnedByUserId,
+          },
         }
       : {
           memory: resolvedPin(

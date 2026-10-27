@@ -157,11 +157,14 @@ visibility. Leading a team does not grant access to its private sessions.
 
 Session access and personal memory are separate. However many people can read or prompt a session,
 its owner's personal memories serve only the owner's own prompts. On anyone else's prompt the agent
-cannot search, read, or save them. Handing the sandbox's terminal, editor, or desktop credentials to
-anyone else switches personal memory search off for the rest of the session, because shell access
-cannot be tied to a prompt. The session's memory sidebar lists personal items only for the owner.
+cannot search, read, or save them, and once anyone else has prompted the session, or received its
+terminal, editor, or desktop credentials, personal memory search stays off there and in its children
+for good, because either can leave something running in the sandbox. A request for those credentials
+must say so with `connect=1`. The session's memory sidebar lists personal items only for the owner.
 Automation runs, manual ones included, and sessions started from Slack channels, Linear, or GitHub
-never include personal memory. See
+never include personal memory.
+
+Agent replies built from personal memory remain visible to everyone who can read the session. See
 [Personal memory follows the owner's prompts](MEMORY.md#personal-memory-follows-the-owners-prompts).
 
 ### Team Defaults and Migration

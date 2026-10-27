@@ -486,9 +486,10 @@ describe("memory shared-scope authorization", () => {
     });
 
     const selections = new SessionMemorySelectionStore(env.DB);
-    expect(await selections.revokePersonalForSandboxAccess("shared", MEMBER)).toBe(false);
-    expect(await selections.revokePersonalForSandboxAccess("shared", OUTSIDER)).toBe(true);
-    expect(await selections.revokePersonalForSandboxAccess("shared", OUTSIDER)).toBe(false);
+    expect(await selections.sandboxAccessEndsPersonal("shared", MEMBER)).toBe(false);
+    expect(await selections.sandboxAccessEndsPersonal("shared", OUTSIDER)).toBe(true);
+    await selections.bindRevokePersonalForSandboxAccess("shared", OUTSIDER).run();
+    expect(await selections.sandboxAccessEndsPersonal("shared", OUTSIDER)).toBe(false);
     expect(await eligibility()).toEqual({
       personal_reads_eligible: 0,
       personal_auto_save_eligible: 0,

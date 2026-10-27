@@ -42,7 +42,7 @@ import {
 } from "./shared";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
-import { inheritedMemoryPin, inheritedPin } from "../session/pinned";
+import { inheritedPin } from "../session/pinned";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
 
 const logger = createLogger("router:session-child-spawn");
@@ -320,7 +320,11 @@ export async function handleSpawnChild(
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkills: inheritedPin(parentId),
     // The parent owner's personal memory carries over only to a child spawned on their own prompt.
-    memory: inheritedMemoryPin(parentId, spawnContext.promptAuthor.canonicalUserId ?? null),
+    memory: {
+      kind: "inherited",
+      parentSessionId: parentId,
+      promptAuthorUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
+    },
     providerAuth: providerAuth.map((auth) => ({
       ...auth,
       inheritedFromSessionId: parentId,

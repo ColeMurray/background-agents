@@ -178,10 +178,9 @@ describe("memory persistence", () => {
     const store = new MemoryRecordStore(env.DB);
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "workspace");
     expect((await store.create(memory(), agent, AUTO_SAVE)).status).toBe("active");
-    await new SessionMemorySelectionStore(env.DB).revokePersonalForSandboxAccess(
-      "session_a",
-      "user_b"
-    );
+    await new SessionMemorySelectionStore(env.DB)
+      .bindRevokePersonalForSandboxAccess("session_a", "user_b")
+      .run();
     await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
     expect((await store.create(memory(), agent)).status).toBe("proposed");
   });

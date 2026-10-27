@@ -64,6 +64,7 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "memory.rejected": "Memory rejected",
   "memory.superseded": "Memory superseded",
   "memory.personal_read": "Personal memory read by an agent",
+  "memory.personal_access_revoked": "Personal memory switched off by sandbox access",
   "session.private_break_glass": "Private session break-glass read",
   "session.visibility_changed": "Session visibility changed",
   "session.moved": "Session moved",

@@ -107,8 +107,9 @@ claim-bearing one.
 | `/sessions/batch-archive`       | POST      | Archive explicitly selected sessions |
 
 Sandbox credentials count as joining the session: when someone other than the session's
-personal-memory owner receives them, the session stops reading that owner's personal memory for good
-(see
+personal-memory owner receives them, the session and its children stop reading that owner's personal
+memory for good. While that would happen, `/sessions/:id/sandbox-access` refuses with 409
+`sandbox_connect_required` unless the request adds `?connect=1` (see
 [Personal memory follows the owner's prompts](../../docs/MEMORY.md#personal-memory-follows-the-owners-prompts)).
 Clients that only need preview links use `/sessions/:id/tunnel-urls`.
 

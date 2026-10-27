@@ -16,6 +16,7 @@ import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionMemorySelectionStore } from "../db/session-memory-selections";
+import { PersonalMemoryAuditStore } from "../db/personal-memory-audit";
 import { createLogger } from "../logger";
 import { checkSessionAccess } from "@open-inspect/shared";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
@@ -32,6 +33,7 @@ import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import {
   error,
+  json,
   GITHUB_SANDBOX_FALLBACK_ROUTE,
   GITHUB_USER_OR_SERVICE_ROUTE,
   NO_AUTHORIZATION,
@@ -112,32 +114,64 @@ function legacyTokenRefresh(
   };
 }
 
+/** Whether a sandbox access response carries terminal, editor or desktop credentials. */
+function grantsSandboxShell(access: unknown): boolean {
+  return (
+    isObjectBody(access) &&
+    [access.codeServer, access.vnc, access.ttyd].some((credential) => credential != null)
+  );
+}
+
 /**
  * Hand out the sandbox's terminal, editor and desktop credentials. Shell access cannot be tied to
- * a prompt, so before anyone other than the session's personal owner receives them, the session
- * stops reading that owner's personal memory; if that cannot be recorded, nothing is returned.
+ * a prompt, so credentials for anyone but the personal owner switch off the session's personal
+ * memory. That needs the caller's explicit `connect=1`; without it they get a
+ * `sandbox_connect_required` refusal and nothing changes. The switch-off is recorded before the
+ * credentials are returned, and if it fails nothing is returned.
  */
 async function handleSandboxAccess(
-  _request: Request,
+  request: Request,
   _env: Env,
   params: SessionParams,
   ctx: UserRouteContext & { sessionRuntime: SessionRuntimeClient }
 ): Promise<Response> {
   const response = await ctx.sessionRuntime.fetch(params.id, SessionInternalPaths.sandboxAccess);
   if (!response.ok) return response;
-  const revoked = await new SessionMemorySelectionStore(ctx.db).revokePersonalForSandboxAccess(
-    params.id,
-    ctx.principal.userId
-  );
-  if (revoked)
-    logger.info("memory.personal_reads_revoked", {
-      event: "memory.personal_reads_revoked",
+  const access: unknown = await response.json();
+  const headers = new Headers(response.headers);
+  headers.delete("Content-Length");
+  const userId = ctx.principal.userId;
+  const selections = new SessionMemorySelectionStore(ctx.db);
+  if (
+    grantsSandboxShell(access) &&
+    (await selections.sandboxAccessEndsPersonal(params.id, userId))
+  ) {
+    if (new URL(request.url).searchParams.get("connect") !== "1") {
+      return json(
+        {
+          error: "Opening this sandbox switches off the session owner's personal memory",
+          code: "sandbox_connect_required",
+        },
+        409
+      );
+    }
+    await ctx.db.batch([
+      selections.bindRevokePersonalForSandboxAccess(params.id, userId),
+      new PersonalMemoryAuditStore(ctx.db).bindAccessRevoked({
+        requestId: ctx.request_id,
+        sessionId: params.id,
+        userId,
+      }),
+    ]);
+    logger.info("memory.personal_access_revoked", {
+      event: "memory.personal_access_revoked",
       session_id: params.id,
-      user_id: ctx.principal.userId,
+      user_id: userId,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-  return response;
+  }
+  return Response.json(access, { status: response.status, headers });
 }
 
 async function handleSandboxError(

@@ -3,8 +3,10 @@ import type { MemoryPromptContext, MemorySession } from "./types";
 const PERSONAL_EXCLUDED = "Personal memory is excluded from this session";
 const PERSONAL_OWNER_PROMPTS_ONLY =
   "Personal memory is available only on the session owner's own prompts";
-const PERSONAL_READS_OFF =
+const PERSONAL_SANDBOX_OPENED =
   "Personal memory search is off in this session because someone else opened its sandbox";
+const PERSONAL_OTHERS_PROMPTED =
+  "Personal memory search is off in this session because someone else has prompted it";
 
 /** Whether the active prompt is the personal owner's own. */
 function isOwnerPrompt(session: MemorySession, prompt: MemoryPromptContext): boolean {
@@ -14,22 +16,26 @@ function isOwnerPrompt(session: MemorySession, prompt: MemoryPromptContext): boo
 
 /**
  * How much of the personal store the active prompt may read live. Only the personal owner's own
- * prompts read it, and none do once someone else has received the session's sandbox credentials.
- * Children see only personal records pinned in the selection they inherited, so a later preference
- * or new personal record never widens a delegated session's context.
+ * prompts read it, and none do once someone else has prompted the session (or a session that
+ * spawned it) or received its sandbox credentials: either can leave something running in the
+ * sandbox that reads on the owner's later prompts. Children see only personal records pinned in
+ * the selection they inherited, so a later preference or new personal record never widens a
+ * delegated session's context.
  */
 export function personalReadAccess(
   session: MemorySession,
   prompt: MemoryPromptContext
 ): "none" | "pinned" | "all" {
-  if (!isOwnerPrompt(session, prompt) || !session.personalReadsEligible) return "none";
+  if (!isOwnerPrompt(session, prompt) || !session.personalReadsEligible || prompt.othersPrompted)
+    return "none";
   return session.isChildSession ? "pinned" : "all";
 }
 
 /** Why the active prompt cannot read personal memory; meaningful when access is `"none"`. */
 export function personalReadDenial(session: MemorySession, prompt: MemoryPromptContext): string {
   if (!session.sources.personalOwnerUserId) return PERSONAL_EXCLUDED;
-  return isOwnerPrompt(session, prompt) ? PERSONAL_READS_OFF : PERSONAL_OWNER_PROMPTS_ONLY;
+  if (!isOwnerPrompt(session, prompt)) return PERSONAL_OWNER_PROMPTS_ONLY;
+  return session.personalReadsEligible ? PERSONAL_OTHERS_PROMPTED : PERSONAL_SANDBOX_OPENED;
 }
 
 /**

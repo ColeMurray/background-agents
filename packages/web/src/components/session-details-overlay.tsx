@@ -42,7 +42,7 @@ export function SessionDetailsOverlay({
   artifacts,
   terminalOpen,
   onToggleTerminal,
-  sandboxConnected,
+  sandboxConnectRequired,
   onConnectSandbox,
   onOpenMedia,
   diffState,
@@ -177,7 +177,7 @@ export function SessionDetailsOverlay({
       artifacts={artifacts}
       terminalOpen={terminalOpen}
       onToggleTerminal={onToggleTerminal}
-      sandboxConnected={sandboxConnected}
+      sandboxConnectRequired={sandboxConnectRequired}
       onConnectSandbox={onConnectSandbox}
       onOpenMedia={onOpenMedia}
       diffState={diffState}

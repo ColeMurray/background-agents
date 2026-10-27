@@ -3,9 +3,9 @@
 import { TerminalIcon } from "@/components/ui/icons";
 
 /**
- * Asks before loading the sandbox's terminal, editor and desktop credentials. Someone other than
- * the session owner who opens them turns off the owner's personal memory search for the rest of
- * the session, so the page never loads them just for viewing.
+ * Shown when the control plane will hand out the sandbox's terminal, editor and desktop
+ * credentials only on an explicit connect, because opening them would turn off the session
+ * owner's personal memory search for the rest of the session.
  */
 export function SandboxConnectSection({ onConnect }: { onConnect: () => void }) {
   return (

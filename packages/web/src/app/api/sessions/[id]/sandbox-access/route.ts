@@ -10,10 +10,12 @@ function hasSandboxUnavailableError(value: unknown): boolean {
   );
 }
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Only an explicit connect may cost the session owner their personal memory.
+  const connect = new URL(request.url).searchParams.get("connect") === "1";
   const response = await controlPlaneUserFetch(
-    `/sessions/${encodeURIComponent(id)}/sandbox-access`,
+    `/sessions/${encodeURIComponent(id)}/sandbox-access${connect ? "?connect=1" : ""}`,
     { cache: "no-store" }
   );
   const conflict =
