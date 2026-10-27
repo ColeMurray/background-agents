@@ -49,8 +49,9 @@ export function isEmailAttestingProvider(provider: ProviderIdentity["provider"])
  *
  * Known limitation: a Slack user whose profile email the bot cannot read,
  * typically an external Slack Connect user, cannot be enrolled and so cannot
- * use the bot. Linear is not listed because its bot still sends claim-less
- * requests before its first claim-bearing one.
+ * use the bot. Linear is not listed because the Linear bot starts
+ * automation-created sessions as its installed app user and sends no email
+ * for it.
  */
 const ENROLLMENT_EMAIL_REQUIRED_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
   "slack",

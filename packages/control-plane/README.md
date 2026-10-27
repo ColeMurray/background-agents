@@ -79,8 +79,9 @@ known actor is admitted with or without one. This keeps an email-less enrollment
 a second account with the default role and none of their existing account's restrictions. Known
 limitation: new Slack users whose profile email the bot cannot read, typically external Slack
 Connect users, cannot start using the bot; Slack users it already knows keep working. Linear actors
-are not yet covered, because the Linear bot still sends claim-less requests before its first
-claim-bearing one.
+are not covered, because the Linear bot starts automation-created sessions as its installed app user
+and sends no email for it. The Linear bot enrolls each human author with their Linear profile before
+it acts on their follow-up or stop.
 
 ### Sessions
 
