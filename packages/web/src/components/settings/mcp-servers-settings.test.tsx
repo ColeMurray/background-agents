@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { McpServerMetadata } from "@open-inspect/shared/types/integrations";
+import {
+  MAX_MCP_SERVER_TOOLS,
+  MAX_MCP_TOOL_NAME_LENGTH,
+  type McpServerMetadata,
+} from "@open-inspect/shared/types/integrations";
 import { McpServersSettings } from "./mcp-servers-settings";
 
 expect.extend(matchers);
@@ -371,6 +375,52 @@ describe("McpServersSettings", () => {
           expect.objectContaining({ toolAllowlist: ["navigate", "click"] })
         )
       );
+    });
+
+    it("refuses a bulk selection over the tool limit and keeps the saved selection", async () => {
+      // A full catalog that includes "search", plus Server B's stored "retired_tool".
+      mocks.discoverMcpTools.mockResolvedValue(
+        Array.from({ length: MAX_MCP_SERVER_TOOLS }, (_, i) => ({
+          name: i === 0 ? "search" : `tool_${i}`,
+        }))
+      );
+      mocks.updateMcpServer.mockResolvedValue({ ...servers[1], revision: 8 });
+      const user = userEvent.setup();
+      render(<McpServersSettings />);
+
+      await user.click(screen.getByRole("button", { name: /Server B/ }));
+      await user.click(screen.getByRole("button", { name: "Load tools" }));
+      await user.click(await screen.findByRole("button", { name: "Select all" }));
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        `at most ${MAX_MCP_SERVER_TOOLS} selected tools`
+      );
+      await user.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() =>
+        expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+          "server-b",
+          expect.objectContaining({ toolAllowlist: ["search", "retired_tool"] })
+        )
+      );
+      // Renders a full catalog of checkboxes.
+    }, 15_000);
+
+    it("refuses a typed tool name longer than the limit and keeps it for editing", async () => {
+      const user = userEvent.setup();
+      render(<McpServersSettings />);
+
+      await user.click(screen.getByRole("button", { name: /Server C/ }));
+      await user.click(screen.getByRole("radio", { name: /Selected tools only/ }));
+      const input = screen.getByRole("textbox", { name: "Tool name" });
+      await user.click(input);
+      await user.paste("x".repeat(MAX_MCP_TOOL_NAME_LENGTH + 1));
+      await user.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        `longer than ${MAX_MCP_TOOL_NAME_LENGTH} characters`
+      );
+      expect(input).toHaveValue("x".repeat(MAX_MCP_TOOL_NAME_LENGTH + 1));
+      expect(screen.queryByRole("list", { name: "Selected tools" })).not.toBeInTheDocument();
     });
 
     it("restores every tool when switched back to All tools", async () => {

@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, type KeyboardEvent } from "react";
-import type { McpToolMetadata } from "@open-inspect/shared/types/integrations";
+import {
+  MAX_MCP_SERVER_TOOLS,
+  MAX_MCP_TOOL_NAME_LENGTH,
+  mcpToolAllowlistSchema,
+  type McpToolMetadata,
+} from "@open-inspect/shared/types/integrations";
 import { discoverMcpTools } from "@/hooks/use-mcp-servers";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,6 +31,15 @@ export function toolAccessToAllowlist(access: ToolAccess): string[] | null {
   return access.mode === "all" ? null : access.tools;
 }
 
+/** Why the API would refuse a selection, or null when it can be saved. */
+export function selectionProblem(tools: string[]): string | null {
+  if (mcpToolAllowlistSchema.safeParse(tools).success) return null;
+  if (tools.length > MAX_MCP_SERVER_TOOLS) {
+    return `A server can have at most ${MAX_MCP_SERVER_TOOLS} selected tools. Remove some before adding more.`;
+  }
+  return `Tool names cannot be blank or longer than ${MAX_MCP_TOOL_NAME_LENGTH} characters.`;
+}
+
 /** Whether and how a server's tools can be loaded from the server itself. */
 export type McpToolDiscovery =
   | { kind: "available"; serverId: string; revision: number }
@@ -43,7 +57,15 @@ interface McpToolAccessProps {
  * subset picked from the tools the server advertises or typed by name.
  */
 export function McpToolAccess({ value, onChange, radioPrefix, discovery }: McpToolAccessProps) {
-  const setTools = (tools: string[]) => onChange({ mode: "selected", tools });
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  // Every change goes through the shared allowlist contract, so the draft stays
+  // saveable; a refused change leaves the selection as it was.
+  const setTools = (tools: string[]) => {
+    const problem = selectionProblem(tools);
+    setSelectionError(problem);
+    if (!problem) onChange({ mode: "selected", tools });
+    return !problem;
+  };
   const removeTool = (name: string) => setTools(value.tools.filter((tool) => tool !== name));
 
   return (
@@ -89,6 +111,11 @@ export function McpToolAccess({ value, onChange, radioPrefix, discovery }: McpTo
             </>
           )}
           <ManualToolEntry tools={value.tools} onChange={setTools} />
+          {selectionError && (
+            <p role="alert" className="text-xs text-destructive">
+              {selectionError}
+            </p>
+          )}
           {value.tools.length === 0 && (
             <p className="text-xs text-warning">
               No tools selected. The agent cannot use any of this server&apos;s tools.
@@ -102,7 +129,8 @@ export function McpToolAccess({ value, onChange, radioPrefix, discovery }: McpTo
 
 interface ToolSelectionProps {
   tools: string[];
-  onChange: (tools: string[]) => void;
+  /** Returns whether the change was accepted. */
+  onChange: (tools: string[]) => boolean;
 }
 
 /** Loads the tools a saved server offers and lets them be picked from a list. */
@@ -273,8 +301,7 @@ function ManualToolEntry({ tools, onChange }: ToolSelectionProps) {
   function add() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (!tools.includes(trimmed)) onChange([...tools, trimmed]);
-    setName("");
+    if (tools.includes(trimmed) || onChange([...tools, trimmed])) setName("");
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {

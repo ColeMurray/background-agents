@@ -710,6 +710,8 @@ export interface McpServerConfig {
 export const DEFAULT_MCP_SERVER_ENABLED = true;
 /** Most tools an allowlist may name; discovery fails for a server that advertises more. */
 export const MAX_MCP_SERVER_TOOLS = 1000;
+/** Longest tool name an allowlist may hold. */
+export const MAX_MCP_TOOL_NAME_LENGTH = 256;
 /**
  * Allowlisted tool names, exactly as the server advertises them (a rewritten
  * name could select a different tool), non-blank, deduplicated and sorted.
@@ -718,7 +720,7 @@ export const mcpToolAllowlistSchema = z
   .array(
     z
       .string()
-      .max(256)
+      .max(MAX_MCP_TOOL_NAME_LENGTH)
       .refine((name) => name.trim() !== "", "Tool names cannot be blank")
   )
   .max(MAX_MCP_SERVER_TOOLS)
