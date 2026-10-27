@@ -68,6 +68,11 @@ export function McpToolAccess({ value, onChange, radioPrefix, discovery }: McpTo
 
       {value.mode === "selected" && (
         <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            This limits which tools agents are offered. Claude Agent still lists the other tools but
+            refuses to run them, and the server&apos;s saved headers and environment still reach the
+            sandbox.
+          </p>
           {discovery.kind === "available" ? (
             // Keyed by the saved server revision, so tools loaded before a later save
             // (which may have changed the connection) are discarded.

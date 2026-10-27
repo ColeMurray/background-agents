@@ -413,39 +413,45 @@ Servers, where **Load tools** asks the control plane to connect to a saved remot
 stored headers and list its tools (`POST /mcp-servers/:id/tools`, which requires
 `mcp_servers.manage`).
 
-Runtimes older than the manifest's `minimumMcpToolAllowlistGeneration` ignore the allowlist. A
-sandbox restored from a snapshot runs the snapshot's runtime, and a prebuilt image records the
-runtime it was built with, so the control plane withholds restricted servers from a launch on an
-older runtime. It logs `mcp.restricted_servers_withheld` and, on restore, adds a warning to the
-session. A launch from a provider's base image is assumed to run the control plane's own runtime
-version.
+Runtimes older than the manifest's `minimumMcpToolAllowlistGeneration` ignore the allowlist. Every
+harness's image floor is at or above that generation, so a fresh launch always runs a runtime that
+enforces it (`launch-context.test.ts` pins this). A sandbox restored from a snapshot runs the
+snapshot's runtime instead, so the control plane withholds restricted servers from a restore on an
+older or unparseable runtime, logs `mcp.restricted_servers_withheld`, and adds a warning to the
+session.
 
-The sandbox runtime applies the allowlist per harness (`mcp_tool_access.py`):
+The allowlist limits the tools a harness offers the model and will call; it is not a credential
+boundary. A remote server's headers and a local server's environment are still delivered to the
+sandbox, so an agent with a shell could call the server's other tools itself.
 
-- **OpenCode** names MCP tools `<server>_<tool>`. A restricted server gets a `<server>_*` deny rule
-  followed by an allow rule per selected tool, after the global allow. OpenCode leaves denied tools
-  out of the model request. Rules are ordered by name length so a restricted server whose name
-  extends another keeps its own rules, and OpenCode's built-in tools and custom tools
-  (Open-Inspect's and the repository's `.opencode/tool` files) that a deny pattern would match are
-  re-allowed. The rules must be in OpenCode's config before it loads those files, so the runtime
-  lists each file's exports with Bun's parser (`Bun.Transpiler.scan`, which reads a module without
-  running it) and names them as OpenCode does: `<file>` for the default export and `<file>_<export>`
-  for each named one. A CommonJS file, or one the parser rejects, falls back to its file name. A
-  tool re-exported with `export * from` cannot be listed and stays hidden if a deny pattern matches
-  it. If the scan fails, the runtime falls back to file names and logs
+The sandbox runtime applies the allowlist per harness. `mcp_tool_access.py` holds the shared model
+(parsing, name sanitization, and merging servers whose names collide); each harness renders it:
+
+- **OpenCode** (`opencode_tool_access.py`) names MCP tools `<server>_<tool>`. A restricted server
+  gets a `<server>_*` deny rule followed by an allow rule per selected tool, after the global allow.
+  OpenCode leaves denied tools out of the model request. Rules are ordered by name length so a
+  restricted server whose name extends another keeps its own rules, and OpenCode's built-in tools
+  and custom tools (Open-Inspect's and the repository's `.opencode/tool` files) that a deny pattern
+  would match are re-allowed. The rules must be in OpenCode's config before it loads those files, so
+  the runtime lists each file's exports with Bun's parser (`Bun.Transpiler.scan`, which reads a
+  module without running it) and names them as OpenCode does: `<file>` for the default export and
+  `<file>_<export>` for each named one. A CommonJS file, or one the parser rejects, falls back to
+  its file name. A tool re-exported with `export * from` cannot be listed and stays hidden if a deny
+  pattern matches it. If the scan fails, the runtime falls back to file names and logs
   `opencode.custom_tool_scan_failed`. An unrestricted server whose name extends a restricted one
   (`docs_extra` next to a restricted `docs`) gets no allow rule, because `docs_extra_*` would also
   match `docs`' own `extra_*` tools; the runtime logs `mcp.tool_allowlist_shadowed_servers`.
-- **Claude Agent** runs in `dontAsk` mode, so a restricted server's `mcp__<server>__*` approval is
-  replaced by one `mcp__<server>__<tool>` approval per selected tool and other calls are refused.
-  Claude Code removes a tool from context only when a deny rule names it, so the unselected tools
-  stay listed. Approvals add up across sources (the session's Claude settings, or the wildcard of a
-  server whose name overlaps, since Claude Code splits names on `__`), so a `PreToolUse` hook also
-  refuses every unselected `mcp__<server>__*` tool of a restricted server. An unrestricted server
-  named `docs__extra` next to a restricted `docs` therefore gets no tools.
-- **Codex** receives the allowlist as the server's native `enabled_tools`. Codex leaves the other
-  tools out of what the model sees, including the `ALL_TOOLS` list its `exec` tool exposes, and
-  refuses calls to them.
+- **Claude Agent** (`harness/claude_mcp_policy.py`) runs in `dontAsk` mode, so a restricted server's
+  `mcp__<server>__*` approval is replaced by one `mcp__<server>__<tool>` approval per selected tool
+  and other calls are refused. Claude Code removes a tool from context only when a deny rule names
+  it, so the unselected tools stay listed. Approvals add up across sources (the session's Claude
+  settings, or the wildcard of a server whose name overlaps, since Claude Code splits names on
+  `__`), so a `PreToolUse` hook also refuses every unselected `mcp__<server>__*` tool of a
+  restricted server. An unrestricted server named `docs__extra` next to a restricted `docs`
+  therefore gets no tools.
+- **Codex** (`harness/codex/env.py`) receives the allowlist as the server's native `enabled_tools`.
+  Codex leaves the other tools out of what the model sees, including the `ALL_TOOLS` list its `exec`
+  tool exposes, and refuses calls to them.
 - Servers whose names differ only in characters OpenCode and Claude Agent replace with `_`
   (`my.docs` and `my_docs`) produce the same tool names there. They are treated as one: restricted
   if any of them is, to the tools every restricted one allows.
