@@ -38,6 +38,7 @@ import {
 import { classifyGitTreeEntry } from "./git-tree";
 import { listBranchesWithCache } from "../branch-cache";
 import {
+  type GitHubAppConfig,
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
   getInstallationTokenCacheKey,
@@ -732,28 +733,32 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   /**
    * List branches for a repository.
    */
-  listBranches(
+  async listBranches(
     config: GetRepositoryConfig,
     context: ListBranchesContext
   ): Promise<ListBranchesResult> {
-    return listBranchesWithCache(
-      config,
-      () => this.fetchBranches(config),
-      context,
-      this.branchesCache
-    );
-  }
-
-  private async fetchBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
-    if (!this.appConfig) {
+    const appConfig = this.appConfig;
+    if (!appConfig) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list branches",
         "permanent"
       );
     }
 
+    return listBranchesWithCache(
+      config,
+      () => this.fetchBranches(appConfig, config),
+      context,
+      this.branchesCache
+    );
+  }
+
+  private async fetchBranches(
+    appConfig: GitHubAppConfig,
+    config: GetRepositoryConfig
+  ): Promise<{ name: string }[]> {
     try {
-      return await listRepositoryBranches(this.appConfig, config.owner, config.name, {
+      return await listRepositoryBranches(appConfig, config.owner, config.name, {
         cacheStore: this.cacheStore,
         userAgent: this.userAgent,
       });
