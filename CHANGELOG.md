@@ -7,8 +7,9 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 **Fewer memory proposals.** Agents no longer weigh a memory at the end of every task; saving nothing
 is now the expected outcome. They save when you ask them to remember something, correct them, state
 a standing preference, or confirm a non-obvious approach, or when they verify a hard-won fact the
-repository doesn't record. Work summaries, fixes already in the code, sandbox quirks, and guesses
-are skipped. See [Persistent session memory](docs/MEMORY.md).
+repository doesn't record and that would change what the next session does first. Work summaries,
+fixes already in the code, sandbox quirks, and guesses are skipped. See
+[Persistent session memory](docs/MEMORY.md).
 
 ## October 25, 2026
 
