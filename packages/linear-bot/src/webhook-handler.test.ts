@@ -368,6 +368,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return eventsResponse;
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
@@ -615,37 +616,77 @@ describe("handleAgentSessionEvent environment targets", () => {
     ).toContain(message);
   });
 
-  it("posts a membership error without linking or prompting an app-user fallback session", async () => {
-    const { kv, store } = createFakeKV({
+  it("attests the installed app user's profile for an automation-created delegation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createLinearFetchMock({
+        identity: () => linearIdentityResponse(),
+        graphql: ({ body }) => {
+          if (String(body.query).includes("FetchUser")) {
+            expect(body.variables).toEqual({ id: "app-user-1" });
+            return Response.json({
+              data: { user: { id: "app-user-1", name: "Installed app", email: "app@corp.test" } },
+            });
+          }
+          return Response.json({ data: {} });
+        },
+      })
+    );
+    const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "config:team-repos": JSON.stringify({ "team-1": [{ owner: "acme", name: "backend" }] }),
     });
     const env = makeLinearBotEnv(kv);
-    const fetchMock = stubControlPlane(env, {
-      bindingResponse: Response.json({ teamId: "team_internal", kind: "primary" }),
-      createResponse: Response.json({ code: "not_member" }, { status: 403 }),
-    });
+    const fetchMock = stubControlPlane(env);
     const webhook = makeWebhook();
     webhook.agentSession.creatorId = null;
 
-    await handleAgentSessionEvent(webhook, env, "trace-app-not-member");
+    await handleAgentSessionEvent(webhook, env, "trace-app-profile");
 
-    expect(createSessionBody(fetchMock)).toMatchObject({ teamId: "team_internal" });
-    const createCall = fetchMock.mock.calls.find(
-      ([input]) => String(input) === "https://internal/sessions"
-    );
-    expect(new Headers(createCall?.[1]?.headers).get("X-OpenInspect-Actor")).toBe(
-      "linear:app-user-1"
-    );
-    expect(promptBody(fetchMock)).toBeNull();
-    expect(store.has("issue:issue-1")).toBe(false);
-    expect(
-      vi
-        .mocked(fetch)
-        .mock.calls.map(([, init]) => String(init?.body))
-        .join("\n")
-    ).toContain("not a member");
+    expect(createSessionBody(fetchMock)).toMatchObject({
+      actorDisplayName: "Installed app",
+      actorEmail: "app@corp.test",
+    });
   });
+
+  it.each([
+    ["not_member", "not a member"],
+    ["actor_admission_denied", "admission allowlists"],
+    ["actor_email_required", "email is unavailable"],
+  ])(
+    "posts %s without linking or prompting an app-user fallback session",
+    async (code, message) => {
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "config:team-repos": JSON.stringify({ "team-1": [{ owner: "acme", name: "backend" }] }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const fetchMock = stubControlPlane(env, {
+        bindingResponse: Response.json({ teamId: "team_internal", kind: "primary" }),
+        createResponse: Response.json({ code }, { status: 403 }),
+      });
+      const webhook = makeWebhook();
+      webhook.agentSession.creatorId = null;
+
+      await handleAgentSessionEvent(webhook, env, "trace-app-not-member");
+
+      expect(createSessionBody(fetchMock)).toMatchObject({ teamId: "team_internal" });
+      const createCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === "https://internal/sessions"
+      );
+      expect(new Headers(createCall?.[1]?.headers).get("X-OpenInspect-Actor")).toBe(
+        "linear:app-user-1"
+      );
+      expect(promptBody(fetchMock)).toBeNull();
+      expect(store.has("issue:issue-1")).toBe(false);
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.map(([, init]) => String(init?.body))
+          .join("\n")
+      ).toContain(message);
+    }
+  );
 
   it("names the refused repository when the target team lacks an environment member grant", async () => {
     const { kv, store } = createFakeKV({
@@ -1001,6 +1042,52 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:replier-user-2");
   });
 
+  it.each(["prompted", "stopped"])(
+    "stops %s after enrollment is denied and retains the session mapping",
+    async (action) => {
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      controlPlaneFetch.mockResolvedValue(
+        Response.json({ code: "actor_admission_denied" }, { status: 403 })
+      );
+      const webhook = makeWebhook();
+      webhook.action = action;
+      webhook.agentActivity = {
+        userId: "new-collaborator",
+        content: { type: "prompt", body: "Please continue" },
+      };
+
+      await handleAgentSessionEvent(webhook, env, "trace-enrollment-denied");
+
+      expect(controlPlaneFetch.mock.calls.map(([url]) => String(url))).toEqual([
+        "https://internal/actors/me",
+      ]);
+      const enrollmentInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit;
+      expect(new Headers(enrollmentInit.headers).get("X-OpenInspect-Actor")).toBe(
+        "linear:new-collaborator"
+      );
+      expect(store.has("issue:issue-1")).toBe(true);
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.map(([, init]) => String(init?.body))
+          .join("\n")
+      ).toContain("admission allowlists");
+    }
+  );
+
   it("attributes follow-up prompts to the human activity author", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
@@ -1019,6 +1106,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
@@ -1163,12 +1251,12 @@ describe("handleAgentSessionEvent environment targets", () => {
 
     await handleAgentSessionEvent(webhook, env, "trace-stop");
 
-    expect(controlPlaneFetch).toHaveBeenCalledOnce();
+    expect(controlPlaneFetch).toHaveBeenCalledTimes(2);
     expect(controlPlaneFetch).toHaveBeenCalledWith(
       "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1",
       expect.objectContaining({ method: "POST" })
     );
-    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const stopInit = controlPlaneFetch.mock.calls[1]?.[1] as RequestInit | undefined;
     expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe(
       "linear:follow-up-human-user"
     );
@@ -1233,7 +1321,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       `https://internal/sessions/session-xyz/stop${query}`,
       expect.objectContaining({ method: "POST" })
     );
-    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const stopInit = controlPlaneFetch.mock.calls[1]?.[1] as RequestInit | undefined;
     expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe("linear:human-user-1");
     expect(store.has("issue:issue-1")).toBe(false);
   });
@@ -1255,6 +1343,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input).split("?")[0];
+      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url === "https://internal/environments") {
         return Response.json({ environments: [environment], total: 1 });
       }

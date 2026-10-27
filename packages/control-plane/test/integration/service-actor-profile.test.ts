@@ -89,14 +89,15 @@ describe("known service actor profile claims", () => {
     expect(read.status).toBe(200);
   });
 
-  it("still enrolls a new Linear actor on a claim-less first contact", async () => {
+  it("refuses a new Linear actor on a claim-less first contact", async () => {
     const firstContact = await serviceFetch(SESSIONS_URL, {
       service: "linear-bot",
       actor: "linear:U-NAMELESS-FIRST",
     });
 
-    expect(firstContact.status).toBe(200);
-    await expect(users.getIdentity("linear", "U-NAMELESS-FIRST")).resolves.not.toBeNull();
+    expect(firstContact.status).toBe(403);
+    await expect(firstContact.json()).resolves.toMatchObject({ code: "actor_email_required" });
+    await expect(users.getIdentity("linear", "U-NAMELESS-FIRST")).resolves.toBeNull();
   });
 
   it("completes a legacy nameless Slack actor's profile", async () => {

@@ -98,7 +98,7 @@ export async function requirePublicationAccess(
 }
 
 /** Outcome of `enrollActor`. Anything but `enrolled` must stop the message. */
-export type EnrollActorResult = "enrolled" | "email_required" | "unavailable";
+export type EnrollActorResult = "enrolled" | "email_required" | "admission_denied" | "unavailable";
 
 /**
  * Present the actor's Slack profile before any other request that carries the
@@ -129,7 +129,12 @@ export async function enrollActor(
     );
     if (response.ok) return "enrolled";
     const { code } = await readErrorBody(response);
-    const outcome = code === "actor_email_required" ? "email_required" : "unavailable";
+    const outcome =
+      code === "actor_email_required"
+        ? "email_required"
+        : code === "actor_admission_denied"
+          ? "admission_denied"
+          : "unavailable";
     log.warn("control_plane.enroll_actor", {
       ...base,
       outcome,

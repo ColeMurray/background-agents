@@ -49,11 +49,12 @@ export function isEmailAttestingProvider(provider: ProviderIdentity["provider"])
  *
  * Known limitation: a Slack user whose profile email the bot cannot read,
  * typically an external Slack Connect user, cannot be enrolled and so cannot
- * use the bot. Linear is not listed because its bot still sends claim-less
- * requests before its first claim-bearing one.
+ * use the bot. Linear's catalog reads are actorless; its session-creation
+ * request carries the enrolling actor's email.
  */
 const ENROLLMENT_EMAIL_REQUIRED_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
   "slack",
+  "linear",
 ]);
 
 export function requiresEnrollmentEmail(provider: ProviderIdentity["provider"]): boolean {
@@ -173,7 +174,11 @@ const collaboratorEligibilityRowSchema = z.object({
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
-  constructor(private readonly db: SqlDatabase) {}
+  constructor(
+    private readonly db: SqlDatabase,
+    /** Checked only when enrollment needs a new canonical user, before any inserts. */
+    private readonly requireEnrollmentAdmission?: () => void
+  ) {}
 
   /** Lists active users; a team ID restricts candidates to that team's members. */
   async listCollaboratorCandidates({
@@ -512,6 +517,7 @@ export class UserStore {
     // Step 4: Brand new user — batch user + identity creation so a UNIQUE
     // failure on the identity INSERT rolls back the user INSERT, preventing
     // orphaned user rows under concurrent requests.
+    this.requireEnrollmentAdmission?.();
     const userId = generateId();
     const identityId = generateId();
     const now = Date.now();

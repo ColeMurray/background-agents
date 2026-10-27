@@ -164,6 +164,8 @@ const ENROLLMENT_REFUSAL_MESSAGES: Record<Exclude<EnrollActorResult, "enrolled">
   // users.info lookup all look the same here, so the reply names none of them.
   email_required:
     "I couldn't read the email on your Slack profile, so I can't link you to an Open-Inspect account. Please try again, or ask an admin to check that the bot can read Slack profile emails.",
+  admission_denied:
+    "Your account is not authorized to join this Open-Inspect workspace. Sign in on the web with the email on your Slack profile, or ask an administrator to check the admission allowlists.",
   unavailable: "Sorry, I couldn't verify your account right now. Please try again in a moment.",
 };
 
