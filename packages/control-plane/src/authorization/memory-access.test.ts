@@ -76,7 +76,7 @@ describe("SessionMemoryAccessPolicy", () => {
     });
   });
 
-  it("evaluates workspace sessions as their owner, loading authorization once", async () => {
+  it("evaluates workspace sessions as their owner", async () => {
     const { policy, deps } = sessionPolicy();
     expect(await policy.check(workspace, [api])).toEqual(GRANTED);
     deps.repositoryGrants.ungrantedRepository.mockResolvedValueOnce(ungranted);
@@ -85,7 +85,6 @@ describe("SessionMemoryAccessPolicy", () => {
       reason: "repository_ungranted",
       partition: api,
     });
-    expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
     expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(owner, [api]);
   });
 
@@ -108,9 +107,17 @@ describe("SessionMemoryAccessPolicy", () => {
   it("admits a personal store while its owner may manage personal memory", async () => {
     const { policy, deps } = sessionPolicy();
     expect(await policy.check(team, [api, dev, personal])).toEqual(GRANTED);
-    expect(await policy.check(workspace, [personal])).toEqual(GRANTED);
-    expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
+    expect(await policy.check(workspace, [personal, personal])).toEqual(GRANTED);
+    // Once per check (the workspace owner and personal owner are the same user), never reused.
+    expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(2);
     expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledWith(USER);
+  });
+
+  it("observes a revocation between checks by the same policy", async () => {
+    const { policy, deps } = sessionPolicy();
+    expect(await policy.check(team, [personal])).toEqual(GRANTED);
+    deps.authorization.getEffectiveAuthorization.mockResolvedValueOnce(authorization());
+    expect(await policy.check(team, [personal])).toMatchObject({ reason: "personal_unavailable" });
   });
 
   it.each([

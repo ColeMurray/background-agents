@@ -361,6 +361,18 @@ export interface SessionMemoryAccessPolicyDeps {
 
 const SESSION_ACCESS_GRANTED: SessionMemoryAccessDecision = { kind: "granted" };
 
+/** A user's current authorization, or null when they have none. */
+type AuthorizationLoader = (userId: string) => Promise<EffectiveAuthorization | null>;
+
+/** The same permission that gates the owner's personal catalog in Settings. */
+function mayUsePersonalMemory(authorization: EffectiveAuthorization | null): boolean {
+  return (
+    authorization !== null &&
+    authorization.suspendedAt === null &&
+    authorization.permissions.includes("memories.manage_own")
+  );
+}
+
 /**
  * Whether a session's principal may read memory partitions right now. A pinned manifest or an
  * issued sandbox token never freezes access: team activity, repository grants, owner suspension,
@@ -369,25 +381,26 @@ const SESSION_ACCESS_GRANTED: SessionMemoryAccessDecision = { kind: "granted" };
  * only decides whether that owner may still use it, so agents never write memories the owner
  * cannot review in Settings.
  *
- * Instances are request-scoped; each user's authorization is loaded once per instance.
+ * Each check loads a user's authorization at most once, but never reuses it across checks: callers
+ * recheck around reads (search does so before and after its query), and every recheck must
+ * observe revocations made in between.
  */
 export class SessionMemoryAccessPolicy {
-  private readonly ownerAuthorizations = new Map<string, Promise<EffectiveAuthorization | null>>();
-
   constructor(private readonly deps: SessionMemoryAccessPolicyDeps) {}
 
   async check(
     principal: SessionPrincipal,
     partitions: readonly MemoryPartition[]
   ): Promise<SessionMemoryAccessDecision> {
+    const authorizationFor = this.authorizationLoader();
     const repositories = partitions.filter((partition) => partition.type === "repository");
     const repositoryDecision = principal.ownerTeamId
       ? await this.teamRepositoryAccess(principal.ownerTeamId, repositories)
-      : await this.ownerRepositoryAccess(principal.userId, repositories);
+      : await this.ownerRepositoryAccess(principal.userId, repositories, authorizationFor);
     if (repositoryDecision.kind === "denied") return repositoryDecision;
     for (const partition of partitions) {
       if (partition.type === "personal") {
-        if (!(await this.mayUsePersonalMemory(partition.userId)))
+        if (!mayUsePersonalMemory(await authorizationFor(partition.userId)))
           return { kind: "denied", reason: "personal_unavailable", partition };
         continue;
       }
@@ -419,9 +432,10 @@ export class SessionMemoryAccessPolicy {
   /** Workspace sessions read what their active owner's workspace grants allow. */
   private async ownerRepositoryAccess(
     userId: string | null,
-    repositories: readonly RepositoryPartition[]
+    repositories: readonly RepositoryPartition[],
+    authorizationFor: AuthorizationLoader
   ): Promise<SessionMemoryAccessDecision> {
-    const authorization = userId ? await this.ownerAuthorization(userId) : null;
+    const authorization = userId ? await authorizationFor(userId) : null;
     if (!authorization || authorization.suspendedAt !== null)
       return { kind: "denied", reason: "owner_unavailable" };
     const ungranted = await this.deps.repositoryGrants.ungrantedRepository(
@@ -433,25 +447,19 @@ export class SessionMemoryAccessPolicy {
       : SESSION_ACCESS_GRANTED;
   }
 
-  /** The same permission that gates the owner's personal catalog in Settings. */
-  private async mayUsePersonalMemory(userId: string): Promise<boolean> {
-    const authorization = await this.ownerAuthorization(userId);
-    return (
-      authorization !== null &&
-      authorization.suspendedAt === null &&
-      authorization.permissions.includes("memories.manage_own")
-    );
-  }
-
-  private ownerAuthorization(userId: string): Promise<EffectiveAuthorization | null> {
-    let loaded = this.ownerAuthorizations.get(userId);
-    if (!loaded) {
-      loaded = this.deps.authorization.getEffectiveAuthorization(userId).catch((cause) => {
-        if (cause instanceof AuthorizationError) return null;
-        throw cause;
-      });
-      this.ownerAuthorizations.set(userId, loaded);
-    }
-    return loaded;
+  /** Load each user's authorization at most once within one check. */
+  private authorizationLoader(): AuthorizationLoader {
+    const loaded = new Map<string, Promise<EffectiveAuthorization | null>>();
+    return (userId) => {
+      let authorization = loaded.get(userId);
+      if (!authorization) {
+        authorization = this.deps.authorization.getEffectiveAuthorization(userId).catch((cause) => {
+          if (cause instanceof AuthorizationError) return null;
+          throw cause;
+        });
+        loaded.set(userId, authorization);
+      }
+      return authorization;
+    };
   }
 }

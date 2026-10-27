@@ -298,6 +298,27 @@ describe("session memory discovery", () => {
     }
   );
 
+  it("denies personal results when memories.manage_own is revoked during search", async () => {
+    await seedSearchFacts(env.DB, OWNER, [
+      { id: "mine", title: "needle", description: "PRIVATE_PERSONAL_SENTINEL" },
+    ]);
+    const call = await sandbox("revoked-personal-during");
+    const original = LexicalFactIndex.prototype.search;
+    vi.spyOn(LexicalFactIndex.prototype, "search").mockImplementationOnce(async function (
+      this: LexicalFactIndex,
+      ...args
+    ) {
+      const result = await original.apply(this, args);
+      await env.DB.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?")
+        .bind(`role_custom_${OWNER}`, "memories.manage_own")
+        .run();
+      return result;
+    });
+    const response = await call({ query: "needle", scopeType: "personal" });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("PRIVATE_PERSONAL_SENTINEL");
+  });
+
   it("rejects malformed searches and does not accept identity overrides", async () => {
     const call = await sandbox("invalid");
     for (const body of [
