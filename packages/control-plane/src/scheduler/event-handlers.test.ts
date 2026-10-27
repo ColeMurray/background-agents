@@ -13,6 +13,12 @@ import { WebhookContinuationPolicyFactory } from "./webhook-continuation-policy"
 import type { ContinuationPolicy, SteeringActor } from "./session-continuity";
 import { SessionFollowUpRefusedError } from "./contracts";
 import { SlackEventHandler, type SlackEventHandlerDeps } from "./slack-event-handler";
+import {
+  SLACK_BOT_TRIGGER_LIMIT,
+  SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON,
+  SLACK_BOT_TRIGGER_WINDOW_MS,
+  SlackBotTriggerPolicy,
+} from "./slack-bot-trigger-policy";
 import { WebhookEventHandler, type WebhookEventHandlerDeps } from "./webhook-event-handler";
 
 const automation: AutomationRow = {
@@ -76,6 +82,9 @@ function slackHarness() {
           await input.instructionsOverrideFactory?.();
           return { outcome: "started", invocationId: input.automation.id, runs: [], launched: 1 };
         }),
+      skipEvent: vi
+        .fn<SlackEventHandlerDeps["invocations"]["skipEvent"]>()
+        .mockResolvedValue({ outcome: "skipped", invocationId: "inv-skip" }),
     },
     continuity: {
       continueSession: vi
@@ -86,13 +95,37 @@ function slackHarness() {
     users: { getIdentity: vi.fn().mockResolvedValue({ userId: "slack-user" }) },
     attribution: { resolve: vi.fn().mockResolvedValue(null) },
     scmProvider: "github" as const,
+    botFirings: { listEventTriggerMetadataSince: vi.fn().mockResolvedValue([]) },
     clock: { now: () => 100 },
     log,
   };
   return {
     ...deps,
     policies: new SlackContinuationPolicyFactory(deps),
+    bots: new SlackBotTriggerPolicy({ store: deps.botFirings }),
   } satisfies SlackEventHandlerDeps;
+}
+
+const botEvent: SlackAutomationEvent = {
+  ...slackEvent,
+  actorUserId: "UALERTS",
+  botId: "BALERTS",
+  text: "Cost anomaly",
+};
+
+function botMetadata(count: number): string[] {
+  return Array.from({ length: count }, (_, i) =>
+    JSON.stringify({ channel: "C1", messageTs: `bot-${i}`, botId: "BALERTS" })
+  );
+}
+
+function optedIn(row: AutomationRow): AutomationRow {
+  return {
+    ...row,
+    trigger_type: "slack_event",
+    event_type: "message.posted",
+    trigger_config: JSON.stringify({ conditions: [], slack: { includeBotMessages: true } }),
+  };
 }
 
 describe("Slack event ownership", () => {
@@ -161,6 +194,100 @@ describe("Slack event ownership", () => {
     await expect(handler.handle(slackEvent)).resolves.toMatchObject({ skipped: 2 });
     expect(deps.slack.notifySkip).toHaveBeenCalledExactlyOnceWith(slackEvent);
     expect(deps.slack.contextWithThread).not.toHaveBeenCalled();
+  });
+});
+
+describe("Slack bot messages", () => {
+  it("reaches only automations that opted in, ahead of session continuity", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([
+      { ...automation, trigger_type: "slack_event", event_type: "message.posted" },
+      optedIn({ ...automation, id: "auto-2" }),
+    ]);
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(botEvent)).resolves.toMatchObject({ triggered: 1, skipped: 0 });
+
+    expect(deps.continuity.continueSession).toHaveBeenCalledOnce();
+    expect(deps.continuity.continueSession.mock.calls[0]![0].id).toBe("auto-2");
+    expect(deps.invocations.start).toHaveBeenCalledOnce();
+    expect(JSON.parse(deps.invocations.start.mock.calls[0]![0].triggerMetadata!)).toEqual({
+      channel: "C1",
+      messageTs: "2",
+      botId: "BALERTS",
+    });
+  });
+
+  it("starts below the hourly limit, counting only bot-started firings", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
+    deps.botFirings.listEventTriggerMetadataSince.mockResolvedValue([
+      ...botMetadata(SLACK_BOT_TRIGGER_LIMIT - 1),
+      JSON.stringify({ channel: "C1", messageTs: "person" }),
+    ]);
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(botEvent)).resolves.toMatchObject({ triggered: 1 });
+    expect(deps.invocations.skipEvent).not.toHaveBeenCalled();
+  });
+
+  it("records a skip instead of starting once bot messages reached the hourly limit", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
+    deps.botFirings.listEventTriggerMetadataSince.mockResolvedValue([
+      ...botMetadata(SLACK_BOT_TRIGGER_LIMIT),
+      // Firings people started do not count toward the limit.
+      JSON.stringify({ channel: "C1", messageTs: "person" }),
+    ]);
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(botEvent)).resolves.toEqual({
+      triggered: 0,
+      skipped: 1,
+      steered: 0,
+      invocationIds: ["inv-skip"],
+    });
+
+    expect(deps.botFirings.listEventTriggerMetadataSince).toHaveBeenCalledExactlyOnceWith(
+      "auto-1",
+      100 - SLACK_BOT_TRIGGER_WINDOW_MS
+    );
+    expect(deps.invocations.skipEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ triggerKey: botEvent.triggerKey }),
+      SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON
+    );
+    expect(deps.invocations.start).not.toHaveBeenCalled();
+  });
+
+  it("never counts or limits a person's messages", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
+    deps.botFirings.listEventTriggerMetadataSince.mockResolvedValue(
+      botMetadata(SLACK_BOT_TRIGGER_LIMIT)
+    );
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(slackEvent)).resolves.toMatchObject({ triggered: 1 });
+    expect(deps.botFirings.listEventTriggerMetadataSince).not.toHaveBeenCalled();
+  });
+
+  it("does not send the already-active notice to a bot", async () => {
+    const deps = slackHarness();
+    deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
+    deps.invocations.start.mockResolvedValue({ outcome: "skipped", invocationId: null });
+    const handler = new SlackEventHandler(deps);
+
+    await expect(handler.handle(botEvent)).resolves.toMatchObject({ skipped: 1 });
+    expect(deps.slack.notifySkip).not.toHaveBeenCalled();
+  });
+
+  it("refuses a bot as a steering actor without looking up an identity", async () => {
+    const deps = slackHarness();
+    const policy = deps.policies.create(botEvent);
+
+    await expect(policy.resolveActor()).resolves.toBeNull();
+    expect(deps.users.getIdentity).not.toHaveBeenCalled();
+    expect(policy.logFields).toMatchObject({ slack_bot_id: "BALERTS" });
   });
 });
 

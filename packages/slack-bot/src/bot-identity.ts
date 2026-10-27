@@ -2,8 +2,9 @@
  * Bot identity resolution.
  *
  * Channel-trigger processing needs the bot's own Slack user id to strip and
- * suppress its own mentions. We resolve it once via `auth.test` and cache it —
- * the id is effectively static for the lifetime of the Slack app.
+ * suppress its own mentions, and its bot id to recognise its own posts. One
+ * `auth.test` call returns both; we cache them, since they are effectively
+ * static for the lifetime of the Slack app.
  */
 
 import { authTest } from "@open-inspect/shared/slack";
@@ -14,41 +15,51 @@ import { createLogger } from "./logger";
 const log = createLogger("bot-identity");
 
 const BOT_USER_ID_KV_KEY = "slack:bot-user-id";
+const BOT_ID_KV_KEY = "slack:bot-id";
 
 /** Bot identity is effectively static; cache it for an hour in-process. */
-const BOT_USER_ID_TTL_MS = 60 * 60 * 1000;
+const BOT_IDENTITY_TTL_MS = 60 * 60 * 1000;
 
-let botUserIdCache: {
-  id: string;
-  timestamp: number;
-} | null = null;
+/** The bot's own Slack ids. */
+export interface BotIdentity {
+  userId: string;
+  /** Null when Slack did not report one; callers then drop every bot message. */
+  botId: string | null;
+}
+
+let identityCache: { identity: BotIdentity; timestamp: number } | null = null;
 
 /**
- * Resolve the bot's own Slack user id via `auth.test`, cached in-process and in
- * KV as last-known-good.
+ * Resolve the bot's own Slack ids via `auth.test`, cached in-process and in KV
+ * as last-known-good.
  *
- * Returns `null` when the id cannot be determined (auth.test failed and no KV
- * copy exists). The caller fails **closed** and skips channel-trigger
+ * Returns `null` when the user id cannot be determined (auth.test failed and no
+ * KV copy exists). The caller fails **closed** and skips channel-trigger
  * processing in that case — mention suppression and self-mention stripping both
  * require a known id, so it is never safe to proceed without one.
  */
-export async function getBotUserId(env: Env, traceId?: string): Promise<string | null> {
-  if (botUserIdCache && Date.now() - botUserIdCache.timestamp < BOT_USER_ID_TTL_MS) {
-    return botUserIdCache.id;
+export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIdentity | null> {
+  if (identityCache && Date.now() - identityCache.timestamp < BOT_IDENTITY_TTL_MS) {
+    return identityCache.identity;
   }
 
+  const kv = createKvCacheStore(env.SLACK_KV);
   const result = await authTest(env.SLACK_BOT_TOKEN);
   if (result.ok && result.user_id) {
-    botUserIdCache = { id: result.user_id, timestamp: Date.now() };
+    const identity = { userId: result.user_id, botId: result.bot_id ?? null };
+    identityCache = { identity, timestamp: Date.now() };
     try {
-      await createKvCacheStore(env.SLACK_KV).put(BOT_USER_ID_KV_KEY, result.user_id);
+      await Promise.all([
+        kv.put(BOT_USER_ID_KV_KEY, identity.userId),
+        identity.botId ? kv.put(BOT_ID_KV_KEY, identity.botId) : undefined,
+      ]);
     } catch (e) {
       log.warn("kv.put", {
-        key_prefix: "bot_user_id",
+        key_prefix: "bot_identity",
         error: e instanceof Error ? e : new Error(String(e)),
       });
     }
-    return result.user_id;
+    return identity;
   }
 
   log.warn("slack.auth_test", {
@@ -57,17 +68,18 @@ export async function getBotUserId(env: Env, traceId?: string): Promise<string |
     error: result.ok ? "missing_user_id" : result.error,
   });
 
-  // Last-known-good from KV — the id never really changes, so a stale copy is
+  // Last-known-good from KV — the ids never really change, so a stale copy is
   // safe to serve through a transient auth.test failure.
   try {
-    const cached = await createKvCacheStore(env.SLACK_KV).get(BOT_USER_ID_KV_KEY);
-    if (cached) {
-      botUserIdCache = { id: cached, timestamp: Date.now() };
-      return cached;
+    const [userId, botId] = await Promise.all([kv.get(BOT_USER_ID_KV_KEY), kv.get(BOT_ID_KV_KEY)]);
+    if (userId) {
+      const identity = { userId, botId: botId ?? null };
+      identityCache = { identity, timestamp: Date.now() };
+      return identity;
     }
   } catch (e) {
     log.warn("kv.get", {
-      key_prefix: "bot_user_id",
+      key_prefix: "bot_identity",
       error: e instanceof Error ? e : new Error(String(e)),
     });
   }
@@ -75,7 +87,7 @@ export async function getBotUserId(env: Env, traceId?: string): Promise<string |
   return null;
 }
 
-/** Clear the in-memory bot-id cache (for tests and forced refresh). */
-export function clearBotUserIdCache(): void {
-  botUserIdCache = null;
+/** Clear the in-memory bot identity cache (for tests and forced refresh). */
+export function clearBotIdentityCache(): void {
+  identityCache = null;
 }

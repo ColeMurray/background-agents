@@ -344,6 +344,33 @@ A message runs the automation only when **every** condition passes. The bot-ment
 stripped before matching, and messages that `@mention` the bot are handled by the interactive
 `@mention` flow instead — they never double-fire as triggers.
 
+### Bot messages
+
+By default, messages posted by other bots and integrations (alerting tools, CI notifications,
+incoming webhooks) do not trigger a Slack automation. Turn on **Trigger on bot messages** on the
+automation to let them start runs; the agent is told the message came from a bot. To accept only
+some bots, also add a **Slack User** include condition with their bot IDs (`B…`). A Slack User
+condition matches a message's author by user ID or, for a bot, by bot ID, so it works for app bots
+and for legacy integrations that post without a user. The Open-Inspect bot's own messages never
+trigger an automation.
+
+Only a bot message's `text` is read. An integration that posts its content only in attachments or
+blocks, with empty `text`, triggers nothing, and one that sets `text` to a short fallback is matched
+on that fallback alone.
+
+A bot can start a run but never continues one: continuing a thread's session needs a Slack user
+linked to an Open-Inspect account, so a bot's reply in a thread that already has a session is
+dropped.
+
+Bot messages can start at most 10 runs of one automation per hour; later bot messages in that hour
+are skipped and appear in the automation's run history. This stops a loop in which a run makes
+another bot post in the watched channel, which starts the automation again. The limit can be
+overshot by a burst of bot messages that arrive at the same moment, but not by such a loop. Messages
+from people are not limited.
+
+Bot output is untrusted input that can start autonomous work, so allow it only in channels where you
+trust every bot that posts.
+
 ### Run feedback
 
 A triggering message is marked with the 👀 reaction while its run is in flight. When the run

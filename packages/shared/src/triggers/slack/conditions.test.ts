@@ -10,8 +10,12 @@ import { conditionRegistry } from "../registry";
 import { buildMockEvent } from "../testing";
 import { SLACK_TEXT_MAX_LENGTH } from "./normalizer";
 
-const slackEvent = (overrides: { text?: string; channelId?: string; actorUserId?: string }) =>
-  buildMockEvent("slack", overrides);
+const slackEvent = (overrides: {
+  text?: string;
+  channelId?: string;
+  actorUserId?: string;
+  botId?: string;
+}) => buildMockEvent("slack", overrides);
 
 const match = (condition: TriggerCondition, event = slackEvent({ text: "please deploy now" })) =>
   matchesConditions([condition], event, conditionRegistry);
@@ -160,6 +164,33 @@ describe("slack_actor condition", () => {
         slackEvent({ actorUserId: "U1" })
       )
     ).toBe(true);
+  });
+
+  it("include matches a bot by its bot id", () => {
+    expect(
+      match(
+        { type: "slack_actor", operator: "include", value: ["B1"] },
+        slackEvent({ actorUserId: "U9", botId: "B1" })
+      )
+    ).toBe(true);
+  });
+
+  it("include matches a legacy integration that has only a bot id", () => {
+    expect(
+      match(
+        { type: "slack_actor", operator: "include", value: ["B1"] },
+        slackEvent({ actorUserId: undefined, botId: "B1" })
+      )
+    ).toBe(true);
+  });
+
+  it("exclude rejects a bot listed by its bot id", () => {
+    expect(
+      match(
+        { type: "slack_actor", operator: "exclude", value: ["B1"] },
+        slackEvent({ actorUserId: "U9", botId: "B1" })
+      )
+    ).toBe(false);
   });
 });
 

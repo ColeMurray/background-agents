@@ -13,6 +13,7 @@ import {
 import { MAX_AUTOMATION_RETRIES } from "@open-inspect/shared/types/automations";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -371,6 +372,34 @@ export function AutomationTriggerConfigurationFields({
             <p className="mt-1 text-xs text-destructive">{slackChannelError}</p>
           )}
         </fieldset>
+      )}
+
+      {value.type === "slack_event" && (
+        <div>
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-foreground">
+                Trigger on bot messages
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Let messages posted by other bots and integrations start runs. To accept only some
+                bots, add a Slack User condition with their bot IDs. This app&apos;s own messages
+                never trigger.
+              </span>
+            </span>
+            <Switch
+              aria-label="Trigger on bot messages"
+              checked={value.includeBotMessages}
+              onCheckedChange={(checked) => update({ includeBotMessages: checked })}
+            />
+          </label>
+          {value.includeBotMessages && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              Bot messages are untrusted input and can start autonomous work. Scope this automation
+              to channels where you trust every bot that posts.
+            </p>
+          )}
+        </div>
       )}
     </>
   );

@@ -1727,6 +1727,19 @@ export class AutomationStore {
     return row?.id ?? null;
   }
 
+  /** Trigger metadata of an automation's unskipped event firings created at or after `since`. */
+  async listEventTriggerMetadataSince(automationId: string, since: number): Promise<string[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT trigger_metadata FROM automation_invocations
+         WHERE automation_id = ? AND source = 'event' AND skip_reason IS NULL
+           AND trigger_metadata IS NOT NULL AND created_at >= ?`
+      )
+      .bind(automationId, since)
+      .all<{ trigger_metadata: string }>();
+    return results.map((row) => row.trigger_metadata);
+  }
+
   /** Claim an explicit webhook key before either continuation or invocation work is admitted. */
   async claimFollowUpReceipt(params: {
     automationId: string;

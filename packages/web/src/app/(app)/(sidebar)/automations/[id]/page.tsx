@@ -260,6 +260,14 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 automation.triggerConfig.conditions.length > 0 && (
                   <ConditionSummary conditions={automation.triggerConfig.conditions} />
                 )}
+              {automation.triggerType === "slack_event" && (
+                <div>
+                  <dt className="text-muted-foreground">Bot messages</dt>
+                  <dd className="text-foreground">
+                    {automation.triggerConfig?.slack?.includeBotMessages ? "Trigger" : "Ignored"}
+                  </dd>
+                </div>
+              )}
               {automation.environmentIds.length > 0 && (
                 <div className="sm:col-span-2">
                   <dt className="text-muted-foreground">Environments</dt>

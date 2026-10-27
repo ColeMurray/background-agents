@@ -360,6 +360,17 @@ export function extractSlackChannels(triggerConfig: TriggerConfig | null | undef
   return [];
 }
 
+/** Reject source-specific trigger options set on a trigger of another type. */
+export function getTriggerOptionsError(
+  triggerType: AutomationTriggerType,
+  triggerConfig: TriggerConfig | null | undefined
+): string | null {
+  if (triggerConfig?.slack !== undefined && triggerType !== "slack_event") {
+    return "triggerConfig.slack is only valid for slack_event triggers";
+  }
+  return null;
+}
+
 /**
  * Validate a slack_event trigger config before persistence. It must be scoped to
  * an explicit channel set (net-new validation; the engine otherwise skips

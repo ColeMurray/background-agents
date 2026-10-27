@@ -180,9 +180,12 @@ export const slackConditions = {
     validate(c: { value: string[] }) {
       return isNonEmptyStringArray(c.value) ? null : "slack_actor requires at least one user ID";
     },
+    /** Lists hold user ids (`U…`) and bot ids (`B…`); either of the author's ids matches. */
     evaluate(c: { operator: "include" | "exclude"; value: string[] }, event: AutomationEvent) {
       if (event.source !== "slack") return true;
-      const inList = c.value.includes(event.actorUserId);
+      const inList = [event.actorUserId, event.botId].some(
+        (id) => id !== undefined && c.value.includes(id)
+      );
       return c.operator === "include" ? inList : !inList;
     },
   },

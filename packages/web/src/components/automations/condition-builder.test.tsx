@@ -108,7 +108,7 @@ describe("ConditionBuilder — slack editors", () => {
   it("renders the slack_actor include/exclude control and user input", () => {
     renderBuilder([{ type: "slack_actor", operator: "include", value: [] }]);
     expect(screen.getByText("Slack User")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Add Slack user ID/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Add Slack user or bot ID/)).toBeInTheDocument();
   });
 });
 

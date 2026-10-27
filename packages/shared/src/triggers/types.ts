@@ -128,9 +128,20 @@ export type ConditionConfigMap = {
   [K in ConditionType]: Omit<Extract<TriggerCondition, { type: K }>, "type">;
 };
 
+/** Options that apply only to `slack_event` triggers. */
+const slackTriggerOptionsSchema = z.object({
+  /**
+   * Let messages posted by other bots and integrations trigger the automation.
+   * Off when absent: bot output is untrusted input, and allowing it is opt-in.
+   * Open-Inspect's own Slack bot is always excluded.
+   */
+  includeBotMessages: z.boolean().optional(),
+});
+
 /** Trigger settings stored as JSON in D1. */
 export const triggerConfigSchema = z.object({
   conditions: z.array(triggerConditionSchema),
+  slack: slackTriggerOptionsSchema.optional(),
 });
 
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;
@@ -220,21 +231,34 @@ export const webhookAutomationEventSchema = z.object({
   body: z.unknown(),
 });
 
-export const slackAutomationEventSchema = z.object({
-  ...baseAutomationEventSchema,
-  source: z.literal("slack"),
-  channelId: z.string().min(1),
-  channelName: z.string().optional(),
-  /** Permalink to the triggering message, when Slack returned one. */
-  permalink: z.string().optional(),
-  /** Parent thread ts when the message is a thread reply. */
-  threadTs: z.string().optional(),
-  /** The triggering message's own ts. */
-  ts: z.string().min(1),
-  actorUserId: z.string().min(1),
-  /** Bot-mention token stripped and length-capped. */
-  text: z.string(),
-});
+export const slackAutomationEventSchema = z
+  .object({
+    ...baseAutomationEventSchema,
+    source: z.literal("slack"),
+    channelId: z.string().min(1),
+    channelName: z.string().optional(),
+    /** Permalink to the triggering message, when Slack returned one. */
+    permalink: z.string().optional(),
+    /** Parent thread ts when the message is a thread reply. */
+    threadTs: z.string().optional(),
+    /** The triggering message's own ts. */
+    ts: z.string().min(1),
+    /**
+     * Slack user id of the author. An app bot posts as its bot user, so it has
+     * one too; only a legacy integration's `bot_message` carries none.
+     */
+    actorUserId: z.string().min(1).optional(),
+    /**
+     * `bot_id` of the bot or integration that posted the message; absent for a
+     * person, including events from a slack-bot that predates the field.
+     */
+    botId: z.string().min(1).optional(),
+    /** Bot-mention token stripped and length-capped. */
+    text: z.string(),
+  })
+  .refine((event) => event.actorUserId !== undefined || event.botId !== undefined, {
+    message: "A Slack event needs an actorUserId or a botId",
+  });
 
 export const automationEventSchema = z.discriminatedUnion("source", [
   githubAutomationEventSchema,

@@ -113,6 +113,22 @@ describe("RunHistory", () => {
     expect(screen.queryByText(/completed/)).not.toBeInTheDocument();
   });
 
+  it("explains a firing skipped by the hourly bot-message limit", () => {
+    const invocation = makeInvocation({
+      status: "skipped",
+      source: "event",
+      skipReason: "slack_bot_trigger_limit",
+      completedAt: null,
+      runs: [],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(
+      screen.getByText("Skipped because bot messages reached this automation's hourly run limit")
+    ).toBeInTheDocument();
+  });
+
   it("renders an invocation of one exactly like a flat run row", () => {
     const invocation = makeInvocation();
 

@@ -9,7 +9,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
   return { ...actual, authTest: mockAuthTest };
 });
 
-import { getBotUserId, clearBotUserIdCache } from "./bot-identity";
+import { getBotIdentity, clearBotIdentityCache } from "./bot-identity";
 
 function makeEnv(kv: { get: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn> }): Env {
   return {
@@ -18,55 +18,75 @@ function makeEnv(kv: { get: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.
   } as unknown as Env;
 }
 
-function emptyKv() {
+function kvWith(stored: Record<string, string> = {}) {
   return {
-    get: vi.fn().mockResolvedValue(null),
+    get: vi.fn(async (key: string) => stored[key] ?? null),
     put: vi.fn().mockResolvedValue(undefined),
   };
 }
 
-describe("getBotUserId", () => {
+describe("getBotIdentity", () => {
   beforeEach(() => {
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     vi.clearAllMocks();
   });
 
-  it("resolves the user id via auth.test and persists it to KV", async () => {
-    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123" });
-    const kv = emptyKv();
+  it("resolves both ids from one auth.test call and persists them to KV", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    const kv = kvWith();
 
-    expect(await getBotUserId(makeEnv(kv))).toBe("UBOT123");
+    expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UBOT123", botId: "BBOT123" });
     expect(kv.put).toHaveBeenCalledWith("slack:bot-user-id", "UBOT123");
+    expect(kv.put).toHaveBeenCalledWith("slack:bot-id", "BBOT123");
   });
 
   it("caches in-process and does not call auth.test twice", async () => {
-    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123" });
-    const env = makeEnv(emptyKv());
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    const env = makeEnv(kvWith());
 
-    await getBotUserId(env);
-    await getBotUserId(env);
+    await getBotIdentity(env);
+    await getBotIdentity(env);
 
     expect(mockAuthTest).toHaveBeenCalledTimes(1);
   });
 
-  it("serves the KV last-known-good id when auth.test fails", async () => {
-    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
-    const kv = {
-      get: vi.fn().mockResolvedValue("UCACHED"),
-      put: vi.fn().mockResolvedValue(undefined),
-    };
+  it("reports an unknown bot id as null without persisting one", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123" });
+    const kv = kvWith();
 
-    expect(await getBotUserId(makeEnv(kv))).toBe("UCACHED");
-    expect(kv.get).toHaveBeenCalledWith("slack:bot-user-id");
+    expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UBOT123", botId: null });
+    expect(kv.put).toHaveBeenCalledExactlyOnceWith("slack:bot-user-id", "UBOT123");
+  });
+
+  it("still returns the identity when persisting it to KV fails", async () => {
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT123", bot_id: "BBOT123" });
+    const kv = kvWith();
+    kv.put.mockRejectedValue(new Error("kv down"));
+
+    expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UBOT123", botId: "BBOT123" });
+  });
+
+  it("serves the KV last-known-good ids when auth.test fails", async () => {
+    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
+    const kv = kvWith({ "slack:bot-user-id": "UCACHED", "slack:bot-id": "BCACHED" });
+
+    expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UCACHED", botId: "BCACHED" });
+  });
+
+  it("serves a KV user id without a bot id, leaving the bot id unknown", async () => {
+    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
+    const kv = kvWith({ "slack:bot-user-id": "UCACHED" });
+
+    expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UCACHED", botId: null });
   });
 
   it("fails closed (null) when auth.test fails and KV is empty", async () => {
     mockAuthTest.mockResolvedValue({ ok: false, error: "invalid_auth" });
-    expect(await getBotUserId(makeEnv(emptyKv()))).toBeNull();
+    expect(await getBotIdentity(makeEnv(kvWith()))).toBeNull();
   });
 
   it("fails closed (null) when auth.test succeeds without a user_id", async () => {
     mockAuthTest.mockResolvedValue({ ok: true });
-    expect(await getBotUserId(makeEnv(emptyKv()))).toBeNull();
+    expect(await getBotIdentity(makeEnv(kvWith()))).toBeNull();
   });
 });

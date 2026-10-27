@@ -34,7 +34,11 @@ export class SlackContinuationPolicy implements ContinuationPolicy {
     private readonly deps: SlackContinuationPolicyDeps,
     private readonly event: SlackAutomationEvent
   ) {
-    this.logFields = { slack_actor_id: event.actorUserId, channel: event.channelId };
+    this.logFields = {
+      slack_actor_id: event.actorUserId,
+      slack_bot_id: event.botId,
+      channel: event.channelId,
+    };
   }
 
   resolveActor(): Promise<SteeringActor | null> {
@@ -43,10 +47,14 @@ export class SlackContinuationPolicy implements ContinuationPolicy {
 
   private async lookupActor(): Promise<SteeringActor | null> {
     const { event, deps } = this;
-    const identity = await deps.users.getIdentity("slack", event.actorUserId);
+    const { actorUserId } = event;
+    // Only a person steers a session: bot output is untrusted, and no
+    // Open-Inspect user stands behind it, even when the bot accepts triggers.
+    if (event.botId !== undefined || actorUserId === undefined) return null;
+    const identity = await deps.users.getIdentity("slack", actorUserId);
     if (!identity) return null;
     return deps.continuity.resolveActor(
-      { userId: identity.userId, authorId: `slack:${event.actorUserId}` },
+      { userId: identity.userId, authorId: `slack:${actorUserId}` },
       `automation:slack-steering:${event.triggerKey}`,
       event.triggerKey
     );

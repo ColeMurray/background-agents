@@ -8,6 +8,7 @@ import {
   type AutomationRunRow,
   type AutomationInvocationRow,
   type InvocationOverlapScope,
+  type ScheduleAdvance,
   type AutomationRepositoryInsert,
   type AutomationEnvironmentRow,
   type TeamGrantsVersion,
@@ -410,23 +411,58 @@ export class AutomationInvocationService {
   }
 
   /**
+   * Record an event firing refused before admission (such as the Slack bot
+   * message limit) under `skipReason`, as the same childless skipped invocation
+   * an overlap skip leaves.
+   */
+  async skipEvent(
+    params: Pick<
+      StartInvocationParams,
+      "automation" | "triggerKey" | "concurrencyKey" | "triggerMetadata"
+    >,
+    skipReason: string
+  ): Promise<StartInvocationResult> {
+    return this.recordSkip({ ...params, source: "event" }, skipReason);
+  }
+
+  /**
    * Record an overlap-blocked firing. Manual firings surface as a 409 with no
    * row; schedule and event firings persist a childless skipped invocation —
    * for schedule slots atomically with the schedule advance (a skip recorded
-   * without its advance would re-collide on the same slot every tick). A skip
-   * never stores the event trigger_key: a skip must not consume the dedup
-   * slot of a firing that never ran.
+   * without its advance would re-collide on the same slot every tick).
    */
   private async recordOverlapSkip(
     params: StartInvocationParams,
     options: { advanceSchedule: boolean }
   ): Promise<StartInvocationResult> {
-    const store = this.deps.store;
     if (params.source === "manual") return { outcome: "blocked", reason: "concurrent_run_active" };
+    return this.recordSkip(
+      params,
+      "concurrent_run_active",
+      options.advanceSchedule &&
+        params.source === "schedule" &&
+        params.scheduledAt !== undefined &&
+        params.advanceToNextRunAt !== undefined
+        ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
+        : undefined
+    );
+  }
 
-    // A concurrent same-key delivery may have admitted this event since the
-    // pre-check; its invocation commits with its active child, so the overlap
-    // just observed may be that firing.
+  /**
+   * Persist a childless skipped invocation. A skip never stores the event
+   * trigger_key: a skip must not consume the dedup slot of a firing that never
+   * ran.
+   */
+  private async recordSkip(
+    params: StartInvocationParams,
+    skipReason: string,
+    scheduleAdvance?: ScheduleAdvance
+  ): Promise<StartInvocationResult> {
+    const store = this.deps.store;
+    // The firing that already admitted this event owns it: a concurrent same-key
+    // delivery may have committed with its active child since the overlap
+    // pre-check, and a redelivered message may have been admitted before a
+    // pre-admission limit was reached.
     if (params.triggerKey) {
       const ownerId = await store.getInvocationIdByTriggerKey(
         params.automation.id,
@@ -446,17 +482,12 @@ export class AutomationInvocationService {
         trigger_key: null,
         concurrency_key: params.concurrencyKey ?? null,
         trigger_metadata: params.triggerMetadata ?? null,
-        skip_reason: "concurrent_run_active",
+        skip_reason: skipReason,
         failure_counted_at: null,
         created_at: now,
         updated_at: now,
       },
-      options.advanceSchedule &&
-        params.source === "schedule" &&
-        params.scheduledAt !== undefined &&
-        params.advanceToNextRunAt !== undefined
-        ? { fromSlot: params.scheduledAt, nextRunAt: params.advanceToNextRunAt }
-        : undefined
+      scheduleAdvance
     );
     return { outcome: "skipped", invocationId: inserted ? invocationId : null };
   }

@@ -15,6 +15,8 @@ import type { AutomationRunRow } from "../db/automation-store";
 const slackRunMetadataSchema = z.object({
   channel: z.string(),
   messageTs: z.string(),
+  /** `bot_id` of the bot or integration that posted the triggering message. */
+  botId: z.string().optional(),
 });
 
 /**

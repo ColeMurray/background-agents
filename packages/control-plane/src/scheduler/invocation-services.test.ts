@@ -281,6 +281,39 @@ describe("AutomationInvocationService", () => {
       "id-1"
     );
   });
+
+  it("records an event skip under its reason without consuming the trigger key", async () => {
+    const { deps, service } = invocationHarness();
+    const result = await service.skipEvent(
+      {
+        automation,
+        triggerKey: "slack:msg:C1:1",
+        concurrencyKey: "slack:C1:1",
+        triggerMetadata: '{"botId":"B1"}',
+      },
+      "slack_bot_trigger_limit"
+    );
+    expect(result).toEqual({ outcome: "skipped", invocationId: "id-1" });
+    expect(deps.store.insertSkippedInvocation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        source: "event",
+        trigger_key: null,
+        concurrency_key: "slack:C1:1",
+        trigger_metadata: '{"botId":"B1"}',
+        skip_reason: "slack_bot_trigger_limit",
+      }),
+      undefined
+    );
+  });
+
+  it("resolves an event skip to the firing that already admitted the message", async () => {
+    const { deps, service } = invocationHarness();
+    deps.store.getInvocationIdByTriggerKey.mockResolvedValue("existing-invocation");
+    await expect(
+      service.skipEvent({ automation, triggerKey: "slack:msg:C1:1" }, "slack_bot_trigger_limit")
+    ).resolves.toEqual({ outcome: "deduplicated", invocationId: "existing-invocation" });
+    expect(deps.store.insertSkippedInvocation).not.toHaveBeenCalled();
+  });
 });
 
 function recoveryHarness() {

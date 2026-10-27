@@ -107,6 +107,7 @@ export {
   ALLOWED_REGEX_FLAGS,
 } from "./slack";
 export type {
+  SlackMessageAuthor,
   SlackMessageInput,
   SlackChannelMeta,
   SlackChannelConditionParseResult,
