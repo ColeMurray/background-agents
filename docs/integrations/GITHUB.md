@@ -327,6 +327,9 @@ Important limitations:
   the bot.
 - If the bot cannot load its GitHub integration settings, it fails closed and does not start direct
   bot sessions.
+- Review and `@mention` sessions never include personal memories; the control plane decides this
+  from the calling service. An Autofix turn is not the session owner's prompt, so the agent cannot
+  read or save the owner's personal memories during it.
 
 ### Prompt Safety
 

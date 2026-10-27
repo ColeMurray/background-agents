@@ -38,15 +38,16 @@ export function agentWriteGuard(actor: AgentActor, partition: MemoryPartition): 
 }
 
 /**
- * Personal auto-save eligibility, rechecked at commit: sharing a session or adding a collaborator
- * revokes it in the same transaction as the audience change.
+ * Personal auto-save eligibility, rechecked at commit: handing the session's sandbox credentials to
+ * someone other than the owner revokes it. Visibility plays no part; the writing prompt must be the
+ * owner's, which the service checks before the write.
  */
 export function personalAutoSaveGuard(sessionId: string, ownerUserId: string | null): SqlFragment {
   return sql`EXISTS (SELECT 1 FROM session_memory_manifests manifest
     JOIN sessions s ON s.id = manifest.session_id
     WHERE manifest.session_id = ${sessionId} AND manifest.personal_auto_save_eligible = 1
       AND manifest.personal_owner_user_id = ${ownerUserId}
-      AND s.visibility = 'private' AND s.user_id = manifest.personal_owner_user_id)`;
+      AND s.user_id = manifest.personal_owner_user_id)`;
 }
 
 /** Per-session agent quota on records written. */

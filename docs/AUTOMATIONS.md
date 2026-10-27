@@ -538,6 +538,10 @@ executor's. In addition to trigger permission, the requester must pass runtime s
 and be a current member of the active owning team for a team automation, even if they are a
 workspace Owner or Administrator.
 
+No automation run, scheduled, event-driven or manual, loads anyone's personal memories or personal
+skill profiles: personal memory serves its owner's own prompts, and nobody prompts an automation
+run. Repository and environment memories apply as in any session.
+
 ### Edit
 
 You can change an automation's name, repository selection, branch, model, and instructions at any

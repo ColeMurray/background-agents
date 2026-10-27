@@ -15,6 +15,8 @@ import {
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
+import { SessionMemorySelectionStore } from "../db/session-memory-selections";
+import { createLogger } from "../logger";
 import { checkSessionAccess } from "@open-inspect/shared";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { TeamMembershipStore } from "../db/team-memberships";
@@ -26,6 +28,7 @@ import {
 import { resolverDecides } from "../authorization/teams-enforcement";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
+import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import {
   error,
@@ -39,10 +42,13 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   SCM_CREDENTIALS_ROUTE,
+  type UserRouteContext,
 } from "./shared";
 import { parseBody, parseJsonBody } from "./body";
 import { type SessionRouteContext, dispatchSession } from "./session-route";
 import { canManageSessionBudget } from "../session/budget-authorization";
+
+const logger = createLogger("router:session-runtime-proxy");
 
 const participantsResponseSchema = z.object({
   participants: z.array(
@@ -104,6 +110,34 @@ function legacyTokenRefresh(
     }
     return ctx.sessionRuntime.fetch(params.id, internalPath, { method: "POST" });
   };
+}
+
+/**
+ * Hand out the sandbox's terminal, editor and desktop credentials. Shell access cannot be tied to
+ * a prompt, so before anyone other than the session's personal owner receives them, the session
+ * stops reading that owner's personal memory; if that cannot be recorded, nothing is returned.
+ */
+async function handleSandboxAccess(
+  _request: Request,
+  _env: Env,
+  params: SessionParams,
+  ctx: UserRouteContext & { sessionRuntime: SessionRuntimeClient }
+): Promise<Response> {
+  const response = await ctx.sessionRuntime.fetch(params.id, SessionInternalPaths.sandboxAccess);
+  if (!response.ok) return response;
+  const revoked = await new SessionMemorySelectionStore(ctx.db).revokePersonalForSandboxAccess(
+    params.id,
+    ctx.principal.userId
+  );
+  if (revoked)
+    logger.info("memory.personal_reads_revoked", {
+      event: "memory.personal_reads_revoked",
+      session_id: params.id,
+      user_id: ctx.principal.userId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  return response;
 }
 
 async function handleSandboxError(
@@ -350,7 +384,7 @@ sessionRuntimeProxyRoutes.get(
     ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
     authorization: requireSession("sandbox"),
   }),
-  (c) => dispatchSession(c, simpleProxy({ internalPath: SessionInternalPaths.sandboxAccess }))
+  (c) => dispatchSession(c, handleSandboxAccess)
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id",

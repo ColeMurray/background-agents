@@ -78,6 +78,9 @@ Otherwise the classifier chooses the best target for the request, including **No
 the task does not require a codebase. When the match is unclear, Open-Inspect asks you to choose a
 repository, environment, or **No repository** in the Slack thread.
 
+Channel-started sessions never include personal memories, because their replies post where others
+read them. Repository and environment memories still apply.
+
 ### From a DM
 
 Open a direct message with the Open-Inspect bot and send the request:
@@ -88,6 +91,11 @@ Can you investigate the flaky login test in acme/web?
 
 DMs do not need an `@mention`. If you include one anyway, Open-Inspect strips it before sending the
 request to the agent.
+
+A DM-started session uses your personal memories as a web session does: the bot marks its create
+request `directMessage` (Slack conversation IDs starting with `D`), and the control plane applies
+your saved preference. See
+[Personal memory follows the owner's prompts](../MEMORY.md#personal-memory-follows-the-owners-prompts).
 
 ### Model and reasoning overrides
 

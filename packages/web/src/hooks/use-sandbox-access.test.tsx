@@ -18,6 +18,69 @@ function wrapper({ children }: { children: React.ReactNode }) {
 describe("useSandboxAccess", () => {
   beforeEach(() => vi.resetAllMocks());
 
+  it("loads only preview URLs until the viewer connects", async () => {
+    mocks.browserApiFetch.mockImplementation(async (url: string) =>
+      url.endsWith("/tunnel-urls")
+        ? Response.json({ tunnelUrls: { "3000": "https://app.example" } })
+        : Response.json({
+            codeServer: { url: "https://code.example", password: "secret" },
+            vnc: null,
+            ttyd: null,
+          })
+    );
+    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
+
+    await waitFor(() =>
+      expect(result.current.sandboxAccess).toEqual({
+        tunnelUrls: { "3000": "https://app.example" },
+      })
+    );
+    expect(result.current.connected).toBe(false);
+    expect(mocks.browserApiFetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/sessions/session-1/tunnel-urls",
+      { cache: "no-store" }
+    );
+
+    act(() => result.current.connect());
+    await waitFor(() =>
+      expect(result.current.sandboxAccess).toMatchObject({ codeServerPassword: "secret" })
+    );
+    expect(result.current.connected).toBe(true);
+    expect(mocks.browserApiFetch).toHaveBeenLastCalledWith(
+      "/api/sessions/session-1/sandbox-access",
+      { cache: "no-store" }
+    );
+  });
+
+  it("forgets a connection when the viewer moves to another session", async () => {
+    mocks.browserApiFetch.mockResolvedValue(Response.json({ tunnelUrls: {} }));
+    const { result, rerender } = renderHook(({ sessionId }) => useSandboxAccess(sessionId, true), {
+      wrapper,
+      initialProps: { sessionId: "session-1" },
+    });
+    act(() => result.current.connect());
+    expect(result.current.connected).toBe(true);
+
+    rerender({ sessionId: "session-2" });
+    expect(result.current.connected).toBe(false);
+    await waitFor(() =>
+      expect(mocks.browserApiFetch).toHaveBeenLastCalledWith(
+        "/api/sessions/session-2/tunnel-urls",
+        { cache: "no-store" }
+      )
+    );
+  });
+
+  it("loads nothing for a viewer without sandbox access", async () => {
+    const { result } = renderHook(
+      () => useSandboxAccess("session-1", true, { enabled: false, autoConnect: true }),
+      { wrapper }
+    );
+    act(() => result.current.connect());
+    expect(result.current.connected).toBe(false);
+    expect(mocks.browserApiFetch).not.toHaveBeenCalled();
+  });
+
   it("fetches credentials only through the client BFF with no-store", async () => {
     mocks.browserApiFetch.mockResolvedValue(
       Response.json({
@@ -28,7 +91,10 @@ describe("useSandboxAccess", () => {
         sandboxDashboardUrl: "https://modal.example/sandbox/sb-123",
       })
     );
-    const { result } = renderHook(() => useSandboxAccess("session/one", true), { wrapper });
+    const { result } = renderHook(
+      () => useSandboxAccess("session/one", true, { autoConnect: true }),
+      { wrapper }
+    );
 
     await waitFor(() =>
       expect(result.current.sandboxAccess).toEqual(
@@ -49,7 +115,10 @@ describe("useSandboxAccess", () => {
 
   it.each([204, 404])("authoritatively clears credentials on status %s", async (status) => {
     mocks.browserApiFetch.mockResolvedValue(new Response(null, { status }));
-    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
+    const { result } = renderHook(
+      () => useSandboxAccess("session-1", true, { autoConnect: true }),
+      { wrapper }
+    );
     await waitFor(() => expect(result.current.sandboxAccess).toBeNull());
   });
 
@@ -62,7 +131,10 @@ describe("useSandboxAccess", () => {
       })
     );
 
-    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
+    const { result } = renderHook(
+      () => useSandboxAccess("session-1", true, { autoConnect: true }),
+      { wrapper }
+    );
 
     await waitFor(() =>
       expect(result.current.sandboxAccess).toEqual({
@@ -87,7 +159,10 @@ describe("useSandboxAccess", () => {
       })
     );
 
-    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
+    const { result } = renderHook(
+      () => useSandboxAccess("session-1", true, { autoConnect: true }),
+      { wrapper }
+    );
 
     await waitFor(() => expect(result.current.sandboxAccess).toBeUndefined());
     await waitFor(() => expect(mocks.browserApiFetch).toHaveBeenCalledOnce());
@@ -101,9 +176,14 @@ describe("useSandboxAccess", () => {
         ttyd: null,
       })
     );
-    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
+    const { result } = renderHook(
+      () => useSandboxAccess("session-1", true, { autoConnect: true }),
+      { wrapper }
+    );
 
-    await waitFor(() => expect(result.current.sandboxAccess?.codeServerPassword).toBe("secret"));
+    await waitFor(() =>
+      expect(result.current.sandboxAccess).toMatchObject({ codeServerPassword: "secret" })
+    );
     await act(async () => {
       await result.current.clear();
     });
@@ -128,10 +208,13 @@ describe("useSandboxAccess", () => {
           ttyd: null,
         })
       );
-    const { result } = renderHook(() => useSandboxAccess("session-1", true), { wrapper });
+    const { result } = renderHook(
+      () => useSandboxAccess("session-1", true, { autoConnect: true }),
+      { wrapper }
+    );
 
     await waitFor(() =>
-      expect(result.current.sandboxAccess?.codeServerPassword).toBe("old-secret")
+      expect(result.current.sandboxAccess).toMatchObject({ codeServerPassword: "old-secret" })
     );
     let refresh: Promise<unknown>;
     await act(async () => {
@@ -142,7 +225,7 @@ describe("useSandboxAccess", () => {
     });
 
     await waitFor(() =>
-      expect(result.current.sandboxAccess?.codeServerPassword).toBe("new-secret")
+      expect(result.current.sandboxAccess).toMatchObject({ codeServerPassword: "new-secret" })
     );
     expect(mocks.browserApiFetch).toHaveBeenCalledTimes(2);
   });
@@ -152,7 +235,7 @@ describe("useSandboxAccess", () => {
       Response.json({ codeServer: null, vnc: null, ttyd: null })
     );
     const { rerender } = renderHook(
-      ({ isSandboxReady }) => useSandboxAccess("session-1", isSandboxReady),
+      ({ isSandboxReady }) => useSandboxAccess("session-1", isSandboxReady, { autoConnect: true }),
       { wrapper, initialProps: { isSandboxReady: false } }
     );
 

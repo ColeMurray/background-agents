@@ -10,15 +10,16 @@ import {
   type SandboxMemoryWriteResult,
 } from "@open-inspect/shared/types/memories";
 import type { SessionMemoryAccessPolicy } from "../authorization/memory-access";
+import type { MemoryReadAuditStore } from "../db/memory-read-audit";
 import type { MemoryRecordStore } from "../db/memory-records";
 import type { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError, unhandled } from "./errors";
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
-import { canWritePersonal, personalReadAccess } from "./session-rules";
+import { personalReadAccess, personalReadDenial, personalWriteDenial } from "./session-rules";
 import { repositoryPartition, sourcePartitions } from "./sources";
-import type { MemorySession } from "./types";
+import type { MemoryPromptContext, MemorySession } from "./types";
 
 const SCOPE_UNAVAILABLE = "Memory scope is no longer available";
 const OUTSIDE_SESSION = "Memory scope is outside this session";
@@ -32,8 +33,8 @@ const SESSION_NOT_FOUND = "Session not found";
  */
 export interface SessionMemoryServiceDeps {
   /**
-   * What one session sees: the session itself (principal, memory sources, harness, auto-save
-   * eligibility), its pinned selection, and whether a record is pinned in it.
+   * What one session sees: the session itself (principal, memory sources, harness, personal read
+   * and auto-save eligibility), its pinned selection, and whether a record is pinned in it.
    */
   selections: Pick<SessionMemorySelectionStore, "loadSession" | "loadSelection" | "isPinned">;
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
@@ -42,14 +43,18 @@ export interface SessionMemoryServiceDeps {
   factIndex: FactSearchIndex;
   /** Whether the session principal may currently read shared partitions; rechecked per operation. */
   access: Pick<SessionMemoryAccessPolicy, "check">;
-  /** Recorded as provenance on agent writes. */
+  /** Records each read that returns personal memory, with the prompt it served. */
+  audit: Pick<MemoryReadAuditStore, "recordPersonalRead">;
+  /** Recorded as provenance on agent writes and personal-read audits. */
   requestId: string;
 }
 
 /**
  * Agent-facing memory operations for one authenticated sandbox session. Identity and scope are
  * always derived from the session, never from request bodies; every operation rechecks the
- * session principal's current access to shared partitions. Throws `MemoryError`s.
+ * session principal's current access to shared partitions. Personal memory additionally depends on
+ * the prompt being processed, which the caller resolves from the session runtime. Throws
+ * `MemoryError`s.
  */
 export class SessionMemoryService {
   constructor(private readonly deps: SessionMemoryServiceDeps) {}
@@ -76,9 +81,14 @@ export class SessionMemoryService {
   /**
    * Expand an active fact in the session's sources, or return a body-free notice for a pinned
    * record that was archived. Directives are never expandable. Proposals, unpinned archives,
-   * opted-out personal records, and unpinned personal records in children are concealed.
+   * personal records the active prompt may not read, and unpinned personal records in children are
+   * concealed.
    */
-  async read(sessionId: string, memoryId: string): Promise<SandboxMemoryReadResult> {
+  async read(
+    sessionId: string,
+    memoryId: string,
+    prompt: MemoryPromptContext
+  ): Promise<SandboxMemoryReadResult> {
     const session = await this.loadSession(sessionId);
     const [record, pinned] = await Promise.all([
       this.deps.records.get(memoryId),
@@ -86,7 +96,7 @@ export class SessionMemoryService {
     ]);
     if (!record || record.status === "proposed") throw new MemoryNotFoundError();
     if (record.partition.type === "personal") {
-      const access = personalReadAccess(session);
+      const access = personalReadAccess(session, prompt);
       if (access === "none" || (access === "pinned" && !pinned)) throw new MemoryNotFoundError();
     }
     if (record.status === "archived") {
@@ -109,6 +119,8 @@ export class SessionMemoryService {
       !(await this.mayAccessShared(session, [record.partition]))
     )
       throw new MemoryNotFoundError();
+    if (record.partition.type === "personal")
+      await this.auditPersonalRead(session, prompt, [record.id]);
     return {
       id: record.id,
       status: "active",
@@ -127,16 +139,17 @@ export class SessionMemoryService {
 
   /**
    * Write relative to the session: the sole repository or the selected one, the session
-   * environment, or the pinned personal owner. Shared-session personal writes become proposals
-   * because credentials identify a session, not an immutable prompt author; the store rechecks
-   * auto-save eligibility atomically.
+   * environment, or the pinned personal owner. Personal writes need the owner's own prompt, and
+   * become proposals once anyone else has prompted the session or received its sandbox
+   * credentials; the store rechecks the credential half atomically.
    */
   async write(
     sessionId: string,
-    input: SandboxMemoryWriteInput
+    input: SandboxMemoryWriteInput,
+    prompt: MemoryPromptContext
   ): Promise<SandboxMemoryWriteResult> {
     const session = await this.loadSession(sessionId);
-    const { partition, scope } = this.writeTarget(session, input);
+    const { partition, scope } = this.writeTarget(session, input, prompt);
     if (!(await this.mayAccessShared(session, [partition])))
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const memory = await this.deps.records.create(
@@ -153,21 +166,25 @@ export class SessionMemoryService {
       },
       {
         kind: "agent",
-        // Equal to the personal owner for personal writes (`canWritePersonal` holds).
+        // Equal to the personal owner for personal writes (`personalWriteDenial` holds).
         userId: session.principal.userId,
         sessionId,
         requestId: this.deps.requestId,
       },
-      { personalAutoSaveEligible: session.personalAutoSaveEligible }
+      { personalAutoSaveEligible: session.personalAutoSaveEligible && !prompt.othersPrompted }
     );
     if (memory.status === "archived") throw new Error("A newly created memory cannot be archived");
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
   }
 
   /** Search current facts in the session's partitions, checking access before and after SQL. */
-  async search(sessionId: string, input: MemorySearchInput): Promise<MemorySearchResponse> {
+  async search(
+    sessionId: string,
+    input: MemorySearchInput,
+    prompt: MemoryPromptContext
+  ): Promise<MemorySearchResponse> {
     const session = await this.loadSession(sessionId);
-    const partitions = this.searchPartitions(session, input);
+    const partitions = this.searchPartitions(session, input, prompt);
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
     const hits = await this.deps.factIndex.search({
@@ -176,13 +193,37 @@ export class SessionMemoryService {
       limit: input.limit,
     });
     if (!(await this.mayAccessShared(session, all))) throw new MemoryAccessError(SCOPE_UNAVAILABLE);
-    return factSearchResponse(hits, input.limit);
+    const response = factSearchResponse(hits, input.limit);
+    const personal = response.results.filter((result) => result.scope.type === "personal");
+    if (personal.length)
+      await this.auditPersonalRead(
+        session,
+        prompt,
+        personal.map((result) => result.id)
+      );
+    return response;
   }
 
   private async loadSession(sessionId: string): Promise<MemorySession> {
     const session = await this.deps.selections.loadSession(sessionId);
     if (!session) throw new MemoryNotFoundError(SESSION_NOT_FOUND);
     return session;
+  }
+
+  /** Record personal records returned to the agent, before they leave the service. */
+  private async auditPersonalRead(
+    session: MemorySession,
+    prompt: MemoryPromptContext,
+    memoryIds: string[]
+  ): Promise<void> {
+    await this.deps.audit.recordPersonalRead({
+      requestId: this.deps.requestId,
+      sessionId: session.id,
+      // Personal records are returned only for the owner's own prompts.
+      promptAuthorUserId: prompt.authorUserId,
+      ownerUserId: session.sources.personalOwnerUserId,
+      memoryIds,
+    });
   }
 
   /** Whether the session principal may currently access these shared partitions. */
@@ -211,7 +252,8 @@ export class SessionMemoryService {
   /** The partition a session-relative write targets, with its display scope. */
   private writeTarget(
     session: MemorySession,
-    input: SandboxMemoryWriteInput
+    input: SandboxMemoryWriteInput,
+    prompt: MemoryPromptContext
   ): { partition: MemoryPartition; scope: MemoryScope } {
     switch (input.scopeType) {
       case "repository": {
@@ -236,16 +278,15 @@ export class SessionMemoryService {
           scope: { type: "environment", environmentId },
         };
       }
-      case "personal":
+      case "personal": {
         if (!session.sources.personalOwnerUserId) throw new MemoryAccessError(OUTSIDE_SESSION);
-        // A collaborator-owned child consumes inherited context but cannot mutate the original
-        // owner's personal store.
-        if (!canWritePersonal(session))
-          throw new MemoryAccessError("Personal memory owner differs from this session owner");
+        const denial = personalWriteDenial(session, prompt);
+        if (denial) throw new MemoryAccessError(denial);
         return {
           partition: { type: "personal", userId: session.sources.personalOwnerUserId },
           scope: { type: "personal" },
         };
+      }
       default:
         return unhandled("memory scope", input.scopeType);
     }
@@ -254,20 +295,20 @@ export class SessionMemoryService {
   /** Session-relative searchable partitions; an explicitly requested unavailable scope fails. */
   private searchPartitions(
     session: MemorySession,
-    input: MemorySearchInput
+    input: MemorySearchInput,
+    prompt: MemoryPromptContext
   ): FactSearchPartition[] {
     const partitions: FactSearchPartition[] = [];
     const wants = (scopeType: NonNullable<MemorySearchInput["scopeType"]>) =>
       !input.scopeType || input.scopeType === scopeType;
     if (wants("personal")) {
-      const access = personalReadAccess(session);
+      const access = personalReadAccess(session, prompt);
       if (access !== "none" && session.sources.personalOwnerUserId)
         partitions.push({
           partition: { type: "personal", userId: session.sources.personalOwnerUserId },
           ...(access === "pinned" ? { pinnedIn: session.id } : {}),
         });
-      else if (input.scopeType)
-        throw new MemoryAccessError("Personal memory is excluded from this session");
+      else if (input.scopeType) throw new MemoryAccessError(personalReadDenial(session, prompt));
     }
     if (wants("repository")) {
       const repositories = this.selectRepositories(session, input);

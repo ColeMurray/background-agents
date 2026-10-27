@@ -29,6 +29,7 @@ import * as refreshPullRequests from "./sessions/[id]/pull-requests/refresh/rout
 import * as readState from "./sessions/[id]/read-state/route";
 import * as sandboxAccess from "./sessions/[id]/sandbox-access/route";
 import * as title from "./sessions/[id]/title/route";
+import * as tunnelUrls from "./sessions/[id]/tunnel-urls/route";
 import * as unarchive from "./sessions/[id]/unarchive/route";
 import * as wsToken from "./sessions/[id]/ws-token/route";
 
@@ -76,6 +77,7 @@ const routes: {
   },
   { path: "/sessions/[id]/sandbox-access", handlers: sandboxAccess },
   { path: "/sessions/[id]/title", handlers: title, body: { title: "Investigate" } },
+  { path: "/sessions/[id]/tunnel-urls", handlers: tunnelUrls },
   { path: "/sessions/[id]/unarchive", handlers: unarchive },
   { path: "/sessions/[id]/ws-token", handlers: wsToken },
 ];

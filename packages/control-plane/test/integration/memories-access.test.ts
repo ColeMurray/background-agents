@@ -4,8 +4,9 @@ import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { createScheduler } from "../../src/scheduler/factory";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
+import { memorySelectorForTest, seedMemorySession, seedPrompt } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
+import { SessionScopeStore } from "../../src/db/session-scope-store";
 import { memoryScopeToSearchParams, type MemoryScope } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
@@ -375,6 +376,7 @@ describe("memory shared-scope authorization", () => {
     });
     const { stub } = await initNamedSessionDO(sessionId);
     await seedSandboxAuthHash(stub, { authToken: "race-token", sandboxId: "sandbox-race" });
+    await seedPrompt(stub, MEMBER);
     const original = MemoryRecordStore.prototype.create;
     vi.spyOn(MemoryRecordStore.prototype, "create").mockImplementationOnce(async function (
       this: MemoryRecordStore,
@@ -470,20 +472,31 @@ describe("memory shared-scope authorization", () => {
     }
   );
 
-  it("permanently revokes personal autosave when a collaborator was added and removed", async () => {
-    await seedMemorySession("private", { userId: MEMBER, status: "created" });
-    const collaborators = new SessionCollaboratorStore(env.DB);
-    await collaborators.add("private", OUTSIDER, MEMBER);
-    await collaborators.remove("private", OUTSIDER);
-    expect(
-      await env.DB.prepare(
-        "SELECT personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = 'private'"
-      ).first()
-    ).toEqual({ personal_auto_save_eligible: 0 });
+  it("keeps personal autosave through audience changes until someone else gets the sandbox", async () => {
+    await seedMemorySession("shared", { userId: MEMBER, status: "created" });
+    await new SessionCollaboratorStore(env.DB).add("shared", OUTSIDER, MEMBER);
+    await new SessionScopeStore(env.DB).updateVisibility(["shared"], "workspace");
+    const eligibility = () =>
+      env.DB.prepare(
+        "SELECT personal_reads_eligible, personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = 'shared'"
+      ).first();
+    expect(await eligibility()).toEqual({
+      personal_reads_eligible: 1,
+      personal_auto_save_eligible: 1,
+    });
+
+    const selections = new SessionMemorySelectionStore(env.DB);
+    expect(await selections.revokePersonalForSandboxAccess("shared", MEMBER)).toBe(false);
+    expect(await selections.revokePersonalForSandboxAccess("shared", OUTSIDER)).toBe(true);
+    expect(await selections.revokePersonalForSandboxAccess("shared", OUTSIDER)).toBe(false);
+    expect(await eligibility()).toEqual({
+      personal_reads_eligible: 0,
+      personal_auto_save_eligible: 0,
+    });
     await expect(
       new MemoryRecordStore(env.DB).create(
         { partition: { type: "personal", userId: MEMBER }, scope: { type: "personal" }, content },
-        { ...actor, kind: "agent", sessionId: "private" },
+        { ...actor, kind: "agent", sessionId: "shared" },
         { personalAutoSaveEligible: true }
       )
     ).rejects.toThrow(/session access/);

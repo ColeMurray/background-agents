@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { memorySearchResponseSchema } from "@open-inspect/shared/types/memories";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
-import { seedMemorySession } from "./memory-test-helpers";
+import { seedMemorySession, seedPrompt } from "./memory-test-helpers";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { LexicalFactIndex } from "../../src/db/lexical-fact-index";
 import { seedSearchFacts } from "../conformance/memory-search-fixtures";
@@ -23,7 +23,10 @@ const repo = { repoOwner: "acme/group", repoName: "api", repoId: 123, baseBranch
 const repoPartition: MemoryPartition = { type: "repository", repoId: repo.repoId };
 const devPartition: MemoryPartition = { type: "environment", environmentId: "dev" };
 
-/** Create a real indexed session and bind tools to its own sandbox credential. */
+/**
+ * Create a real indexed session whose agent is processing the owner's prompt, and bind tools to
+ * its own sandbox credential.
+ */
 async function sandbox(
   id: string,
   options: {
@@ -44,6 +47,7 @@ async function sandbox(
   });
   const { stub } = await initNamedSessionDO(id);
   await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
+  await seedPrompt(stub, OWNER);
   return (body: unknown, path = "/search", token = `token-${id}`) =>
     routeRequest(
       new Request(`https://test.local/sessions/${id}/sandbox-memory${path}`, {

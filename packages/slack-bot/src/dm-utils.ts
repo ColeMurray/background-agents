@@ -12,6 +12,14 @@ export function stripMentions(text: string): string {
 }
 
 /**
+ * Whether a Slack conversation ID names a one-to-one direct message. Slack prefixes those IDs with
+ * `D`; channels and group conversations use other prefixes.
+ */
+export function isDirectMessageChannel(channel: string): boolean {
+  return /^D[A-Z0-9]+$/.test(channel);
+}
+
+/**
  * Returns true if a Slack message event should be dispatched as a DM.
  * Filters out subtypes (bot_message, message_changed, message_deleted, etc.)
  * to prevent processing bot replies and edit/delete notifications. Messages

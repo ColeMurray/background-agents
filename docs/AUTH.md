@@ -153,6 +153,17 @@ session when enforcement is `on`, also requires session ownership, owning-team l
 workspace Owner/Administrator role. Only the session owner or a workspace Owner can change private
 visibility. Leading a team does not grant access to its private sessions.
 
+### Personal Memory in Sessions
+
+Session access and personal memory are separate. However many people can read or prompt a session,
+its owner's personal memories serve only the owner's own prompts. On anyone else's prompt the agent
+cannot search, read, or save them. Handing the sandbox's terminal, editor, or desktop credentials to
+anyone else switches personal memory search off for the rest of the session, because shell access
+cannot be tied to a prompt. The session's memory sidebar lists personal items only for the owner.
+Automation runs, manual ones included, and sessions started from Slack channels, Linear, or GitHub
+never include personal memory. See
+[Personal memory follows the owner's prompts](MEMORY.md#personal-memory-follows-the-owners-prompts).
+
 ### Team Defaults and Migration
 
 A team's default visibility accepts only `team` or `workspace` and sets the audience of new

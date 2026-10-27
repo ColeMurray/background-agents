@@ -11,9 +11,9 @@ import type {
   MemorySession,
   PinnedItemDrift,
   PinnedMemoryEntry,
+  SessionMemoryPin,
   SessionMemorySelection,
 } from "../memory/types";
-import type { Pinned } from "../session/pinned";
 import { bulkInsertStatements } from "./bulk-insert";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -54,22 +54,23 @@ export interface PinnedSelection {
 /**
  * What each session sees of memory: the selection pinned when it was created (manifest header and
  * ordered revision references), its memory context (personal owner, repositories, environment,
- * auto-save eligibility), and pin membership. It never creates or changes memory records — that is
- * `MemoryRecordStore` — and pinned selections stay fixed while the records they reference evolve.
+ * personal read and auto-save eligibility), and pin membership. It never creates or changes memory
+ * records — that is `MemoryRecordStore` — and pinned selections stay fixed while the records they
+ * reference evolve.
  */
 export class SessionMemorySelectionStore {
   constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Statements that pin a session's selection, run in the session insert's atomic batch.
-   * Resolved root sessions start eligible for personal auto-save only when private and
-   * collaborator-free. Children copy the parent's owner and selection; eligibility is never
-   * inherited, and a legacy parent without a manifest leaves the child with empty context.
+   * Resolved root sessions start eligible for personal auto-save, whatever their visibility.
+   * Children copy the parent's selection; eligibility is never inherited, and a legacy parent
+   * without a manifest leaves the child with empty context.
    */
-  bindPinned(sessionId: string, pinned: Pinned<SessionMemorySelection>): SqlStatement[] {
+  bindPinned(sessionId: string, pinned: SessionMemoryPin): SqlStatement[] {
     return pinned.kind === "resolved"
       ? this.bindInsert(sessionId, pinned.value)
-      : this.bindCopy(sessionId, pinned.parentSessionId);
+      : this.bindCopy(sessionId, pinned.parentSessionId, pinned.promptAuthorUserId);
   }
 
   private bindInsert(sessionId: string, manifest: SessionMemorySelection): SqlStatement[] {
@@ -78,9 +79,8 @@ export class SessionMemorySelectionStore {
         .prepare(
           `INSERT INTO session_memory_manifests
       (session_id, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count, personal_auto_save_eligible)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN visibility = 'private' AND parent_session_id IS NULL
-        AND NOT EXISTS (SELECT 1 FROM session_collaborators WHERE session_id = sessions.id AND user_id <> sessions.user_id)
-        THEN 1 ELSE 0 END FROM sessions WHERE id = ?`
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN parent_session_id IS NULL THEN 1 ELSE 0 END
+      FROM sessions WHERE id = ?`
         )
         .bind(
           sessionId,
@@ -110,41 +110,58 @@ export class SessionMemorySelectionStore {
     ];
   }
 
-  private bindCopy(childId: string, parentId: string): SqlStatement[] {
+  /**
+   * Copy the parent's selection into a child spawned on `promptAuthorUserId`'s prompt. The parent
+   * owner's personal records and ownership carry over only when that prompt was theirs; any other
+   * author's child gets the shared records alone. Header sizes and hash stay the parent's: they
+   * describe the selection that was made, not what the child renders.
+   */
+  private bindCopy(
+    childId: string,
+    parentId: string,
+    promptAuthorUserId: string | null
+  ): SqlStatement[] {
     return [
       this.db
         .prepare(
           `INSERT INTO session_memory_manifests
       (session_id, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count)
-      SELECT ?, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count FROM session_memory_manifests WHERE session_id = ?`
+      SELECT ?, selection_version, manifest_sha256, resolved_at,
+        CASE WHEN personal_owner_user_id = ? THEN personal_owner_user_id END,
+        directive_chars, catalog_chars, estimated_tokens, omitted_count
+      FROM session_memory_manifests WHERE session_id = ?`
         )
-        .bind(childId, parentId),
+        .bind(childId, promptAuthorUserId, parentId),
       this.db
         .prepare(
           `INSERT INTO session_memory_items (session_id, position, memory_id, revision_id, scope_json, inclusion, estimated_tokens)
-      SELECT ?, position, memory_id, revision_id, scope_json, inclusion, estimated_tokens FROM session_memory_items WHERE session_id = ? ORDER BY position`
+      SELECT ?, i.position, i.memory_id, i.revision_id, i.scope_json, i.inclusion, i.estimated_tokens
+      FROM session_memory_items i
+      JOIN memories m ON m.id = i.memory_id
+      JOIN session_memory_manifests parent ON parent.session_id = i.session_id
+      WHERE i.session_id = ? AND (m.partition_type <> 'personal' OR parent.personal_owner_user_id = ?)
+      ORDER BY i.position`
         )
-        .bind(childId, parentId),
+        .bind(childId, parentId, promptAuthorUserId),
     ];
   }
 
   /**
-   * Permanently revoke personal auto-save once a session's audience widens, in the same batch
-   * as that change. `addedUserId` skips revocation when the owner adds themselves.
+   * Switch off personal reads and auto-save for good when someone other than the personal owner
+   * receives the session's sandbox credentials: shell access cannot be tied to a prompt, and a
+   * restored sandbox keeps whatever they changed on disk. Returns whether this call switched them
+   * off.
    */
-  bindRevokePersonalAutoSave(sessionId: string, addedUserId?: string): SqlStatement {
-    return addedUserId === undefined
-      ? this.db
-          .prepare(
-            "UPDATE session_memory_manifests SET personal_auto_save_eligible = 0 WHERE session_id = ?"
-          )
-          .bind(sessionId)
-      : this.db
-          .prepare(
-            `UPDATE session_memory_manifests SET personal_auto_save_eligible = 0
-        WHERE session_id = ? AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND user_id <> ?)`
-          )
-          .bind(sessionId, sessionId, addedUserId);
+  async revokePersonalForSandboxAccess(sessionId: string, userId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE session_memory_manifests SET personal_reads_eligible = 0, personal_auto_save_eligible = 0
+        WHERE session_id = ? AND personal_owner_user_id IS NOT NULL AND personal_owner_user_id <> ?
+          AND (personal_reads_eligible = 1 OR personal_auto_save_eligible = 1)`
+      )
+      .bind(sessionId, userId)
+      .run();
+    return result.meta.changes > 0;
   }
 
   /**
@@ -223,18 +240,23 @@ export class SessionMemorySelectionStore {
 
   /**
    * Load a session as memory operations see it, in one batch: its principal, harness, and
-   * memory sources from the session row and repositories, plus the personal owner and auto-save
-   * eligibility pinned in its manifest (never the owner's current preferences). Does not read
-   * selection items. Returns null for nonexistent sessions.
+   * memory sources from the session row and repositories, plus the personal owner and personal
+   * read and auto-save eligibility pinned in its manifest. The personal owner is dropped when
+   * their current preference excludes personal memory, so turning it off reaches existing
+   * sessions. Does not read selection items. Returns null for nonexistent sessions.
    */
   async loadSession(sessionId: string): Promise<MemorySession | null> {
     const [sessions, repositories] = await this.db.batch([
       this.db
         .prepare(
           `SELECT s.user_id, s.owner_team_id, s.harness, s.repo_owner, s.repo_name, s.environment_id,
-             s.parent_session_id, m.personal_owner_user_id,
-             m.personal_auto_save_eligible
-           FROM sessions s LEFT JOIN session_memory_manifests m ON m.session_id = s.id WHERE s.id = ?`
+             s.parent_session_id,
+             CASE WHEN COALESCE(p.include_personal_memories, 1) = 1 THEN m.personal_owner_user_id END
+               AS personal_owner_user_id,
+             m.personal_reads_eligible, m.personal_auto_save_eligible
+           FROM sessions s LEFT JOIN session_memory_manifests m ON m.session_id = s.id
+           LEFT JOIN memory_preferences p ON p.user_id = m.personal_owner_user_id
+           WHERE s.id = ?`
         )
         .bind(sessionId),
       this.db
@@ -253,6 +275,7 @@ export class SessionMemorySelectionStore {
           environment_id: string | null;
           parent_session_id: string | null;
           personal_owner_user_id: string | null;
+          personal_reads_eligible: number | null;
           personal_auto_save_eligible: number | null;
         }
       | undefined;
@@ -280,6 +303,7 @@ export class SessionMemorySelectionStore {
       },
       harness: session.harness ?? DEFAULT_HARNESS,
       isChildSession: session.parent_session_id !== null,
+      personalReadsEligible: session.personal_reads_eligible === 1,
       personalAutoSaveEligible: session.personal_auto_save_eligible === 1,
     };
   }

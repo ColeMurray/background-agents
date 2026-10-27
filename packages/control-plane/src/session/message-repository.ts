@@ -528,6 +528,21 @@ export class MessageRepository {
     const rows = parseStorageRows(result.toArray(), messageProcessingAuthorRowSchema);
     return rows[0] ?? null;
   }
+
+  /**
+   * Whether a prompt from anyone but `canonicalUserId` has reached the agent: a dispatched message
+   * whose author has another account, or none (an integration author such as Autofix).
+   */
+  hasDispatchedPromptFromOtherUser(canonicalUserId: string): boolean {
+    const result = this.sql.exec(
+      `SELECT 1 AS present FROM messages m LEFT JOIN participants p ON p.id = m.author_id
+       WHERE m.started_at IS NOT NULL
+         AND (p.canonical_user_id IS NULL OR p.canonical_user_id <> ?)
+       LIMIT 1`,
+      canonicalUserId
+    );
+    return result.toArray().length > 0;
+  }
 }
 
 function parseMessageRows(rows: unknown[]): MessageRow[] {

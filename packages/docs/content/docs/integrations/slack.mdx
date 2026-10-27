@@ -4,7 +4,7 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-27"
 relatedCode:
   - docs/integrations/SLACK.md
   - docs/CLAUDE_AGENT.md
@@ -116,11 +116,15 @@ Invite the bot first, then mention it. Name the repository when the request coul
 
 OpenInspect picks a target in this order: a matching [routing rule](#routing-rules), then a channel association, then a classifier that looks at your message, the channel, and recent thread context. The classifier can pick an environment as well as a repository, and it can pick **No repository** when the task does not need a codebase. If the match is unclear, OpenInspect asks you to choose in the thread.
 
+Channel sessions do not use your personal memories, because their replies post where others read them. Repository and environment memories still apply.
+
 ### From a DM
 
 Open a direct message with the bot and send the request. No mention is needed; if you include one, it is stripped before the request reaches the agent.
 
 To continue a DM session, reply in the thread Slack created for that request. A new top-level DM is a new request and may start target selection again.
+
+A DM session uses your personal memories the way a web session does, when your **Use my personal memories in my sessions** setting is on. See [Memories](/configure/memories#including-personal-memories).
 
 ### Model and reasoning flags
 

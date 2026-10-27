@@ -939,6 +939,44 @@ describe("SessionRightSidebar", () => {
     expect(onToggleTerminal).toHaveBeenCalledOnce();
   });
 
+  it("asks before loading sandbox credentials, keeping preview links available", () => {
+    const onConnectSandbox = vi.fn();
+    const sessionState: SessionState = {
+      ...SESSION,
+      codeServerUrl: "https://code.example",
+      vncUrl: "https://vnc.example",
+      ttydUrl: "https://terminal.example",
+      tunnelUrls: { "3000": "https://app.example" },
+    };
+    const { rerender } = render(
+      inspector({ sessionState, sandboxConnected: false, onConnectSandbox })
+    );
+    selectTab("Tools");
+    expect(screen.queryByText("Open Editor")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open Desktop")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Port 3000" })).toHaveAttribute(
+      "href",
+      "https://app.example/"
+    );
+    expect(
+      screen.getByText(/stops the agent from searching their personal memories/)
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal, editor and desktop" }));
+    expect(onConnectSandbox).toHaveBeenCalledOnce();
+
+    rerender(
+      inspector({
+        sessionState: { ...sessionState, ttydToken: "token", codeServerPassword: "secret" },
+        sandboxConnected: true,
+        onConnectSandbox,
+      })
+    );
+    expect(screen.getByText("Open Editor")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Open terminal, editor and desktop" })
+    ).not.toBeInTheDocument();
+  });
+
   it("scrolls each tab panel on its own", () => {
     render(inspector({ diffState: READY_DIFF }));
     selectTab("Info");

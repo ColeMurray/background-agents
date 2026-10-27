@@ -26,13 +26,21 @@ const FULL_CAPABILITIES = {
 
 type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
 
-const { mutateMock, authorizationMock } = vi.hoisted(() => ({
+const { mutateMock, authorizationMock, authSessionMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
   authorizationMock: { canExportTrace: false, hasPermission: vi.fn() },
+  authSessionMock: { userId: null as string | null },
 }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({ hasPermission: authorizationMock.hasPermission }),
+}));
+
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () =>
+    authSessionMock.userId
+      ? { data: { user: { id: authSessionMock.userId } }, status: "authenticated" }
+      : { data: null, status: "unauthenticated" },
 }));
 
 vi.mock("swr", async () => {
@@ -148,6 +156,7 @@ describe("useSessionSocket", () => {
     FakeWebSocket.instances = [];
     mutateMock.mockReset();
     authorizationMock.canExportTrace = false;
+    authSessionMock.userId = null;
     authorizationMock.hasPermission.mockReset();
     authorizationMock.hasPermission.mockImplementation(
       (permission: string) => permission === "sessions.export" && authorizationMock.canExportTrace
@@ -167,6 +176,25 @@ describe("useSessionSocket", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([
+    ["the session owner", "owner-1", "sandbox-access", "tunnel-urls"],
+    ["anyone else", "teammate-1", "tunnel-urls", "sandbox-access"],
+  ])("loads sandbox credentials on sight only for %s", async (_viewer, userId, loaded, skipped) => {
+    authSessionMock.userId = userId;
+    const snapshot = createSnapshot();
+    snapshot.session.ownerUserId = "owner-1";
+    const fetchMock = vi.mocked(fetch);
+
+    renderHook(() => useSessionSocket("session-1", snapshot));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/session-1/${loaded}`, expect.anything())
+    );
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain(
+      `/api/sessions/session-1/${skipped}`
+    );
   });
 
   it("keeps read synchronization available without collaboration or sandbox access", async () => {

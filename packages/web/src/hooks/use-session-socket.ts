@@ -5,6 +5,7 @@ import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSandboxAccess } from "@/hooks/use-sandbox-access";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useAuthSession } from "@/lib/auth-session";
 import { resolveSessionCapabilities, type SessionCapabilities } from "@/lib/session-capabilities";
 import {
   ingestLiveSandboxEvent,
@@ -59,6 +60,10 @@ interface UseSessionSocketReturn {
   sessionGone: boolean;
   capabilities: SessionCapabilities;
   sessionState: SessionState | null;
+  /** Whether this viewer has loaded the sandbox's terminal, editor and desktop credentials. */
+  sandboxConnected: boolean;
+  /** Load those credentials; for anyone but the owner this turns off personal memory search. */
+  connectSandbox: () => void;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
   /** The latest sandbox boot: its last phase and completed-phase timings. */
@@ -131,10 +136,13 @@ export function useSessionSocket(
     dispatch({ type: "snapshot_refreshed", session: initialSnapshot.session });
   }
   const { hasPermission } = useCurrentUserAuthorization();
+  const { data: authSession } = useAuthSession();
   const capabilities = resolveSessionCapabilities(
     cachedState.sessionState?.capabilities,
     hasPermission("sessions.export")
   );
+  const ownerUserId = initialSnapshot.session.ownerUserId;
+  const isSessionOwner = !!ownerUserId && authSession?.user?.id === ownerUserId;
   const subscribedRef = useRef(false);
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
@@ -145,13 +153,15 @@ export function useSessionSocket(
   const pendingRequestsRef = useRef(new Map<string, PendingCorrelatedRequest>());
   const {
     sandboxAccess,
+    connected: sandboxConnected,
+    connect: connectSandbox,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
-  } = useSandboxAccess(
-    sessionId,
-    cachedState.sessionState?.sandboxStatus === "ready",
-    capabilities.sandboxAccess
-  );
+  } = useSandboxAccess(sessionId, cachedState.sessionState?.sandboxStatus === "ready", {
+    enabled: capabilities.sandboxAccess,
+    // The owner's own credentials never affect their personal memory, so they load on sight.
+    autoConnect: isSessionOwner,
+  });
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -501,6 +511,8 @@ export function useSessionSocket(
     sessionGone: transport.sessionGone,
     capabilities: transport.sessionGone ? resolveSessionCapabilities(undefined) : capabilities,
     sessionState,
+    sandboxConnected,
+    connectSandbox,
     sandboxError: state.sandboxError,
     boot: state.boot,
     messages: NO_MESSAGES,

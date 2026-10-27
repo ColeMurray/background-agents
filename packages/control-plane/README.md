@@ -90,7 +90,8 @@ claim-bearing one.
 | `/sessions`                     | POST      | Create new session                   |
 | `/sessions/:id`                 | GET       | Get canonical session snapshot       |
 | `/sessions/:id`                 | DELETE    | Delete session                       |
-| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection details       |
+| `/sessions/:id/sandbox-access`  | GET       | Get sandbox connection credentials   |
+| `/sessions/:id/tunnel-urls`     | GET       | Get preview-port URLs only           |
 | `/sessions/:id/prompt`          | POST      | Enqueue prompt                       |
 | `/sessions/:id/stop`            | POST      | Stop execution                       |
 | `/sessions/:id/ws`              | WebSocket | Real-time connection                 |
@@ -104,6 +105,12 @@ claim-bearing one.
 | `/sessions/:id/archive`         | POST      | Archive session                      |
 | `/sessions/:id/unarchive`       | POST      | Unarchive session                    |
 | `/sessions/batch-archive`       | POST      | Archive explicitly selected sessions |
+
+Sandbox credentials count as joining the session: when someone other than the session's
+personal-memory owner receives them, the session stops reading that owner's personal memory for good
+(see
+[Personal memory follows the owner's prompts](../../docs/MEMORY.md#personal-memory-follows-the-owners-prompts)).
+Clients that only need preview links use `/sessions/:id/tunnel-urls`.
 
 ### Create PR Payload
 

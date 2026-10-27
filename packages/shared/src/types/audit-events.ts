@@ -82,6 +82,7 @@ export const AUDIT_OPERATION_ACTIONS = [
   "memory.approved",
   "memory.rejected",
   "memory.superseded",
+  "memory.personal_read",
   "session.private_break_glass",
   "session.visibility_changed",
   "session.moved",

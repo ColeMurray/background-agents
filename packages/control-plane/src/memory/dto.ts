@@ -64,11 +64,19 @@ export function toSelectionSummary(selection: SessionMemorySelection): MemorySel
   };
 }
 
-/** A live session's selection summary with each item's drift since it was pinned. */
+/**
+ * A live session's selection summary with each item's drift since it was pinned, as `viewerUserId`
+ * sees it: personal items are listed only for their owner and counted for everyone else.
+ */
 export function toSelectionStatus(
   selection: SessionMemorySelection,
-  drift: readonly PinnedItemDrift[]
+  drift: readonly PinnedItemDrift[],
+  viewerUserId: string
 ): SessionMemorySelectionStatus {
   const summary = toSelectionSummary(selection);
-  return { ...summary, items: summary.items.map((item, index) => ({ ...item, ...drift[index] })) };
+  const items = summary.items.map((item, index) => ({ ...item, ...drift[index] }));
+  if (selection.personalOwnerUserId === viewerUserId)
+    return { ...summary, items, hiddenPersonalCount: 0 };
+  const shown = items.filter((item) => item.scope.type !== "personal");
+  return { ...summary, items: shown, hiddenPersonalCount: items.length - shown.length };
 }

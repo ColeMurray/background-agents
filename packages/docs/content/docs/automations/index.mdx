@@ -4,7 +4,7 @@ description: Run coding agents on a schedule or in response to webhooks, Sentry 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-27"
 relatedCode:
   - packages/control-plane/src/routes/automation-crud.ts
   - packages/web/src/hooks/use-can-create-automation.ts
@@ -137,7 +137,7 @@ Automations can be workspace-owned or team-owned. Ownership is separate from the
 | Manage or manually trigger  | The corresponding feature permission. Members can act as the executor or owning-team lead on an eligible automation; Administrators and Owners have workspace-wide management and trigger permissions.                      |
 | Reassign executor           | Automation management access plus owning-team lead or workspace Administrator/Owner authority. Executor status alone is insufficient.                                                                                       |
 
-Scheduled and event-driven runs use the configured executor. **Trigger Now** uses the requester, including their identity and linked source-control credentials. At run time, that execution user must still be active and allowed to create sessions and use the targets. For team automations, they must also remain a member of the active owning team, even if they are an Administrator or Owner. Repository grants and environment ownership/access are rechecked for the selected targets before launch.
+Scheduled and event-driven runs use the configured executor. **Trigger Now** uses the requester, including their identity and linked source-control credentials. Neither brings personal context: automation runs never load anyone's personal memories or personal skill profiles, whoever triggers them. Repository and environment memories apply as in any session. At run time, that execution user must still be active and allowed to create sessions and use the targets. For team automations, they must also remain a member of the active owning team, even if they are an Administrator or Owner. Repository grants and environment ownership/access are rechecked for the selected targets before launch.
 
 Generated sessions inherit the automation's owning team and the team's current default visibility; workspace-owned automations produce Workspace-visible sessions. Requiring a team for new definitions does not itself disable existing workspace-owned automation runs.
 

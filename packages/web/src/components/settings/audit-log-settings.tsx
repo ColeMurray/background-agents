@@ -63,6 +63,7 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "memory.approved": "Memory approved",
   "memory.rejected": "Memory rejected",
   "memory.superseded": "Memory superseded",
+  "memory.personal_read": "Personal memory read by an agent",
   "session.private_break_glass": "Private session break-glass read",
   "session.visibility_changed": "Session visibility changed",
   "session.moved": "Session moved",

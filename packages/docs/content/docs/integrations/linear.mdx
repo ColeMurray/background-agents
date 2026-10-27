@@ -4,7 +4,7 @@ description: Start OpenInspect sessions by mentioning or assigning the Linear Ag
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-27"
 relatedCode:
   - docs/integrations/LINEAR.md
   - packages/shared/src/types/integrations.ts
@@ -193,6 +193,7 @@ Claude Agent sessions started from Linear are automated sessions: they use the d
 - Linear does not provide Git credentials. Repository access comes from the deployment's source-control integration, such as the GitHub App installation.
 - **Repository Scope** controls which resolved repositories can receive Linear-started sessions.
 - Issue titles, descriptions, comments, and agent prompts are sent to the agent. Do not put secrets in them.
+- Linear-started sessions never use anyone's personal memories, because their replies post where others read them. Repository and environment memories still apply.
 
 ## Troubleshooting
 

@@ -17,6 +17,25 @@ add anyone else who should still trigger it. Only a message's `text` is matched.
 most 10 runs of an automation per hour and never continue an existing session, and Open-Inspect's
 own messages never trigger anything. See [Bot messages](docs/AUTOMATIONS.md#bot-messages).
 
+**Personal memory follows its owner's prompts.** Your personal memories now serve only your own
+prompts, whatever the session's visibility. On someone else's prompt, an Autofix turn, or between
+prompts, the agent can't search, read, or save them; the personal directives and catalog loaded when
+the session started still shape it. Team- and workspace-visible sessions you prompt yourself now
+save the personal facts the agent learns right away, until someone else prompts or opens the
+sandbox. Automation runs, manual ones included, and sessions started from Slack channels, Linear, or
+GitHub no longer include personal memories; Slack DMs work like the web. A child session spawned on
+someone else's prompt leaves out the parent owner's personal memories. Turning off **Use my personal
+memories in my sessions** now reaches existing sessions too. Only the owner sees personal items in a
+session's memory sidebar, and reads of personal memories are audited as `memory.personal_read`.
+Sessions that started earlier keep what they pinned, but the prompt rules apply to them at once.
+Requires D1 migration 0092. See [Persistent session memory](docs/MEMORY.md).
+
+**Sandbox credentials load on request.** In someone else's session, the session page no longer
+fetches terminal, editor, and desktop credentials just because you opened it. The Tools tab offers
+**Open terminal, editor and desktop**; opening them stops the agent from searching the owner's
+personal memories for the rest of the session. Your own sessions load the tools as before, and port
+preview links work without opening anything.
+
 ## October 26, 2026
 
 **Codex sub-agents appear as tasks.** Most Codex models can spawn sub-agents, but their activity was

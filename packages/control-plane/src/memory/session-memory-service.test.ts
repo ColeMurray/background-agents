@@ -8,6 +8,7 @@ import type { MemoryPartition } from "./partition";
 import { emptySelection } from "./selection";
 import { SessionMemoryService, type SessionMemoryServiceDeps } from "./session-memory-service";
 import type {
+  MemoryPromptContext,
   MemoryRecord,
   MemorySession,
   MemorySources,
@@ -18,6 +19,8 @@ import type {
 const api = { repoOwner: "acme", repoName: "api", repoId: 1 };
 const web = { repoOwner: "acme", repoName: "web", repoId: 2 };
 const apiPartition: MemoryPartition = { type: "repository", repoId: api.repoId };
+const ownerPrompt: MemoryPromptContext = { authorUserId: "owner", othersPrompted: false };
+const teammatePrompt: MemoryPromptContext = { authorUserId: "teammate", othersPrompted: true };
 
 function memorySession(
   overrides: Partial<Omit<MemorySession, "principal" | "sources">> & {
@@ -30,6 +33,7 @@ function memorySession(
     id: "session",
     harness: "opencode",
     isChildSession: false,
+    personalReadsEligible: true,
     personalAutoSaveEligible: true,
     ...rest,
     principal: { userId: "owner", ownerTeamId: null, ...principal },
@@ -97,6 +101,11 @@ function setup(
           : ({ kind: "denied", reason: "repository_ungranted" } as const)
       ),
     },
+    audit: {
+      recordPersonalRead: vi.fn<SessionMemoryServiceDeps["audit"]["recordPersonalRead"]>(
+        async () => {}
+      ),
+    },
     requestId: "request",
   } satisfies SessionMemoryServiceDeps;
   return { deps, service: new SessionMemoryService(deps) };
@@ -112,7 +121,9 @@ const fact = {
 describe("SessionMemoryService.write", () => {
   it("infers the sole repository and derives provenance from the session", async () => {
     const { service, deps } = setup();
-    await expect(service.write("session", { ...fact, scopeType: "repository" })).resolves.toEqual({
+    await expect(
+      service.write("session", { ...fact, scopeType: "repository" }, ownerPrompt)
+    ).resolves.toEqual({
       id: "created",
       status: "proposed",
       revisionId: "rev_created",
@@ -141,16 +152,15 @@ describe("SessionMemoryService.write", () => {
     const { service, deps } = setup({
       session: memorySession({ sources: { repositories: [api, web] } }),
     });
-    await expect(service.write("session", { ...fact, scopeType: "repository" })).rejects.toThrow(
-      MemoryValidationError
-    );
     await expect(
-      service.write("session", {
-        ...fact,
-        scopeType: "repository",
-        repoOwner: "acme",
-        repoName: "web",
-      })
+      service.write("session", { ...fact, scopeType: "repository" }, ownerPrompt)
+    ).rejects.toThrow(MemoryValidationError);
+    await expect(
+      service.write(
+        "session",
+        { ...fact, scopeType: "repository", repoOwner: "acme", repoName: "web" },
+        ownerPrompt
+      )
     ).resolves.toMatchObject({ id: "created" });
     expect(deps.records.create).toHaveBeenCalledTimes(1);
     expect(deps.records.create.mock.calls[0][0].partition).toEqual({
@@ -163,17 +173,46 @@ describe("SessionMemoryService.write", () => {
     const { service, deps } = setup({
       session: memorySession({ isChildSession: true, principal: { userId: "collaborator" } }),
     });
-    await expect(service.write("session", { ...fact, scopeType: "personal" })).rejects.toThrow(
-      MemoryAccessError
-    );
+    await expect(
+      service.write("session", { ...fact, scopeType: "personal" }, ownerPrompt)
+    ).rejects.toThrow(MemoryAccessError);
     expect(deps.records.create).not.toHaveBeenCalled();
+  });
+
+  it("writes personal memory only on the owner's own prompt", async () => {
+    const { service, deps } = setup();
+    const personal = { ...fact, scopeType: "personal" as const };
+    await expect(service.write("session", personal, teammatePrompt)).rejects.toThrow(
+      "Personal memory is available only on the session owner's own prompts"
+    );
+    await expect(
+      service.write("session", personal, { authorUserId: null, othersPrompted: true })
+    ).rejects.toThrow(MemoryAccessError);
+    expect(deps.records.create).not.toHaveBeenCalled();
+
+    await service.write("session", personal, ownerPrompt);
+    expect(deps.records.create).toHaveBeenCalledWith(
+      expect.objectContaining({ partition: { type: "personal", userId: "owner" } }),
+      expect.objectContaining({ kind: "agent", userId: "owner" }),
+      { personalAutoSaveEligible: true }
+    );
+  });
+
+  it("stops auto-saving the owner's personal facts once anyone else has prompted", async () => {
+    const { service, deps } = setup();
+    await service.write(
+      "session",
+      { ...fact, scopeType: "personal" },
+      { authorUserId: "owner", othersPrompted: true }
+    );
+    expect(deps.records.create.mock.calls[0][2]).toEqual({ personalAutoSaveEligible: false });
   });
 
   it("denies a write when the principal can no longer read the partition", async () => {
     const { service, deps } = setup({ readable: [false] });
-    await expect(service.write("session", { ...fact, scopeType: "repository" })).rejects.toThrow(
-      MemoryAccessError
-    );
+    await expect(
+      service.write("session", { ...fact, scopeType: "repository" }, ownerPrompt)
+    ).rejects.toThrow(MemoryAccessError);
     expect(deps.records.create).not.toHaveBeenCalled();
   });
 });
@@ -185,17 +224,57 @@ describe("SessionMemoryService.read", () => {
       records,
       session: memorySession({ sources: { personalOwnerUserId: null } }),
     });
-    await expect(optedOut.service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    await expect(optedOut.service.read("session", "mine", ownerPrompt)).rejects.toThrow(
+      MemoryNotFoundError
+    );
     const child = setup({ records, session: memorySession({ isChildSession: true }) });
-    await expect(child.service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    await expect(child.service.read("session", "mine", ownerPrompt)).rejects.toThrow(
+      MemoryNotFoundError
+    );
     const pinnedChild = setup({
       records,
       pinned: ["mine"],
       session: memorySession({ isChildSession: true }),
     });
-    await expect(pinnedChild.service.read("session", "mine")).resolves.toMatchObject({
+    await expect(pinnedChild.service.read("session", "mine", ownerPrompt)).resolves.toMatchObject({
       status: "active",
       content: "Start the database",
+    });
+  });
+
+  it("reads personal memory only on the owner's prompt and audits what it returns", async () => {
+    const repository = record("api", {
+      partition: apiPartition,
+      scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+    });
+    const records = [record("mine"), repository];
+    const teammate = setup({ records });
+    await expect(teammate.service.read("session", "mine", teammatePrompt)).rejects.toThrow(
+      MemoryNotFoundError
+    );
+    await expect(teammate.service.read("session", "api", teammatePrompt)).resolves.toMatchObject({
+      id: "api",
+    });
+    expect(teammate.deps.audit.recordPersonalRead).not.toHaveBeenCalled();
+
+    const sandboxShared = setup({
+      records,
+      session: memorySession({ personalReadsEligible: false }),
+    });
+    await expect(sandboxShared.service.read("session", "mine", ownerPrompt)).rejects.toThrow(
+      MemoryNotFoundError
+    );
+
+    const owner = setup({ records });
+    await expect(owner.service.read("session", "mine", ownerPrompt)).resolves.toMatchObject({
+      content: "Start the database",
+    });
+    expect(owner.deps.audit.recordPersonalRead).toHaveBeenCalledWith({
+      requestId: "request",
+      sessionId: "session",
+      promptAuthorUserId: "owner",
+      ownerUserId: "owner",
+      memoryIds: ["mine"],
     });
   });
 
@@ -206,11 +285,11 @@ describe("SessionMemoryService.read", () => {
       archivedAt: 5,
       archiveNote: "Outdated",
     });
-    await expect(setup({ records: [archived] }).service.read("session", "old")).rejects.toThrow(
-      MemoryNotFoundError
-    );
     await expect(
-      setup({ records: [archived], pinned: ["old"] }).service.read("session", "old")
+      setup({ records: [archived] }).service.read("session", "old", ownerPrompt)
+    ).rejects.toThrow(MemoryNotFoundError);
+    await expect(
+      setup({ records: [archived], pinned: ["old"] }).service.read("session", "old", ownerPrompt)
     ).resolves.toEqual({
       id: "old",
       status: "archived",
@@ -228,15 +307,17 @@ describe("SessionMemoryService.read", () => {
         record("web", { partition: other }),
       ],
     });
-    await expect(service.read("session", "directive")).rejects.toThrow(MemoryNotFoundError);
-    await expect(service.read("session", "web")).rejects.toThrow(MemoryNotFoundError);
+    await expect(service.read("session", "directive", ownerPrompt)).rejects.toThrow(
+      MemoryNotFoundError
+    );
+    await expect(service.read("session", "web", ownerPrompt)).rejects.toThrow(MemoryNotFoundError);
   });
 });
 
 describe("SessionMemoryService.search", () => {
   it("restricts a child's personal search to pinned records", async () => {
     const { service, deps } = setup({ session: memorySession({ isChildSession: true }) });
-    await service.search("session", { query: "needle", limit: 10 });
+    await service.search("session", { query: "needle", limit: 10 }, ownerPrompt);
     expect(deps.factIndex.search).toHaveBeenCalledWith({
       terms: ["needle"],
       limit: 10,
@@ -247,11 +328,61 @@ describe("SessionMemoryService.search", () => {
     });
   });
 
+  it("searches personal memory only on the owner's prompt while reads are on", async () => {
+    const { service, deps } = setup();
+    await service.search("session", { query: "needle", limit: 10 }, teammatePrompt);
+    expect(deps.factIndex.search).toHaveBeenCalledWith(
+      expect.objectContaining({ partitions: [{ partition: apiPartition }] })
+    );
+    await expect(
+      service.search(
+        "session",
+        { query: "needle", limit: 10, scopeType: "personal" },
+        teammatePrompt
+      )
+    ).rejects.toThrow("Personal memory is available only on the session owner's own prompts");
+
+    const sandboxShared = setup({ session: memorySession({ personalReadsEligible: false }) });
+    await expect(
+      sandboxShared.service.search(
+        "session",
+        { query: "needle", limit: 10, scopeType: "personal" },
+        ownerPrompt
+      )
+    ).rejects.toThrow("someone else opened its sandbox");
+  });
+
+  it("audits the personal records a search returns", async () => {
+    const { service, deps } = setup();
+    deps.factIndex.search.mockResolvedValue([
+      {
+        id: "mine",
+        revisionId: "rev_mine",
+        partition: { type: "personal", userId: "owner" },
+        scope: { type: "personal" },
+        title: "Test setup",
+        description: "How to run the tests",
+      },
+      {
+        id: "api",
+        revisionId: "rev_api",
+        partition: apiPartition,
+        scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+        title: "Deploys",
+        description: "How to deploy",
+      },
+    ]);
+    await service.search("session", { query: "needle", limit: 10 }, ownerPrompt);
+    expect(deps.audit.recordPersonalRead).toHaveBeenCalledWith(
+      expect.objectContaining({ promptAuthorUserId: "owner", memoryIds: ["mine"] })
+    );
+  });
+
   it("discards results when access is revoked while the query runs", async () => {
     const { service, deps } = setup({ readable: [true, false] });
-    await expect(service.search("session", { query: "needle", limit: 10 })).rejects.toThrow(
-      MemoryAccessError
-    );
+    await expect(
+      service.search("session", { query: "needle", limit: 10 }, ownerPrompt)
+    ).rejects.toThrow(MemoryAccessError);
     expect(deps.factIndex.search).toHaveBeenCalledTimes(1);
   });
 });
