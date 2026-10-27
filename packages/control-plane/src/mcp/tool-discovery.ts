@@ -27,7 +27,8 @@ export class McpToolDiscoveryError extends Error {
 
 /**
  * Sends the server's configured headers on every request, bounded by `signal`.
- * Drops `cache`: the SSE transport's EventSource sets `cache: "no-store"`, which
+ * Never follows a redirect, which would carry those headers to another URL; a
+ * 3xx response surfaces as that HTTP status. Drops `cache`: the SSE transport's EventSource sets `cache: "no-store"`, which
  * the Workers runtime rejects at the control plane's compatibility date.
  */
 export function authenticatedFetch(
@@ -44,6 +45,7 @@ export function authenticatedFetch(
     return baseFetch(input, {
       ...forwarded,
       headers: requestHeaders,
+      redirect: "manual",
       signal: requestSignal ? AbortSignal.any([signal, requestSignal]) : signal,
     });
   };

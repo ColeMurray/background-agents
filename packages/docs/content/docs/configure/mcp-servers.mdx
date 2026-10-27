@@ -96,13 +96,13 @@ The list shows the number of selected tools next to each restricted server.
 
 How each harness applies the selection:
 
-- OpenCode: tools outside the selection are left out of every request, so they take no context, and calls to them are refused, even when an agent defined in the repository allows them. Other tools whose names start with the server's name and an underscore, such as a repository's own tools in `.opencode/tool/docs.ts` while `docs` is limited, are left out too.
+- OpenCode: tools outside the selection are left out of every request, so they take no context, and calls to them are refused, even when an agent defined in the repository allows them. Other tools whose names start with the server's name and an underscore, such as a repository's own tools in `.opencode/tool/docs.ts` while `docs` is limited, are left out too. One exception: OpenCode always lists tools named like its editing tools (`edit`, `write`, `apply_patch`) or its MCP resource tools, so an unselected tool that takes one of those names, such as an `apply` server's `patch` tool (named `apply_patch`), still appears, though calls to it are refused. Rename the server to avoid this.
 - Claude Agent: only the selected tools are allowed, and calls to any other tool of that server are refused, even when Claude settings in the repository allow them. Those tools still appear in Claude Agent's tool list, so a selection saves no context there.
 - Codex: tools outside the selection are hidden from the agent, and calls to them are refused.
 
 OpenCode and Claude Agent build a tool's name from the server and tool names, so they cannot always tell apart servers whose names overlap. While a server such as `docs` is limited, a server whose name extends it (`docs_extra` in OpenCode, `docs__extra` in either) gets no tools rather than expose the limited server's other tools. Rename one of them to avoid this.
 
-A selection takes effect the next time a session's sandbox starts; a running session keeps the tools it started with.
+A selection takes effect when a session gets a new sandbox, whether a fresh one or one restored from a snapshot. A running session, or one whose sandbox is resumed in place (on Daytona, E2B, or Boat), keeps the tools it started with; start a new session to pick up the change.
 
 A selection limits the tools the agent is offered; it is not a credential boundary. A server's headers and environment are still passed into the sandbox, so an agent that can run shell commands could reach the server's other tools directly. To keep a tool away from agents entirely, use credentials that cannot call it.
 

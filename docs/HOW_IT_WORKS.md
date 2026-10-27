@@ -414,11 +414,13 @@ stored headers and list its tools (`POST /mcp-servers/:id/tools`, which requires
 `mcp_servers.manage`).
 
 Runtimes older than the manifest's `minimumMcpToolAllowlistGeneration` ignore the allowlist. Every
-harness's image floor is at or above that generation, so a fresh launch always runs a runtime that
-enforces it (`launch-context.test.ts` pins this). A sandbox restored from a snapshot runs the
-snapshot's runtime instead, so the control plane withholds restricted servers from a restore on an
-older or unparseable runtime, logs `mcp.restricted_servers_withheld`, and adds a warning to the
-session.
+harness's image floor is at or above that generation, so a fresh launch from a prebuilt image runs a
+runtime that enforces it (`launch-context.test.ts` pins this). A launch with no prebuilt image uses
+the provider's base image, which the control plane assumes runs its own runtime version without
+checking; rebuild the base image when deploying this generation, or such launches ignore the
+allowlist. A sandbox restored from a snapshot runs the snapshot's runtime instead, so the control
+plane withholds restricted servers from a restore on an older or unparseable runtime, logs
+`mcp.restricted_servers_withheld`, and adds a warning to the session.
 
 The allowlist limits the tools a harness offers the model and will call; it is not a credential
 boundary. A remote server's headers and a local server's environment are still delivered to the

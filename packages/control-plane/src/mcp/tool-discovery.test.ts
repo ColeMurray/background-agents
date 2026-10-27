@@ -140,6 +140,8 @@ describe("authenticatedFetch", () => {
     expect(headers.get("authorization")).toBe("Bearer secret");
     expect(headers.get("accept")).toBe("application/json");
     expect(forwarded).not.toHaveProperty("cache");
+    // A followed redirect would carry the stored headers to another URL.
+    expect(forwarded?.redirect).toBe("manual");
     expect(forwarded?.signal?.aborted).toBe(false);
     transport.abort();
     expect(forwarded?.signal?.aborted).toBe(true);
@@ -259,6 +261,20 @@ describe("discoverRemoteMcpTools", () => {
     expect(err).toBeInstanceOf(McpToolDiscoveryError);
     expect(err.message).toBe("The server returned HTTP 500");
     expect(fetchMock.mock.calls.every(([, init]) => init?.method === "POST")).toBe(true);
+  });
+
+  it("reports a redirect as its status instead of following it", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, { status: 307, headers: { location: "https://elsewhere.example" } })
+    );
+
+    const err = await discoverRemoteMcpTools(remoteServer, {
+      fetch: fetchMock as unknown as FetchLike,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(McpToolDiscoveryError);
+    expect(err.message).toBe("The server returned HTTP 307");
+    expect(fetchMock.mock.calls.every(([input]) => String(input) === remoteServer.url)).toBe(true);
   });
 
   it("rethrows a failure without an HTTP status unchanged and does not try SSE", async () => {
