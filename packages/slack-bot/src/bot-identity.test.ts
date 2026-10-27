@@ -80,6 +80,28 @@ describe("getBotIdentity", () => {
     expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UCACHED", botId: null });
   });
 
+  it("serves the KV user id when only the bot id cannot be read", async () => {
+    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
+    const kv = kvWith({ "slack:bot-user-id": "UCACHED" });
+    kv.get.mockImplementation(async (key: string) => {
+      if (key === "slack:bot-id") throw new Error("kv read failed");
+      return "UCACHED";
+    });
+
+    expect(await getBotIdentity(makeEnv(kv))).toEqual({ userId: "UCACHED", botId: null });
+  });
+
+  it("fails closed (null) when the KV user id cannot be read", async () => {
+    mockAuthTest.mockResolvedValue({ ok: false, error: "ratelimited" });
+    const kv = kvWith({ "slack:bot-id": "BCACHED" });
+    kv.get.mockImplementation(async (key: string) => {
+      if (key === "slack:bot-user-id") throw new Error("kv read failed");
+      return "BCACHED";
+    });
+
+    expect(await getBotIdentity(makeEnv(kv))).toBeNull();
+  });
+
   it("fails closed (null) when auth.test fails and KV is empty", async () => {
     mockAuthTest.mockResolvedValue({ ok: false, error: "invalid_auth" });
     expect(await getBotIdentity(makeEnv(kvWith()))).toBeNull();

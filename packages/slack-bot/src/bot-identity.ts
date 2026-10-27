@@ -69,22 +69,33 @@ export async function getBotIdentity(env: Env, traceId?: string): Promise<BotIde
   });
 
   // Last-known-good from KV — the ids never really change, so a stale copy is
-  // safe to serve through a transient auth.test failure.
+  // safe to serve through a transient auth.test failure. The ids are read
+  // independently: only bot-message self-exclusion needs the bot id, so a
+  // missing or unreadable one must not stop triggers from people.
+  const [userId, botId] = await Promise.all([
+    readStoredId(kv, BOT_USER_ID_KV_KEY),
+    readStoredId(kv, BOT_ID_KV_KEY),
+  ]);
+  if (!userId) return null;
+  const identity = { userId, botId };
+  identityCache = { identity, timestamp: Date.now() };
+  return identity;
+}
+
+/** A last-known-good id from KV, or null when it is absent or cannot be read. */
+async function readStoredId(
+  kv: ReturnType<typeof createKvCacheStore>,
+  key: string
+): Promise<string | null> {
   try {
-    const [userId, botId] = await Promise.all([kv.get(BOT_USER_ID_KV_KEY), kv.get(BOT_ID_KV_KEY)]);
-    if (userId) {
-      const identity = { userId, botId: botId ?? null };
-      identityCache = { identity, timestamp: Date.now() };
-      return identity;
-    }
+    return (await kv.get(key)) ?? null;
   } catch (e) {
     log.warn("kv.get", {
-      key_prefix: "bot_identity",
+      key_prefix: key,
       error: e instanceof Error ? e : new Error(String(e)),
     });
+    return null;
   }
-
-  return null;
 }
 
 /** Clear the in-memory bot identity cache (for tests and forced refresh). */

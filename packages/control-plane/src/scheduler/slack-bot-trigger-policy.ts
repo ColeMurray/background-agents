@@ -1,6 +1,5 @@
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 import type { AutomationStore } from "../db/automation-store";
-import { parseSlackTriggerMetadata } from "./slack-completion";
 
 /**
  * Most runs that bot messages may start for one automation within
@@ -16,8 +15,16 @@ export const SLACK_BOT_TRIGGER_LIMIT = 10;
 export const SLACK_BOT_TRIGGER_WINDOW_MS = 60 * 60 * 1000;
 export const SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON = "slack_bot_trigger_limit";
 
+/**
+ * Matches the trigger metadata of a firing a bot's message started: the Slack
+ * event handler serializes SlackRunMetadata with JSON.stringify, which writes
+ * this key only when `botId` is set. A LIKE stays within portable SQL, which
+ * has no JSON functions.
+ */
+const BOT_FIRING_METADATA_PATTERN = '%"botId":%';
+
 export interface SlackBotTriggerPolicyDeps {
-  store: Pick<AutomationStore, "listEventTriggerMetadataSince">;
+  store: Pick<AutomationStore, "countEventFiringsSince">;
 }
 
 /** Which automations a message from another bot may start, and how often. */
@@ -29,17 +36,14 @@ export class SlackBotTriggerPolicy {
     return config?.slack?.includeBotMessages === true;
   }
 
-  /**
-   * Whether bot messages already started SLACK_BOT_TRIGGER_LIMIT runs in the
-   * window. Counted here rather than in SQL, which has no portable way to read
-   * the metadata's `botId`.
-   */
+  /** Whether bot messages already started SLACK_BOT_TRIGGER_LIMIT runs in the window. */
   async limitReached(automationId: string, now: number): Promise<boolean> {
-    const metadata = await this.deps.store.listEventTriggerMetadataSince(
+    const botFirings = await this.deps.store.countEventFiringsSince(
       automationId,
-      now - SLACK_BOT_TRIGGER_WINDOW_MS
+      now - SLACK_BOT_TRIGGER_WINDOW_MS,
+      BOT_FIRING_METADATA_PATTERN,
+      SLACK_BOT_TRIGGER_LIMIT
     );
-    const botFirings = metadata.filter((raw) => parseSlackTriggerMetadata(raw)?.botId).length;
     return botFirings >= SLACK_BOT_TRIGGER_LIMIT;
   }
 }

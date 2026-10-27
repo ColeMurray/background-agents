@@ -95,7 +95,7 @@ function slackHarness() {
     users: { getIdentity: vi.fn().mockResolvedValue({ userId: "slack-user" }) },
     attribution: { resolve: vi.fn().mockResolvedValue(null) },
     scmProvider: "github" as const,
-    botFirings: { listEventTriggerMetadataSince: vi.fn().mockResolvedValue([]) },
+    botFirings: { countEventFiringsSince: vi.fn().mockResolvedValue(0) },
     clock: { now: () => 100 },
     log,
   };
@@ -112,12 +112,6 @@ const botEvent: SlackAutomationEvent = {
   botId: "BALERTS",
   text: "Cost anomaly",
 };
-
-function botMetadata(count: number): string[] {
-  return Array.from({ length: count }, (_, i) =>
-    JSON.stringify({ channel: "C1", messageTs: `bot-${i}`, botId: "BALERTS" })
-  );
-}
 
 function optedIn(row: AutomationRow): AutomationRow {
   return {
@@ -218,13 +212,10 @@ describe("Slack bot messages", () => {
     });
   });
 
-  it("starts below the hourly limit, counting only bot-started firings", async () => {
+  it("starts below the hourly limit", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.listEventTriggerMetadataSince.mockResolvedValue([
-      ...botMetadata(SLACK_BOT_TRIGGER_LIMIT - 1),
-      JSON.stringify({ channel: "C1", messageTs: "person" }),
-    ]);
+    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT - 1);
     const handler = new SlackEventHandler(deps);
 
     await expect(handler.handle(botEvent)).resolves.toMatchObject({ triggered: 1 });
@@ -234,11 +225,7 @@ describe("Slack bot messages", () => {
   it("records a skip instead of starting once bot messages reached the hourly limit", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.listEventTriggerMetadataSince.mockResolvedValue([
-      ...botMetadata(SLACK_BOT_TRIGGER_LIMIT),
-      // Firings people started do not count toward the limit.
-      JSON.stringify({ channel: "C1", messageTs: "person" }),
-    ]);
+    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
     const handler = new SlackEventHandler(deps);
 
     await expect(handler.handle(botEvent)).resolves.toEqual({
@@ -248,9 +235,11 @@ describe("Slack bot messages", () => {
       invocationIds: ["inv-skip"],
     });
 
-    expect(deps.botFirings.listEventTriggerMetadataSince).toHaveBeenCalledExactlyOnceWith(
+    expect(deps.botFirings.countEventFiringsSince).toHaveBeenCalledExactlyOnceWith(
       "auto-1",
-      100 - SLACK_BOT_TRIGGER_WINDOW_MS
+      100 - SLACK_BOT_TRIGGER_WINDOW_MS,
+      '%"botId":%',
+      SLACK_BOT_TRIGGER_LIMIT
     );
     expect(deps.invocations.skipEvent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ triggerKey: botEvent.triggerKey }),
@@ -262,13 +251,11 @@ describe("Slack bot messages", () => {
   it("never counts or limits a person's messages", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.listEventTriggerMetadataSince.mockResolvedValue(
-      botMetadata(SLACK_BOT_TRIGGER_LIMIT)
-    );
+    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
     const handler = new SlackEventHandler(deps);
 
     await expect(handler.handle(slackEvent)).resolves.toMatchObject({ triggered: 1 });
-    expect(deps.botFirings.listEventTriggerMetadataSince).not.toHaveBeenCalled();
+    expect(deps.botFirings.countEventFiringsSince).not.toHaveBeenCalled();
   });
 
   it("does not send the already-active notice to a bot", async () => {

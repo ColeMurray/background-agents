@@ -1727,17 +1727,29 @@ export class AutomationStore {
     return row?.id ?? null;
   }
 
-  /** Trigger metadata of an automation's unskipped event firings created at or after `since`. */
-  async listEventTriggerMetadataSince(automationId: string, since: number): Promise<string[]> {
-    const { results } = await this.db
+  /**
+   * Count an automation's unskipped event firings created at or after `since`
+   * whose trigger metadata matches the `metadataLike` pattern, stopping at
+   * `limit`: callers only need to know whether a threshold is reached.
+   */
+  async countEventFiringsSince(
+    automationId: string,
+    since: number,
+    metadataLike: string,
+    limit: number
+  ): Promise<number> {
+    const row = await this.db
       .prepare(
-        `SELECT trigger_metadata FROM automation_invocations
-         WHERE automation_id = ? AND source = 'event' AND skip_reason IS NULL
-           AND trigger_metadata IS NOT NULL AND created_at >= ?`
+        `SELECT COUNT(*) AS count FROM (
+           SELECT 1 FROM automation_invocations
+           WHERE automation_id = ? AND source = 'event' AND skip_reason IS NULL
+             AND created_at >= ? AND trigger_metadata LIKE ?
+           LIMIT ?
+         ) AS matching_firings`
       )
-      .bind(automationId, since)
-      .all<{ trigger_metadata: string }>();
-    return results.map((row) => row.trigger_metadata);
+      .bind(automationId, since, metadataLike, limit)
+      .first<{ count: number }>();
+    return row?.count ?? 0;
   }
 
   /** Claim an explicit webhook key before either continuation or invocation work is admitted. */

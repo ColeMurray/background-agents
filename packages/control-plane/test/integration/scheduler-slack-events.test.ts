@@ -284,7 +284,7 @@ describe("Scheduler slack event handling (integration)", () => {
       expect(JSON.parse(row!.trigger_metadata)).toMatchObject({ botId: "BALERTS" });
     });
 
-    it("lists the metadata of the automation's unskipped event firings since a time", async () => {
+    it("counts the automation's unskipped matching event firings since a time, up to a limit", async () => {
       const store = new AutomationStore(env.DB);
       const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
       const otherId = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
@@ -313,8 +313,10 @@ describe("Scheduler slack event handling (integration)", () => {
           .run();
       }
 
-      const listed = await store.listEventTriggerMetadataSince(id, now - 1_000);
-      expect(listed.map((raw) => JSON.parse(raw).messageTs).sort()).toEqual(["1", "2", "3"]);
+      const since = now - 1_000;
+      expect(await store.countEventFiringsSince(id, since, '%"botId":%', 10)).toBe(2);
+      // Stops scanning once the limit is reached.
+      expect(await store.countEventFiringsSince(id, since, '%"botId":%', 1)).toBe(1);
     });
 
     it("does not let a bot's thread reply reach an excluded automation's session", async () => {
