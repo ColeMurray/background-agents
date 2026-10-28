@@ -1,11 +1,16 @@
 """Reconnect timing for the bridge's control-plane WebSocket.
 
-These constants are bounded by one budget: the control plane marks a sandbox
-stale when no heartbeat arrives for ``CONTROL_PLANE_HEARTBEAT_TIMEOUT_SECONDS``.
-A connection that drops just before a heartbeat is due goes silent for up to
-``HEARTBEAT_INTERVAL_SECONDS`` plus one reconnect delay, so
-``RECONNECT_MAX_DELAY_SECONDS + HEARTBEAT_INTERVAL_SECONDS`` must stay well
-below the stale threshold.
+The control plane marks a sandbox stale when no heartbeat arrives for
+``CONTROL_PLANE_HEARTBEAT_TIMEOUT_SECONDS``; a successful reattach refreshes
+that liveness. These constants share a configured-delay budget:
+``HEARTBEAT_INTERVAL_SECONDS + RECONNECT_MAX_DELAY_SECONDS`` must stay below
+the stale threshold. That sum covers a drop just before a heartbeat was due,
+followed by one maximal reconnect wait.
+
+The budget is not an end-to-end recovery bound. It assumes the drop is seen at
+once and the next attempt succeeds. Failure detection (up to the next ping or
+heartbeat), teardown, the handshake and any further failed attempts are not
+counted; they have only the margin left under the threshold.
 """
 
 from __future__ import annotations

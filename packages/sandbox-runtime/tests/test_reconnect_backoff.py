@@ -85,9 +85,11 @@ class TestReconnectBackoff:
 
 
 class TestStaleThresholdBudget:
-    def test_a_maximal_reconnect_lands_before_the_stale_threshold(self):
-        # A drop just before a heartbeat is due is silent for one heartbeat
-        # interval plus the reconnect delay.
+    def test_configured_delays_fit_within_the_stale_threshold(self):
+        # Configured delays only: a drop just before a heartbeat was due, then
+        # one maximal reconnect wait. Assumes immediate detection and a first
+        # attempt that succeeds; detection latency, teardown, the handshake
+        # and further failed attempts are not covered.
         assert (
             RECONNECT_MAX_DELAY_SECONDS + HEARTBEAT_INTERVAL_SECONDS
             < CONTROL_PLANE_HEARTBEAT_TIMEOUT_SECONDS
