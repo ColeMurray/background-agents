@@ -1,11 +1,12 @@
 "use client";
 
+import { type ModelCategory } from "@open-inspect/shared/models";
 import {
-  getReasoningConfig,
-  isValidReasoningEffort,
-  type ModelCategory,
-} from "@open-inspect/shared/models";
-import { HARNESS_IDS, getHarnessLabel, isValidHarness } from "@open-inspect/shared/harnesses";
+  getHarnessLabel,
+  HARNESS_IDS,
+  getHarnessReasoningConfig,
+  isValidHarness,
+} from "@open-inspect/shared/harnesses";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import {
   Select,
@@ -17,7 +18,7 @@ import {
 import { ChevronDownIcon, ModelIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { FieldDescription } from "./automation-form-field";
-import type { AutomationAgentDraft } from "./automation-form-policy";
+import { effectiveReasoningEffort, type AutomationAgentDraft } from "./automation-form-policy";
 
 const DEFAULT_REASONING_VALUE = "__default__";
 
@@ -37,7 +38,12 @@ export function AutomationAgentFields({
   modelError = "",
   onChange,
 }: AutomationAgentFieldsProps) {
-  const reasoningConfig = getReasoningConfig(resolvedModel);
+  const reasoningConfig = getHarnessReasoningConfig(value.harness, resolvedModel);
+  const reasoningEffort = effectiveReasoningEffort(
+    value.harness,
+    resolvedModel,
+    value.reasoningEffort
+  );
   const modelGroups: ComboboxGroup[] = enabledModelOptions.map((group) => ({
     category: group.category,
     options: group.models.map((model) => ({
@@ -48,11 +54,11 @@ export function AutomationAgentFields({
   }));
 
   const changeModel = (model: string) => {
-    const reasoningEffort =
-      value.reasoningEffort && isValidReasoningEffort(model, value.reasoningEffort)
-        ? value.reasoningEffort
-        : "";
-    onChange({ ...value, model, reasoningEffort });
+    onChange({
+      ...value,
+      model,
+      reasoningEffort: effectiveReasoningEffort(value.harness, model, value.reasoningEffort),
+    });
   };
 
   return (
@@ -67,11 +73,20 @@ export function AutomationAgentFields({
         <Select
           value={value.harness}
           onValueChange={(harness) => {
-            if (isValidHarness(harness)) onChange({ ...value, harness });
+            if (isValidHarness(harness))
+              onChange({
+                ...value,
+                harness,
+                reasoningEffort: effectiveReasoningEffort(
+                  harness,
+                  resolvedModel,
+                  value.reasoningEffort
+                ),
+              });
           }}
         >
           <SelectTrigger id="automation-harness" className="w-full" aria-label="Agent harness">
-            <SelectValue />
+            <SelectValue>{getHarnessLabel(value.harness)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {HARNESS_IDS.map((harness) => (
@@ -126,7 +141,7 @@ export function AutomationAgentFields({
           Reasoning Effort
         </label>
         <Select
-          value={reasoningConfig ? value.reasoningEffort || DEFAULT_REASONING_VALUE : ""}
+          value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
           onValueChange={(reasoningEffort) =>
             onChange({
               ...value,

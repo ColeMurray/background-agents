@@ -90,7 +90,7 @@ export async function storeThreadSession(
     await createKvCacheStore(env.SLACK_KV).put(
       getThreadSessionKey(channel, threadTs),
       JSON.stringify(session),
-      { expirationTtl: THREAD_SESSION_TTL_MS / 1000 }
+      { ttlMs: THREAD_SESSION_TTL_MS }
     );
   } catch (e) {
     log.error("kv.put", {
@@ -127,7 +127,7 @@ export async function closeThreadSession(
     getThreadClosureKey(channel, threadTs, sessionId),
     "1",
     {
-      expirationTtl: THREAD_SESSION_TTL_MS / 1000,
+      ttlMs: THREAD_SESSION_TTL_MS,
     }
   );
   const mapping = await lookupThreadSession(env, channel, threadTs);
@@ -178,7 +178,7 @@ export async function markThreadClosureNoticeSent(
   await createKvCacheStore(env.SLACK_KV).put(
     getThreadClosureNoticeKey(channel, threadTs, sessionId),
     "1",
-    { expirationTtl: THREAD_SESSION_TTL_MS / 1000 }
+    { ttlMs: THREAD_SESSION_TTL_MS }
   );
 }
 

@@ -184,6 +184,21 @@ describe("fetchUser", () => {
     vi.unstubAllGlobals();
   });
 
+  it("forwards caller cancellation to the profile request", async () => {
+    const callerSignal = AbortSignal.abort(new DOMException("Enrollment expired", "TimeoutError"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        expect(init?.signal?.aborted).toBe(true);
+        expect(init?.signal?.reason).toBe(callerSignal.reason);
+        throw init?.signal?.reason;
+      })
+    );
+
+    await expect(fetchUser(client, "user-1", callerSignal)).resolves.toBeNull();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("returns user with name and email", async () => {
     mockFetchResponse({
       data: {

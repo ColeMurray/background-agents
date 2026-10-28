@@ -241,6 +241,7 @@ def observed_tool_version(command: str, expected: str, output: str) -> str:
     prefixes = {
         "node": r"v",
         "opencode": r"",
+        "codex": r"codex-cli ",
         "bun": r"",
         "pnpm": r"",
         "agent-browser": r"agent-browser\s+",
@@ -265,6 +266,7 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
     for command, version in (
         ("node", tools["node"][plan["target"]["node"]]["version"]),
         ("opencode", tools["opencode"]),
+        ("codex", tools["codex"]["version"]),
         ("bun", tools["bun"]),
         ("pnpm", tools["pnpm"]),
         ("agent-browser", tools["agentBrowser"]),
@@ -284,6 +286,9 @@ def inspect_image(plan: dict[str, Any], tools: dict[str, Any], *, services: bool
     )
     if installed_runtime != plan["runtimeVersion"]:
         raise RuntimeError("Installed runtime manifest does not match the recipe")
+    probe.run(["python3", "-m", "sandbox_runtime.harness.codex.probe"], timeout_seconds=30)
+    # Offline: a refreshed cache in the build sandbox is not proof it survived capture.
+    probe.run(["python3", "-m", "sandbox_runtime.model_catalog", "--check"])
     probe.run(
         [
             "python3",

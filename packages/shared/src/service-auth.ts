@@ -40,8 +40,7 @@ export type ServiceSignatureFailure = "format" | "expired" | "mismatch";
  * re-split the header (this module is the sole owner of the sig1 grammar).
  */
 export type ServiceSignatureResult =
-  | { ok: true; timestampMs: number; nonce: string }
-  | { ok: false; reason: ServiceSignatureFailure };
+  { ok: true; timestampMs: number; nonce: string } | { ok: false; reason: ServiceSignatureFailure };
 
 const NONCE_PATTERN = /^[0-9a-f]{1,64}$/;
 // Strict ASCII decimal. Number()'s wider grammar ("1e3", "0x10", padding)

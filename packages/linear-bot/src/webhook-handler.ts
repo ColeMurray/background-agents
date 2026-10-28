@@ -4,7 +4,9 @@
  */
 
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import { ACTOR_EMAIL_REQUIRED_CODE } from "@open-inspect/shared/types/actors";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
+import { checkHarnessCompatibility, getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import type { Env, AgentSessionWebhook, AgentSessionWebhookIssue } from "./types";
 import {
@@ -17,9 +19,10 @@ import {
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { enrollLinearActor } from "./actor-enrollment";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
-import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
+import { extractModelFromLabels, resolveSessionAgentSettings } from "./model-resolution";
 import {
   resolveSessionTarget,
   resolveStoredSessionTarget,
@@ -105,12 +108,32 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
       const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
       if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
       try {
-        const stopRes = await signedControlPlaneFetch(env, {
+        const stopRequest = {
           method: "POST",
           url: stopUrl.toString(),
           actor: `linear:${actorUserId}`,
           traceId,
-        });
+        };
+        // Known actors can stop without relying on Linear's API or token issuance.
+        let stopRes = await signedControlPlaneFetch(env, stopRequest);
+        if (
+          stopRes.status === 403 &&
+          z
+            .object({ code: z.literal(ACTOR_EMAIL_REQUIRED_CODE) })
+            .safeParse(await stopRes.json().catch(() => null)).success
+        ) {
+          const client = await getLinearClientOrThrow(
+            env,
+            webhook.organizationId,
+            webhook.appUserId
+          );
+          const refusal = await enrollLinearActor(env, client, actorUserId, traceId);
+          if (refusal) {
+            await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+            return;
+          }
+          stopRes = await signedControlPlaneFetch(env, stopRequest);
+        }
         if (!stopRes.ok) {
           log.error("agent_session.stop_failed", {
             trace_id: traceId,
@@ -160,7 +183,7 @@ function getNewSessionInput(webhook: AgentSessionWebhook): {
   clarificationReply: { body: string } | undefined;
   actorUserId: string | undefined;
 } {
-  const instructionComment = webhook.agentSession.comment;
+  const instructionComment = webhook.agentSession.comment ?? undefined;
   const sessionActor = instructionComment?.userId ?? webhook.agentSession.creatorId ?? undefined;
   const replyBody =
     webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;
@@ -297,6 +320,11 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
+  const refusal = await enrollLinearActor(env, client, followUp.actorUserId, traceId);
+  if (refusal) {
+    await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+    return;
+  }
   const scope = { linearTeamId: issue.team.id };
   let currentIntegration: TargetIntegration | null;
   try {
@@ -531,23 +559,23 @@ async function handleNewSession(
 
   let userModel: string | undefined;
   let userReasoningEffort: string | undefined;
-  let actorDisplayName: string | undefined;
-  let actorEmail: string | undefined;
   if (sessionActorUserId) {
     const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
-
-    const linearUser = await fetchUser(client, sessionActorUserId);
-    actorDisplayName = linearUser?.name;
-    actorEmail = linearUser?.email ?? undefined;
   }
+  // Automation-created delegations act as the installed app user; first-time
+  // enrollment needs that actor's profile too.
+  const linearUser = await fetchUser(client, launchActorUserId);
+  const actorDisplayName = linearUser?.name;
+  const actorEmail = linearUser?.email ?? undefined;
 
   const labelModel = extractModelFromLabels(labels);
-  const { model, reasoningEffort } = resolveSessionModelSettings({
+  const { harness, model, reasoningEffort } = resolveSessionAgentSettings({
     envDefaultModel: env.DEFAULT_MODEL,
+    configHarness: integrationConfig.harness,
     configModel: integrationConfig.model,
     configReasoningEffort: integrationConfig.reasoningEffort,
     allowUserPreferenceOverride: integrationConfig.allowUserPreferenceOverride,
@@ -557,7 +585,18 @@ async function handleNewSession(
     labelModel,
   });
 
+  const compatibilityError = checkHarnessCompatibility(harness, model, undefined, reasoningEffort);
+  if (compatibilityError) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: `No coding session was created. ${compatibilityError.message} Choose a compatible model label, user preference, or default model, or change the Linear integration harness, then delegate again.`,
+    });
+    return;
+  }
+
   // ─── Create session ───────────────────────────────────────────────────
+
+  const harnessLabel = getHarnessLabel(harness);
 
   await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
   await emitAgentActivity(
@@ -565,7 +604,7 @@ async function handleNewSession(
     agentSessionId,
     {
       type: "thought",
-      body: `Creating coding session on ${label} (model: ${model})...`,
+      body: `Creating coding session on ${label} (agent: ${harnessLabel}, model: ${model})...`,
     },
     true
   );
@@ -575,6 +614,7 @@ async function handleNewSession(
     target,
     {
       title: `${issue.identifier}: ${issue.title}`,
+      harness,
       model,
       reasoningEffort,
       actorUserId: launchActorUserId,
@@ -671,7 +711,7 @@ async function handleNewSession(
 
   await emitAgentActivity(client, agentSessionId, {
     type: "thought",
-    body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    body: `Working on \`${label}\` with **${model}** (${harnessLabel}).\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 
   log.info("agent_session.session_created", {
@@ -680,6 +720,8 @@ async function handleNewSession(
     agent_session_id: agentSessionId,
     issue_identifier: issue.identifier,
     target: targetId(target),
+    configured_harness: integrationConfig.harness,
+    harness,
     model,
     classification_reasoning: classificationReasoning,
     duration_ms: Date.now() - startTime,

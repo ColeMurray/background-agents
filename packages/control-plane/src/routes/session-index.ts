@@ -12,7 +12,10 @@ import {
 import {
   SESSION_INBOX_CATEGORIES,
   sessionInboxCategorySchema,
+  sessionInboxMarkReadRequestSchema,
+  sessionInboxMarkReadResponseSchema,
   sessionInboxPageSchema,
+  type SessionInboxMarkReadRequest,
 } from "@open-inspect/shared/types/session-inbox";
 import type { SessionViewer } from "@open-inspect/shared";
 import { sessionVisibilitySchema } from "@open-inspect/shared/types/teams";
@@ -45,7 +48,7 @@ import {
 } from "../authorization/session-admission";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
-import type { ListSessionInboxResult } from "../db/session-inbox-store";
+import type { InboxFilterOptions, ListSessionInboxResult } from "../db/session-inbox-store";
 import { recordShadowListDenials } from "../authorization/session-shadow-audit";
 
 const sessionInboxQuerySchema = z.object({
@@ -232,6 +235,34 @@ export async function handleListSessions(
   return response;
 }
 
+/** The viewer-scoped options shared by every query over the viewer's inbox. */
+async function resolveInboxFilterOptions(
+  env: Env,
+  ctx: UserRouteContext,
+  filters: SessionInboxMarkReadRequest
+): Promise<(InboxFilterOptions & { readScope: SessionViewer }) | Response> {
+  const viewer = viewerFromContext(
+    ctx,
+    (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
+      ctx.principal.userId
+    ))
+  );
+  if (filters.scope === "all" && (viewer.kind !== "user" || !isWorkspaceAdmin(viewer.roleKey))) {
+    return error("Invalid scope", 403);
+  }
+  return {
+    createdByUserIds: filters.mine ? [ctx.principal.userId] : [],
+    excludeAutomatedSessions: filters.mine === true,
+    viewerUserId: ctx.principal.userId,
+    readScope: viewer,
+    mode: teamsEnforcementMode(ctx, env),
+    teamIds: filters.teamIds,
+    ownerFilter: filters.ownerFilter,
+    visibility: filters.visibility,
+    scope: filters.scope,
+  };
+}
+
 export async function handleListSessionInbox(
   request: Request,
   env: Env,
@@ -250,31 +281,19 @@ export async function handleListSessionInbox(
   if (teamIds === null) {
     return error("Invalid teamIds[]", 400);
   }
-  const viewer = viewerFromContext(
-    ctx,
-    (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
-      ctx.principal.userId
-    ))
-  );
-  if (scope === "all" && (viewer.kind !== "user" || !isWorkspaceAdmin(viewer.roleKey))) {
-    return error("Invalid scope", 403);
-  }
-
-  const startedAt = Date.now();
-  const store = new SessionIndexStore(ctx.db);
-  const mode = teamsEnforcementMode(ctx, env);
-  const commonOptions = {
-    limit: SESSION_INBOX_LIMIT,
-    createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
-    excludeAutomatedSessions: mine === "true",
-    viewerUserId: ctx.principal.userId,
-    readScope: viewer,
-    mode,
+  const filterOptions = await resolveInboxFilterOptions(env, ctx, {
+    mine: mine === "true",
     teamIds,
     ownerFilter,
     visibility,
     scope,
-  };
+  });
+  if (filterOptions instanceof Response) return filterOptions;
+  const { readScope: viewer, mode } = filterOptions;
+
+  const startedAt = Date.now();
+  const store = new SessionIndexStore(ctx.db);
+  const commonOptions = { ...filterOptions, limit: SESSION_INBOX_LIMIT };
 
   if (category === null) {
     const snapshot = await readSessionList(() => store.listInboxSnapshot(commonOptions));
@@ -404,6 +423,40 @@ export async function handlePatchReadState(
   return response;
 }
 
+export async function handleMarkSessionInboxRead(
+  request: Request,
+  env: Env,
+  _params: object,
+  ctx: UserRouteContext
+): Promise<Response> {
+  const body = await parseBody(
+    request,
+    sessionInboxMarkReadRequestSchema,
+    "Invalid session inbox read request"
+  );
+  if (body instanceof Response) return body;
+  const filterOptions = await resolveInboxFilterOptions(env, ctx, body);
+  if (filterOptions instanceof Response) return filterOptions;
+
+  const markedCount = await readSessionList(() =>
+    new SessionIndexStore(ctx.db).markInboxRead(filterOptions, body.rootSessionId)
+  );
+  if (markedCount instanceof Response) return markedCount;
+
+  const response = json(sessionInboxMarkReadResponseSchema.parse({ markedCount }));
+  response.headers.set("Cache-Control", "private, no-store");
+  log.info("session_inbox.marked_read", {
+    event: "session_inbox.marked_read",
+    marked_count: markedCount,
+    mine: body.mine === true,
+    team_count: body.teamIds?.length ?? 0,
+    root_session_id: body.rootSessionId ?? null,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+  return response;
+}
+
 export async function handleDeleteSession(
   _request: Request,
   env: Env,
@@ -432,6 +485,14 @@ sessionIndexRoutes.get(
     authorization: requirePermission("sessions.read", { service: "deny" }),
   }),
   (c) => dispatch(c, handleListSessionInbox)
+);
+sessionIndexRoutes.post(
+  "/sessions/inbox/read-state",
+  admit({
+    ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+    authorization: requirePermission("sessions.read", { service: "deny" }),
+  }),
+  (c) => dispatch(c, handleMarkSessionInboxRead)
 );
 sessionIndexRoutes.patch(
   "/sessions/:id/read-state",

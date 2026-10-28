@@ -28,6 +28,15 @@ export const MEMORY_AGENT_WRITE_QUOTAS = {
 /** Management list paging; the control plane fetches one extra row to compute `nextOffset`. */
 export const MEMORY_LIST_PAGE_SIZE = 50;
 export const MEMORY_LIST_MAX_PAGE_SIZE = 100;
+/** Bound candidate accumulation when merging shared management pages across partitions. */
+export const MEMORY_SHARED_LIST_MAX_OFFSET = 1_000;
+/**
+ * Records one bulk lifecycle request may decide. Each record costs up to four D1 queries (load,
+ * predecessor, guarded batch, reload) on top of a fixed request overhead, so a full request stays
+ * inside the Workers Free plan's 50 queries per invocation. Clients split larger selections into
+ * sequential requests.
+ */
+export const MEMORY_BULK_ACTION_MAX_RECORDS = 8;
 
 // ---------------------------------------------------------------------------
 // Scopes
@@ -48,6 +57,9 @@ export const memoryScopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("environment"), environmentId: z.string().min(1).max(200) }).strict(),
 ]);
 export type MemoryScope = z.infer<typeof memoryScopeSchema>;
+
+/** Management lists can aggregate shared scopes; records and writes still name one partition. */
+export type MemoryListScope = MemoryScope | "shared";
 
 /** Exhaustiveness guard for switches over memory unions. */
 function unreachable(value: never): never {
@@ -257,6 +269,33 @@ export type MemoryActionBody<A extends MemoryAction = MemoryAction> = z.infer<
 export function memoryActionAcceptsNote(action: MemoryAction): boolean {
   return "archiveNote" in memoryActionBodySchemas[action].shape;
 }
+/**
+ * One lifecycle action over several records. Each names the revision the person reviewed (the
+ * bulk form of `If-Match`) and is decided independently, so a stale record fails alone.
+ */
+export const bulkMemoryActionSchema = z
+  .object({
+    action: memoryActionNameSchema,
+    memories: z
+      .array(z.object({ id: memoryIdSchema, revisionId: memoryIdSchema }).strict())
+      .min(1)
+      .max(MEMORY_BULK_ACTION_MAX_RECORDS)
+      .refine(
+        (memories) => new Set(memories.map((memory) => memory.id)).size === memories.length,
+        "Each memory may appear only once"
+      ),
+    archiveNote: archiveNoteBodySchema.shape.archiveNote,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.archiveNote !== undefined && !memoryActionAcceptsNote(value.action))
+      ctx.addIssue({
+        code: "custom",
+        path: ["archiveNote"],
+        message: `${value.action} does not accept an archive note`,
+      });
+  });
+export type BulkMemoryActionInput = z.infer<typeof bulkMemoryActionSchema>;
 export const memoryPreferencesSchema = z.object({ includePersonalMemories: z.boolean() }).strict();
 export type MemoryPreferences = z.infer<typeof memoryPreferencesSchema>;
 /** Preview the selection a new session would pin, without persisting it. */
@@ -264,6 +303,8 @@ export const memoryPreviewSchema = z
   .object({
     repositories: repositoriesInputSchema.optional(),
     environmentId: z.string().min(1).optional(),
+    /** The team that would own the session; team sessions read memories through its grants. */
+    teamId: z.string().min(1).optional(),
     includePersonalMemories: z.boolean().optional(),
   })
   .strict();
@@ -314,9 +355,21 @@ export const memoryResponseSchema = z.object({ memory: memoryDtoSchema });
 export const memoryListResponseSchema = z.object({
   memories: z.array(memoryDtoSchema),
   nextOffset: z.number().int().nullable(),
+  /** More matches exist past the All view's paging depth (`MEMORY_SHARED_LIST_MAX_OFFSET`). */
+  truncated: z.boolean().default(false),
   canCreate: z.boolean(),
 });
 export type MemoryListResponse = z.infer<typeof memoryListResponseSchema>;
+/** Per-record outcomes of a bulk action, in request order. */
+export const bulkMemoryActionResponseSchema = z.object({
+  results: z.array(
+    z.discriminatedUnion("ok", [
+      z.object({ id: z.string(), ok: z.literal(true), memory: memoryDtoSchema }),
+      z.object({ id: z.string(), ok: z.literal(false), error: z.string() }),
+    ])
+  ),
+});
+export type BulkMemoryActionResponse = z.infer<typeof bulkMemoryActionResponseSchema>;
 export const memoryRevisionsResponseSchema = z.object({ revisions: z.array(memoryRevisionSchema) });
 
 // ---------------------------------------------------------------------------
@@ -386,6 +439,35 @@ export function memorySearchTerms(query: string): string[] {
   return [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
 }
 
+/** A literal search query: one set of bounds for agent search and the management list. */
+export const memorySearchQuerySchema = z
+  .string()
+  .trim()
+  .min(MEMORY_SEARCH_LIMITS.queryMin, `Use at least ${MEMORY_SEARCH_LIMITS.queryMin} characters.`)
+  .max(MEMORY_SEARCH_LIMITS.query, `Use at most ${MEMORY_SEARCH_LIMITS.query} characters.`)
+  .refine(
+    (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
+    `Use at most ${MEMORY_SEARCH_LIMITS.terms} search terms.`
+  );
+
+/** Management-list text filter (`GET /memories?search=`): blank means no filter. */
+export const memoryListSearchSchema = z
+  .string()
+  .trim()
+  .pipe(z.literal("").or(memorySearchQuerySchema));
+
+/**
+ * What a search box applies for the text typed so far. Under the minimum length is not a search
+ * yet (no filter, so the list stays put while typing); a query over a limit is explained instead
+ * of sent, since the server would reject it.
+ */
+export function memoryListSearchFromInput(raw: string): { search: string } | { problem: string } {
+  const trimmed = raw.trim();
+  if (trimmed.length < MEMORY_SEARCH_LIMITS.queryMin) return { search: "" };
+  const parsed = memorySearchQuerySchema.safeParse(trimmed);
+  return parsed.success ? { search: parsed.data } : { problem: parsed.error.issues[0].message };
+}
+
 /** Optional `repoOwner`/`repoName` selector shared by agent search and write inputs. */
 const repositorySelectorShape = {
   repoOwner: repositoryPairInputSchema.shape.repoOwner
@@ -408,16 +490,7 @@ function checkRepositorySelector(
 /** Repository filters select session members; environment and personal identity are server-derived. */
 export const memorySearchSchema = z
   .object({
-    query: z
-      .string()
-      .trim()
-      .min(MEMORY_SEARCH_LIMITS.queryMin)
-      .max(MEMORY_SEARCH_LIMITS.query)
-      .refine(
-        (query) => memorySearchTerms(query).length <= MEMORY_SEARCH_LIMITS.terms,
-        "Too many search terms"
-      )
-      .describe("Short literal keywords; every term must match"),
+    query: memorySearchQuerySchema.describe("Short literal keywords; every term must match"),
     scopeType: memoryScopeTypeSchema
       .optional()
       .describe("Restrict to one scope type; omit to search every permitted session scope"),

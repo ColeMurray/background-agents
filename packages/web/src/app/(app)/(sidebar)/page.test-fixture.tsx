@@ -94,6 +94,7 @@ const mocks = vi.hoisted(() => {
       totalBytes: 10,
       ignoredProfileSkillIds: [],
     },
+    skillResolutionPreview: vi.fn(),
     keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
     canCreateSession: true,
     ...teamContext,
@@ -193,6 +194,9 @@ vi.mock("@/components/model-reasoning-selector", () => ({
       <button type="button" onClick={() => onModelChange("openai/gpt-5.4")}>
         Switch model to GPT-5.4
       </button>
+      <button type="button" onClick={() => onModelChange("openai/gpt-6.1-sol")}>
+        Switch model to GPT-6.1
+      </button>
       {onHarnessChange && (
         <>
           <button type="button" onClick={() => onHarnessChange("claude")}>
@@ -249,12 +253,7 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
 
 vi.mock("@/hooks/use-managed-skills", () => ({
   useSkillProfiles: () => ({ profiles: [], loading: false }),
-  useSkillResolutionPreview: () => ({
-    preview: mocks.skillPreview,
-    loading: false,
-    error: undefined,
-    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
-  }),
+  useSkillResolutionPreview: mocks.skillResolutionPreview,
 }));
 
 beforeAll(() => {
@@ -289,6 +288,12 @@ beforeEach(() => {
   mocks.routerPush.mockReset();
   mocks.toastError.mockReset();
   mocks.mutateMock.mockReset();
+  mocks.skillResolutionPreview.mockReset().mockImplementation(() => ({
+    preview: mocks.skillPreview,
+    loading: false,
+    error: undefined,
+    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
+  }));
   // Radix Checkbox measures itself via ResizeObserver, which jsdom lacks.
   vi.stubGlobal(
     "ResizeObserver",

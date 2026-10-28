@@ -4,7 +4,7 @@ description: Decide whether to follow up, retry, reconnect an account, fix setup
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/SECRETS.md
@@ -59,7 +59,7 @@ If the environment is fine but the plan is wrong:
 1. Click the stop button in the composer ("Stop current prompt; queued prompts will continue").
 2. Send a follow-up that names what to keep and what to change.
 
-Both harnesses hold follow-ups until the running turn completes, so stopping first is what makes the correction take effect immediately.
+Every harness holds follow-ups until the running turn completes, so stopping first is what makes the correction take effect immediately.
 
 ## Retry a transient failure
 

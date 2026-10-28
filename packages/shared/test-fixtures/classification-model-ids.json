@@ -1,0 +1,117 @@
+[
+  {
+    "id": "claude-haiku-4-5",
+    "parsed": {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "anthropic/claude-haiku-4-5",
+    "parsed": {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5"
+    }
+  },
+  {
+    "id": "claude-x",
+    "parsed": {
+      "provider": "anthropic",
+      "model": "claude-x"
+    }
+  },
+  {
+    "id": "gpt-5.4-mini",
+    "parsed": {
+      "provider": "openai",
+      "model": "gpt-5.4-mini"
+    }
+  },
+  {
+    "id": "openai/gpt-5.4-mini",
+    "parsed": {
+      "provider": "openai",
+      "model": "gpt-5.4-mini"
+    }
+  },
+  {
+    "id": "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "parsed": {
+      "provider": "bedrock",
+      "region": "us-east-1",
+      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    }
+  },
+  {
+    "id": "bedrock/us-east-1/global.anthropic.claude-opus-5-5",
+    "parsed": {
+      "provider": "bedrock",
+      "region": "us-east-1",
+      "model": "global.anthropic.claude-opus-5-5"
+    }
+  },
+  {
+    "id": "bedrock/us-gov-west-1/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "parsed": {
+      "provider": "bedrock",
+      "region": "us-gov-west-1",
+      "model": "us-gov.anthropic.claude-haiku-4-5-20251001-v1:0"
+    }
+  },
+  {
+    "id": "bedrock/ap-southeast-4/anthropic.claude-opus-4-8",
+    "parsed": {
+      "provider": "bedrock",
+      "region": "ap-southeast-4",
+      "model": "anthropic.claude-opus-4-8"
+    }
+  },
+  {
+    "id": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "parsed": null
+  },
+  {
+    "id": "bedrock/us-east-1/claude-haiku-4-5",
+    "parsed": null
+  },
+  {
+    "id": "bedrock/US-EAST-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "parsed": null
+  },
+  {
+    "id": "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0 ",
+    "parsed": null
+  },
+  {
+    "id": "bedrock/us-east-1/anthropic.claude-",
+    "parsed": null
+  },
+  {
+    "id": "bedrock/us-east-1/",
+    "parsed": null
+  },
+  {
+    "id": "anthropic.claude-haiku-4-5",
+    "parsed": null
+  },
+  {
+    "id": "claude-",
+    "parsed": null
+  },
+  {
+    "id": "anthropic/   ",
+    "parsed": null
+  },
+  {
+    "id": "openai/",
+    "parsed": null
+  },
+  {
+    "id": "",
+    "parsed": null
+  },
+  {
+    "id": "llama-3-70b",
+    "parsed": null
+  }
+]

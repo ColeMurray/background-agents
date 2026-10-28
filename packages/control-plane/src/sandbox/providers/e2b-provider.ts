@@ -43,7 +43,7 @@ import {
   scmCloneIdentity,
 } from "../sandbox-env";
 import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
-import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
+import { resolveSandboxPortPlan } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxCreated, E2BSandboxDetail } from "../e2b-rest-client";
 import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-client";
@@ -255,7 +255,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       }
       const lifetime = await this.readLifetime(sandbox.sandboxID, "create");
 
-      const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
+      const { codeServerUrl, vncUrl, ttydUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
         config.codeServerEnabled,
         config.vncEnabled,
@@ -271,6 +271,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
+        ttydUrl,
         tunnelUrls,
       };
     } catch (error) {
@@ -429,7 +430,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       const vncPassword = config.vncEnabled
         ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined;
-      const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
+      const { codeServerUrl, vncUrl, ttydUrl, tunnelUrls } = this.buildTunnelUrls(
         config.providerObjectId,
         config.codeServerEnabled,
         config.vncEnabled,
@@ -444,6 +445,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         codeServerUrl,
         codeServerPassword,
         vncAccess: createVncAccess(vncUrl, vncPassword),
+        ttydUrl,
         tunnelUrls,
       };
     } catch (error) {
@@ -712,33 +714,35 @@ export class E2BSandboxProvider implements SandboxProvider {
     sandboxSettings: SandboxSettings | undefined,
     domain?: string | null
   ) {
-    let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
-    let codeServerUrl: string | undefined;
-    let vncUrl: string | undefined;
-
-    if (codeServerEnabled) {
-      const { codeServerPort } = resolveServicePorts(sandboxSettings);
-      codeServerUrl = this.client.getHostnameForPort(e2bSandboxId, codeServerPort, domain);
-      tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
-    }
-
-    if (vncEnabled) {
-      const { vncPort } = resolveServicePorts(sandboxSettings);
-      vncUrl = this.client.getHostnameForPort(e2bSandboxId, vncPort, domain);
-      tunnelPorts = tunnelPorts.filter((p) => p !== vncPort);
-    }
+    const { codeServerPort, vncPort, terminalPort, extraTunnelPorts } = resolveSandboxPortPlan(
+      {
+        codeServer: codeServerEnabled === true,
+        vnc: vncEnabled === true,
+        terminal: sandboxSettings?.terminalEnabled === true,
+      },
+      sandboxSettings
+    );
+    const codeServerUrl = codeServerPort
+      ? this.client.getHostnameForPort(e2bSandboxId, codeServerPort, domain)
+      : undefined;
+    const vncUrl = vncPort
+      ? this.client.getHostnameForPort(e2bSandboxId, vncPort, domain)
+      : undefined;
+    const ttydUrl = terminalPort
+      ? this.client.getHostnameForPort(e2bSandboxId, terminalPort, domain)
+      : undefined;
 
     const tunnelUrls =
-      tunnelPorts.length > 0
+      extraTunnelPorts.length > 0
         ? Object.fromEntries(
-            tunnelPorts.map((p) => [
+            extraTunnelPorts.map((p) => [
               String(p),
               this.client.getHostnameForPort(e2bSandboxId, p, domain),
             ])
           )
         : undefined;
 
-    return { codeServerUrl, vncUrl, tunnelUrls };
+    return { codeServerUrl, vncUrl, ttydUrl, tunnelUrls };
   }
 
   private classifyError(

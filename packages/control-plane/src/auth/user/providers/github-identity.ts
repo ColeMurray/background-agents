@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { SIGN_IN_PROVIDER_ISSUERS } from "@open-inspect/shared/sign-in-provider";
 import { createLogger, type Logger } from "../../../logger";
+import { readBoundedBytes } from "../../../http/bounded-body";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./constants";
 import { assertCanonicalIssuer, OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
@@ -9,6 +10,11 @@ const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_EMAILS_PER_PAGE = 100;
 const GITHUB_EMAILS_MAX_PAGES = 10;
 const GITHUB_NETWORK_REQUEST_ATTEMPTS = 2;
+const GITHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const GITHUB_ERROR_MESSAGE_MAX_LENGTH = 200;
+const GITHUB_PERMISSION_DENIED_MESSAGE = "Resource not accessible by integration";
+const GITHUB_EMAIL_PERMISSION_HINT =
+  "Grant the GitHub App the Account -> Email addresses: Read-only permission and approve the installation update (see docs/GETTING_STARTED.md step 7)";
 
 const githubUserSchema = z.object({
   id: z.number().int().positive(),
@@ -24,7 +30,20 @@ const githubEmailSchema = z.object({
   visibility: z.string().nullable(),
 });
 
+const githubErrorSchema = z.object({ message: z.string() });
+
 const githubEmailPageSchema = z.array(githubEmailSchema);
+
+/** GitHub refused `/user/emails` because the App lacks Email addresses: Read-only. */
+export class GitHubEmailPermissionError extends OAuthProviderError {
+  constructor(status: number) {
+    super(
+      "provider_rejected",
+      `GitHub email lookup was not successful (status ${status}; ${GITHUB_EMAIL_PERMISSION_HINT})`
+    );
+    this.name = "GitHubEmailPermissionError";
+  }
+}
 
 export interface GitHubProviderIdentityResolverConfig {
   readonly issuer: string;
@@ -106,9 +125,28 @@ export class GitHubProviderIdentityResolver {
         headers: this.apiHeaders(accessToken),
       });
       if (!response.ok) {
+        // A 403 alone does not identify a missing permission. Require GitHub's
+        // permission-denial message and exclude rate limits and later pages.
+        const bodyMessage = await this.readGitHubErrorMessage(response);
+        const rateLimited =
+          response.headers.get("x-ratelimit-remaining") === "0" ||
+          response.headers.get("retry-after") !== null ||
+          /rate.?limit|abuse/i.test(bodyMessage ?? "");
+        const permissionMissing =
+          response.status === 403 &&
+          page === 1 &&
+          bodyMessage === GITHUB_PERMISSION_DENIED_MESSAGE &&
+          !rateLimited;
+        this.logger.error("GitHub email lookup failed", {
+          event: "auth.github_email_lookup_failed",
+          status: response.status,
+          ...(bodyMessage !== undefined ? { githubMessage: bodyMessage } : {}),
+          ...(permissionMissing ? { hint: GITHUB_EMAIL_PERMISSION_HINT } : {}),
+        });
+        if (permissionMissing) throw new GitHubEmailPermissionError(response.status);
         throw new OAuthProviderError(
           "provider_unavailable",
-          "GitHub email lookup was not successful"
+          `GitHub email lookup was not successful (status ${response.status})`
         );
       }
       const parsed = githubEmailPageSchema.safeParse(
@@ -142,22 +180,49 @@ export class GitHubProviderIdentityResolver {
   private async parseJson(response: Response, context: string): Promise<unknown> {
     try {
       return await response.json();
-    } catch {
-      throw new OAuthProviderError("malformed_response", `${context} response was not JSON`);
+    } catch (cause) {
+      // Anything but a JSON syntax error is the body read failing, including
+      // the request deadline aborting a stalled body.
+      if (cause instanceof SyntaxError) {
+        throw new OAuthProviderError("malformed_response", `${context} response was not JSON`);
+      }
+      throw new OAuthProviderError("provider_unavailable", `${context} response was not read`, {
+        cause,
+      });
     }
   }
 
+  private async readGitHubErrorMessage(response: Response): Promise<string | undefined> {
+    try {
+      const body = await readBoundedBytes(
+        response.body,
+        GITHUB_ERROR_BODY_MAX_BYTES,
+        response.headers.get("Content-Length")
+      );
+      if (!body.ok) return undefined;
+      const parsed = githubErrorSchema.safeParse(JSON.parse(new TextDecoder().decode(body.bytes)));
+      return parsed.success
+        ? parsed.data.message.slice(0, GITHUB_ERROR_MESSAGE_MAX_LENGTH)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Each attempt has one deadline that stays armed after headers arrive, so it
+   * also bounds the caller's body read.
+   */
   private async fetchWithTimeout(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
     let lastCause: unknown;
     for (let attempt = 1; attempt <= GITHUB_NETWORK_REQUEST_ATTEMPTS; attempt += 1) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
       try {
-        return await this.fetchImpl(input, { ...init, signal: controller.signal });
+        return await this.fetchImpl(input, {
+          ...init,
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
+        });
       } catch (cause) {
         lastCause = cause;
-      } finally {
-        clearTimeout(timeout);
       }
     }
     this.logger.error("GitHub provider request failed", {

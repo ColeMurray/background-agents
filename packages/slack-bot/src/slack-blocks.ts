@@ -68,7 +68,6 @@ export type SlackSectionBlock = {
   type: "section";
   block_id?: string;
   text: SlackText;
-  expand?: boolean;
   // A section accessory may be a button or a select (the repo clarification
   // picker uses an external_select), not only a button.
   accessory?: SlackBlockElement;
@@ -78,6 +77,11 @@ export type SlackActionsBlock = {
   block_id?: string;
   elements: SlackBlockElement[];
 };
+/**
+ * Slack renders standard Markdown in this block itself. Message-only, and all of a
+ * message's markdown blocks share MARKDOWN_BLOCK_MAX_CHARS (@open-inspect/shared/slack).
+ */
+export type SlackMarkdownBlock = { type: "markdown"; text: string };
 export type SlackContextBlock = { type: "context"; elements: SlackText[] };
 export type SlackInputBlock = {
   type: "input";

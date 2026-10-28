@@ -1,7 +1,6 @@
 import {
   AdmissionPolicy,
-  parseAdmissionAllowlist,
-  parseAdmissionBoolean,
+  admissionPolicyConfigFromEnv,
   type AdmissionPolicyConfig,
 } from "./admission-policy";
 import {
@@ -117,13 +116,7 @@ function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
     publicWebOrigin: parsePublicWebOrigin(env.WEB_APP_URL),
     secret,
     appName: env.APP_NAME?.trim() || "Open-Inspect",
-    admission: {
-      allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
-      allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
-      allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
-      allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
-      unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
-    },
+    admission: admissionPolicyConfigFromEnv(env),
     providers,
   };
 }

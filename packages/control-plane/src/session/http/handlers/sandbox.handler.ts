@@ -6,7 +6,7 @@ import {
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import {
   bootPhaseNameSchema,
-  sandboxEventSchema,
+  sandboxIngressEventSchema,
   type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
 import {
@@ -30,7 +30,6 @@ import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxStateReader } from "../../sandbox-ports";
 import type { SessionSandboxEventProcessor } from "../../sandbox-events/processor";
 import type { SandboxRow, SessionRow } from "../../types";
-import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
 import { z } from "zod";
 
@@ -85,12 +84,12 @@ export class SandboxHandler {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
 
-    const result = sandboxEventSchema.safeParse(raw);
+    const result = sandboxIngressEventSchema.safeParse(raw);
     if (!result.success) {
       return Response.json({ error: "Invalid sandbox event" }, { status: 400 });
     }
 
-    const event: SandboxEvent = result.data;
+    const event = result.data;
     await this.sandboxEventProcessor.processSandboxEvent(event);
     return Response.json({ status: "ok" });
   }
@@ -106,12 +105,7 @@ export class SandboxHandler {
     if (sandbox.modal_sandbox_id && sandboxId !== sandbox.modal_sandbox_id) {
       return Response.json({ error: "Wrong sandbox" }, { status: 403 });
     }
-    // Read before the awaits below: a `failed` generation may reconnect while
-    // this request is suspended and be published as `ready` with these same
-    // credentials. The report still describes the sandbox as it was when it
-    // was sent, so a dead row at either point means it is stale.
-    const wasDead = isDeadSandboxStatus(sandbox.status);
-
+    const wasStoppedOrStale = isSandboxReconnectBlockedStatus(sandbox.status);
     if (!(await this.isValidSandboxToken(token, sandbox))) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -135,13 +129,10 @@ export class SandboxHandler {
     ) {
       return Response.json({ error: "Sandbox credentials changed" }, { status: 403 });
     }
-    // A dead row has nobody to terminate and nothing to retry. `failed` is
-    // deliberately in that set: the connect watchdog fails a slow boot but
-    // cannot always stop it (Modal has no explicit stop), so the orphan runs
-    // on until a sandbox-authenticated call refuses it and it reports that
-    // refusal as fatal. Acting on that report would re-drive the pending
-    // prompt onto a fresh sandbox that meets the same fate.
-    if (wasDead || isDeadSandboxStatus(currentSandbox.status)) {
+    // Reports observed while stopped/stale stay stale across an in-place resume. A
+    // watchdog-failed generation can reconnect with the same credentials during
+    // authentication or body parsing; once live, its fatal report must fail it.
+    if (wasStoppedOrStale || isDeadSandboxStatus(currentSandbox.status)) {
       log.warn("Ignoring fatal report from a sandbox that is no longer live", {
         event: "sandbox.error_ignored",
         sandbox_status: currentSandbox.status,
@@ -149,6 +140,10 @@ export class SandboxHandler {
         error: result.data.error,
       });
       return Response.json({ status: "ignored" });
+    }
+    // Resume keeps the ID and credentials but starts a new generation.
+    if (currentSandbox.created_at !== sandbox.created_at) {
+      return Response.json({ error: "Sandbox generation changed" }, { status: 403 });
     }
 
     // The HTTP report is the reliable carrier of the failed phase: the
@@ -202,7 +197,7 @@ export class SandboxHandler {
       return Response.json({ error: "No active prompt" }, { status: 409 });
     }
 
-    const artifactType = assertArtifactType(body.artifactType);
+    const artifactType = body.artifactType;
     const now = this.now();
     const timestampSeconds = now / 1000;
     const artifact: SessionArtifact = {

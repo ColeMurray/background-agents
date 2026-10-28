@@ -10,7 +10,12 @@ import { z } from "zod";
 import type { CreateEventData, EventRepository } from "./event-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
-import { messageRowSchema, SessionStorageIntegrityError, type MessageRow } from "./types";
+import {
+  messageRowSchema,
+  sessionRowSchema,
+  SessionStorageIntegrityError,
+  type MessageRow,
+} from "./types";
 import type { MessageListCursor } from "./message-cursor";
 
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
@@ -22,9 +27,15 @@ const messageStopConfirmationRowSchema = messageRowSchema
   .pick({ id: true, stop_confirmation_deadline: true })
   .extend({ stop_confirmation_deadline: z.number() });
 const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageReportedCostRowSchema = messageRowSchema.pick({ reported_cost_usd: true });
 const messageCallbackContextRowSchema = messageRowSchema.pick({
   callback_context: true,
   source: true,
+});
+const messageCancellationRowSchema = messageRowSchema.pick({
+  status: true,
+  source: true,
+  callback_context: true,
 });
 const messageCompletionStateRowSchema = z.object({
   status: z.unknown().optional(),
@@ -32,6 +43,7 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
+const sessionBudgetExhaustedRowSchema = sessionRowSchema.pick({ budget_exhausted: true });
 
 export interface RecordedMessageCompletion {
   messageId: string;
@@ -166,9 +178,11 @@ export class MessageRepository {
     // would only expose the post-update value.
     const rows = this.sql
       .exec(`SELECT reported_cost_usd FROM messages WHERE id = ?`, messageId)
-      .toArray() as Array<{ reported_cost_usd: number }>;
+      .toArray();
     if (rows.length !== 1) return 0;
-    const previous = rows[0].reported_cost_usd;
+    const parsed = messageReportedCostRowSchema.safeParse(rows[0]);
+    if (!parsed.success) throw new SessionStorageIntegrityError("Malformed persisted message row");
+    const previous = parsed.data.reported_cost_usd;
     if (reportedCostUsd <= previous) return 0;
     this.sql.exec(
       `UPDATE messages SET reported_cost_usd = ? WHERE id = ?`,
@@ -243,10 +257,9 @@ export class MessageRepository {
       if (existingMessageId) {
         return { kind: "duplicate", messageId: existingMessageId };
       }
-      const budget = (
-        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray() as Array<{
-          budget_exhausted: number;
-        }>
+      const budget = parseStorageRows(
+        this.sql.exec(`SELECT budget_exhausted FROM session LIMIT 1`).toArray(),
+        sessionBudgetExhaustedRowSchema
       )[0];
       if (budget?.budget_exhausted === 1) {
         return { kind: "rejected", reason: "budget_exhausted" };
@@ -318,17 +331,12 @@ export class MessageRepository {
         `SELECT status, source, callback_context FROM messages WHERE id = ?`,
         messageId
       );
-      const message = (
-        result.toArray() as Array<{
-          status?: unknown;
-          source: string;
-          callback_context: string | null;
-        }>
-      )[0];
-      const status = parseMessageStatus(message?.status);
+      const rawMessage = result.toArray()[0];
+      const parsedMessage = messageCancellationRowSchema.safeParse(rawMessage);
+      if (!parsedMessage.success) return false;
+      const message = parsedMessage.data;
       if (
-        !message ||
-        status !== "pending" ||
+        message.status !== "pending" ||
         message.source !== "web" ||
         message.callback_context !== null
       ) {

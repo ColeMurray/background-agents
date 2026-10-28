@@ -16,12 +16,18 @@ import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-d
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
 import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";
 import { usePanelWidth } from "@/hooks/use-panel-width";
+import {
+  emptyMarkdownPreviewStatus,
+  isMarkdownPath,
+  previewMarkdownDocument,
+} from "@/lib/markdown-preview";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
 import type { DiffSelection, ResolvedDiffSelection } from "@/lib/session-diffs";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { cn } from "@/lib/utils";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
+import { SafeMarkdown } from "@/components/safe-markdown";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
 import { BackIcon, ChevronRightIcon, FileIcon, SidebarIcon } from "@/components/ui/icons";
 
@@ -31,6 +37,23 @@ const PierreDiffRenderer = dynamic(() => import("./pierre-diff-renderer"), {
 });
 
 const SPLIT_DIFF_MIN_CODE_WIDTH = 640;
+
+type ChangesView = DiffStyle | "preview";
+
+const CHANGES_VIEW_LABELS: Record<ChangesView, string> = {
+  unified: "Unified",
+  split: "Split",
+  preview: "Preview",
+};
+const DIFF_VIEWS: readonly ChangesView[] = ["unified", "split"];
+const MARKDOWN_VIEWS: readonly ChangesView[] = [...DIFF_VIEWS, "preview"];
+
+const MARKDOWN_PREVIEW_MESSAGES = {
+  deleted: "This file was deleted, so there is no document to preview.",
+  empty: "This document is empty.",
+  unavailable:
+    "Preview is unavailable because the captured changes do not include the full document.",
+} as const;
 
 type ReadyDiffSelection = Extract<ResolvedDiffSelection, { status: "ready" }>;
 
@@ -171,54 +194,70 @@ function SelectedFileHeader({
 }
 
 function ChangesPanelToolbar({
+  views,
   allowSplit,
-  activeDiffStyle,
-  onDiffStyleChange,
+  activeView,
+  onViewChange,
   wrap,
   onWrapChange,
 }: {
+  views: readonly ChangesView[];
   allowSplit: boolean;
-  activeDiffStyle: DiffStyle;
-  onDiffStyleChange: (style: DiffStyle) => void;
+  activeView: ChangesView;
+  onViewChange: (view: ChangesView) => void;
   wrap: boolean;
   onWrapChange: (wrap: boolean) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-border-muted px-4 py-2">
-      <div role="group" className="inline-flex gap-1" aria-label="Diff layout">
-        {(["unified", "split"] as const).map((style) => (
+      <div role="group" className="inline-flex gap-1" aria-label="Changes view">
+        {views.map((view) => (
           <button
-            key={style}
+            key={view}
             type="button"
-            aria-pressed={activeDiffStyle === style}
-            disabled={style === "split" && !allowSplit}
+            aria-pressed={activeView === view}
+            disabled={view === "split" && !allowSplit}
             title={
-              style === "split" && !allowSplit
+              view === "split" && !allowSplit
                 ? "Split needs more code space. On desktop, widen the pane or hide the file list."
                 : undefined
             }
-            onClick={() => onDiffStyleChange(style)}
+            onClick={() => onViewChange(view)}
             className={cn(
               "rounded-sm px-2.5 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40",
-              activeDiffStyle === style
+              activeView === view
                 ? "bg-accent-muted text-foreground"
                 : "text-muted-foreground hover:bg-muted"
             )}
           >
-            {style === "unified" ? "Unified" : "Split"}
+            {CHANGES_VIEW_LABELS[view]}
           </button>
         ))}
       </div>
-      <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-        <input
-          type="checkbox"
-          className="accent-accent"
-          checked={wrap}
-          onChange={(event) => onWrapChange(event.target.checked)}
-        />
-        Wrap lines
-      </label>
+      {activeView !== "preview" && (
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            className="accent-accent"
+            checked={wrap}
+            onChange={(event) => onWrapChange(event.target.checked)}
+          />
+          Wrap lines
+        </label>
+      )}
     </div>
+  );
+}
+
+function MarkdownPreview({ patch }: { patch: string }) {
+  const preview = previewMarkdownDocument(patch);
+  if (preview.status !== "document") {
+    return <PanelMessage>{MARKDOWN_PREVIEW_MESSAGES[preview.status]}</PanelMessage>;
+  }
+  return (
+    <article aria-label="Markdown preview" className="p-4">
+      <SafeMarkdown content={preview.content} imageMode="placeholder" linkMode="externalOnly" />
+    </article>
   );
 }
 
@@ -248,6 +287,7 @@ export function SessionChangesPanel({
   const fileListId = useId();
   // Until the viewer toggles it, the file list opens only when nothing else lists the files.
   const [fileListChoice, setFileListChoice] = useState<boolean | null>(null);
+  const [previewChosen, setPreviewChosen] = useState(false);
   const isFileListOpen = fileListChoice ?? (!mobile && !sidebarShowsFileList);
   const codeWidth = usePanelWidth(codeColumnRef, { enabled: !mobile });
   const { resolvedTheme } = useTheme();
@@ -278,10 +318,15 @@ export function SessionChangesPanel({
   const effectiveDiffStyle = allowSplit ? diffStyle : "unified";
   const selectedPath = selected?.file.path;
   const selectedRepositoryPosition = selected?.repository.position;
+  const canPreview = selectedPath !== undefined && isMarkdownPath(selectedPath);
+  // The preview choice sticks across files; it applies only while a Markdown file is selected.
+  const previewing = previewChosen && canPreview;
+  const emptyPreviewStatus =
+    previewing && selected ? emptyMarkdownPreviewStatus(selected.file) : null;
 
   useEffect(() => {
     if (codeScrollRef.current) codeScrollRef.current.scrollTop = 0;
-  }, [selectedPath, selectedRepositoryPosition]);
+  }, [selectedPath, selectedRepositoryPosition, previewing]);
 
   useEffect(() => {
     panelRef.current?.focus();
@@ -378,15 +423,21 @@ export function SessionChangesPanel({
             onMoveSelection={moveSelection}
           />
           <ChangesPanelToolbar
+            views={canPreview ? MARKDOWN_VIEWS : DIFF_VIEWS}
             allowSplit={allowSplit}
-            activeDiffStyle={effectiveDiffStyle}
-            onDiffStyleChange={setDiffStyle}
+            activeView={previewing ? "preview" : effectiveDiffStyle}
+            onViewChange={(view) => {
+              setPreviewChosen(view === "preview");
+              if (view !== "preview") setDiffStyle(view);
+            }}
             wrap={wrap}
             onWrapChange={setWrap}
           />
           <div ref={codeScrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
             {resolved.status === "missing" ? (
               <PanelMessage>This file is no longer part of the latest changes.</PanelMessage>
+            ) : emptyPreviewStatus ? (
+              <PanelMessage>{MARKDOWN_PREVIEW_MESSAGES[emptyPreviewStatus]}</PanelMessage>
             ) : resolved.file.renderState !== "renderable" ? (
               <PanelMessage>{fileMessage(resolved.file)}</PanelMessage>
             ) : isLoading ? (
@@ -395,6 +446,8 @@ export function SessionChangesPanel({
               <PanelMessage>Refreshing the latest revision…</PanelMessage>
             ) : patchError ? (
               <PanelMessage>Unable to load this patch.</PanelMessage>
+            ) : previewing ? (
+              <MarkdownPreview patch={patch ?? ""} />
             ) : patch ? (
               <PierreDiffRenderer
                 patch={patch}

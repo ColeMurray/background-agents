@@ -35,6 +35,7 @@ import { attachSessionListMetadata } from "./session-list-metadata";
 import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import {
   SessionInboxStore,
+  type InboxFilterOptions,
   type ListSessionInboxOptions,
   type ListSessionInboxResult,
   type ListSessionInboxSnapshotResult,
@@ -598,6 +599,11 @@ export class SessionIndexStore {
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
     return new SessionInboxStore(this.db).snapshot(options);
+  }
+
+  /** Mark every unread session in the viewer's filtered inbox, or one of its hierarchies, as read. */
+  async markInboxRead(options: InboxFilterOptions, rootSessionId?: string): Promise<number> {
+    return new SessionInboxStore(this.db).markAllRead(options, rootSessionId);
   }
 
   private async attachListMetadata<T extends { id: string }>(sessions: T[]): Promise<T[]> {

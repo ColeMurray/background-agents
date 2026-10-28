@@ -34,7 +34,29 @@ interface ConditionBuilderProps {
   eventType?: string;
 }
 
+type ConditionOperator<T extends TriggerCondition["type"]> = Extract<
+  TriggerCondition,
+  { type: T }
+>["operator"];
+
+interface OperatorOption<TOperator extends string> {
+  value: TOperator;
+  label: string;
+}
+
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
+
+const LABEL_OPERATORS = [
+  { value: "any_of", label: "any of" },
+  { value: "none_of", label: "none of" },
+] as const satisfies readonly OperatorOption<ConditionOperator<"label">>[];
+
+const ACTOR_OPERATORS = [
+  { value: "include", label: "include" },
+  { value: "exclude", label: "exclude" },
+] as const satisfies readonly OperatorOption<
+  ConditionOperator<"actor"> & ConditionOperator<"slack_actor">
+>[];
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
 const DEFAULT_WORKFLOW_NAME = "";
@@ -97,6 +119,9 @@ export function ConditionBuilder({
         break;
       case "workflow_name":
         newCondition = { type: "workflow_name", operator: "eq", value: DEFAULT_WORKFLOW_NAME };
+        break;
+      case "draft":
+        newCondition = { type: "draft", operator: "eq", value: false };
         break;
       case "text_match":
         newCondition = { type: "text_match", operator: "contains", value: { pattern: "" } };
@@ -223,9 +248,12 @@ function ConditionEditor({
       );
     case "label":
       return (
-        <TagInput
+        <OperatorTagInput
+          operator={condition.operator}
+          operators={LABEL_OPERATORS}
+          onOperatorChange={(operator) => onChange({ ...condition, operator })}
           values={condition.value}
-          onChange={(value) => onChange({ ...condition, value })}
+          onValuesChange={(value) => onChange({ ...condition, value })}
           placeholder="Add label..."
         />
       );
@@ -239,25 +267,14 @@ function ConditionEditor({
       );
     case "actor":
       return (
-        <div className="space-y-2">
-          <Select
-            value={condition.operator}
-            onValueChange={(v) => onChange({ ...condition, operator: v as "include" | "exclude" })}
-          >
-            <SelectTrigger className="w-32 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="include">include</SelectItem>
-              <SelectItem value="exclude">exclude</SelectItem>
-            </SelectContent>
-          </Select>
-          <TagInput
-            values={condition.value}
-            onChange={(value) => onChange({ ...condition, value })}
-            placeholder="Add actor username..."
-          />
-        </div>
+        <OperatorTagInput
+          operator={condition.operator}
+          operators={ACTOR_OPERATORS}
+          onOperatorChange={(operator) => onChange({ ...condition, operator })}
+          values={condition.value}
+          onValuesChange={(value) => onChange({ ...condition, value })}
+          placeholder="Add actor username..."
+        />
       );
     case "conclusion":
     case "check_conclusion":
@@ -284,6 +301,21 @@ function ConditionEditor({
           placeholder="Exact workflow name, e.g. CI"
           className="text-xs"
         />
+      );
+    case "draft":
+      return (
+        <Select
+          value={String(condition.value)}
+          onValueChange={(v) => onChange({ ...condition, value: v === "true" })}
+        >
+          <SelectTrigger className="w-40 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="false">Not draft</SelectItem>
+            <SelectItem value="true">Draft only</SelectItem>
+          </SelectContent>
+        </Select>
       );
     case "text_match": {
       const flags = condition.value.flags ?? "";
@@ -351,25 +383,14 @@ function ConditionEditor({
       );
     case "slack_actor":
       return (
-        <div className="space-y-2">
-          <Select
-            value={condition.operator}
-            onValueChange={(v) => onChange({ ...condition, operator: v as "include" | "exclude" })}
-          >
-            <SelectTrigger className="w-32 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="include">include</SelectItem>
-              <SelectItem value="exclude">exclude</SelectItem>
-            </SelectContent>
-          </Select>
-          <TagInput
-            values={condition.value}
-            onChange={(value) => onChange({ ...condition, value })}
-            placeholder="Add Slack user ID (e.g. U0123ABCD)..."
-          />
-        </div>
+        <OperatorTagInput
+          operator={condition.operator}
+          operators={ACTOR_OPERATORS}
+          onOperatorChange={(operator) => onChange({ ...condition, operator })}
+          values={condition.value}
+          onValuesChange={(value) => onChange({ ...condition, value })}
+          placeholder="Add Slack user or bot ID (e.g. U0123ABCD, B0123ABCD)..."
+        />
       );
     default:
       return <div className="text-xs text-muted-foreground">Configuration not available</div>;
@@ -474,6 +495,50 @@ function SlackChannelPicker({
           messages until it&apos;s invited.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Operator selector paired with a tag list, for list conditions whose operator
+ * is user-selectable (e.g. label `any_of`/`none_of`, actor `include`/`exclude`).
+ */
+function OperatorTagInput<TOperator extends string>({
+  operator,
+  operators,
+  onOperatorChange,
+  values,
+  onValuesChange,
+  placeholder,
+}: {
+  operator: TOperator;
+  operators: readonly OperatorOption<TOperator>[];
+  onOperatorChange: (operator: TOperator) => void;
+  values: string[];
+  onValuesChange: (values: string[]) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <Select
+        value={operator}
+        onValueChange={(v) => {
+          const selected = operators.find((option) => option.value === v);
+          if (selected) onOperatorChange(selected.value);
+        }}
+      >
+        <SelectTrigger className="w-32 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {operators.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <TagInput values={values} onChange={onValuesChange} placeholder={placeholder} />
     </div>
   );
 }

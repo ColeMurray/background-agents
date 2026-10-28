@@ -80,6 +80,43 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     );
     expect((await request("/memories?limit=10000")).status).toBe(400);
   });
+  it("filters management records by literal terms across title, description and body", async () => {
+    const byTitle = await createMemory({ ...content, title: "Rspec retries" });
+    const byDescription = await createMemory({
+      ...content,
+      description: "Flaky RSPEC suites in CI",
+    });
+    const byBody = await createMemory({ ...content, content: "Run rspec with --seed" });
+    const wildcard = await createMemory({ ...content, title: "Coverage at 100%_done" });
+    await createMemory();
+    const ids = async (search: string, extra = "") => {
+      const response = await request(`/memories?search=${encodeURIComponent(search)}${extra}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { memories: { id: string }[]; nextOffset: unknown };
+      return { ids: body.memories.map((memory) => memory.id).sort(), nextOffset: body.nextOffset };
+    };
+
+    expect((await ids("RSpec")).ids).toEqual([byTitle.id, byDescription.id, byBody.id].sort());
+    // Every term must match somewhere in the record.
+    expect((await ids("rspec seed")).ids).toEqual([byBody.id]);
+    // `%` and `_` match themselves, not any text.
+    expect((await ids("100%_")).ids).toEqual([wildcard.id]);
+    expect((await ids("0%")).ids).toEqual([wildcard.id]);
+    // Search combines with paging and status.
+    const firstPage = await ids("rspec", "&limit=2");
+    expect(firstPage.ids).toHaveLength(2);
+    expect(firstPage.nextOffset).toBe(2);
+    expect((await ids("rspec", "&status=archived")).ids).toEqual([]);
+    // A blank search is no filter; oversized searches are rejected.
+    expect((await ids("   ")).ids).toHaveLength(5);
+    expect((await request(`/memories?search=${"x".repeat(257)}`)).status).toBe(400);
+    // Nonblank searches share agent search's minimum length.
+    expect((await request("/memories?search=a")).status).toBe(400);
+    expect((await request("/memories?search=%20a%20")).status).toBe(400);
+    expect(
+      (await request(`/memories?search=${encodeURIComponent("a b c d e f g h i")}`)).status
+    ).toBe(400);
+  });
   it("keeps personal management owner-only, including other administrators", async () => {
     const record = await createMemory();
     expect((await request(`/memories/${record.id}`, "GET", undefined, OTHER)).status).toBe(404);
@@ -296,6 +333,11 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       .selection;
     await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     await act(record.id, "archive", record.currentRevisionId);
+    // The request helper links every seeded user to GitHub; a merge refuses to give one user two
+    // GitHub identities, so drop the merged-in user's fixture identity first.
+    await env.DB.prepare("DELETE FROM user_identities WHERE user_id = ? AND provider = 'github'")
+      .bind(OWNER)
+      .run();
     await mergeUsers(env.DB, { survivorId: OTHER, loserId: OWNER });
     const after = (await new SessionMemorySelectionStore(env.DB).loadSelection("merged-owner"))!
       .selection;

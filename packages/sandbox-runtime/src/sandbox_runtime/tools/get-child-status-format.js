@@ -85,7 +85,28 @@ function formatArtifacts(artifacts = []) {
   return lines;
 }
 
-export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishedPrompt = false) {
+function formatStoredFiles(files = [], indent = "  ") {
+  if (!files.length) return [];
+  const lines = ["", `${indent}Stored outputs:`];
+  for (const file of files) {
+    const metadata = file.type === "file" && file.available ? file.metadata : null;
+    const filename = metadata?.filename ?? file.filename;
+    const caption = metadata?.caption ?? file.caption;
+    const unavailable = file.available === false ? " (unavailable)" : "";
+    lines.push(
+      `${indent}  - ${file.type} id=${file.id}${filename ? `: ${filename}` : ""}${unavailable}`
+    );
+    if (caption) lines.push(indentBlock(caption, `${indent}    `));
+  }
+  return lines;
+}
+
+export function formatFinalResponse(
+  finalResponse,
+  includeResponse,
+  hasUnfinishedPrompt = false,
+  includeResponseText = true
+) {
   if (!finalResponse) {
     return includeResponse ? ["", "  Final response: not available yet"] : [];
   }
@@ -102,7 +123,11 @@ export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishe
     lines.push(`    Events: ${finalResponse.eventCount} (limit reached)`);
   }
   lines.push("    Text:");
-  lines.push(indentBlock(finalResponse.textContent || "(empty)", "      "));
+  lines.push(
+    includeResponseText
+      ? indentBlock(finalResponse.textContent || "(empty)", "      ")
+      : "      (see finalResponse.textContent)"
+  );
 
   if (finalResponse.toolCalls?.length) {
     lines.push("", "    Tool summary:");
@@ -111,6 +136,9 @@ export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishe
     }
   }
 
+  lines.push(
+    ...formatStoredFiles(finalResponse.fileArtifacts ?? finalResponse.mediaArtifacts ?? [], "    ")
+  );
   return lines;
 }
 
@@ -171,16 +199,59 @@ export function formatChildDetail(detail, childId, options = {}) {
   }
 
   lines.push(...formatArtifacts(detail.artifacts));
+  lines.push(...formatStoredFiles(detail.fileArtifacts));
   const hasUnfinishedPrompt = detail.hasUnfinishedPrompt === true;
   lines.push(
     ...formatFinalResponse(
       detail.finalResponse,
       Boolean(options.includeResponse),
-      hasUnfinishedPrompt
+      hasUnfinishedPrompt,
+      options.includeResponseText !== false
     )
   );
   lines.push(...formatTrajectory(detail.trajectory, options));
   lines.push(...formatRecentEvents(detail.recentEvents));
 
   return lines.join("\n");
+}
+
+// Keep the wire contract symmetric with @open-inspect/shared/child-status-tool
+// and harness/child_status_format.py. Select display fields to avoid serializing
+// private retrieval metadata from the control-plane response.
+function displaySession(session) {
+  const { id, title, status, repoOwner, repoName, branchName, model, createdAt, updatedAt } =
+    session;
+  return { id, title, status, repoOwner, repoName, branchName, model, createdAt, updatedAt };
+}
+
+export function childStatusListOutput(children, agentMessage) {
+  return JSON.stringify({
+    version: 1,
+    kind: "list",
+    children: children.map(displaySession),
+    agentMessage,
+  });
+}
+
+export function childStatusDetailOutput(detail, childId, options = {}) {
+  const final = detail.finalResponse;
+  return JSON.stringify({
+    version: 1,
+    kind: "detail",
+    session: displaySession({ ...detail.session, id: detail.session?.id || childId }),
+    hasUnfinishedPrompt: detail.hasUnfinishedPrompt === true,
+    finalResponse: final
+      ? {
+          success: Boolean(final.success),
+          textContent: final.textContent || "",
+          ...(final.error ? { error: final.error } : {}),
+          ...(final.eventCount != null ? { eventCount: final.eventCount } : {}),
+          ...(final.eventLimitReached != null
+            ? { eventLimitReached: final.eventLimitReached }
+            : {}),
+        }
+      : null,
+    // The response body is already present in the structured field above.
+    agentMessage: formatChildDetail(detail, childId, { ...options, includeResponseText: false }),
+  });
 }

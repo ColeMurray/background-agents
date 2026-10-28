@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,9 +19,13 @@ const mocks = vi.hoisted(() => ({
   hasPermission: (permission: string) => mocks.allowedPermissions.has(permission),
 }));
 
-vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(mocks.tab ? `tab=${mocks.tab}` : ""),
-}));
+vi.mock("next/navigation", async () => {
+  const { useState } = await import("react");
+  return {
+    useSearchParams: () =>
+      useState(() => new URLSearchParams(mocks.tab ? `tab=${mocks.tab}` : ""))[0],
+  };
+});
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.repoImagesEnabled,
@@ -53,6 +57,21 @@ vi.mock("@/components/settings/images-settings", () => ({
 vi.mock("@/components/settings/appearance-settings", () => ({
   AppearanceSettings: () => <div>Appearance panel</div>,
 }));
+// A panel that writes its search to the URL, like the memories list.
+vi.mock("@/components/settings/memories-settings", async () => {
+  const { useUrlSearchParam } = await import("@/hooks/use-url-search-param");
+  function MemoriesSettings() {
+    const { text, setText } = useUrlSearchParam("search", (raw) => raw.trim());
+    return (
+      <input
+        aria-label="Search memories"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+      />
+    );
+  }
+  return { MemoriesSettings, SharedMemoriesSettings: () => null };
+});
 vi.mock("@/components/settings/keyboard-shortcuts-settings", () => ({
   KeyboardShortcutsSettings: () => <div>Keyboard panel</div>,
 }));
@@ -133,6 +152,20 @@ describe("SettingsPage mobile navigation", () => {
 
     expect(screen.getByRole("heading", { name: "Appearance" })).toHaveFocus();
     expect(screen.getByText("Appearance panel")).toBeInTheDocument();
+  });
+
+  it("keeps the detail entry when a panel writes its search to the URL", async () => {
+    const user = userEvent.setup();
+    renderSettingsPage();
+
+    await user.click(screen.getByRole("button", { name: /^Memories/ }));
+    await user.type(await screen.findByRole("textbox", { name: "Search memories" }), "rspec");
+    await waitFor(() => expect(window.location.search).toContain("search=rspec"));
+    expect(window.history.state).toMatchObject({ openInspectSettingsDetail: true });
+
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    await user.click(screen.getByRole("button", { name: "Back to settings" }));
+    expect(back).toHaveBeenCalledOnce();
   });
 
   it("returns a direct deep link to the settings root", async () => {

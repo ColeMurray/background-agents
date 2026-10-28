@@ -7,6 +7,7 @@
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
 import type { CredentialScope } from "./credential-scope";
+import type { BackgroundTasks } from "../platform-ports";
 
 export type { CredentialScope } from "./credential-scope";
 
@@ -136,6 +137,21 @@ export interface GetRepositoryConfig {
   owner: string;
   /** Repository name */
   name: string;
+}
+
+export interface ListBranchesResult {
+  branches: { name: string }[];
+  cached: boolean;
+  cachedAt: string;
+}
+
+/** Host capabilities for keeping refreshes alive and measuring provider work. */
+export interface ListBranchesContext {
+  backgroundTasks: BackgroundTasks;
+  metrics: {
+    time<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  };
+  traceId?: string;
 }
 
 /**
@@ -405,10 +421,13 @@ export interface SourceControlProvider {
    * List branches for a repository.
    *
    * @param config - Repository identifier (owner/name)
-   * @returns Array of branch names
+   * @returns Branch names and cache provenance
    * @throws SourceControlProviderError on configuration or API errors
    */
-  listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]>;
+  listBranches(
+    config: GetRepositoryConfig,
+    context: ListBranchesContext
+  ): Promise<ListBranchesResult>;
 
   /**
    * Resolve one branch tip with app-level credentials. A confirmed 404 is

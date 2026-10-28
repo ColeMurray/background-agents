@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { postMessage } from "@open-inspect/shared/slack";
 import type * as SlackModule from "@open-inspect/shared/slack";
 import type { Env } from "../types";
@@ -62,12 +63,15 @@ const actor: SlackActorIdentity = {
   email: "user@example.com",
 };
 const launchSettings: SlackLaunchSettings = {
+  modelSource: "app-home",
   enabledModels: ["openai/gpt-5.4"],
-  slackConfig: {},
+  slackConfig: { harness: "opencode" },
   userPreferences: {
     model: "openai/gpt-5.4",
+    modelOrigin: "app-home",
     reasoningEffort: "high",
     branch: "user-default-branch",
+    harness: "opencode",
   },
 };
 const options = {
@@ -165,4 +169,126 @@ describe("startSessionAndSendPrompt team boundaries", () => {
       );
     }
   );
+});
+
+describe("startSessionAndSendPrompt harness", () => {
+  const anthropicModel = "anthropic/claude-haiku-4-5";
+  const openAIModel = "openai/gpt-5.4";
+
+  function settings(harness: HarnessId, preferredModel: string): SlackLaunchSettings {
+    return {
+      modelSource: "app-home",
+      enabledModels: [anthropicModel, openAIModel],
+      slackConfig: { harness: "opencode" },
+      userPreferences: {
+        model: preferredModel,
+        modelOrigin: "app-home",
+        reasoningEffort: undefined,
+        branch: undefined,
+        harness,
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getUserRepoBranchPreference).mockResolvedValue(undefined);
+    vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
+    vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
+  });
+
+  it.each([
+    ["OpenCode with an Anthropic model", "opencode", anthropicModel],
+    ["OpenCode with an OpenAI model", "opencode", openAIModel],
+    ["Claude Agent with an Anthropic model", "claude", anthropicModel],
+  ] as const)("creates %s on the user's harness", async (_case, harness, model) => {
+    const env = makeEnv();
+
+    expect(
+      await startSessionAndSendPrompt(env, { ...options, launchSettings: settings(harness, model) })
+    ).toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expect(createSession).toHaveBeenCalledWith(env, expect.objectContaining({ harness, model }));
+  });
+
+  it("refuses a model the user's harness cannot run without creating a session", async () => {
+    const env = makeEnv();
+
+    expect(
+      await startSessionAndSendPrompt(env, {
+        ...options,
+        launchSettings: settings("claude", openAIModel),
+      })
+    ).toBeNull();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      env.SLACK_BOT_TOKEN,
+      "C123",
+      'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with `!model` and a model Claude Agent can run, or change your model or agent harness in the Slack app\'s Home tab.',
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it("refuses a disabled planned model before checking harness compatibility", async () => {
+    const env = makeEnv();
+
+    expect(
+      await startSessionAndSendPrompt(env, {
+        ...options,
+        launchSettings: {
+          ...settings("claude", "anthropic/claude-sonnet-4-6"),
+          enabledModels: [openAIModel, anthropicModel],
+        },
+        launchPlan: { sessionDefaults: { model: "anthropic/claude-sonnet-4-6" } },
+      })
+    ).toBeNull();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(deliverPrompt).not.toHaveBeenCalled();
+    expect(storeThreadSession).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      env.SLACK_BOT_TOKEN,
+      "C123",
+      'Your requested model "Claude Sonnet 4.6" is no longer enabled. Start a new request with `!model` and an enabled model.',
+      { thread_ts: "111.222" }
+    );
+  });
+
+  it.each(["high", "xhigh"] as const)(
+    "does not replace a disabled planned model with %s reasoning",
+    async (reasoningEffort) => {
+      const env = makeEnv();
+
+      expect(
+        await startSessionAndSendPrompt(env, {
+          ...options,
+          launchSettings: {
+            ...settings("opencode", anthropicModel),
+            enabledModels: [anthropicModel],
+          },
+          launchPlan: { sessionDefaults: { model: "openai/gpt-5.6-sol", reasoningEffort } },
+        })
+      ).toBeNull();
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(deliverPrompt).not.toHaveBeenCalled();
+      expect(storeThreadSession).not.toHaveBeenCalled();
+    }
+  );
+
+  it("allows an enabled planned model to override disabled user defaults", async () => {
+    const env = makeEnv();
+
+    await startSessionAndSendPrompt(env, {
+      ...options,
+      launchSettings: { ...settings("opencode", openAIModel), enabledModels: [anthropicModel] },
+      launchPlan: { sessionDefaults: { model: anthropicModel, reasoningEffort: "high" } },
+    });
+
+    expect(createSession).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        model: anthropicModel,
+        reasoningEffort: "high",
+      })
+    );
+  });
 });

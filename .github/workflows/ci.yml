@@ -17,7 +17,6 @@ on:
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
-      - "packages/opencomputer-infra/**"
       - "packages/preview/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -32,6 +31,9 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Keep README translation checks active for documentation-only changes.
+      - "README.md"
+      - "README.zh-CN.md"
       - "packages/sandbox-runtime/src/**"
       - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
@@ -55,7 +57,6 @@ on:
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
-      - "packages/opencomputer-infra/**"
       - "packages/preview/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -70,6 +71,9 @@ on:
       - "terraform/environments/production/**"
       - "vitest.workspace.ts"
       - "!**/*.md"
+      # Keep README translation checks active for documentation-only changes.
+      - "README.md"
+      - "README.zh-CN.md"
       - "packages/sandbox-runtime/src/**"
       - "packages/sandbox-images/**"
       # Re-included after the exclusion above, which later patterns override: a
@@ -96,12 +100,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           # Minimum supported release, matching `engines` in package.json.
           # Every other job runs the version in .nvmrc.
@@ -141,6 +145,9 @@ jobs:
       - name: Test Node version workflow contract
         run: npm run test:node-version-workflow-contract
 
+      - name: Check README translations
+        run: npm run test:readme-translations
+
       - name: Check Prettier formatting
         run: npm run format:check
 
@@ -153,12 +160,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -178,12 +185,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -197,18 +204,21 @@ jobs:
       - name: Build web package
         run: npm run build -w @open-inspect/web
 
+      - name: Verify Mermaid browser isolation
+        run: npm run test:mermaid-browser -w @open-inspect/web
+
   build-docs:
     name: Build (Docs)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -227,12 +237,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -259,15 +269,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/2", "2/2"]
+        shard: ["1/3", "2/3", "3/3"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -289,12 +299,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -314,12 +324,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -336,12 +346,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"

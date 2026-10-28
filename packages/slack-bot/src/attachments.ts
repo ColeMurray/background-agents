@@ -56,10 +56,7 @@ export interface SlackImageAttachment {
 
 /** Why an attached image did not make it to the session. */
 export type SlackAttachmentDropReason =
-  | "download_failed"
-  | "too_large"
-  | "over_cap"
-  | "upload_rejected";
+  "download_failed" | "too_large" | "over_cap" | "upload_rejected";
 
 /** Downloaded image bytes plus a record of every image that was lost. */
 export interface PreparedImageAttachments {

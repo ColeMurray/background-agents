@@ -10,6 +10,7 @@ export const CONDITION_LABELS: Record<string, string> = {
   conclusion: "Conclusion",
   check_conclusion: "Check Conclusion",
   workflow_name: "Workflow Name",
+  draft: "Draft",
   linear_status: "Linear Status",
   text_match: "Message Text",
   slack_channel: "Slack Channel",

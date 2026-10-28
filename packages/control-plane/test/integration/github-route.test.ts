@@ -108,11 +108,14 @@ async function counts() {
 describe("GET /github/route", () => {
   beforeEach(async () => {
     await cleanD1Tables();
-    const sender = await new UserStore(env.DB).resolveOrCreateUser({
-      provider: "github",
-      providerUserId: "101",
-      providerLogin: "renamed-sender",
-    });
+    const sender = await new UserStore(env.DB).resolveOrCreateUser(
+      {
+        provider: "github",
+        providerUserId: "101",
+        providerLogin: "renamed-sender",
+      },
+      () => {}
+    );
     senderUserId = sender.id;
   });
 

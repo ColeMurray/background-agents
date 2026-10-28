@@ -2,10 +2,36 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestEnv } from "../router.test-support";
 import { GitHubSourceControlProvider } from "../source-control/providers/github-provider";
 import { ImageBuildPlanner } from "./planner";
+import * as scopeResolution from "./scope";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("ImageBuildPlanner", () => {
+  it("selects all request and cap fields for image builds, including null resets", async () => {
+    const resources = { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: null };
+    vi.spyOn(scopeResolution, "resolveScopeSandboxSettings").mockResolvedValue(resources);
+    vi.spyOn(scopeResolution, "loadScopeBuildSecrets").mockResolvedValue(undefined);
+    vi.spyOn(
+      GitHubSourceControlProvider.prototype,
+      "generateCredentialHelperAuth"
+    ).mockRejectedValue(new Error("Token scope denied"));
+    const env = createTestEnv({ SCM_PROVIDER: "github" });
+    const plan = await new ImageBuildPlanner(env, env.DB).planBuild({
+      buildId: "build-1",
+      scope: { kind: "repo", id: "acme/web" },
+      target: {
+        kind: "repo",
+        repoId: 12,
+        repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+        repositoriesFingerprint: "fp-repo",
+      },
+      callbackUrl: "https://worker.test/image-builds/build-complete",
+      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+      callbackAuth: { token: "callback-token", tokenHash: "callback-hash", expiresAt: 1000 },
+    });
+    expect(plan.resources).toEqual(resources);
+  });
   it("does not retry a scoped credential failure with broader auth", async () => {
     const mint = vi
       .spyOn(GitHubSourceControlProvider.prototype, "generateCredentialHelperAuth")

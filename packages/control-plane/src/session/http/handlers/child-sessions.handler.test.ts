@@ -79,6 +79,7 @@ function createHandler() {
   const enqueuePrompt = vi.fn(async () => ({
     messageId: "message-follow-up",
     status: "queued" as const,
+    deduplicated: false,
   }));
   const messageService = { enqueuePrompt };
 
@@ -138,6 +139,7 @@ describe("ChildSessionsHandler", () => {
       await expect(response.json()).resolves.toEqual({
         messageId: "message-follow-up",
         status: "queued",
+        deduplicated: false,
       });
       expect(enqueuePrompt).toHaveBeenCalledWith({
         content: "Continue with the edge cases",

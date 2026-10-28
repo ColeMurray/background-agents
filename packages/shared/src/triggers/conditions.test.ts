@@ -232,6 +232,33 @@ describe("matchesConditions", () => {
     });
   });
 
+  describe("GitHub draft", () => {
+    const notDraft = [{ type: "draft" as const, operator: "eq" as const, value: false }];
+    const prEvent = (draft?: boolean) =>
+      buildMockEvent("github", { pullRequest: { number: 1, draft } });
+
+    it("skips draft pull requests", () => {
+      expect(matchesConditions(notDraft, prEvent(true), conditionRegistry)).toBe(false);
+      expect(matchesConditions(notDraft, prEvent(false), conditionRegistry)).toBe(true);
+    });
+
+    it("matches neither choice when the draft flag is missing", () => {
+      expect(matchesConditions(notDraft, prEvent(), conditionRegistry)).toBe(false);
+      expect(
+        matchesConditions([{ ...notDraft[0], value: true }], prEvent(), conditionRegistry)
+      ).toBe(false);
+    });
+
+    it("applies only to pull request opened and updated events", () => {
+      expect(
+        validateConditions(notDraft, "github", conditionRegistry, "pull_request.synchronize")
+      ).toEqual([]);
+      expect(
+        validateConditions(notDraft, "github", conditionRegistry, "issue_comment.created")
+      ).toEqual(['Condition "draft" does not apply to GitHub event issue_comment.created']);
+    });
+  });
+
   describe("GitHub workflow_name", () => {
     it("matches only the configured workflow", () => {
       const event = buildMockEvent("github", { workflowName: "CI" });

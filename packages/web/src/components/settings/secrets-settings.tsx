@@ -3,9 +3,10 @@
 import { SecretsEditor } from "@/components/secrets-editor";
 import { useRepos } from "@/hooks/use-repos";
 import { useState } from "react";
-import { ChevronDownIcon, CheckIcon } from "@/components/ui/icons";
-import { Combobox } from "@/components/ui/combobox";
+import { ChevronDownIcon } from "@/components/ui/icons";
+import { Combobox, FIELD_COMBOBOX_TRIGGER_CLASS } from "@/components/ui/combobox";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { GlobalRepositoryComboboxOption } from "./global-repository-combobox-option";
 
 const GLOBAL_SCOPE = "__global__";
 
@@ -66,27 +67,14 @@ export function SecretsSettings() {
           direction="down"
           dropdownWidth="w-full max-w-sm"
           disabled={loadingRepos || (!canManageGlobal && !canManageRepos)}
-          triggerClassName="w-full max-w-sm flex items-center justify-between px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          triggerClassName={FIELD_COMBOBOX_TRIGGER_CLASS}
           prependContent={({ select }) =>
             canManageGlobal ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => select(GLOBAL_SCOPE)}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm hover:bg-muted transition ${
-                    isGlobal ? "text-foreground" : "text-muted-foreground"
-                  }`}
-                >
-                  <div className="flex flex-col items-start text-left">
-                    <span className="font-medium">All Repositories (Global)</span>
-                    <span className="text-xs text-secondary-foreground">
-                      Shared across all repositories
-                    </span>
-                  </div>
-                  {isGlobal && <CheckIcon className="w-4 h-4 text-accent" />}
-                </button>
-                {repos.length > 0 && <div className="border-t border-border my-1" />}
-              </>
+              <GlobalRepositoryComboboxOption
+                selected={isGlobal}
+                onSelect={() => select(GLOBAL_SCOPE)}
+                showSeparator={repos.length > 0}
+              />
             ) : null
           }
         >

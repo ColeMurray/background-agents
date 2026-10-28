@@ -162,7 +162,7 @@ describe("sandbox continuity while its bridge reconnects", () => {
     }
   );
 
-  it("retires a source that does not reconnect at its heartbeat deadline, not the inactivity extension", async () => {
+  it("retires a source that does not reconnect within its heartbeat grace, not the inactivity extension", async () => {
     const sandbox = connectedSource({ last_activity: NOW - inactivity.timeoutMs });
     const h = createAlarmFixture(
       sandbox,
@@ -181,7 +181,15 @@ describe("sandbox continuity while its bridge reconnects", () => {
     const deadline = Math.min(...h.alarmScheduler.alarms);
     expect(deadline).toBe(RECENT_HEARTBEAT + heartbeat.timeoutMs + 1);
 
+    // The deadline opens the reconnect grace without touching the source.
     vi.mocked(Date.now).mockReturnValue(deadline);
+    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+    expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("ready");
+    const graceEnd = deadline + heartbeat.reconnectGraceMs;
+    expect(h.alarmScheduler.alarms).toContain(graceEnd);
+
+    vi.mocked(Date.now).mockReturnValue(graceEnd);
     await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
     expect(h.provider.takeSnapshot).toHaveBeenCalledOnce();
     expect(h.provider.stopSandbox).toHaveBeenCalledOnce();

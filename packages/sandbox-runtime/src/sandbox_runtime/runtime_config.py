@@ -85,6 +85,12 @@ class ClaudeStagerConfig:
 
 
 @dataclass(frozen=True)
+class CodexStagerConfig:
+    has_repository: bool
+    mcp_servers: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class ManagedSkillsConfig:
     control_plane_url: str
     sandbox_token: str
@@ -191,29 +197,32 @@ class RuntimeConfig:
             repo_path=self.repo_path,
         )
 
-    def opencode_config(self) -> OpenCodeConfig:
+    def _mcp_servers(self) -> tuple[Mapping[str, Any], ...]:
         raw_mcp_servers = self.session_config.get("mcp_servers")
-        mcp_servers = (
+        return (
             tuple(item for item in raw_mcp_servers if isinstance(item, Mapping))
             if isinstance(raw_mcp_servers, tuple)
             else ()
         )
+
+    def opencode_config(self) -> OpenCodeConfig:
         return OpenCodeConfig(
             provider=str(self.session_config.get("provider") or "anthropic"),
             model=str(self.session_config.get("model") or "claude-sonnet-4-6"),
-            mcp_servers=mcp_servers,
+            mcp_servers=self._mcp_servers(),
             has_repository=self.has_repository,
             workspace_path=self.workspace_path,
         )
 
     def claude_stager_config(self) -> ClaudeStagerConfig:
-        raw_mcp_servers = self.session_config.get("mcp_servers")
-        mcp_servers = (
-            tuple(item for item in raw_mcp_servers if isinstance(item, Mapping))
-            if isinstance(raw_mcp_servers, tuple)
-            else ()
+        return ClaudeStagerConfig(
+            has_repository=self.has_repository, mcp_servers=self._mcp_servers()
         )
-        return ClaudeStagerConfig(has_repository=self.has_repository, mcp_servers=mcp_servers)
+
+    def codex_stager_config(self) -> CodexStagerConfig:
+        return CodexStagerConfig(
+            has_repository=self.has_repository, mcp_servers=self._mcp_servers()
+        )
 
     def bridge_process_config(self) -> BridgeProcessConfig:
         return BridgeProcessConfig(

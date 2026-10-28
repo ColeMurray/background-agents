@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { GitLabSourceControlProvider, deriveGitLabMergeRequestStatus } from "./gitlab-provider";
 import { SourceControlProviderError } from "../errors";
 import type { CredentialScope } from "../types";
+import { createTestBackgroundTasks } from "../../background-tasks.test-support";
+import { createRequestMetrics } from "../../db/instrumented-sql-database";
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -839,15 +841,23 @@ describe("GitLabSourceControlProvider", () => {
   });
 
   describe("listBranches", () => {
+    const context = () => ({
+      backgroundTasks: createTestBackgroundTasks(),
+      metrics: createRequestMetrics(),
+    });
     it("returns branch names from API response", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([{ name: "main" }, { name: "develop" }, { name: "feature/foo" }])
       );
 
       const provider = new GitLabSourceControlProvider(fakeConfig);
-      const branches = await provider.listBranches({ owner: "acme", name: "web" });
+      const result = await provider.listBranches({ owner: "acme", name: "web" }, context());
 
-      expect(branches).toEqual([{ name: "main" }, { name: "develop" }, { name: "feature/foo" }]);
+      expect(result).toEqual({
+        branches: [{ name: "main" }, { name: "develop" }, { name: "feature/foo" }],
+        cached: false,
+        cachedAt: expect.any(String),
+      });
     });
 
     it("throws permanent error when a listed branch shape is invalid", async () => {
@@ -855,7 +865,7 @@ describe("GitLabSourceControlProvider", () => {
 
       const provider = new GitLabSourceControlProvider(fakeConfig);
       const err = await provider
-        .listBranches({ owner: "acme", name: "web" })
+        .listBranches({ owner: "acme", name: "web" }, context())
         .catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(SourceControlProviderError);

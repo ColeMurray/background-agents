@@ -182,7 +182,7 @@ ${STEP_USAGE_TABLE_SQL};
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,                               -- 'pr', 'screenshot', 'video', 'preview', 'branch'
+  type TEXT NOT NULL,                               -- validated by shared artifactTypeSchema
   url TEXT,
   metadata TEXT,                                    -- JSON
   created_at INTEGER NOT NULL,
@@ -313,6 +313,17 @@ function parseSqlColumnNames(rows: unknown[]): string[] {
       );
     }
     return row.name;
+  });
+}
+
+function parseAppliedMigrationIds(rows: unknown[]): number[] {
+  return rows.map((row, index) => {
+    if (!isRecord(row) || typeof row.id !== "number") {
+      throw new TypeError(
+        `Invalid schema migration metadata at row ${index}: expected an object with a numeric id`
+      );
+    }
+    return row.id;
   });
 }
 
@@ -802,8 +813,9 @@ export function applyMigrations(sql: SqlStorage): void {
     `CREATE TABLE IF NOT EXISTS _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`
   );
 
-  const rows = sql.exec(`SELECT id FROM _schema_migrations`).toArray() as Array<{ id: number }>;
-  const applied = new Set(rows.map((r) => r.id));
+  const applied = new Set(
+    parseAppliedMigrationIds(sql.exec(`SELECT id FROM _schema_migrations`).toArray())
+  );
 
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.id)) continue;

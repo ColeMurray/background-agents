@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { createRequestMetrics, instrumentSqlDatabase } from "./instrumented-sql-database";
 import type { RequestMetrics } from "./instrumented-sql-database";
@@ -262,6 +262,46 @@ describe("instrumentSqlDatabase over an engine that reports every field", () => 
     expect(summary.sql_engine_total_ms).toBe(8);
     expect(summary).toHaveProperty("github_api_ms");
   });
+});
+
+describe("failed SQL attempts", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["first", "run", "all", "batch"] as const)(
+    "%s records elapsed time once and preserves the exact rejection",
+    async (method) => {
+      const metrics = createRequestMetrics();
+      const engine = new FakeDatabase();
+      const statement = engine.prepare("SELECT ?").bind(1);
+      vi.spyOn(engine, "prepare").mockReturnValue(statement);
+      // Exercise synchronous driver throws as well as asynchronous rejections,
+      // including values which are not Error instances.
+      for (const synchronous of [false, true]) {
+        const failure = synchronous ? { code: "SQL_FAILURE" } : new Error("query failed");
+        let now = 1_000;
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const fail = () => {
+          now += 37;
+          if (synchronous) throw failure;
+          return Promise.reject(failure);
+        };
+        if (method === "batch") vi.spyOn(engine, "batch").mockImplementation(fail);
+        else vi.spyOn(statement, method).mockImplementation(fail);
+        const db = instrumentSqlDatabase(engine, metrics);
+        const operation =
+          method === "batch"
+            ? db.batch([db.prepare("SELECT ?")])
+            : db.prepare("SELECT ?")[method]();
+
+        await expect(operation).rejects.toBe(failure);
+      }
+
+      expect(metrics.sqlQueries).toHaveLength(2);
+      expect(metrics.sqlQueries.map((query) => query.query_ms)).toEqual([37, 37]);
+      expect(metrics.summarize()).toEqual({ sql_query_count: 2, sql_total_ms: 74 });
+      if (method === "batch") expect(engine.batch).toHaveBeenLastCalledWith([statement]);
+    }
+  );
 });
 
 // The Node adapter reports duration and rows_written but never rows_read,

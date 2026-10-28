@@ -7,8 +7,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..claude_stager import ClaudeHarnessHandoff
+from ..codex_stager import CodexHarnessHandoff
+from ..credentials.openai_access_token_client import OpenAIAccessTokenClient
 from ..credentials.provider_credential_client import RuntimeCredentialClient
 from ..memories import append_memory
+from ..model_prices import ModelPriceCatalog, default_catalog_path
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -23,11 +26,11 @@ from .base import (
     TurnOutcome,
     parse_harness_id,
 )
-from .claude import ClaudeHarness, ClaudeHarnessConfig
 from .claude_env import OAUTH_MANAGED_ENV_VAR
-from .claude_tools import ToolServerConfig
+from .codex import CodexHarness, CodexHarnessConfig
 from .opencode import OpencodeHarness
 from .opencode_client import OpenCodeClient
+from .tools import ToolServerConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,6 +69,8 @@ def build_agent_harness(
                 limits=limits,
             )
         case HarnessId.CLAUDE:
+            from .claude import ClaudeHarness, ClaudeHarnessConfig
+
             handoff = ClaudeHarnessHandoff.read()
             session_config = _session_config_from_env()
             oauth_managed = bool(os.environ.get(OAUTH_MANAGED_ENV_VAR))
@@ -106,6 +111,44 @@ def build_agent_harness(
                 log=log,
                 limits=limits,
                 credential_client=credential_client,
+            )
+        case HarnessId.CODEX:
+            codex_handoff = CodexHarnessHandoff.read()
+            session_config = _session_config_from_env()
+            oauth_managed = os.environ.get("OPENAI_OAUTH_MANAGED") in {"1", "true"}
+            codex_config = CodexHarnessConfig(
+                workdir=codex_handoff.workdir,
+                state_dir=codex_handoff.config_dir,
+                default_model=str(session_config.get("model") or "gpt-6.1-sol"),
+                oauth_managed=oauth_managed,
+                mcp_servers=_mcp_servers_from(session_config),
+                restored=os.environ.get("RESTORED_FROM_SNAPSHOT") == "true",
+                tools=ToolServerConfig(
+                    control_plane_url=identity.control_plane_url,
+                    session_id=identity.session_id,
+                    auth_token=identity.auth_token,
+                    repo_manifest_path=identity.repo_manifest_path,
+                    has_repository=codex_handoff.has_repository,
+                    slack_notify_enabled=os.environ.get("AGENT_SLACK_NOTIFY_ENABLED", "").lower()
+                    == "true",
+                ),
+            )
+            token_client = (
+                OpenAIAccessTokenClient(
+                    control_plane_url=identity.control_plane_url,
+                    session_id=identity.session_id,
+                    auth_token=identity.auth_token,
+                    log=log,
+                )
+                if oauth_managed
+                else None
+            )
+            return CodexHarness(
+                config=codex_config,
+                log=log,
+                limits=limits,
+                credential_client=token_client,
+                prices=ModelPriceCatalog(default_catalog_path(os.environ), log),
             )
     raise ValueError(f"Unsupported harness: {harness_id}")
 

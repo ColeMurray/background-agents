@@ -6,6 +6,7 @@ import {
   updateMessage,
 } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
+import type { ActorEnrollmentOutcome } from "@open-inspect/shared/types/actors";
 import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
@@ -30,6 +31,7 @@ import { createLogger } from "../logger";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
   buildWorkingMessage,
+  formatHarnessModelRefusal,
   formatSessionDefaultsNotice,
   scheduleStartingStatus,
 } from "../messages/blocks";
@@ -41,7 +43,7 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import { checkPublicationAccess } from "../sessions/control-plane-client";
+import { checkPublicationAccess, enrollActor } from "../sessions/control-plane-client";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -62,8 +64,10 @@ import {
   EMPTY_INLINE_PROMPT_OPTIONS,
   hasInlinePromptOptions,
   parseInlinePromptFlags,
-  resolveInlinePromptOptions,
   type InlinePromptOptions,
+} from "@open-inspect/shared/inline-prompt-flags";
+import {
+  resolveInlinePromptOptions,
   type ResolvedTurnPlan,
   type SessionLaunchPlan,
 } from "../inline-flags";
@@ -152,6 +156,34 @@ async function resolveThreadSessionAdmission(
   return { kind: "followUp", session, threadTs };
 }
 
+const ENROLLMENT_REFUSAL_MESSAGES: Record<Exclude<ActorEnrollmentOutcome, "enrolled">, string> = {
+  // A hidden profile email (e.g. Slack Connect), a missing scope, or a failed
+  // users.info lookup all look the same here, so the reply names none of them.
+  email_required:
+    "I couldn't read the email on your Slack profile, so I can't link you to an Open-Inspect account. Please try again, or ask an admin to check that the bot can read Slack profile emails.",
+  admission_denied:
+    "Your account is not authorized to join this Open-Inspect workspace. Sign in on the web with the email on your Slack profile, or ask an administrator to check the admission allowlists.",
+  unavailable: "Sorry, I couldn't verify your account right now. Please try again in a moment.",
+};
+
+/**
+ * Resolve the sender's Slack identity and enroll it with its profile. The
+ * control plane links a new actor to an existing user by email only when it
+ * enrolls the actor, so this must succeed before any request carrying the
+ * actor; otherwise the caller replies with `refusal` and stops.
+ */
+async function resolveEnrolledSlackActor(
+  env: Env,
+  user: string,
+  traceId: string | undefined
+): Promise<{ ok: true; actor: SlackActorIdentity } | { ok: false; refusal: string }> {
+  const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
+  const enrollment = await enrollActor(env, actor, traceId);
+  return enrollment === "enrolled"
+    ? { ok: true, actor }
+    : { ok: false, refusal: ENROLLMENT_REFUSAL_MESSAGES[enrollment] };
+}
+
 /**
  * Route one user message: follow up on the thread's existing session when there
  * is one, otherwise classify the target and launch a new session (or ask for
@@ -199,7 +231,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   // instruction and reads as one when it comes last.
   const forwardedContext = formatForwardedContext(forwarded.entries);
   const promptText = forwardedContext + requestText;
-  let actor: SlackActorIdentity | undefined;
 
   if (admission.kind === "followUp") {
     const { session: existingSession, threadTs } = admission;
@@ -243,8 +274,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
     // The session already has its own turns, so only forward the human
     // discussion that happened in the thread since the last prompt.
-    const [resolvedActor, interimHistory] = await Promise.all([
-      resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
+    const [enrollment, interimHistory] = await Promise.all([
+      resolveEnrolledSlackActor(env, user, traceId),
       existingSession.lastPromptTs
         ? fetchInteractiveThreadContext(
             env,
@@ -259,7 +290,11 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           )
         : Promise.resolve(undefined),
     ]);
-    actor = resolvedActor;
+    if (!enrollment.ok) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, enrollment.refusal, { thread_ts: threadTs });
+      return;
+    }
+    const { actor } = enrollment;
     const interimContext = interimHistory
       ? formatInterimThreadContext(interimHistory.messages)
       : "";
@@ -314,6 +349,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     // An image-only follow-up that lost every image sends no prompt; the
     // user was already told inside deliverPrompt.
     if (promptResult.reason === "no_images_delivered") return;
+    if (promptResult.reason === "harness_model_incompatible") {
+      await postMessage(
+        env.SLACK_BOT_TOKEN,
+        channel,
+        formatHarnessModelRefusal(promptResult.message),
+        { thread_ts: threadTs }
+      );
+      return;
+    }
     if (promptResult.reason === "transient") {
       await postMessage(
         env.SLACK_BOT_TOKEN,
@@ -381,15 +425,25 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     scheduleStartingStatus(scheduleBackground, env, channel, threadTs || ts, traceId);
   }
 
-  const threadHistory = threadTs
-    ? await fetchInteractiveThreadContext(
-        env,
-        channel,
-        threadTs,
-        { beforeTs: ts, includeBotMessages: true },
-        traceId
-      )
-    : undefined;
+  const [enrollment, threadHistory] = await Promise.all([
+    resolveEnrolledSlackActor(env, user, traceId),
+    threadTs
+      ? fetchInteractiveThreadContext(
+          env,
+          channel,
+          threadTs,
+          { beforeTs: ts, includeBotMessages: true },
+          traceId
+        )
+      : undefined,
+  ]);
+  if (!enrollment.ok) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, enrollment.refusal, {
+      thread_ts: threadTs || ts,
+    });
+    return;
+  }
+  const { actor } = enrollment;
   const previousMessages = threadHistory?.messages;
 
   const result = await createClassifier(env).classify(
@@ -441,9 +495,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         thread_ts: clarificationThreadTs,
         blocks: buildTargetClarificationBlocks(
           result.reasoning,
-          result.target?.kind === "none"
-            ? [result.target, ...(result.alternatives ?? [])]
-            : result.alternatives,
+          result.target ? [result.target, ...(result.alternatives ?? [])] : result.alternatives,
           catalog,
           requestId
         ),
@@ -470,7 +522,6 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
-  actor ??= await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
   const sessionResult = await startSessionAndSendPrompt(env, {
     target: result.target,
     teamId,

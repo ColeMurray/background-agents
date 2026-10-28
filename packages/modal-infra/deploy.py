@@ -24,30 +24,23 @@ if __name__ == "__main__":
     # only build modules, without src.__init__ registering deployable functions.
     from app_config import APP_NAME
     from images.base import (
-        MODAL_VM_EXPERIMENTAL_OPTIONS,
         base_image,
         base_image_plan,
         docker_image,
         image_reference_path,
     )
-    from sandbox.launch_policy import VM_DEFAULT_CPU_CORES, VM_DEFAULT_MEMORY_MIB
+    from sandbox.launch_policy import launch_kwargs, parse_launch
 else:
     # Modal imports this module to discover the fully registered application.
     from src.app import app
     from src.app_config import APP_NAME
     from src.images.base import (
-        MODAL_VM_EXPERIMENTAL_OPTIONS,
         base_image,
         base_image_plan,
         docker_image,
         image_reference_path,
     )
-    from src.sandbox.launch_policy import VM_DEFAULT_CPU_CORES, VM_DEFAULT_MEMORY_MIB
-
-# Resources the Docker image is verified with; the same defaults the control
-# plane freezes into a Docker session that configures none.
-DOCKER_VERIFICATION_CPU_CORES = VM_DEFAULT_CPU_CORES
-DOCKER_VERIFICATION_MEMORY_MIB = VM_DEFAULT_MEMORY_MIB
+    from src.sandbox.launch_policy import launch_kwargs, parse_launch
 
 
 def _verify_image(sandbox: modal.Sandbox, *scripts: tuple[str, ...]) -> None:
@@ -133,9 +126,7 @@ def build_sandbox_image(*, with_docker: bool = False) -> None:
         image=modal.Image.from_id(docker_image.object_id),
         env=base_image_plan["runtimeEnv"],
         timeout=600,
-        cpu=DOCKER_VERIFICATION_CPU_CORES,
-        memory=DOCKER_VERIFICATION_MEMORY_MIB,
-        experimental_options=dict(MODAL_VM_EXPERIMENTAL_OPTIONS),
+        **launch_kwargs(parse_launch("modal-vm", None)),
     )
     try:
         _verify_image(

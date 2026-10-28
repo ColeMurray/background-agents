@@ -42,6 +42,12 @@ import { providerResumesAfterStop } from "../provider";
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
+/** A bridge heartbeat old enough to be past both the stale threshold and its reconnect grace. */
+export const EXPIRED_HEARTBEAT_AGE_MS =
+  DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs +
+  DEFAULT_LIFECYCLE_CONFIG.heartbeat.reconnectGraceMs +
+  10_000;
+
 export function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
     id: "session-123",
@@ -525,6 +531,10 @@ export function createUnmanagedShutdown() {
     prepared: vi.fn(),
     admissionDecision: vi.fn(() => "unmanaged" as const),
     handleAlarm: vi.fn(async () => "continue" as const),
+    rearmCaptureSettlement: vi.fn(async () => undefined),
+    recordRuntimeFailure: vi.fn(),
+    pendingRuntimeFailure: vi.fn(() => null),
+    clearRuntimeFailure: vi.fn(),
     recover: vi.fn(async () => undefined),
     snapshot: vi.fn(() => null),
   } satisfies SandboxShutdownLifecycle;
@@ -563,12 +573,16 @@ export function createCheckpointShutdown(
   } as never);
   return {
     ...createUnmanagedShutdown(),
-    captureCheckpoint: (generation, reason) => coordinator.captureCheckpoint(generation, reason),
+    captureCheckpoint: (generation, reason, after) =>
+      coordinator.captureCheckpoint(generation, reason, after),
     requestShutdown: (reason, mode) =>
       mode === "emergency"
         ? coordinator.requestShutdown(reason, mode)
         : Promise.resolve("unmanaged"),
     isHolding: () => coordinator.isHolding(),
+    recordRuntimeFailure: (reason) => coordinator.recordRuntimeFailure(reason),
+    pendingRuntimeFailure: () => coordinator.pendingRuntimeFailure(),
+    clearRuntimeFailure: () => coordinator.clearRuntimeFailure(),
     admissionDecision: () => coordinator.admissionDecision(),
     onRefusedReconnect: () => coordinator.onRefusedReconnect(),
   };

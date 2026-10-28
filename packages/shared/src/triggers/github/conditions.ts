@@ -83,4 +83,15 @@ export const githubConditions = {
       return event.workflowName === condition.value;
     },
   },
+  draft: {
+    appliesTo: ["github"] as const,
+    validate() {
+      return null;
+    },
+    evaluate(condition, event) {
+      if (event.source !== "github") return true;
+      // GitHub always sends a boolean; an event without one matches neither choice.
+      return event.pullRequest?.draft === condition.value;
+    },
+  },
 } satisfies Partial<ConditionRegistry>;

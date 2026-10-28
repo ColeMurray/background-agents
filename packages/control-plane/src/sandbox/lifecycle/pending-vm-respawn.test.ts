@@ -298,7 +298,7 @@ describe("pending VM reference recovery", () => {
     await vi.waitFor(() => expect(client.createSandbox).toHaveBeenCalledOnce());
     const restarted = createAlarmFixture(sandbox, provider);
     vi.setSystemTime(Date.now() + DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs + 1);
-    expect(await restarted.manager.handleAlarm()).toBe("sandbox_failed");
+    expect(await restarted.manager.handleAlarm()).toBe("sandbox_terminated");
     expect(sandbox.fenced).toBe(1);
     await restarted.manager.spawnSandbox();
     expect(client.createSandbox).toHaveBeenCalledTimes(2);

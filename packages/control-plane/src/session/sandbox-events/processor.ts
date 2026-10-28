@@ -1,4 +1,4 @@
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { MessageRepository } from "../message-repository";
 import type { SandboxPushService } from "../sandbox-push-service";
@@ -9,7 +9,7 @@ import type { SandboxExecutionEventHandler } from "./execution.handler";
 import type { SandboxRuntimeEventHandler } from "./runtime.handler";
 import type { SandboxStreamingEventHandler } from "./streaming.handler";
 
-type SandboxEventWithAck = SandboxEvent & { ackId?: string };
+type SandboxEventWithAck = SandboxIngressEvent & { ackId?: string };
 const LOG_METADATA_MAX_CHARS = 256;
 
 /** Metadata only: never copy event content, arguments, results, or error text. */
@@ -67,8 +67,10 @@ export class SessionSandboxEventProcessor {
     private readonly runtime: SandboxRuntimeEventHandler,
     private readonly pushService: SandboxPushService,
     private readonly shutdown?: {
-      generationReady(event: Extract<SandboxEvent, { type: "sandbox_generation_ready" }>): void;
-      prepared(event: Extract<SandboxEvent, { type: "preservation_prepared" }>): void;
+      generationReady(
+        event: Extract<SandboxIngressEvent, { type: "sandbox_generation_ready" }>
+      ): void;
+      prepared(event: Extract<SandboxIngressEvent, { type: "preservation_prepared" }>): void;
     }
   ) {}
 
@@ -107,7 +109,7 @@ export class SessionSandboxEventProcessor {
     }
   }
 
-  private async dispatch(event: SandboxEvent, context: SandboxEventContext): Promise<void> {
+  private async dispatch(event: SandboxIngressEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
       case "sandbox_generation_ready":
         if (!this.shutdown) {

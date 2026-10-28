@@ -1,12 +1,19 @@
 """Provider-local mapping from backend identity and resources to launch mechanics."""
 
 import re
+from pathlib import Path
 
 import pytest
 
 from sandbox_runtime.constants import DOCKER_ENABLED_ENV_VAR
 from src.images import base
 from src.sandbox.launch_policy import (
+    MODAL_DEFAULT_CPU_CORES,
+    MODAL_DEFAULT_MEMORY_MIB,
+    VM_DEFAULT_CPU_CORES,
+    VM_DEFAULT_CPU_LIMIT_CORES,
+    VM_DEFAULT_MEMORY_LIMIT_MIB,
+    VM_DEFAULT_MEMORY_MIB,
     DockerImageUnavailableError,
     InvalidDockerSettingsError,
     ModalLaunch,
@@ -21,6 +28,22 @@ from src.sandbox.launch_policy import (
 from src.sandbox.vm_recovery import VMServiceLaunch, parse_vm_service_launch
 
 
+def test_resource_defaults_match_shared_provider_validation():
+    shared = Path(__file__).parents[2] / "shared/src/types/integrations.ts"
+    source = shared.read_text()
+    for name, expected in {
+        "DEFAULT_MODAL_CPU_CORES": MODAL_DEFAULT_CPU_CORES,
+        "DEFAULT_MODAL_MEMORY_MIB": MODAL_DEFAULT_MEMORY_MIB,
+        "DEFAULT_MODAL_VM_CPU_CORES": VM_DEFAULT_CPU_CORES,
+        "DEFAULT_MODAL_VM_MEMORY_MIB": VM_DEFAULT_MEMORY_MIB,
+        "DEFAULT_MODAL_VM_CPU_LIMIT_CORES": VM_DEFAULT_CPU_LIMIT_CORES,
+        "DEFAULT_MODAL_VM_MEMORY_LIMIT_MIB": VM_DEFAULT_MEMORY_LIMIT_MIB,
+    }.items():
+        match = re.search(rf"export const {name} = ([\d.]+);", source)
+        assert match is not None, name
+        assert float(match[1]) == expected, name
+
+
 @pytest.mark.parametrize("settings", [None, {}])
 def test_standard_defaults_preserve_existing_launch(settings):
     launch = parse_launch("modal", settings)
@@ -33,11 +56,17 @@ def test_standard_defaults_preserve_existing_launch(settings):
 def test_launch_policy_maps_vm_backend_and_resources():
     launch = parse_launch("modal-vm", {"cpuCores": 2, "memoryMib": 4096})
 
-    assert launch == ModalLaunch(backend="modal-vm", cpu_cores=2.0, memory_mib=4096)
+    assert launch == ModalLaunch(
+        backend="modal-vm",
+        cpu_cores=2.0,
+        memory_mib=4096,
+        cpu_limit_cores=2,
+        memory_limit_mib=4096,
+    )
     assert launch_kwargs(launch) == {
         "experimental_options": {"vm_runtime": True},
         "cpu": (2.0, 2.0),
-        "memory": 4096,
+        "memory": (4096, 4096),
     }
     assert docker_runtime_env(launch) == {DOCKER_ENABLED_ENV_VAR: "true"}
 
@@ -121,11 +150,19 @@ def test_pending_vm_reference_rejects_malformed_values(reference):
     assert parse_pending_vm_reference(reference) is None
 
 
-@pytest.mark.parametrize("settings", [None, {}, {"cpuCores": None, "memoryMib": None}])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        None,
+        {},
+        {"cpuCores": None, "memoryMib": None},
+        {"cpuLimitCores": None, "memoryLimitMib": None},
+    ],
+)
 def test_vm_owns_defaults_for_absent_or_null_resources(settings):
     assert launch_kwargs(parse_launch("modal-vm", settings)) == {
-        "cpu": (2, 2),
-        "memory": 4096,
+        "cpu": (0.5, 2),
+        "memory": (2048, 4096),
         "experimental_options": {"vm_runtime": True},
     }
 
@@ -137,3 +174,56 @@ def test_both_backends_validate_explicit_resources(settings):
     for backend in ("modal", "modal-vm"):
         with pytest.raises(InvalidDockerSettingsError):
             parse_launch(backend, settings)
+
+
+@pytest.mark.parametrize("backend", ["modal", "modal-vm"])
+def test_explicit_burst_limits(backend):
+    kwargs = launch_kwargs(
+        parse_launch(
+            backend,
+            {
+                "cpuCores": 0.5,
+                "cpuLimitCores": 4,
+                "memoryMib": 2048,
+                "memoryLimitMib": 8192,
+            },
+        )
+    )
+    assert kwargs["cpu"] == (0.5, 4)
+    assert kwargs["memory"] == (2048, 8192)
+
+
+def test_vm_default_limits_do_not_constrain_larger_requests():
+    kwargs = launch_kwargs(parse_launch("modal-vm", {"cpuCores": 8, "memoryMib": 16384}))
+    assert kwargs["cpu"] == (8, 8)
+    assert kwargs["memory"] == (16384, 16384)
+
+
+def test_standard_limit_only_uses_provider_default_requests():
+    kwargs = launch_kwargs(parse_launch("modal", {"cpuLimitCores": 2, "memoryLimitMib": 4096}))
+    assert kwargs == {"cpu": (0.125, 2), "memory": (128, 4096)}
+
+
+@pytest.mark.parametrize("backend", ["modal", "modal-vm"])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"cpuLimitCores": True},
+        {"cpuLimitCores": 0},
+        {"cpuLimitCores": float("nan")},
+        {"memoryLimitMib": True},
+        {"memoryLimitMib": 0},
+        {"memoryLimitMib": 1024.5},
+        {"cpuCores": 2, "cpuLimitCores": 1},
+        {"memoryMib": 4096, "memoryLimitMib": 2048},
+    ],
+)
+def test_invalid_limits_are_rejected(backend, settings):
+    with pytest.raises(InvalidDockerSettingsError):
+        parse_launch(backend, settings)
+
+
+@pytest.mark.parametrize("settings", [{"cpuLimitCores": 0.25}, {"memoryLimitMib": 1024}])
+def test_vm_limits_cannot_be_below_default_requests(settings):
+    with pytest.raises(InvalidDockerSettingsError):
+        parse_launch("modal-vm", settings)

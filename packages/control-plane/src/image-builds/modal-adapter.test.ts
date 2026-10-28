@@ -47,6 +47,7 @@ describe("ModalImageBuildAdapter", () => {
     const provider = createProvider();
     const adapter = new ModalImageBuildAdapter(provider);
     const plan = createPlan();
+    plan.resources = { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: null };
     const bindProviderSession = vi.fn(async () => undefined);
 
     await adapter.startBuild(plan, { bindProviderSession });
@@ -54,6 +55,7 @@ describe("ModalImageBuildAdapter", () => {
     expect(provider.triggerImageBuild).toHaveBeenCalledWith({
       scopeKind: "repo",
       scopeId: "acme/repo",
+      resources: plan.resources,
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       cloneToken: "clone-token",

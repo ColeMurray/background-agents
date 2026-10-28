@@ -1,7 +1,38 @@
 import { z } from "zod";
+import { generatedFileCaptionSchema, generatedFileDetailsSchema } from "../generated-files";
 
-export const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
+export const artifactTypeSchema = z.enum([
+  "pr",
+  "screenshot",
+  "video",
+  "preview",
+  "branch",
+  "file",
+]);
 export type ArtifactType = z.infer<typeof artifactTypeSchema>;
+
+export const storedFileArtifactTypeSchema = artifactTypeSchema.extract([
+  "screenshot",
+  "video",
+  "file",
+]);
+export type StoredFileArtifactType = z.infer<typeof storedFileArtifactTypeSchema>;
+
+/** Stored bytes are retrieved through protected routes, never external artifact links. */
+export function isStoredFileArtifactType(type: ArtifactType): type is StoredFileArtifactType {
+  return storedFileArtifactTypeSchema.safeParse(type).success;
+}
+
+/**
+ * Server-owned retrieval metadata. Registration/download must additionally verify
+ * object-key ownership against the actual session and artifact, not just its shape.
+ */
+export const generatedFileArtifactMetadataSchema = generatedFileDetailsSchema.safeExtend({
+  objectKey: z.string().regex(/^sessions\/[^/]+\/files\/[^/]+$/),
+  messageId: z.string().min(1),
+  caption: generatedFileCaptionSchema.optional(),
+});
+export type GeneratedFileArtifactMetadata = z.infer<typeof generatedFileArtifactMetadataSchema>;
 
 // Artifact created by session
 export const sessionArtifactSchema = z.object({
@@ -178,11 +209,38 @@ export interface MediaArtifactInfo {
   caption?: string;
 }
 
+/** Invalid general-file metadata retains the id so delivery can report unavailability. */
+export const generatedFileArtifactInfoSchema = z.discriminatedUnion("available", [
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal("file"),
+    available: z.literal(true),
+    metadata: generatedFileArtifactMetadataSchema,
+  }),
+  z.strictObject({
+    id: z.string().min(1),
+    type: z.literal("file"),
+    available: z.literal(false),
+  }),
+]);
+export type GeneratedFileArtifactInfo = z.infer<typeof generatedFileArtifactInfoSchema>;
+export type StoredFileArtifactInfo = MediaArtifactInfo | GeneratedFileArtifactInfo;
+
 export interface AgentResponse {
   textContent: string;
   toolCalls: ToolCallSummary[];
   artifacts: ArtifactInfo[];
+  /** Media-only compatibility projection of fileArtifacts for older consumers. */
   mediaArtifacts: MediaArtifactInfo[];
+  /** Canonical message-scoped collection; optional only for older producers. */
+  fileArtifacts?: StoredFileArtifactInfo[];
   success: boolean;
   error?: string;
+}
+
+/** Presence wins even for an empty canonical collection; never concatenate both projections. */
+export function getResponseFileArtifacts(
+  response: Pick<AgentResponse, "fileArtifacts" | "mediaArtifacts">
+): StoredFileArtifactInfo[] {
+  return response.fileArtifacts ?? response.mediaArtifacts;
 }

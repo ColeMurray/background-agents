@@ -15,11 +15,15 @@ expect.extend(matchers);
 
 const CURRENT_USER_ID = "11111111111111111111111111111111";
 let permissions: string[] = [];
+let loading = false;
 const replace = vi.fn();
 const push = vi.fn();
 let search = "";
 const formProps = vi.fn();
 let submittedEnvironmentIds = ["env-1"];
+let submittedRepositories: AutomationFormValues["repositories"] = [
+  { repoOwner: "acme", repoName: "app" },
+];
 
 const NO_CAPABILITIES = { canRead: false, canManage: false, canTrigger: false };
 
@@ -42,7 +46,7 @@ const automation = {
   deletedAt: null,
   eventType: null,
   triggerConfig: null,
-  repositories: [],
+  repositories: new Array<AutomationFormValues["repositories"][number]>(),
   environmentIds: new Array<string>(),
   providerSelections: {},
   capabilities: NO_CAPABILITIES as AutomationCapabilities,
@@ -58,7 +62,7 @@ vi.mock("@/components/sidebar-layout", () => ({
   useSidebarContext: () => ({ isOpen: false }),
 }));
 vi.mock("@/hooks/use-automations", () => ({
-  useAutomation: () => ({ automation, loading: false }),
+  useAutomation: () => ({ automation: loading ? undefined : automation, loading }),
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
@@ -84,7 +88,7 @@ vi.mock("@/components/automations/automation-form", () => ({
               reasoningEffort: null,
               triggerType: "schedule",
               instructions: "Review",
-              repositories: [{ repoOwner: "acme", repoName: "app" }],
+              repositories: submittedRepositories,
               environmentIds: submittedEnvironmentIds,
               providerSelections: {},
             })
@@ -111,11 +115,14 @@ async function renderPage() {
 
 beforeEach(() => {
   permissions = [];
+  loading = false;
   search = "";
   formProps.mockClear();
   automation.capabilities = NO_CAPABILITIES;
   automation.environmentIds = [];
+  automation.repositories = [];
   submittedEnvironmentIds = ["env-1"];
+  submittedRepositories = [{ repoOwner: "acme", repoName: "app" }];
   replace.mockReset();
   push.mockReset();
   vi.mocked(invalidateAutomationCache).mockReset().mockResolvedValue(undefined);
@@ -123,6 +130,22 @@ beforeEach(() => {
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({}));
 });
 afterEach(cleanup);
+
+describe("EditAutomationPage loading", () => {
+  it("shows the form skeleton while the automation loads", async () => {
+    loading = true;
+    await renderPage();
+
+    expect(screen.getByRole("status", { name: "Loading automation form" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to automation" })).toHaveAttribute(
+      "href",
+      "/automations/auto-1"
+    );
+    expect(screen.queryByText("Automation edit form")).not.toBeInTheDocument();
+    expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+});
 
 describe("EditAutomationPage authorization", () => {
   it.each([
@@ -141,6 +164,49 @@ describe("EditAutomationPage authorization", () => {
       if (unchanged) expect(body).not.toHaveProperty("environmentIds");
       else expect(body.environmentIds).toEqual(submitted);
       expect(body.repositories).toEqual([{ repoOwner: "acme", repoName: "app" }]);
+    }
+  );
+
+  it.each([
+    {
+      saved: [{ repoOwner: "Acme", repoName: "App", baseBranch: "main" }],
+      submitted: [{ repoOwner: "acme", repoName: "app", baseBranch: "main" }],
+      unchanged: true,
+    },
+    {
+      saved: [{ repoOwner: "acme", repoName: "app", baseBranch: "main" }],
+      submitted: [{ repoOwner: "acme", repoName: "app", baseBranch: "release" }],
+      unchanged: false,
+    },
+    {
+      saved: [
+        { repoOwner: "acme", repoName: "app", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", baseBranch: "main" },
+      ],
+      submitted: [
+        { repoOwner: "acme", repoName: "api", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "app", baseBranch: "main" },
+      ],
+      unchanged: true,
+    },
+    {
+      saved: [{ repoOwner: "acme", repoName: "app", baseBranch: "main" }],
+      submitted: [{ repoOwner: "acme", repoName: "api", baseBranch: "main" }],
+      unchanged: false,
+    },
+  ])(
+    "only sends a replacement for changed repositories ($saved -> $submitted)",
+    async ({ saved, submitted, unchanged }) => {
+      automation.repositories = saved;
+      submittedRepositories = submitted;
+      automation.capabilities = { canRead: true, canManage: true, canTrigger: false };
+      await renderPage();
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() => expect(push).toHaveBeenCalledWith("/automations/auto-1"));
+      const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+      if (unchanged) expect(body).not.toHaveProperty("repositories");
+      else expect(body.repositories).toEqual(submitted);
+      expect(body.name).toBe("Updated");
     }
   );
 

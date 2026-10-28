@@ -4,16 +4,17 @@
  * user-facing guidance.
  */
 
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { createSessionResponseSchema } from "@open-inspect/shared/types/session-api";
 import { channelBindingResponseSchema } from "@open-inspect/shared/types/team-channel-bindings";
 import { z } from "zod";
 import type { Env } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { describeActorAdmissionFailure } from "./actor-enrollment";
 import { targetRequestFields, type SessionTarget } from "./target-resolution";
 
 export type LinearTeamBinding =
-  | { kind: "bound"; teamId: string | null }
-  | { kind: "refused"; message: string };
+  { kind: "bound"; teamId: string | null } | { kind: "refused"; message: string };
 
 /**
  * Resolve the Open-Inspect team bound to a Linear team. `teamId: null` means the
@@ -62,6 +63,7 @@ export async function createSession(
   target: SessionTarget,
   params: {
     title: string;
+    harness: HarnessId;
     model: string;
     reasoningEffort?: string;
     actorUserId?: string;
@@ -75,6 +77,7 @@ export async function createSession(
   const body = JSON.stringify({
     ...targetRequestFields(target),
     title: params.title,
+    harness: params.harness,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
     actorDisplayName: params.actorDisplayName,
@@ -123,6 +126,10 @@ export function describeSessionCreateFailure(
     rawRefusal = null;
   }
   const refusal = sessionCreateRefusalSchema.safeParse(rawRefusal);
+  if (failure.status === 403 && refusal.success) {
+    const message = describeActorAdmissionFailure(refusal.data.code);
+    if (message) return `${message} No coding session was created.`;
+  }
   if (failure.status === 403 && refusal.success && refusal.data.code === "not_member") {
     return "The acting Linear user is not a member of the bound team. Add that user to the team before delegating again; automation-created requests use the installed app user. No coding session was created.";
   }

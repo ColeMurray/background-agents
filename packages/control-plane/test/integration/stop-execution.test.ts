@@ -8,6 +8,7 @@ import {
   openSandboxWs,
   seedSandboxAuth,
   collectMessages,
+  closeWebSocket,
 } from "./helpers";
 
 describe("POST /internal/stop", () => {
@@ -330,7 +331,7 @@ describe("POST /internal/stop", () => {
     );
     expect(msgBStatus[0].status).toBe("processing");
 
-    if (sandboxWs) sandboxWs.close();
+    if (sandboxWs) await closeWebSocket(sandboxWs);
   });
 
   it("stop via WebSocket client message", async () => {
@@ -387,8 +388,8 @@ describe("POST /internal/stop", () => {
     );
     expect(dbMessages[0].status).toBe("failed");
 
-    clientWs.close();
-    if (sandboxWs) sandboxWs.close();
+    await closeWebSocket(clientWs);
+    if (sandboxWs) await closeWebSocket(sandboxWs);
   });
 
   it("does not stop execution before the client subscribes", async () => {

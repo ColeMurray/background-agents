@@ -1,5 +1,6 @@
 import type { Cache, ScopedMutator } from "swr";
 import { unstable_serialize } from "swr/infinite";
+import { automationApiPath } from "./automation-navigation";
 
 const INFINITE_CACHE_PREFIX = unstable_serialize(() => null);
 
@@ -8,7 +9,7 @@ export async function invalidateAutomationCache(
   automationId?: string,
   { deleted = false }: { deleted?: boolean } = {}
 ): Promise<void> {
-  const resourcePath = automationId ? `/api/automations/${automationId}` : undefined;
+  const resourcePath = automationId ? automationApiPath(automationId) : undefined;
   const collectionKeys: string[] = [];
   const resourceKeys: string[] = [];
   for (const key of cache.keys()) {

@@ -4,7 +4,7 @@ description: Sign in to an existing OpenInspect deployment, start a session agai
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/web/src/hooks/use-prompt-draft.ts
   - packages/web/src/lib/prompt-drafts.ts
@@ -16,6 +16,7 @@ relatedCode:
   - packages/control-plane/src/routes/session-target-authorization.ts
   - packages/control-plane/src/routes/workspace-repository-authorization.ts
   - packages/control-plane/src/session/session-target-secrets.ts
+  - packages/shared/src/harnesses.ts
   - packages/web/src/app/(app)/(sidebar)/page.tsx
   - packages/web/src/components/session-target-picker.tsx
   - packages/web/src/components/session-header.tsx
@@ -88,6 +89,7 @@ The same menu has an Agent row that selects the harness:
 
 - **OpenCode** is the default and runs every enabled model.
 - **Claude Agent** runs Anthropic models only. It is the harness that can use a connected Claude account instead of an API key.
+- **Codex** runs the OpenAI models that support it, with an OpenAI API key or a connected ChatGPT account.
 
 The model list is filtered to what the chosen harness can run. The harness is fixed when the session is created.
 

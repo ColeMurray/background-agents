@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { verifyServiceSignature, sha256Hex } from "../service-auth";
+import type { EventResponse } from "../types/sandbox-events";
+import { getResponseFileArtifacts } from "../types/artifacts";
 import {
   buildAgentResponseFromEvents,
   extractAgentResponse,
@@ -122,6 +124,7 @@ describe("buildAgentResponseFromEvents", () => {
         },
       ],
       mediaArtifacts: [],
+      fileArtifacts: [],
       success: true,
       error: undefined,
     });
@@ -491,6 +494,7 @@ describe("extractAgentResponse", () => {
       toolCalls: [],
       artifacts: [],
       mediaArtifacts: [],
+      fileArtifacts: [],
       success: false,
     });
   });
@@ -592,5 +596,176 @@ describe("extractAgentResponse", () => {
     );
 
     expect(response).toMatchObject({ success: true, artifacts: [] });
+  });
+});
+
+describe("generated file completion extraction", () => {
+  const metadata = {
+    objectKey: "sessions/s1/files/f1",
+    filename: "report.csv",
+    mimeType: "text/csv",
+    sizeBytes: 12,
+    messageId: "m1",
+    caption: "Requested report",
+  };
+  function fileEvent(overrides: Partial<EventResponse> = {}): EventResponse {
+    return {
+      id: "event:f1",
+      type: "artifact",
+      data: { artifactType: "file", artifactId: "f1", url: metadata.objectKey, metadata },
+      messageId: "m1",
+      createdAt: 20,
+      ...overrides,
+    };
+  }
+
+  it("orders a deduplicated mixed batch and derives the legacy media projection", () => {
+    const image: EventResponse = {
+      id: "event:image",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 10,
+      data: {
+        artifactType: "screenshot",
+        artifactId: "image",
+        metadata: { mimeType: "image/png" },
+      },
+    };
+    const video: EventResponse = {
+      id: "event:video",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 30,
+      data: { artifactType: "video", artifactId: "video" },
+    };
+    const response = buildAgentResponseFromEvents([
+      video,
+      fileEvent({ id: "duplicate", createdAt: 40 }),
+      fileEvent(),
+      image,
+    ]);
+    expect(response.fileArtifacts).toEqual([
+      { id: "image", type: "screenshot", mimeType: "image/png" },
+      { id: "f1", type: "file", available: true, metadata },
+      { id: "video", type: "video" },
+    ]);
+    expect(response.mediaArtifacts).toEqual([
+      { id: "image", type: "screenshot", mimeType: "image/png" },
+      { id: "video", type: "video" },
+    ]);
+    expect(getResponseFileArtifacts(response)).toHaveLength(3);
+    expect(response.artifacts).toEqual([]);
+  });
+
+  it("recovers a later validated file without changing its original chronological position", () => {
+    const invalid = fileEvent({ id: "invalid", createdAt: 10 });
+    invalid.data.metadata = null;
+    const valid = fileEvent({ id: "valid", createdAt: 30 });
+    const laterInvalid = fileEvent({ id: "later-invalid", createdAt: 40 });
+    laterInvalid.data.metadata = null;
+    const media: EventResponse = {
+      id: "media",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 20,
+      data: { artifactType: "screenshot", artifactId: "image" },
+    };
+    const response = buildAgentResponseFromEvents([laterInvalid, valid, media, invalid]);
+    expect(response.fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: true, metadata },
+      { id: "image", type: "screenshot" },
+    ]);
+    expect(response.mediaArtifacts).toEqual([{ id: "image", type: "screenshot" }]);
+  });
+
+  it.each([
+    null,
+    { ...metadata, sizeBytes: 0 },
+    { ...metadata, filename: "../report.csv" },
+    { ...metadata, mimeType: "image/png" },
+    { ...metadata, messageId: "older-message" },
+    { ...metadata, objectKey: "sessions/s1/files/other-file" },
+  ])("retains an unavailable file when metadata is invalid or mismatched: %j", (badMetadata) => {
+    const event = fileEvent();
+    event.data.metadata = badMetadata;
+    const response = buildAgentResponseFromEvents([event]);
+    expect(response.fileArtifacts).toEqual([{ id: "f1", type: "file", available: false }]);
+    expect(response.artifacts).toEqual([]);
+    expect(response.mediaArtifacts).toEqual([]);
+  });
+
+  it("does not accept a different object URL or unattributed file event", () => {
+    const event = fileEvent();
+    event.data.url = "sessions/s2/files/f1";
+    expect(buildAgentResponseFromEvents([event]).fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: false },
+    ]);
+    expect(buildAgentResponseFromEvents([fileEvent({ messageId: null })]).fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: false },
+    ]);
+  });
+
+  it("excludes stored outputs from event and direct-list fallback links", () => {
+    expect(toArtifactType("file")).toBe("file");
+    expect(toArtifactType("unknown")).toBeNull();
+    expect(toEventArtifactInfo(fileEvent().data)).toBeNull();
+    const response = buildAgentResponseFromEvents(
+      [],
+      [
+        { type: "file", url: metadata.objectKey, label: "file" },
+        { type: "screenshot", url: "sessions/s1/media/image", label: "screenshot" },
+        { type: "video", url: "sessions/s1/media/video", label: "video" },
+        { type: "pr", url: "https://github.com/acme/repo/pull/1", label: "PR #1" },
+      ]
+    );
+    expect(response.artifacts).toEqual([
+      { type: "pr", url: "https://github.com/acme/repo/pull/1", label: "PR #1" },
+    ]);
+    expect(response.fileArtifacts).toEqual([]);
+  });
+
+  it("selects only the requested message's events, never session-wide files", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/events")) {
+          expect(url.searchParams.get("message_id")).toBe("m1");
+          return Response.json({ events: [fileEvent()], hasMore: false });
+        }
+        return Response.json({
+          artifacts: [
+            { id: "f1", type: "file", url: metadata.objectKey, metadata, createdAt: 20 },
+            {
+              id: "older-file",
+              type: "file",
+              url: "sessions/s1/files/older-file",
+              metadata: null,
+              createdAt: 20,
+            },
+            {
+              id: "pr",
+              type: "pr",
+              url: "https://github.com/acme/repo/pull/1",
+              metadata: { number: 1 },
+              createdAt: 20,
+            },
+          ],
+        });
+      },
+    };
+    const response = await extractAgentResponse(
+      { fetcher, auth: { service: "slack-bot", secret: "secret" }, readPurpose: "slack-post" },
+      "s1",
+      "m1"
+    );
+    expect(response.fileArtifacts).toEqual([{ id: "f1", type: "file", available: true, metadata }]);
+    expect(response.artifacts).toEqual([
+      {
+        type: "pr",
+        url: "https://github.com/acme/repo/pull/1",
+        label: "PR #1",
+        metadata: { number: 1 },
+      },
+    ]);
   });
 });

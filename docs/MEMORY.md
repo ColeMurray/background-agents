@@ -4,12 +4,21 @@ Memory carries useful knowledge between sessions without changing repository fil
 embedding store or semantic search: the agent sees a compact fact catalog, discovers additional
 facts with lexical `memory_search`, and reads relevant bodies with `memory_read`.
 
+Every session receives memory workflow guidance, even with an empty catalog. It tells agents that
+most sessions should save nothing. They write only when the user asked them to remember something,
+corrected them or stated a standing preference, or confirmed a non-obvious approach, or when they
+verified a hard-won fact that the repository does not record and that would change what the next
+session does first. Work summaries and status, fixes already in the code, facts the repository
+already records, sandbox quirks, guesses and task-only details are excluded, and agents check for an
+existing fact to supersede before writing. A `memory_write` result of `proposed` awaits human review
+in Settings → Memories or Settings → Shared memories; it is not yet active memory.
+
 ## User experience
 
 | Surface                    | Behavior                                                                                                                                                                                  |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                                        |
-| Settings → Shared memories | Select a repository or environment. Readers see its catalog; authorized maintainers can manage it.                                                                                        |
+| Settings → Shared memories | Opens on **All**, every readable repository and environment memory with its scope. Select a scope to narrow it or to create. Readers see the catalog; maintainers manage it.              |
 | Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions, and is available to every session creator.          |
 | Session sidebar → Memories | Pinned memories grouped by repository, environment or personal scope; hover or focus a row for its revision, inclusion and estimate. Flags omitted records and subsequent edits/archives. |
 
@@ -33,6 +42,20 @@ a revision with the editor's identity. Rejected proposals are archived; restorin
 to proposed status. Restoring an approved record returns it to active status. A replacement proposal
 does **not** archive its predecessor until approval. Concurrent edits and decisions reject stale
 revisions with HTTP 409.
+
+The management pages can select records on the current page and approve, reject, archive or restore
+them together. Each selected record is still fenced by the revision shown and authorized against its
+own scope, so a record that changed or that the caller cannot manage fails alone while the rest
+apply. Each request is bounded to stay within D1's per-invocation query limit, so the page sends
+larger selections as sequential requests. Archiving is the bulk equivalent of deleting.
+
+Shared memories opens on an **All** view that merges every repository and environment the viewer can
+read, so pending proposals are reviewable under Proposed without choosing a scope first. Each record
+shows its scope; environment scopes link to their own view, while repository scopes stay text
+because repository links resolve to the All view by memory ID (display names may be stale). Creating
+and superseding require a concrete scope. Status tabs, search, paging, bulk actions and revision
+fencing work the same across scopes. Browsing is capped at a fixed depth, after which the page asks
+the viewer to choose a scope or narrow the search.
 
 Sandbox tools currently authenticate a session, not an immutable prompt author. For this reason,
 automatic personal facts are disabled permanently once a session is shared or gains a collaborator,
@@ -124,12 +147,14 @@ owner-only, including when the caller is another administrator.
 | Method and path                                           | Purpose                                                                                                                                                                                                                                                 |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /memories?scope=...&status=...&offset=...&limit=...` | Page through one scope (`personal`, `repository`, or `environment`) and status (`active`, `proposed`, or `archived`). Repository scope also takes `repoOwner` and `repoName`; environment takes `environmentId`. `nextOffset` is null at the last page. |
+| `GET /memories?scope=shared&status=...`                   | The All view: one page merged across every readable repository and environment partition, with per-record capabilities; `canCreate` is false. Paging stops at `MEMORY_SHARED_LIST_MAX_OFFSET` and sets `truncated`.                                     |
 | `POST /memories`                                          | Create a memory, optionally superseding an active one via `supersedesMemoryId`; the superseded record lists it in `supersededByMemoryIds`.                                                                                                              |
 | `GET /memories/:id`                                       | Current record and server-calculated management capabilities.                                                                                                                                                                                           |
 | `PATCH /memories/:id`                                     | Revise content; `If-Match: <currentRevisionId>` is required (428 when missing, 409 when stale).                                                                                                                                                         |
 | `GET /memories/:id/revisions`                             | Immutable revision history.                                                                                                                                                                                                                             |
 | `POST /memories/:id/{action}`                             | `approve`, `reject`, `archive`, or `restore` with `If-Match`; only `archive` and `reject` accept an optional `archiveNote`. Transitions follow `MEMORY_TRANSITIONS`.                                                                                    |
-| `POST /memories/preview`                                  | Summarize the selection a new session would pin (items, sizes, omissions), without creating it.                                                                                                                                                         |
+| `POST /memories/bulk`                                     | Apply one `action` to up to `MEMORY_BULK_ACTION_MAX_RECORDS` records, each named with the `revisionId` it was reviewed at. Records are authorized and decided independently, in order; the response lists each record's outcome.                        |
+| `POST /memories/preview`                                  | Summarize the selection a new session would pin (items, sizes, omissions), without creating it. Pass `teamId` to preview a team session; the caller must be a member of the active team.                                                                |
 | `GET, PUT /memory-preferences`                            | Read/save the current user's personal inclusion default.                                                                                                                                                                                                |
 | `GET /sessions/:id/memories`                              | The pinned selection summary with per-item drift, readable with the session.                                                                                                                                                                            |
 | `GET /sessions/:id/sandbox-memory`                        | The session's rendered memory (boot context), sandbox-bound.                                                                                                                                                                                            |
@@ -220,10 +245,11 @@ does not remove the search tool, and searching does not alter the session's pinn
 Search sits behind the `FactSearchIndex` port (`memory/fact-search.ts`): the session service builds
 an engine-independent `FactQuery` from authorized partitions and shapes the bounded response, and
 `LexicalFactIndex` answers it with one escaped-`LIKE` statement ranked in SQL by
-`FACT_SEARCH_FIELDS`. A different engine (Postgres full-text search, embeddings) is another adapter;
-no migration or new service is needed today. Body matching still scans text; bounded results do not
-guarantee constant query cost. The opt-in Node SQLite benchmark records query plans and
-rare/broad-query timings at 1,000 and 10,000 facts with representative and maximum-size bodies:
+`FACT_SEARCH_WEIGHTS` over `MEMORY_SEARCH_FIELDS` (`memory/search-fields.ts`). A different engine
+(Postgres full-text search, embeddings) is another adapter; no migration or new service is needed
+today. Body matching still scans text; bounded results do not guarantee constant query cost. The
+opt-in Node SQLite benchmark records query plans and rare/broad-query timings at 1,000 and 10,000
+facts with representative and maximum-size bodies:
 
 ```bash
 MEMORY_SEARCH_BENCHMARK=1 MEMORY_SEARCH_BENCHMARK_OUTPUT=/tmp/memory-search-benchmark.json \

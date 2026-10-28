@@ -25,4 +25,6 @@ export interface EnqueuePromptCoreData {
 export interface EnqueuedPrompt {
   messageId: string;
   position: number | null;
+  /** The request's clientRequestId named a prompt already queued; nothing new was added. */
+  deduplicated: boolean;
 }

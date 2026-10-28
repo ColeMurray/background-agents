@@ -34,6 +34,8 @@ export interface SandboxShutdownStorage extends SandboxStateReader {
     from: SandboxStatus,
     to: SandboxStatus
   ): boolean;
+  /** Restarts the inactivity clock when a held runtime is handed back to the session. */
+  updateSandboxLastActivity(timestamp: number): void;
   /**
    * Stop the named generation and forget its snapshot and provider handle, so
    * the next start neither restores nor resumes it. Reports whether it applied.

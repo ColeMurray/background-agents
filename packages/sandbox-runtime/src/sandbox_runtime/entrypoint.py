@@ -14,6 +14,7 @@ from .boot_events import BootEventLog
 from .browser_desktop import BrowserDesktop
 from .claude_stager import ClaudeStager, isolated_claude_config_dir, resolve_claude_config_dir
 from .code_server import CodeServer
+from .codex_stager import CodexStager, resolve_codex_config_dir
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .docker_service import DockerService
 from .harness.base import HarnessId, HarnessProcessOwner
@@ -26,8 +27,10 @@ from .image_build_context_start import (
 from .image_environment import apply_image_environment
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
+from .mcp_packages import McpPackageInstaller
 from .memories import MemoryMaterializer, SessionMemoryClient, memory_path
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
+from .model_catalog import configure_model_catalog
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
 from .repository_hooks import RepositoryHooks
@@ -63,7 +66,19 @@ def build_harness_process(
                 warnings.record,
             )
         case HarnessId.CLAUDE:
-            return ClaudeStager(config.claude_stager_config(), log, config_dir=claude_config_dir)
+            return ClaudeStager(
+                config.claude_stager_config(),
+                log,
+                config_dir=claude_config_dir,
+                mcp_packages=McpPackageInstaller(log),
+            )
+        case HarnessId.CODEX:
+            return CodexStager(
+                config.codex_stager_config(),
+                log,
+                config_dir=resolve_codex_config_dir(),
+                mcp_packages=McpPackageInstaller(log),
+            )
     raise ValueError(f"Unsupported harness: {config.harness}")
 
 
@@ -91,6 +106,8 @@ def harness_config_dir(harness: HarnessId, claude_config_dir: Path | None) -> Pa
             if claude_config_dir is None:
                 raise ValueError("Claude sessions need a config dir decided")
             return claude_config_dir
+        case HarnessId.CODEX:
+            return resolve_codex_config_dir()
     raise ValueError(f"Unsupported harness: {harness}")
 
 
@@ -120,6 +137,7 @@ def _build_memory(
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     """Consume process secrets and compose the production runtime."""
     apply_image_environment()
+    configure_model_catalog(os.environ)
     config = RuntimeConfig.from_env(os.environ)
     vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
     if vnc_password:
@@ -135,7 +153,13 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         config.repository_config(),
         log,
         warnings,
-        TunnelEnvironment(config.sandbox_id, log),
+        TunnelEnvironment(
+            config.sandbox_id,
+            log,
+            control_plane_url=config.control_plane_url,
+            session_id=config.session_id,
+            sandbox_token=config.sandbox_token,
+        ),
         RepositoryHooks(log),
         RepositorySynchronizer(config.vcs_host, log),
     )
