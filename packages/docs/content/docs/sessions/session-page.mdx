@@ -4,7 +4,7 @@ description: A tour of the session page, from the header and timeline to the com
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/web/src/hooks/use-prompt-draft.ts
   - packages/web/src/lib/prompt-drafts.ts
@@ -15,8 +15,10 @@ relatedCode:
   - packages/web/src/lib/session-socket/boot-phase.ts
   - packages/web/src/components/session-header.tsx
   - packages/web/src/components/session-timeline.tsx
+  - packages/web/src/components/mermaid-code-block.tsx
   - packages/web/src/components/session-prompt-composer.tsx
   - packages/web/src/components/session-right-sidebar.tsx
+  - packages/web/src/components/sidebar/memories-section.tsx
   - packages/web/src/components/session-details-overlay.tsx
   - docs/HOW_IT_WORKS.md
 ---
@@ -56,6 +58,8 @@ The timeline is the shared record of the session. Everyone connected sees the sa
 | "Resumed by PR feedback" | A header on a prompt that PR Feedback Autofix queued from a review or PR comment, with "PR comment" or "Review", "Human" or "Bot", and an "Open feedback" link.                                                                                |
 | Pull request card        | "Opened pull request #12", "Updated pull request #12", or "Create pull request failed". Expand it to see the title, the branch route ("feature-branch into main"), the description, a Draft, Open, or Updated badge, and an "Open PR" button.  |
 | Screenshot or video card | A preview with a caption, labeled "Screenshot" or "Video". Click it to open the media viewer.                                                                                                                                                  |
+
+Assistant responses render Mermaid diagrams. Once a ` ```mermaid ` code block is complete, it shows as a diagram with a "View diagram source" disclosure beneath it. A diagram that cannot be rendered stays as code. Ask the agent for a Mermaid diagram when a flow or architecture is easier to read as a picture.
 
 Older events load as you scroll up. The view stays pinned to the bottom while new events arrive unless you have scrolled away.
 
@@ -100,6 +104,7 @@ Session details include the owning team and visibility. If authorized, use **Vis
 | Tasks                | The agent's current task list with pending, in-progress, and completed items.                                                                                                                                                                                                                                                                                                                                                                                                                                | When the agent has published tasks.                                                                                       |
 | Child sessions       | Each child with its title, status badge, PR state, and last activity. Click a row to open it.                                                                                                                                                                                                                                                                                                                                                                                                                | When the agent spawned children.                                                                                          |
 | Managed skills       | The selection used (All applicable, None, or a profile name), each pinned skill with its revision and digest, and why it matched (Global, Repository, or Environment).                                                                                                                                                                                                                                                                                                                                       | Always, collapsed by default; says "No managed skills were pinned." when empty.                                           |
+| Memories (n)         | The memories pinned when the session was created, grouped by repository, environment, or Personal scope, with "revised" or "archived" on any that changed since. The footer shows the estimated tokens, whether personal memories were included, and how many were omitted for budget. Each row links to the memory in Settings. See [Memories](/configure/memories).                                                                                                                                        | Always, collapsed by default; says "No memories were loaded." when empty.                                                 |
 | Changes              | A "Filter N changed files" box and the list of changed files per repository. Click a file to open the Changes panel.                                                                                                                                                                                                                                                                                                                                                                                         | When the session has a repository. Says "Changes will be available after the first execution." until the first turn ends. |
 | Media (n)            | Compact cards for every screenshot and video the agent captured.                                                                                                                                                                                                                                                                                                                                                                                                                                             | When there is at least one media artifact.                                                                                |
 

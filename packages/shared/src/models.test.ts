@@ -9,6 +9,7 @@ import {
   VALID_MODELS,
   applyModelPreferenceChanges,
   extractProviderAndModel,
+  getCodexReasoningConfig,
   getSubscriptionProviderForModel,
   getDefaultReasoningEffort,
   getReasoningConfig,
@@ -124,6 +125,36 @@ it.each([
     } else {
       expect(row?.at(-1)).toBe("N/A");
     }
+  }
+});
+
+it("keeps the Codex effort table in choosing-a-model.mdx aligned with the catalog", () => {
+  const lines = readFileSync(
+    new URL("../../../packages/docs/content/docs/models/choosing-a-model.mdx", import.meta.url),
+    "utf8"
+  ).split("\n");
+  const header = lines.findIndex(
+    (line) => line.startsWith("| Display name") && line.includes("Codex efforts")
+  );
+  const body = lines.slice(header + 2);
+  const end = body.findIndex((line) => !line.startsWith("|"));
+  const rows = body.slice(0, end === -1 ? undefined : end).map((line) =>
+    line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim())
+  );
+  const openAiModels = MODEL_CATALOG.flatMap((group) => group.models).filter(({ id }) =>
+    id.startsWith("openai/")
+  );
+
+  expect(header).toBeGreaterThan(-1);
+  expect(rows.map(([name]) => name)).toEqual(openAiModels.map(({ name }) => name));
+  for (const model of openAiModels) {
+    const row = rows.find(([name]) => name === model.name);
+    const codex = getCodexReasoningConfig(model.id);
+    expect(row?.[1]).toBe(codex ? codex.efforts.join(", ") : "Not on Codex");
+    expect(row?.[2]).toBe(codex ? (codex.default ?? "Not set") : "N/A");
   }
 });
 

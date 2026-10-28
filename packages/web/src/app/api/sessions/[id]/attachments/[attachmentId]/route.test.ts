@@ -19,11 +19,12 @@ const PARAMS = {
 describe("session attachment download API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
-  it("rejects unauthenticated downloads before contacting the control plane", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("preserves a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await GET(
       new Request("http://localhost/api/sessions/session-1/attachments/attachment-1"),
@@ -31,8 +32,8 @@ describe("session attachment download API route", () => {
     );
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch attachment" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
   it("forwards byte ranges and preserves storage response headers", async () => {

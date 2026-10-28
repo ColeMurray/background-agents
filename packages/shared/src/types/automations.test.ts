@@ -4,6 +4,7 @@ import {
   validateAutomationTargetCounts,
   createAutomationRequestSchema,
   listAutomationsResponseSchema,
+  MAX_AUTOMATION_RETRIES,
   updateAutomationRequestSchema,
 } from "./automations";
 
@@ -16,6 +17,7 @@ const automation = {
   instructions: "Run the sync",
   triggerType: "schedule",
   scheduleCron: "0 9 * * *",
+  scheduleOnceAt: null,
   scheduleTz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   harness: "opencode",
@@ -23,6 +25,7 @@ const automation = {
   enabled: true,
   nextRunAt: 123,
   consecutiveFailures: 0,
+  maxRetries: 0,
   createdBy: "user-1",
   userId: USER_ID,
   ownerTeamId: null,
@@ -48,6 +51,38 @@ describe("listAutomationsResponseSchema", () => {
     });
     expect(result.automations[0]).toMatchObject({ ownerTeamId: "team_a", capabilities });
   });
+
+  it("reads an automation from a control plane that predates launch retries as allowing none", () => {
+    const { maxRetries: _maxRetries, ...legacy } = automation;
+    const result = listAutomationsResponseSchema.parse({
+      automations: [legacy],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]!.maxRetries).toBe(0);
+  });
+
+  it("reads an automation from a control plane that predates one-shot schedules", () => {
+    const { scheduleOnceAt: _scheduleOnceAt, ...legacy } = automation;
+    const result = listAutomationsResponseSchema.parse({
+      automations: [legacy],
+      hasMore: false,
+      nextCursor: null,
+    });
+    expect(result.automations[0]!.scheduleOnceAt).toBeNull();
+  });
+
+  it.each([null, Date.parse("2027-01-01T09:00:00Z")])(
+    "preserves an explicit scheduleOnceAt=%s",
+    (scheduleOnceAt) => {
+      const result = listAutomationsResponseSchema.parse({
+        automations: [{ ...automation, scheduleOnceAt }],
+        hasMore: false,
+        nextCursor: null,
+      });
+      expect(result.automations[0]!.scheduleOnceAt).toBe(scheduleOnceAt);
+    }
+  );
 
   it("accepts a valid cursor page", () => {
     expect(
@@ -149,6 +184,7 @@ describe("automation grant-denial statuses", () => {
     expect(automationInvocationStatusSchema.options).toEqual([
       "starting",
       "running",
+      "retrying",
       "completed",
       "failed",
       "partial_failed",
@@ -263,6 +299,19 @@ describe("automation request boundary contracts", () => {
           environmentIds: ["env_a", "env_a"],
         }).success
       ).toBe(false);
+    }
+  );
+
+  it.each([createAutomationRequestSchema, updateAutomationRequestSchema])(
+    "bounds maxRetries to whole numbers up to MAX_AUTOMATION_RETRIES",
+    (schema) => {
+      const parse = (maxRetries: unknown) =>
+        schema.safeParse({ name: "Daily sync", instructions: "Run", maxRetries });
+      expect(parse(0).success).toBe(true);
+      expect(parse(MAX_AUTOMATION_RETRIES).success).toBe(true);
+      expect(parse(MAX_AUTOMATION_RETRIES + 1).success).toBe(false);
+      expect(parse(-1).success).toBe(false);
+      expect(parse(1.5).success).toBe(false);
     }
   );
 

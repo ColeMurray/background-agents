@@ -1,17 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { updateEnvironmentInputSchema } from "@open-inspect/shared/types/environments";
 
 const UPDATE_FIELDS = Object.keys(updateEnvironmentInputSchema.shape);
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const { id } = await params;
 
   try {
@@ -25,10 +20,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const rejection = rejectMissingBrowserSessionCookie(request);
+  if (rejection) return rejection;
 
   const { id } = await params;
 
@@ -62,11 +55,6 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const { id } = await params;
 
   try {

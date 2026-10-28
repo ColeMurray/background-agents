@@ -11,6 +11,7 @@ from ..codex_stager import CodexHarnessHandoff
 from ..credentials.openai_access_token_client import OpenAIAccessTokenClient
 from ..credentials.provider_credential_client import RuntimeCredentialClient
 from ..memories import append_memory
+from ..model_prices import ModelPriceCatalog, default_catalog_path
 from .base import (
     DEFAULT_HARNESS_ID,
     DETERMINISTIC_FAILURE_EXIT_CODE,
@@ -143,7 +144,11 @@ def build_agent_harness(
                 else None
             )
             return CodexHarness(
-                config=codex_config, log=log, limits=limits, credential_client=token_client
+                config=codex_config,
+                log=log,
+                limits=limits,
+                credential_client=token_client,
+                prices=ModelPriceCatalog(default_catalog_path(os.environ), log),
             )
     raise ValueError(f"Unsupported harness: {harness_id}")
 

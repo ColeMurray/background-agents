@@ -12,21 +12,25 @@ import {
 } from "@/components/ui/select";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
+import { MergeMembersDialog } from "./merge-members-dialog";
 
 /**
  * Shows workspace members and roles, exposing member controls only when the user may manage them.
  */
 export function WorkspaceSettings() {
-  const { hasPermission } = useCurrentUserAuthorization();
+  const { authorization, hasPermission } = useCurrentUserAuthorization();
   const canReadMembers = hasPermission("workspace.members.read");
   const canReadRoles = hasPermission("workspace.roles.read");
   const canManage = hasPermission("workspace.members.manage");
   const canAssignRoles = canManage && canReadRoles;
   const canTransfer = hasPermission("workspace.transfer_ownership");
-  const { members, roles, loading, error, updateMember } = useWorkspaceAdministration({
-    readMembers: canReadMembers,
-    readRoles: canReadRoles,
-  });
+  const canMerge = canReadMembers && hasPermission("workspace.members.merge");
+  const { members, roles, loading, error, refreshError, updateMember, previewMerge, mergeMembers } =
+    useWorkspaceAdministration({
+      readMembers: canReadMembers,
+      readRoles: canReadRoles,
+    });
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [pendingMemberIds, setPendingMemberIds] = useState<Set<string>>(() => new Set());
   const unsuspendedOwnerCount = members.filter(
@@ -62,12 +66,24 @@ export function WorkspaceSettings() {
       </div>
 
       {mutationError && <ErrorBanner>{mutationError}</ErrorBanner>}
+      {refreshError && (
+        <ErrorBanner>
+          Couldn&apos;t refresh workspace access. Showing the last loaded data.
+        </ErrorBanner>
+      )}
 
       {canReadMembers && (
         <section className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Members
-          </h3>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Members
+            </h3>
+            {canMerge && members.length > 1 && (
+              <Button variant="outline" size="sm" onClick={() => setMergeOpen(true)}>
+                Merge accounts
+              </Button>
+            )}
+          </div>
           <div className="divide-y divide-border rounded-lg border border-border">
             {members.map((member) => (
               <div
@@ -137,6 +153,16 @@ export function WorkspaceSettings() {
               </div>
             ))}
           </div>
+          {canMerge && (
+            <MergeMembersDialog
+              open={mergeOpen}
+              onOpenChange={setMergeOpen}
+              members={members}
+              currentUserId={authorization?.userId ?? null}
+              previewMerge={previewMerge}
+              mergeMembers={mergeMembers}
+            />
+          )}
         </section>
       )}
 

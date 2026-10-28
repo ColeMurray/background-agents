@@ -9,7 +9,7 @@ import { GitHubAutomationStore } from "../../src/db/github-automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
 import * as sessionInitialization from "../../src/session/initialize";
 import { cleanD1Tables } from "./cleanup";
 import { queryDO, seedActiveUser, sqlDatabase } from "./helpers";
@@ -91,7 +91,7 @@ async function saveAutomation(
 }
 
 function createScheduler() {
-  return new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  return createAutomationScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
 }
 
 async function revokeGrant(teamId: string) {
@@ -238,6 +238,15 @@ async function expectUnauthorizedRun(automationId: string, event: GitHubAutomati
   });
   expect(await store.getById(automationId)).toMatchObject({ enabled: 1, consecutive_failures: 2 });
   await expectNoSession(automationId);
+}
+
+async function invocationActorKinds(automationId: string): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    "SELECT actor_kind FROM automation_invocations WHERE automation_id = ?"
+  )
+    .bind(automationId)
+    .all<{ actor_kind: string }>();
+  return rows.results.map((row) => row.actor_kind);
 }
 
 describe("GitHub automation routing (real D1 and SessionDO)", () => {
@@ -677,9 +686,10 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
     await expectUnauthorizedRun(id, event);
     const runs = await fetchRuns(id);
     expect(runs).toHaveLength(2);
-    expect(runs.find((run) => run.id === activeRun.id)).toEqual(activeRun);
+    const storedActiveRun = { ...activeRun, attempt: 1, retry_at: null };
+    expect(runs.find((run) => run.id === activeRun.id)).toEqual(storedActiveRun);
     const store = new AutomationStore(env.DB);
-    expect(await store.getActiveRunForKey(id, event.concurrencyKey)).toEqual(activeRun);
+    expect(await store.getActiveRunForKey(id, event.concurrencyKey)).toEqual(storedActiveRun);
     expect((await store.listInvocations(id, { limit: 10, offset: 0 })).total).toBe(2);
     expect(automationRepositories.resolveAutomationRepositories).not.toHaveBeenCalled();
     expect(automationSessionTargets.resolveAutomationSessionTarget).not.toHaveBeenCalled();
@@ -792,4 +802,28 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       });
     }
   );
+
+  it.each([
+    ["bot", "bot"],
+    ["person", "person"],
+    [undefined, "unknown"],
+  ] as const)("records a firing whose sender kind is %s as %s", async (actorKind, recorded) => {
+    const id = "auto-github-actor-kind";
+    await saveAutomation(id, null, WORKSPACE_EXECUTOR);
+
+    await createScheduler().event({ ...githubEvent(), actorKind });
+
+    expect(await invocationActorKinds(id)).toEqual([recorded]);
+  });
+
+  it("records a revoked-grant denial under the sender's kind", async () => {
+    await saveAutomation("auto-github-revoked-bot", TEAM_C, EXECUTOR_C);
+    await revokeGrant(TEAM_C);
+    const event = { ...githubEvent(), actorKind: "bot" as const };
+
+    await createScheduler().event(event);
+
+    await expectUnauthorizedRun("auto-github-revoked-bot", event);
+    expect(await invocationActorKinds("auto-github-revoked-bot")).toEqual(["bot"]);
+  });
 });

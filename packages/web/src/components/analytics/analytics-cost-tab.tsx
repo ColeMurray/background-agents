@@ -18,7 +18,7 @@ export function AnalyticsCostTab({ dashboard }: { dashboard: AnalyticsDashboardR
         <div className="space-y-4">
           <AnalyticsPanel
             title="By provider"
-            description="Sessions billed to a subscription report $0"
+            description="Sessions billed to a subscription report model-price equivalents"
             bodyClassName="pt-2"
           >
             <AnalyticsCostTable dashboard={dashboard} dimension="provider" />

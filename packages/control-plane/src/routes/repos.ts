@@ -315,7 +315,7 @@ async function handleListBranches(
   _request: Request,
   env: Env,
   params: { owner: string; name: string },
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const repository = repositoryParams(params);
   if (repository instanceof Response) return repository;
@@ -323,8 +323,15 @@ async function handleListBranches(
 
   try {
     const provider = createRouteSourceControlProvider(env);
-    const branches = await provider.listBranches({ owner, name });
-    return json({ branches });
+    const result = await provider.listBranches(
+      { owner, name },
+      {
+        backgroundTasks: ctx.executionCtx,
+        metrics: ctx.metrics,
+        traceId: ctx.trace_id,
+      }
+    );
+    return json(result);
   } catch (e) {
     if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
       return error("SCM provider not configured", 500);

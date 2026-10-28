@@ -8,18 +8,16 @@ import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { seedTeam } from "./ownership-test-helpers";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-import {
-  AutomationExecutionUnauthorizedError,
-  Scheduler,
-  resolveAutomationProviderAuth,
-} from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
+import { resolveAutomationProviderAuth } from "../../src/scheduler/launch-admission";
+import { AutomationExecutionUnauthorizedError } from "../../src/scheduler/contracts";
 import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-provider-auth";
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
-  return new Scheduler(env.DB, schedulerEnv, { submit() {} });
+  return createAutomationScheduler(env.DB, schedulerEnv, { submit() {} });
 }
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -31,6 +29,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
@@ -762,6 +761,7 @@ describe("Scheduler (integration)", () => {
         id,
         automation_id: "auto-slot-ownership",
         source: "schedule" as const,
+        actor_kind: "system" as const,
         scheduled_at: slot,
         trigger_key: null,
         concurrency_key: null,
@@ -934,6 +934,7 @@ describe("Scheduler (integration)", () => {
           id: invocationId,
           automation_id: automationId,
           source: "manual",
+          actor_kind: "person",
           scheduled_at: null,
           trigger_key: null,
           concurrency_key: null,

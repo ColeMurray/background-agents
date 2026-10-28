@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, queryDO, serviceFetch } from "./helpers";
+import { enrollSlackActor, initSession, queryDO, serviceFetch } from "./helpers";
 
 const internal = { kind: "internal", reason: "session repositories integration tests" } as const;
 
@@ -165,11 +165,14 @@ describe("D1 session index repositories", () => {
 });
 
 describe("POST /sessions repository list validation", () => {
-  beforeEach(cleanD1Tables);
-
   // session-create requires a participant identity: sign as a bot with an
   // asserted actor (the userless web service credential is rejected, 403).
   const actorAuth = { service: "slack-bot", actor: "slack:U0123" } as const;
+
+  beforeEach(async () => {
+    await cleanD1Tables();
+    await enrollSlackActor(actorAuth.actor);
+  });
 
   it("rejects repositories combined with scalar repo fields", async () => {
     const res = await serviceFetch("https://test.local/sessions", {

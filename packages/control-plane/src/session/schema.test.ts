@@ -148,6 +148,26 @@ describe("applyMigrations", () => {
     expect(recordedIds).toEqual(expectedIds);
   });
 
+  it("rejects malformed applied migration rows before running migrations", () => {
+    mock.setData("SELECT id FROM _schema_migrations", [{ id: "1" }]);
+
+    expect(() => applyMigrations(mock.sql)).toThrow("Invalid schema migration metadata at row 0");
+
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO _schema_migrations"))).toBe(
+      false
+    );
+  });
+
+  it("rejects partial applied migration rows before running migrations", () => {
+    mock.setData("SELECT id FROM _schema_migrations", [{}]);
+
+    expect(() => applyMigrations(mock.sql)).toThrow("Invalid schema migration metadata at row 0");
+
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO _schema_migrations"))).toBe(
+      false
+    );
+  });
+
   it("validates PRAGMA rows in the earliest column-aware migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 7);
     if (!migration || typeof migration.run !== "function") {

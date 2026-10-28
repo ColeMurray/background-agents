@@ -54,6 +54,11 @@ The harness running in the sandbox reports the cumulative cost of the current tu
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | OpenCode     | The cost OpenCode reports for the turn.                                                                                                                                                                                       |
 | Claude Agent | The Claude Agent SDK's client-side estimate for the turn (running total at turn end minus the total at turn start). Under a subscription this figure is informational, but the spend limit still applies to it as configured. |
+| Codex        | The price of the turn's reported token usage at the model's published rates and context tiers. Under a ChatGPT subscription this figure is informational, but the spend limit still applies to it as configured.              |
+
+Codex selects the context tier separately for each request's input, including cached tokens, using the sandbox's cached price list. For OpenAI's current tiered models, [published pricing](https://developers.openai.com/api/docs/pricing) keeps short-context rates through 272,000 input tokens and applies long-context rates only above that boundary. Codex intentionally does not reproduce OpenCode's legacy 200,000-token fallback.
+
+For Codex, unavailable model prices (for example a model newer than the sandbox's price list) result in $0 reported cost. Partial or estimated costs can be nonzero and still count toward the spend limit. The session timeline shows a warning explaining missing, partial, or estimated pricing.
 
 The Budget section notes that "Costs and limits reflect reported model usage only." Model usage that the harness does not report cannot be limited.
 

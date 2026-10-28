@@ -257,6 +257,48 @@ describe("NodeJobs", () => {
     expect(store.earliest([KIND])).toBe(10_000 + retryDelayMs);
   });
 
+  it.each(["constructor", "toString", "__proto__"])(
+    "buries a claimed row whose persisted kind is inherited: %s",
+    async (kind) => {
+      const handle = vi.fn(async (): Promise<JobOutcome> => "ack");
+      const bury = vi.fn();
+      const fakeStore: JobStore = {
+        add: vi.fn(),
+        earliest: vi.fn(() => 10_000),
+        claim: vi.fn(() => [
+          {
+            id: "corrupt-kind",
+            kind,
+            payload: JSON.stringify(PAYLOAD),
+            attempts: 1,
+            token: "claim-token",
+          },
+        ]),
+        complete: vi.fn(),
+        retry: vi.fn(),
+        bury,
+        recoverAllClaims: vi.fn(() => []),
+        recoverExpiredClaims: vi.fn(() => []),
+        stats: vi.fn(() => ({ pending: 0, running: 0, dead: 1, oldestRunnableLagMs: null })),
+        close: vi.fn(),
+      };
+      const queue = new NodeJobs({
+        store: fakeStore,
+        deps: () => ({ env: {}, db: {}, log }) as unknown as Omit<JobDeps, "correlation">,
+        log,
+        now: () => Date.now(),
+        newId: () => `job-${++ids}`,
+      });
+      vi.spyOn(JOB_KINDS[KIND], "handle").mockImplementation(handle);
+
+      queue.start();
+      await runPoller(queue);
+
+      expect(handle).not.toHaveBeenCalled();
+      expect(bury).toHaveBeenCalledWith("corrupt-kind", "claim-token", `Unknown job kind: ${kind}`);
+    }
+  );
+
   it("delivers no more than the concurrency bound at once, and starts the rest as they settle", async () => {
     let running = 0;
     let peak = 0;

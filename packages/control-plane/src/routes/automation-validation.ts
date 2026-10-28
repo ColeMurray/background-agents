@@ -2,7 +2,11 @@
  * Request validation and target selection shared by the automation create and update routes.
  */
 
-import { hasValidSlackChannelCondition, triggerSources } from "@open-inspect/shared/triggers";
+import {
+  hasSlackActorIncludeList,
+  hasValidSlackChannelCondition,
+  triggerSources,
+} from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
 import {
   createAutomationRequestSchema,
@@ -360,11 +364,23 @@ export function extractSlackChannels(triggerConfig: TriggerConfig | null | undef
   return [];
 }
 
+/** Reject source-specific trigger options set on a trigger of another type. */
+export function getTriggerOptionsError(
+  triggerType: AutomationTriggerType,
+  triggerConfig: TriggerConfig | null | undefined
+): string | null {
+  if (triggerConfig?.slack !== undefined && triggerType !== "slack_event") {
+    return "triggerConfig.slack is only valid for slack_event triggers";
+  }
+  return null;
+}
+
 /**
  * Validate a slack_event trigger config before persistence. It must be scoped to
  * an explicit channel set (net-new validation; the engine otherwise skips
  * condition validation entirely when none are present). A text_match is optional
  * — without one the automation fires on every message in the watched channel.
+ * Accepting bot messages also requires a Slack User include list.
  * Returns an error message, or null when valid.
  */
 export function validateSlackTriggerConfig(
@@ -373,6 +389,9 @@ export function validateSlackTriggerConfig(
   const conditions = triggerConfig?.conditions ?? [];
   if (!hasValidSlackChannelCondition(conditions)) {
     return "slack_event triggers require a slack_channel condition";
+  }
+  if (triggerConfig?.slack?.includeBotMessages && !hasSlackActorIncludeList(conditions)) {
+    return "slack_event triggers that include bot messages require a slack_actor include condition";
   }
   return null;
 }

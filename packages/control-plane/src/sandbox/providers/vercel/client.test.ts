@@ -185,7 +185,7 @@ describe("VercelSandboxClient", () => {
     );
   });
 
-  it("creates a sandbox with project id, team query, auth headers, and snapshot source", async () => {
+  it("creates a non-persistent sandbox with project id, team query, auth headers, and snapshot source", async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({
         sandbox: {
@@ -246,6 +246,7 @@ describe("VercelSandboxClient", () => {
       env: { FOO: "bar" },
       tags: { openinspect_framework: "open-inspect" },
       source: { type: "snapshot", snapshotId: "snapshot-1" },
+      persistent: false,
     });
     expect(result.session.id).toBe("session-1");
   });
