@@ -21,7 +21,7 @@
     "@cloudflare/workers-types": "^4.20241230.0",
     "@hono/node-server": "^2.1.4",
     "@open-inspect/shared": "file:../shared",
-    "better-auth": "1.6.25",
+    "better-auth": "1.7.7",
     "hono": "^4.13.13",
     "ws": "^8.22.0",
     "yaml": "^2.9.0",
