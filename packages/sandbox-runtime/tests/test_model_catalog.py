@@ -68,6 +68,46 @@ async def test_startup_recovers_missing_or_invalid_prices(
     assert list(path.parent.iterdir()) == [path]
 
 
+@pytest.mark.parametrize(
+    ("base_path", "catalog_path"),
+    [
+        ("", b"/api.json"),
+        ("/", b"/api.json"),
+        ("/catalog", b"/catalog/api.json"),
+        ("/catalog/", b"/catalog/api.json"),
+        ("/catalog%2Fv1/", b"/catalog%2Fv1/api.json"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("query", "fragment"),
+    [
+        ("token=secret", ""),
+        ("token=a%2Fb%3F%26%3D&v=2&tag=one&tag=two&blank=&literal=a+b", "#catalog"),
+    ],
+)
+async def test_catalog_fetch_appends_to_path_and_preserves_query(
+    tmp_path, monkeypatch, base_path, catalog_path, query, fragment
+):
+    environment = {
+        "HOME": str(tmp_path),
+        "OPENCODE_MODELS_URL": f"https://mirror.test{base_path}?{query}{fragment}",
+    }
+    requests = []
+
+    def respond(request):
+        requests.append(request.url)
+        assert request.url.raw_path.split(b"?", 1)[0] == catalog_path
+        assert request.url.query == query.encode("ascii")
+        return httpx.Response(200, content=CATALOG)
+
+    serve_catalog(monkeypatch, respond)
+    assert await ensure_model_catalog(environment, MagicMock())
+    assert len(requests) == 1
+    path = configure_model_catalog(environment)
+    assert path.read_bytes() == CATALOG
+    assert catalog_is_usable(path)
+
+
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("failure", ["http", "network", "timeout", "invalid", "write"])
 async def test_failed_refresh_preserves_old_prices_and_reports_availability(

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -101,7 +102,9 @@ async def ensure_model_catalog(
                     timeout=MODEL_CATALOG_FETCH_TIMEOUT_SECONDS, follow_redirects=True
                 ) as client,
             ):
-                response = await client.get(f"{source.rstrip('/')}/api.json")
+                source_url = urlsplit(source)
+                catalog_url = source_url._replace(path=f"{source_url.path.rstrip('/')}/api.json")
+                response = await client.get(catalog_url.geturl())
                 response.raise_for_status()
                 text = validate_catalog(response.content)
                 atomic_write_private(path, text)
