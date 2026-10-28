@@ -11,7 +11,7 @@ import {
   validatePolicy,
   managedNamePattern,
 } from "./lib/base-snapshot-retention.ts";
-import { createSnapshotClient, daytonaBaseSnapshots } from "./lib/base-snapshot-client.ts";
+import { createSnapshotClient, DaytonaBaseSnapshotClient } from "./lib/base-snapshot-client.ts";
 
 const name = (i) => `openinspect-base-${i.toString(16).padStart(16, "0")}`;
 const NOW_MS = Date.UTC(2026, 9, 15);
@@ -392,7 +392,7 @@ test("HTTP errors abort inventory, 404 deletion is idempotent, and credentials a
 });
 
 test("typed adapters preserve uncertain metadata and normalize only provider readiness", async () => {
-  const daytona = daytonaBaseSnapshots({
+  const daytona = new DaytonaBaseSnapshotClient({
     listSnapshots: async () => [
       {
         id: "a",
