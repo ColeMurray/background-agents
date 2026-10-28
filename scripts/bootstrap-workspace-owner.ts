@@ -7,25 +7,32 @@
  * Execute after reviewing the preflight result:
  *   npm run rbac:bootstrap-owner -- --database <d1-name> --user <canonical-user-id> --execute
  *
+ * For SQLite, replace --database with --sqlite <existing-path> (never creates a database).
+ *
  * Wrangler uses the normal CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID
  * environment variables or the credentials established by `wrangler login`.
  */
 
-import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  databaseTarget,
+  runSql,
+  sqlLiteral,
+  type DatabaseTarget,
+  type WranglerRunner,
+} from "./operator-sql.ts";
 
 const CANONICAL_USER_ID = /^[0-9a-f]{32}$/;
 const OWNER_ROLE_ID = "role_builtin_owner";
-const VALUE_OPTIONS = new Set(["database", "user"]);
+const VALUE_OPTIONS = new Set(["database", "sqlite", "user"]);
 const FLAG_OPTIONS = new Set(["execute"]);
 
 /** Validated command-line options for the Owner bootstrap operation. */
-export interface BootstrapCliOptions {
-  database: string;
+export type BootstrapCliOptions = DatabaseTarget & {
   userId: string;
   execute: boolean;
-}
+};
 
 /** Inputs shared by the Owner bootstrap mutation and its verification query. */
 export interface BootstrapSqlOptions {
@@ -62,8 +69,7 @@ export function parseArgs(argv: string[]): BootstrapCliOptions {
     values.set(name, value);
   }
 
-  const database = values.get("database");
-  if (!database?.trim()) throw new Error("--database is required");
+  const target = databaseTarget(values.get("database"), values.get("sqlite"));
   const userId = values.get("user");
   if (!userId) throw new Error("--user is required");
   if (!CANONICAL_USER_ID.test(userId)) {
@@ -71,18 +77,10 @@ export function parseArgs(argv: string[]): BootstrapCliOptions {
   }
 
   return {
-    database: database.trim(),
+    ...target,
     userId,
     execute: flags.has("execute"),
   };
-}
-
-function sqlLiteral(value: string | number): string {
-  if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) throw new Error(`Unsafe SQL integer: ${value}`);
-    return String(value);
-  }
-  return `'${value.replaceAll("'", "''")}'`;
 }
 
 /** Build preflight and a result-bearing atomic batch from one audit identity. */
@@ -251,8 +249,6 @@ function readReport(
   return rows[0];
 }
 
-type WranglerRunner = (database: string, operation: readonly string[]) => string;
-
 /** Injectable side effects for deterministic bootstrap orchestration tests. */
 export interface BootstrapRunDependencies {
   runWrangler?: WranglerRunner;
@@ -260,32 +256,22 @@ export interface BootstrapRunDependencies {
   now?: () => number;
 }
 
-function runWrangler(database: string, operation: readonly string[]): string {
-  const child = spawnSync(
-    "npx",
-    ["wrangler", "d1", "execute", database, "--remote", ...operation, "--json"],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }
-  );
-  if (child.status !== 0) {
-    throw new Error(`Owner bootstrap refused or failed:\n${child.stderr || child.stdout}`);
-  }
-  return child.stdout;
-}
-
-/** Run the remote Owner bootstrap workflow and verify its postcondition. */
+/** Run the Owner bootstrap workflow and verify its postcondition. */
 export async function run(
   options: BootstrapCliOptions,
   dependencies: BootstrapRunDependencies = {}
 ): Promise<void> {
-  const runner = dependencies.runWrangler ?? runWrangler;
-  console.error(`${options.execute ? "Executing" : "Dry-running"} Owner bootstrap on remote D1...`);
+  const target = databaseTarget(options.database, options.sqlite);
+  console.error(
+    `${options.execute ? "Executing" : "Dry-running"} Owner bootstrap on ${target.sqlite !== undefined ? "SQLite" : "remote D1"}...`
+  );
   const sql = buildBootstrapSql({
     userId: options.userId,
     auditId: dependencies.randomUUID?.() ?? crypto.randomUUID(),
     now: dependencies.now?.() ?? Date.now(),
   });
   const { status } = readReport(
-    runner(options.database, ["--command", sql.preflight]),
+    runSql(target, [sql.preflight], false, dependencies.runWrangler),
     1,
     "preflight"
   );
@@ -302,7 +288,7 @@ export async function run(
   // Like WranglerD1Database.batch, use D1's result-bearing /query transaction:
   // the mutation and its proof commit together, with one result per statement.
   const postcondition = readReport(
-    runner(options.database, ["--command", sql.execution.join("\n")]),
+    runSql(target, sql.execution, true, dependencies.runWrangler),
     sql.execution.length,
     "postcondition"
   );

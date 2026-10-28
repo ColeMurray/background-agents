@@ -1,9 +1,12 @@
 import {
   AdmissionPolicy,
+  AdmissionUnavailableError,
   parseAdmissionAllowlist,
   parseAdmissionBoolean,
   type AdmissionPolicyConfig,
+  type AdmissionEvaluator,
 } from "./admission-policy";
+import { mergeAdmissionRules, type AdmissionRules } from "@open-inspect/shared/admission-settings";
 import {
   SIGN_IN_PROVIDERS,
   SIGN_IN_PROVIDER_ISSUERS,
@@ -15,10 +18,13 @@ import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
 import { SignInClaim } from "./sign-in-claim";
 import { IdentityClaimStore } from "../../db/identity-claim-store";
+import { AdmissionPolicyStore } from "../../db/admission-policy-store";
+import { createLogger } from "../../logger";
 import type { SqlDatabase } from "../../db/sql-database";
 import type { Env } from "../../types";
 
 const MINIMUM_SECRET_LENGTH = 32;
+const logger = createLogger("auth:admission");
 
 export class UserAuthConfigurationError extends Error {
   constructor(message: string) {
@@ -147,10 +153,9 @@ function requireProviderAdmission(
 function createGitHubAuthConfig(
   credentials: OAuthCredentials | null,
   appName: string,
-  admissionPolicy: AdmissionPolicy
+  admissionPolicy: AdmissionEvaluator
 ): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
-  requireProviderAdmission(admissionPolicy, "github");
 
   const profile = new GitHubSignInProfileResolver({
     identityResolver: new GitHubProviderIdentityResolver({
@@ -168,10 +173,9 @@ function createGitHubAuthConfig(
 
 function createGoogleAuthConfig(
   credentials: OAuthCredentials | null,
-  admissionPolicy: AdmissionPolicy
+  admissionPolicy: AdmissionEvaluator
 ): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
-  requireProviderAdmission(admissionPolicy, "google");
 
   const profile = new GoogleSignInProfileResolver({
     clientId: credentials.clientId,
@@ -196,11 +200,42 @@ function withClaim(
   };
 }
 
+function createAdmissionEvaluator(
+  deployment: AdmissionPolicyConfig,
+  store: { get(): Promise<{ rules: AdmissionRules }> }
+): AdmissionEvaluator {
+  return {
+    async requireAdmission(signIn) {
+      let managed: AdmissionRules;
+      try {
+        managed = (await store.get()).rules;
+      } catch {
+        logger.error("Admission policy read failed", {
+          event: "auth.admission_policy_read_failed",
+          provider: signIn.identity.provider,
+        });
+        throw new AdmissionUnavailableError();
+      }
+      return new AdmissionPolicy({
+        ...mergeAdmissionRules(deployment, managed),
+        unsafeAllowAllUsers: deployment.unsafeAllowAllUsers,
+      }).requireAdmission(signIn);
+    },
+  };
+}
+
 function createUserAuthRuntime(
   config: NormalizedUserAuthConfig,
   database: SqlDatabase
 ): UserAuthRuntime {
-  const admissionPolicy = new AdmissionPolicy(config.admission);
+  const baseline = new AdmissionPolicy(config.admission);
+  for (const provider of SIGN_IN_PROVIDERS) {
+    if (config.providers[provider]) requireProviderAdmission(baseline, provider);
+  }
+  const admissionPolicy = createAdmissionEvaluator(
+    config.admission,
+    new AdmissionPolicyStore(database)
+  );
   const claim = new SignInClaim(new IdentityClaimStore(database));
   const github = withClaim(
     "github",

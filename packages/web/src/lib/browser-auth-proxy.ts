@@ -6,6 +6,10 @@ import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { SERVICE_REQUEST_MAX_BODY_BYTES } from "@open-inspect/shared/service-auth";
 import { dispatchWebServiceRequest } from "./control-plane-service";
 
+// Allow for GitHub email pagination and retries before organization evaluation,
+// with additional room for token exchange and persistence.
+export const BROWSER_AUTH_CALLBACK_TIMEOUT_MS = 240_000;
+
 const REQUEST_HEADERS = [
   "Accept",
   "Accept-Language",
@@ -109,6 +113,9 @@ async function dispatchAllowedBrowserAuthRequest(
     headers,
     body: request.body,
     traceId: sourceHeaders.get("x-trace-id") ?? undefined,
+    timeoutMs: request.pathname.startsWith("/api/auth/callback/")
+      ? BROWSER_AUTH_CALLBACK_TIMEOUT_MS
+      : undefined,
     transportOptions: {
       redirect: "manual",
       cache: "no-store",

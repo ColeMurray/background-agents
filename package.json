@@ -20,6 +20,7 @@
     "test:lint-sql-portability": "node --test scripts/lint-sql-portability.test.mjs",
     "test:deploy-aws": "node --test scripts/deploy-aws.test.mjs",
     "test:rbac-bootstrap-owner": "node --test scripts/bootstrap-workspace-owner.test.ts",
+    "test:admission-policy-maintenance": "node --test scripts/admission-policy-maintenance.test.ts",
     "test:user-merge-cli": "node --test scripts/merge-split-users.test.ts",
     "test:cf-logs-cli": "node --test scripts/cf-logs.test.ts",
     "test:terraform-workflow-contract": "node --test scripts/terraform-workflow-contract.test.mjs scripts/terraform-plan-comment.test.mjs",
@@ -32,6 +33,7 @@
     "knip": "knip",
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "rbac:bootstrap-owner": "node scripts/bootstrap-workspace-owner.ts",
+    "admission:maintenance": "node scripts/admission-policy-maintenance.ts",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },
   "devDependencies": {

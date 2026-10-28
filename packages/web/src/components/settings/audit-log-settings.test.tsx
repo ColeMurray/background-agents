@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyAdmissionRules } from "@open-inspect/shared/admission-settings";
 import { AuditLogSettings } from "./audit-log-settings";
 
 expect.extend(matchers);
@@ -238,6 +239,67 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Private session break-glass read")).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
+
+  it.each([
+    {
+      action: "workspace.admission_policy_updated",
+      label: "Sign-in allowlist updated",
+      metadata: {
+        requested: { expectedRevision: 3 },
+        currentRevision: 3,
+        resultRevision: 4,
+        deploymentHash: "deployment-hash",
+        before: { ...emptyAdmissionRules(), allowedEmails: ["old@example.com"] },
+        after: { ...emptyAdmissionRules(), allowedEmails: ["new@example.com"] },
+      },
+      visibleFields: [
+        '"expectedRevision": 3',
+        '"resultRevision": 4',
+        '"old@example.com"',
+        '"new@example.com"',
+      ],
+    },
+    {
+      action: "workspace.admission_policy_maintenance",
+      label: "Sign-in allowlist maintenance",
+      metadata: {
+        before: { revision: 4, writesFrozen: 1 },
+        requested: { expectedRevision: 4, writesFrozen: 0 },
+        after: { revision: 5, writesFrozen: 0 },
+      },
+      visibleFields: [
+        '"expectedRevision": 4',
+        '"revision": 5',
+        '"writesFrozen": 1',
+        '"writesFrozen": 0',
+      ],
+    },
+  ])(
+    "recognizes $action and exposes readable policy metadata",
+    async ({ action, label, metadata, visibleFields }) => {
+      const card = renderSingle(
+        createEvent("applied", {
+          action,
+          resourceType: "admission_policy",
+          resourceId: "workspace",
+          targetUserIdSnapshot: null,
+          metadata,
+        })
+      );
+
+      expect(card.getByRole("heading", { name: label })).toBeInTheDocument();
+      expect(card.getByText("Applied")).toHaveClass("text-success");
+      expect(card.queryByText("Unrecognized")).not.toBeInTheDocument();
+      expect(card.queryByText("HTTP response")).not.toBeInTheDocument();
+      expect(card.getByText("admission_policy / workspace")).toBeInTheDocument();
+
+      await userEvent.click(card.getByText("Structured details"));
+      const details = card.getByText(/"metadata":/);
+      expect(details).toBeVisible();
+      for (const field of visibleFields) expect(details).toHaveTextContent(field);
+      expect(JSON.parse(details.textContent ?? "").metadata).toEqual(metadata);
+    }
+  );
 
   it.each(["applied", "no_op", "denied", "rejected"] as const)(
     "renders a shadow denial as informational Would deny despite stored result %s",
