@@ -2,6 +2,17 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 28, 2026
+
+**Session connections recover automatically.** Transient disconnects now retry without an attempt
+limit, with capped backoff, rather than waiting for a click on **Reconnect** after a long outage.
+Retries pause while the browser is offline and resume when connectivity returns; returning to the
+session tab also accelerates a pending retry. Background tabs keep reconnecting so authorization
+renewal and sandbox presence still work while you use a separate editor or terminal. Session-expired
+connections fetch a fresh credential, and temporary credential-service failures retry instead of
+showing an authentication error. Actual authentication failures and server-overload closes still
+require user action.
+
 ## October 27, 2026
 
 **GitHub sign-in diagnostics.** Failed sign-ins, including provider and admission checks and a
