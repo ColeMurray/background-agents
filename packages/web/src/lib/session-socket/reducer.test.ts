@@ -99,18 +99,19 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 describe("sessionSocketReducer", () => {
   describe("sandbox connection health", () => {
     it("updates bridge health without changing browser readiness or sandbox lifecycle", () => {
-      const state = subscribedState();
+      const state = { ...subscribedState(), sandboxError: "Retained sandbox diagnostic" };
       const reconnecting = reduce(
         state,
-        serverMessage({ type: "sandbox_connection", status: "reconnecting" })
+        serverMessage({ type: "sandbox_status", status: "ready", connectionStatus: "reconnecting" })
       );
       expect(reconnecting.sessionState?.sandboxConnectionStatus).toBe("reconnecting");
       expect(reconnecting.ready).toBe(true);
       expect(reconnecting.sessionState?.sandboxStatus).toBe("ready");
+      expect(reconnecting.sandboxError).toBe(state.sandboxError);
 
       const connected = reduce(
         reconnecting,
-        serverMessage({ type: "sandbox_connection", status: "connected" })
+        serverMessage({ type: "sandbox_status", status: "ready", connectionStatus: "connected" })
       );
       expect(connected.sessionState?.sandboxConnectionStatus).toBe("connected");
       expect(connected.ready).toBe(true);

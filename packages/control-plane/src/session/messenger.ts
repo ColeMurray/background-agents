@@ -12,6 +12,15 @@
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxCommand } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxStateReader } from "./sandbox-ports";
+
+// Internal notification only: adapt to an existing wire type for older web bundles.
+type SessionBroadcast =
+  | ServerMessage
+  | {
+      type: "sandbox_connection";
+      status: "connected" | "reconnecting";
+    };
 
 /**
  * The slice of the socket registry delivery needs: client fan-out and the
@@ -32,7 +41,7 @@ export class SandboxDeliveryUnavailableError extends Error {
 
 export interface SessionMessenger {
   /** Broadcast a message to all authenticated client sockets. */
-  broadcast(message: ServerMessage): void;
+  broadcast(message: SessionBroadcast): void;
 
   /**
    * Send a command to the ready sandbox; rejects when delivery is unavailable,
@@ -42,9 +51,21 @@ export interface SessionMessenger {
 }
 
 export class SessionMessengerImpl implements SessionMessenger {
-  constructor(private readonly wsManager: DeliverySockets) {}
+  constructor(
+    private readonly wsManager: DeliverySockets,
+    private readonly sandboxRepository: SandboxStateReader
+  ) {}
 
-  broadcast(message: ServerMessage): void {
+  broadcast(message: SessionBroadcast): void {
+    if (message.type === "sandbox_connection") {
+      const sandbox = this.sandboxRepository.getSandbox();
+      if (!sandbox) return;
+      message = {
+        type: "sandbox_status",
+        status: sandbox.status,
+        connectionStatus: message.status,
+      };
+    }
     // Best effort; the registry handles per-client send failures.
     this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
       this.wsManager.send(ws, message);

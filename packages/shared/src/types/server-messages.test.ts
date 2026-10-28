@@ -1,10 +1,43 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { sandboxStatusSchema } from "./sessions";
 import {
   redactSessionSnapshotSandboxAccess,
   serverMessageSchema,
   sessionSnapshotSchema,
   sessionSnapshotStateSchema,
 } from "./server-messages";
+
+describe("sandbox connection rolling compatibility", () => {
+  // The shipped sandbox_status variant predates connectionStatus and strips extra fields.
+  const legacyStatusSchema = z.object({
+    type: z.literal("sandbox_status"),
+    status: sandboxStatusSchema,
+  });
+
+  it.each(["connected", "reconnecting"] as const)(
+    "accepts %s health in old and new clients",
+    (connectionStatus) => {
+      const message = { type: "sandbox_status", status: "ready", connectionStatus };
+      expect(serverMessageSchema.parse(message)).toEqual(message);
+      expect(legacyStatusSchema.parse(message)).toEqual({
+        type: "sandbox_status",
+        status: "ready",
+      });
+    }
+  );
+
+  it("still accepts lifecycle-only messages from older servers", () => {
+    const message = { type: "sandbox_status", status: "ready" };
+    expect(serverMessageSchema.parse(message)).toEqual(message);
+  });
+
+  it("rejects the internal-only notification as a wire message", () => {
+    expect(
+      serverMessageSchema.safeParse({ type: "sandbox_connection", status: "reconnecting" }).success
+    ).toBe(false);
+  });
+});
 
 describe("artifact_updated server message", () => {
   const artifact = {

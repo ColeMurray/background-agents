@@ -187,8 +187,12 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("presence_leave"), userId: z.string() }),
   z.object({ type: z.literal("sandbox_warming") }),
   z.object({ type: z.literal("sandbox_spawning") }),
-  z.object({ type: z.literal("sandbox_status"), status: sandboxStatusSchema }),
-  z.object({ type: z.literal("sandbox_connection"), status: sandboxConnectionStatusSchema }),
+  z.object({
+    type: z.literal("sandbox_status"),
+    status: sandboxStatusSchema,
+    // Older clients accept the existing discriminator and ignore this additive field.
+    connectionStatus: sandboxConnectionStatusSchema.optional(),
+  }),
   z.object({ type: z.literal("sandbox_error"), error: z.string() }),
   z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
   // Existing artifact changed (e.g. PR lifecycle update). Consumers upsert by

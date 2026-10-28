@@ -264,12 +264,13 @@ describe("Sandbox command replay through the live session runtime", () => {
     const staleDelivery = collectMessages(ws, { timeoutMs: NO_COMMAND_WINDOW_MS });
     const reconnecting = collectMessages(clientWs, {
       until: (message) =>
-        message.type === "sandbox_connection" && message.status === "reconnecting",
+        message.type === "sandbox_status" && message.connectionStatus === "reconnecting",
     });
     const messageId = await enqueuePrompt(stub);
     expect(await reconnecting).toContainEqual({
-      type: "sandbox_connection",
-      status: "reconnecting",
+      type: "sandbox_status",
+      status: "ready",
+      connectionStatus: "reconnecting",
     });
     expect((await staleDelivery).filter((message) => message.type === "prompt")).toEqual([]);
     expect(
@@ -286,7 +287,8 @@ describe("Sandbox command replay through the live session runtime", () => {
 
     const delivery = collectMessages(ws, { until: (message) => message.type === "prompt" });
     const connected = collectMessages(clientWs, {
-      until: (message) => message.type === "sandbox_connection" && message.status === "connected",
+      until: (message) =>
+        message.type === "sandbox_status" && message.connectionStatus === "connected",
     });
     ws.send(
       JSON.stringify({
@@ -303,7 +305,11 @@ describe("Sandbox command replay through the live session runtime", () => {
         content: "Execute this prompt once",
       }),
     ]);
-    expect(await connected).toContainEqual({ type: "sandbox_connection", status: "connected" });
+    expect(await connected).toContainEqual({
+      type: "sandbox_status",
+      status: "ready",
+      connectionStatus: "connected",
+    });
     await acknowledge(stub, ws, commands[0].commandId as string);
     expect(await queryDO(stub, "SELECT status FROM messages WHERE id = ?", messageId)).toEqual([
       { status: "processing" },
@@ -382,13 +388,14 @@ describe("Sandbox command replay through the live session runtime", () => {
       });
       expect(
         (await beforeDeadline).filter(
-          (message) => message.type === "sandbox_connection" && message.status === "reconnecting"
+          (message) =>
+            message.type === "sandbox_status" && message.connectionStatus === "reconnecting"
         )
       ).toEqual([]);
 
       const reconnecting = collectMessages(clientWs, {
         until: (message) =>
-          message.type === "sandbox_connection" && message.status === "reconnecting",
+          message.type === "sandbox_status" && message.connectionStatus === "reconnecting",
       });
       await runInSessionDO(stub, async (instance) => {
         const clock = vi.spyOn(Date, "now").mockReturnValue(deadline);
@@ -399,8 +406,9 @@ describe("Sandbox command replay through the live session runtime", () => {
         }
       });
       expect(await reconnecting).toContainEqual({
-        type: "sandbox_connection",
-        status: "reconnecting",
+        type: "sandbox_status",
+        status: "ready",
+        connectionStatus: "reconnecting",
       });
       expect(await queryDO(stub, "SELECT status FROM sandbox")).toEqual([{ status: "ready" }]);
       expect(await queryDO(stub, "SELECT status FROM messages")).toEqual(
@@ -408,7 +416,8 @@ describe("Sandbox command replay through the live session runtime", () => {
       );
 
       const connected = collectMessages(clientWs, {
-        until: (message) => message.type === "sandbox_connection" && message.status === "connected",
+        until: (message) =>
+          message.type === "sandbox_status" && message.connectionStatus === "connected",
       });
       ws.send(
         JSON.stringify({
@@ -417,7 +426,11 @@ describe("Sandbox command replay through the live session runtime", () => {
           timestamp: Date.now(),
         })
       );
-      expect(await connected).toContainEqual({ type: "sandbox_connection", status: "connected" });
+      expect(await connected).toContainEqual({
+        type: "sandbox_status",
+        status: "ready",
+        connectionStatus: "connected",
+      });
     }
   );
 });

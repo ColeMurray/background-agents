@@ -305,26 +305,25 @@ from an HTTP 2xx.
 
 ### Server → Client Messages
 
-| Type                 | Description                                                   |
-| -------------------- | ------------------------------------------------------------- |
-| `pong`               | Health check response                                         |
-| `subscribed`         | Confirm subscription                                          |
-| `prompt_queued`      | Confirm prompt queued                                         |
-| `sandbox_event`      | Event from sandbox                                            |
-| `presence_sync`      | Full presence state                                           |
-| `presence_update`    | Presence change                                               |
-| `presence_leave`     | Participant disconnected                                      |
-| `sandbox_spawning`   | Sandbox is being created                                      |
-| `sandbox_warming`    | Sandbox warming                                               |
-| `sandbox_status`     | Sandbox status update                                         |
-| `sandbox_connection` | Bridge connected/reconnecting, separate from client transport |
-| `sandbox_error`      | Sandbox error occurred                                        |
-| `sandbox_warning`    | Sandbox warning message                                       |
-| `sandbox_restored`   | Restored from snapshot                                        |
-| `artifact_created`   | New artifact (PR, screenshot)                                 |
-| `snapshot_saved`     | Filesystem snapshot saved                                     |
-| `session_status`     | Session status change                                         |
-| `error`              | Error occurred                                                |
+| Type               | Description                   |
+| ------------------ | ----------------------------- |
+| `pong`             | Health check response         |
+| `subscribed`       | Confirm subscription          |
+| `prompt_queued`    | Confirm prompt queued         |
+| `sandbox_event`    | Event from sandbox            |
+| `presence_sync`    | Full presence state           |
+| `presence_update`  | Presence change               |
+| `presence_leave`   | Participant disconnected      |
+| `sandbox_spawning` | Sandbox is being created      |
+| `sandbox_warming`  | Sandbox warming               |
+| `sandbox_status`   | Sandbox status update         |
+| `sandbox_error`    | Sandbox error occurred        |
+| `sandbox_warning`  | Sandbox warning message       |
+| `sandbox_restored` | Restored from snapshot        |
+| `artifact_created` | New artifact (PR, screenshot) |
+| `snapshot_saved`   | Filesystem snapshot saved     |
+| `session_status`   | Session status change         |
+| `error`            | Error occurred                |
 
 ### Sandbox Command Delivery
 
@@ -341,9 +340,10 @@ discarded. Push payloads, including remote credentials, are encrypted at rest. P
 `commandId`, and stops target a specific `messageId`.
 
 A heartbeat older than `SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS` holds new commands and publishes
-`sandbox_connection: reconnecting`. A new prompt stays pending until fresh heartbeat or reconnect
-traffic releases it. Existing execution, push, and stop-confirmation deadlines still apply; replay
-does not extend them.
+`sandbox_status` with `connectionStatus: reconnecting`. This optional field is ignored by older web
+clients and is independent of client transport health. A new prompt stays pending until fresh
+heartbeat or reconnect traffic releases it. Existing execution, push, and stop-confirmation
+deadlines still apply; replay does not extend them.
 
 This provides duplicate-safe delivery across socket reconnects and control-plane reactivation, not
 exactly-once execution across bridge process crashes. Bridge deduplication and active work are

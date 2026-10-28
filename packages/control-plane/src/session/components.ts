@@ -322,7 +322,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   );
 
   // Tier 3 — outbound delivery over the socket registry.
-  const messenger: SessionMessenger = new SessionMessengerImpl(wsManager);
+  const messenger: SessionMessenger = new SessionMessengerImpl(wsManager, sandboxRepository);
 
   // Constructed eagerly — an invalid SCM configuration fails right here. The
   // cell is a local `let` so live-DO integration tests can substitute a stub

@@ -257,6 +257,12 @@ function reduceServerMessage(
       }));
 
     case "sandbox_status": {
+      if (message.connectionStatus !== undefined) {
+        return updateSessionState(state, (prev) => ({
+          ...prev,
+          sandboxConnectionStatus: message.connectionStatus,
+        }));
+      }
       const isReplacementStart = message.status === "spawning";
       const shouldClearAccessState =
         isReplacementStart ||
@@ -283,12 +289,6 @@ function reduceServerMessage(
         })
       );
     }
-
-    case "sandbox_connection":
-      return updateSessionState(state, (prev) => ({
-        ...prev,
-        sandboxConnectionStatus: message.status,
-      }));
 
     case "sandbox_error":
       return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({

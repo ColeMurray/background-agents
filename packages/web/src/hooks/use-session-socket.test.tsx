@@ -184,10 +184,14 @@ describe("useSessionSocket", () => {
     expect(result.current.connected).toBe(true);
     expect(result.current.ready).toBe(true);
 
-    act(() => socket.receive({ type: "sandbox_connection", status: "connected" }));
+    act(() =>
+      socket.receive({ type: "sandbox_status", status: "ready", connectionStatus: "connected" })
+    );
     expect(result.current.sessionState?.sandboxConnectionStatus).toBe("connected");
 
-    act(() => socket.receive({ type: "sandbox_connection", status: "reconnecting" }));
+    act(() =>
+      socket.receive({ type: "sandbox_status", status: "ready", connectionStatus: "reconnecting" })
+    );
     expect(result.current.sessionState?.sandboxConnectionStatus).toBe("reconnecting");
     expect(result.current.connected).toBe(true);
     expect(result.current.reconnecting).toBe(false);
