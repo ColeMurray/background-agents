@@ -1366,6 +1366,58 @@ describe("handleAgentSessionEvent environment targets", () => {
       return { env, webhook, store };
     }
 
+    it.each(["lookup", "deletion"])("bounds a stalled mapping %s", async (operation) => {
+      const { env, webhook, store } = stopFixture();
+      let markStalled!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        markStalled = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (operation === "lookup") {
+        vi.mocked(env.LINEAR_KV.get).mockImplementationOnce(async () => {
+          markStalled();
+          await gate;
+          return JSON.parse(store.get("issue:issue-1")!);
+        });
+      } else {
+        vi.mocked(env.LINEAR_KV.delete).mockImplementationOnce(async (key) => {
+          markStalled();
+          await gate;
+          store.delete(key);
+        });
+      }
+      const request = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+      env.CONTROL_PLANE = { fetch: request } as unknown as Fetcher;
+      let settled = false;
+      const handling = handleAgentSessionEvent(webhook, env, "trace-kv-deadline").then(() => {
+        settled = true;
+      });
+      try {
+        await stalled;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        await handling;
+        expect(vi.getTimerCount()).toBe(0);
+        expect(store.has("issue:issue-1")).toBe(true);
+        expect(request).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+        expect(env.LINEAR_KV.delete).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      } finally {
+        release();
+        await handling;
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      // Late lookup cannot issue a stop; an acknowledged stop's deletion may still finish.
+      expect(request).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      expect(env.LINEAR_KV.delete).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      expect(store.has("issue:issue-1")).toBe(operation === "lookup");
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
     it.each([
       "initial stop response",
       "stop refusal body",
