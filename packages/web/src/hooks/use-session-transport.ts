@@ -31,7 +31,7 @@ const WS_CLOSE_INVALID_MESSAGE = 4004;
 // Transient causes retry with no attempt limit. A sleeping laptop or a long
 // outage outlasts any fixed budget, and giving up leaves a banner the user
 // must click. The backoff cap bounds the rate instead, and `scheduleReconnect`
-// holds retries while the browser is offline.
+// holds retries while the tab is hidden or the browser is offline.
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 // RFC 6455 registers 1012 with a randomized 5-30s reconnect. A restart closes
@@ -52,6 +52,10 @@ function reconnectDelayMs(attemptsSoFar: number): number {
 
 function restartDelayMs(): number {
   return RESTART_MIN_DELAY_MS + Math.random() * (RESTART_MAX_DELAY_MS - RESTART_MIN_DELAY_MS);
+}
+
+function canRetryNow(): boolean {
+  return document.visibilityState === "visible" && navigator.onLine;
 }
 
 const wsTokenSchema = z.object({ token: z.string().min(1) });
@@ -125,7 +129,7 @@ export interface SessionTransportHandlers {
 export interface UseSessionTransportReturn {
   connected: boolean;
   connecting: boolean;
-  /** A reconnect is scheduled or waiting for the browser to come online. */
+  /** A reconnect is scheduled or waiting for the tab to be visible and online. */
   reconnecting: boolean;
   authError: string | null;
   connectionError: string | null;
@@ -157,8 +161,8 @@ export function useSessionTransport(
   const wsTokenRef = useRef<string | null>(null);
   const goneSessionIdRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // A reconnect is owed: its timer is armed, or it is held until the browser
-  // is online (then no timer exists).
+  // A reconnect is owed: its timer is armed, or it is held until the tab is
+  // visible and online (then no timer exists).
   const retryPendingRef = useRef(false);
   const reconnectAttempts = useRef(0);
   // Automatic credential reissues spent since the last healthy connection.
@@ -281,19 +285,18 @@ export function useSessionTransport(
   /**
    * The single path back onto the wire: arms the timer and the phase together
    * so no close branch can schedule a reconnect the UI does not report.
-   * Offline retries wait for the online listener. Hidden tabs keep their
-   * connection: it also maintains presence while an external editor is in use.
+   * Hidden or offline tabs hold the retry until visibility or network recovery.
    */
   const scheduleReconnect = useCallback(
     (delayMs: number, retry: () => void) => {
       cancelScheduledReconnect();
       retryPendingRef.current = true;
       setPhase("reconnecting");
-      if (!navigator.onLine) return;
+      if (!canRetryNow()) return;
       reconnectTimeoutRef.current = setTimeout(() => {
         reconnectTimeoutRef.current = null;
-        // Going offline while the timer runs leaves the retry owed.
-        if (!navigator.onLine) return;
+        // Losing visibility or connectivity while the timer runs leaves the retry owed.
+        if (!canRetryNow()) return;
         retryPendingRef.current = false;
         if (mountedRef.current) retry();
       }, delayMs);
@@ -530,18 +533,15 @@ export function useSessionTransport(
   useEffect(() => {
     if (!enabled) return;
     const resume = () => {
-      if (!retryPendingRef.current || !navigator.onLine) return;
+      if (!retryPendingRef.current || !canRetryNow()) return;
       cancelScheduledReconnect();
       reconnectAttempts.current = 0;
       connect();
     };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") resume();
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("visibilitychange", resume);
     window.addEventListener("online", resume);
     return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("online", resume);
     };
   }, [cancelScheduledReconnect, connect, enabled]);

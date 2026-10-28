@@ -266,27 +266,41 @@ describe("useSessionTransport token recovery", () => {
     expect(result.current.authError).toBeNull();
   });
 
-  it.each(["mint", "socket"])("continues %s retries in a hidden online tab", async (source) => {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    if (source === "mint") fetchMock.mockImplementationOnce(transientFailures[0].mint);
-    const { result } = renderTransport();
-    await advance(0);
-    if (source === "socket") {
-      act(() => {
-        FakeWebSocket.instances[0].open();
-        FakeWebSocket.instances[0].serverClose(1006);
-      });
+  it.each(["mint", "socket"])(
+    "holds hidden-tab %s retries until visible and online",
+    async (source) => {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      if (source === "mint") fetchMock.mockImplementationOnce(transientFailures[0].mint);
+      const { result } = renderTransport();
+      await advance(0);
+      if (source === "socket") {
+        act(() => {
+          FakeWebSocket.instances[0].open();
+          FakeWebSocket.instances[0].serverClose(1006);
+        });
+      }
+      const initialCalls = fetchMock.mock.calls.length;
+      const initialSockets = FakeWebSocket.instances.length;
+      await advance(10 * 60_000);
+      await resumeEvents();
+      expect(fetchMock).toHaveBeenCalledTimes(initialCalls);
+      expect(FakeWebSocket.instances).toHaveLength(initialSockets);
+      expect(result.current.reconnecting).toBe(true);
+
+      online.mockReturnValue(false);
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      await resumeEvents();
+      expect(FakeWebSocket.instances).toHaveLength(initialSockets);
+      expect(fetchMock).toHaveBeenCalledTimes(initialCalls);
+      online.mockReturnValue(true);
+      await resumeEvents();
+      expect(FakeWebSocket.instances).toHaveLength(initialSockets + 1);
+      expect(result.current.authError).toBeNull();
     }
-    const initialSockets = FakeWebSocket.instances.length;
-    await advance(999);
-    expect(FakeWebSocket.instances).toHaveLength(initialSockets);
-    await advance(1);
-    expect(FakeWebSocket.instances).toHaveLength(initialSockets + 1);
-    expect(result.current.authError).toBeNull();
-  });
+  );
 
   it.each(["before scheduling", "after scheduling"])(
-    "holds a token retry when offline %s and resumes even while hidden",
+    "holds a token retry when offline %s and waits for visibility after network recovery",
     async (timing) => {
       if (timing === "before scheduling") online.mockReturnValue(false);
       fetchMock.mockImplementationOnce(transientFailures[0].mint);
@@ -300,6 +314,11 @@ describe("useSessionTransport token recovery", () => {
       expect(result.current.authError).toBeNull();
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
       online.mockReturnValue(true);
+      await resumeEvents();
+      await advance(60_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
       await resumeEvents();
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(FakeWebSocket.instances).toHaveLength(1);

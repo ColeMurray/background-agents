@@ -431,7 +431,7 @@ describe("useSessionTransport", () => {
   });
 
   it.each(["visible", "hidden"] as const)(
-    "renews authorization in a %s tab",
+    "renews authorization once a %s tab is visible",
     async (visibility) => {
       vi.useFakeTimers();
       fetchMock
@@ -450,6 +450,14 @@ describe("useSessionTransport", () => {
       // Every scheduled reconnect reports the wait, not just the backoff ones.
       expect(rendered.result.current.reconnecting).toBe(true);
 
+      if (visibility === "hidden") {
+        await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        expect(rendered.result.current.reconnecting).toBe(true);
+        setVisibility("visible");
+        act(() => document.dispatchEvent(new Event("visibilitychange")));
+      }
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -645,7 +653,23 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
-  it("retries in a hidden tab and accelerates a pending retry when visible", async () => {
+  it("keeps an existing connection open when the tab becomes hidden", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    act(() => FakeWebSocket.instances[0].open());
+    setVisibility("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+
+    expect(rendered.result.current.connected).toBe(true);
+    expect(rendered.result.current.isOpen()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    rendered.unmount();
+  });
+
+  it("holds a hidden-tab retry and reconnects immediately when visible", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();
     await act(async () => {
@@ -656,28 +680,27 @@ describe("useSessionTransport", () => {
     setVisibility("hidden");
     act(() => FakeWebSocket.instances[0].serverClose(1006));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
     });
-    expect(FakeWebSocket.instances).toHaveLength(2);
-    act(() => FakeWebSocket.instances[1].serverClose(1006));
     act(() => document.dispatchEvent(new Event("visibilitychange")));
     expect(rendered.result.current.reconnecting).toBe(true);
-    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
 
     setVisibility("visible");
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(FakeWebSocket.instances).toHaveLength(2);
 
     // The return restarts the backoff: a network still waking up after sleep
     // gets the 1s retry, not the 2s one the earlier close had earned.
-    act(() => FakeWebSocket.instances[2].serverClose(1006));
+    act(() => FakeWebSocket.instances[1].serverClose(1006));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(FakeWebSocket.instances).toHaveLength(4);
+    expect(FakeWebSocket.instances).toHaveLength(3);
     rendered.unmount();
   });
 
@@ -705,8 +728,8 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
-  it("holds an armed retry when the browser goes offline before it fires", async () => {
-    // 4002 drops the credential; an offline retry must not attempt a token mint.
+  it.each(["offline", "hidden"])("holds an armed retry when the tab becomes %s", async (state) => {
+    // 4002 drops the credential; an ineligible retry must not attempt a token mint.
     vi.useFakeTimers();
     const rendered = renderTransport();
     await act(async () => {
@@ -717,7 +740,8 @@ describe("useSessionTransport", () => {
       FakeWebSocket.instances[0].serverClose(4002, true);
     });
 
-    setOnline(false);
+    if (state === "offline") setOnline(false);
+    else setVisibility("hidden");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
@@ -726,8 +750,10 @@ describe("useSessionTransport", () => {
     expect(rendered.result.current.reconnecting).toBe(true);
 
     setOnline(true);
+    setVisibility("visible");
     await act(async () => {
       window.dispatchEvent(new Event("online"));
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
