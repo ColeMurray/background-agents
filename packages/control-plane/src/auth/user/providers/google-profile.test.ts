@@ -26,24 +26,22 @@ describe("GoogleSignInProfileResolver", () => {
       token: "signed-google-id-token",
       audience: "google-client-id",
     });
-    expect(requireAdmission).toHaveBeenCalledWith({
-      identity: {
-        provider: "google",
-        issuer: "https://accounts.google.com",
-        subject: "google-subject",
-        displayName: "Person Example",
-        avatarUrl: "https://example.com/avatar.png",
-        verifiedEmails: ["person@example.com"],
-        primaryEmail: "person@example.com",
-      },
+    expect(result.data).toEqual({
+      provider: "google",
+      issuer: "https://accounts.google.com",
+      subject: "google-subject",
+      displayName: "Person Example",
+      avatarUrl: "https://example.com/avatar.png",
+      verifiedEmails: ["person@example.com"],
+      primaryEmail: "person@example.com",
     });
+    expect(requireAdmission).toHaveBeenCalledWith({ identity: result.data });
     expect(result.user).toEqual({
       name: "Person Example",
       email: "person@example.com",
       image: "https://example.com/avatar.png",
       emailVerified: true,
     });
-    expect(result.data).toEqual(await verifyIdToken.mock.results[0].value);
     expect(result.user).not.toHaveProperty("id");
   });
 

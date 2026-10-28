@@ -1,3 +1,5 @@
+import type { VerifiedProviderIdentity } from "./providers/types";
+
 export interface ProviderTokens {
   readonly accessToken?: string;
   readonly refreshToken?: string;
@@ -7,7 +9,7 @@ export interface ProviderTokens {
   readonly scopes?: readonly string[];
 }
 
-export interface ProviderProfile<Data = unknown> {
+export interface ProviderProfile {
   readonly user: {
     readonly id?: never;
     readonly name?: string;
@@ -15,9 +17,7 @@ export interface ProviderProfile<Data = unknown> {
     readonly image?: string;
     readonly emailVerified: boolean;
   };
-  readonly data: Data;
+  readonly data: VerifiedProviderIdentity;
 }
 
-export type ProviderProfileResolver<Data = unknown> = (
-  tokens: ProviderTokens
-) => Promise<ProviderProfile<Data> | null>;
+export type ProviderProfileResolver = (tokens: ProviderTokens) => Promise<ProviderProfile | null>;

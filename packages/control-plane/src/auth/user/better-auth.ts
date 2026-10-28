@@ -1,13 +1,13 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
 import { SIGN_IN_FAILURE_PATH } from "@open-inspect/shared/sign-in-failure";
+import { isSignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { createSignInFailureRedirectHook } from "./sign-in-failure";
 import { createCanonicalBetterAuthAdapter } from "../../db/better-auth-adapter";
 import type { SqlDatabase } from "../../db/sql-database";
 import { generateId } from "../crypto";
 import type { ProviderProfileResolver } from "./provider-profile";
-import type { GitHubSignInProfileData } from "./providers/github-profile";
-import type { GoogleSignInProfileData } from "./providers/google-profile";
+import type { VerifiedProviderIdentity } from "./providers/types";
 import type { OAuthAccountKeyContext } from "better-auth/oauth2";
 
 const MS_PER_SECOND = 1000;
@@ -15,18 +15,18 @@ const MS_PER_SECOND = 1000;
 export const SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
 export const SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
 
-export interface SocialProviderAuthConfig<Data extends object = object> {
+export interface SocialProviderAuthConfig {
   readonly clientId: string;
   readonly clientSecret: string;
-  readonly getUserInfo: ProviderProfileResolver<Data>;
+  readonly getUserInfo: ProviderProfileResolver;
 }
 
 export interface UserAuthConfig {
   readonly database: SqlDatabase;
   readonly publicWebOrigin: string;
   readonly secret: string;
-  readonly github?: SocialProviderAuthConfig<GitHubSignInProfileData>;
-  readonly google?: SocialProviderAuthConfig<GoogleSignInProfileData>;
+  readonly github?: SocialProviderAuthConfig;
+  readonly google?: SocialProviderAuthConfig;
 }
 
 /**
@@ -65,25 +65,16 @@ export function createUserAuth(config: UserAuthConfig) {
           return {
             context: {
               socialProviders: ctx.socialProviders.map((provider) => {
-                if (provider.id === "github" && config.github) {
-                  return {
-                    ...provider,
-                    getUserInfo: config.github.getUserInfo,
-                    accountSubject: ({
-                      profile,
-                    }: OAuthAccountKeyContext<GitHubSignInProfileData>) => profile.id,
-                  };
-                }
-                if (provider.id === "google" && config.google) {
-                  return {
-                    ...provider,
-                    getUserInfo: config.google.getUserInfo,
-                    accountSubject: ({
-                      profile,
-                    }: OAuthAccountKeyContext<GoogleSignInProfileData>) => profile.sub,
-                  };
-                }
-                return provider;
+                const providerConfig = isSignInProvider(provider.id)
+                  ? config[provider.id]
+                  : undefined;
+                if (!providerConfig) return provider;
+                return {
+                  ...provider,
+                  getUserInfo: providerConfig.getUserInfo,
+                  accountSubject: ({ profile }: OAuthAccountKeyContext<VerifiedProviderIdentity>) =>
+                    profile.subject,
+                };
               }),
             },
           };

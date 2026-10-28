@@ -10,14 +10,8 @@ import {
 } from "@open-inspect/shared/sign-in-provider";
 import { createUserAuth, type SocialProviderAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
-import {
-  GitHubSignInProfileResolver,
-  type GitHubSignInProfileData,
-} from "./providers/github-profile";
-import {
-  GoogleSignInProfileResolver,
-  type GoogleSignInProfileData,
-} from "./providers/google-profile";
+import { GitHubSignInProfileResolver } from "./providers/github-profile";
+import { GoogleSignInProfileResolver } from "./providers/google-profile";
 import { SignInClaim } from "./sign-in-claim";
 import { IdentityClaimStore } from "../../db/identity-claim-store";
 import type { SqlDatabase } from "../../db/sql-database";
@@ -147,7 +141,7 @@ function createGitHubAuthConfig(
   credentials: OAuthCredentials | null,
   appName: string,
   admissionPolicy: AdmissionPolicy
-): SocialProviderAuthConfig<GitHubSignInProfileData> | undefined {
+): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "github");
 
@@ -168,7 +162,7 @@ function createGitHubAuthConfig(
 function createGoogleAuthConfig(
   credentials: OAuthCredentials | null,
   admissionPolicy: AdmissionPolicy
-): SocialProviderAuthConfig<GoogleSignInProfileData> | undefined {
+): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "google");
 
@@ -183,15 +177,14 @@ function createGoogleAuthConfig(
   };
 }
 
-function withClaim<Data extends object>(
-  provider: SignInProvider,
+function withClaim(
   claim: SignInClaim,
-  config: SocialProviderAuthConfig<Data> | undefined
-): SocialProviderAuthConfig<Data> | undefined {
+  config: SocialProviderAuthConfig | undefined
+): SocialProviderAuthConfig | undefined {
   if (!config) return undefined;
   return {
     ...config,
-    getUserInfo: claim.wrapResolver(provider, config.getUserInfo),
+    getUserInfo: claim.wrapResolver(config.getUserInfo),
   };
 }
 
@@ -202,15 +195,10 @@ function createUserAuthRuntime(
   const admissionPolicy = new AdmissionPolicy(config.admission);
   const claim = new SignInClaim(new IdentityClaimStore(database));
   const github = withClaim(
-    "github",
     claim,
     createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy)
   );
-  const google = withClaim(
-    "google",
-    claim,
-    createGoogleAuthConfig(config.providers.google, admissionPolicy)
-  );
+  const google = withClaim(claim, createGoogleAuthConfig(config.providers.google, admissionPolicy));
 
   const auth = createUserAuth({
     database,

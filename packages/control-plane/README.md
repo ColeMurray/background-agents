@@ -462,8 +462,9 @@ The upgrade from 1.6.25 to 1.7.14 follows the upstream
 [release changelog](https://github.com/better-auth/better-auth/blob/v1.7.14/packages/better-auth/CHANGELOG.md).
 
 - Provider profile `user` contains only mutable attributes. Our provider-profile plugin keeps the
-  built-in GitHub/Google OAuth transports and pairs vetted `data.id` / verified `data.sub` with
-  explicit account-subject resolvers. Canonical email claims use those same provider subjects.
+  built-in GitHub/Google OAuth transports. Both resolvers return `VerifiedProviderIdentity` as
+  profile data; the SDK account-subject resolver and canonical email claims read the same typed
+  `data.subject`.
 - `getAccessToken`, `refreshToken`, and `accountInfo` select the local `user_identities.id` through
   `accountId`, plus the canonical `userId` for trusted server calls. They no longer accept
   `providerId` or a provider subject as the selector. Profile integrity checks read

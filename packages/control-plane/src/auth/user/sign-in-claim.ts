@@ -37,19 +37,16 @@ const logger = createLogger("auth:sign-in-claim");
 export class SignInClaim {
   constructor(private readonly store: IdentityClaimStore) {}
 
-  wrapResolver<Data>(
-    provider: SignInProvider,
-    inner: ProviderProfileResolver<Data>
-  ): ProviderProfileResolver<Data> {
+  wrapResolver(inner: ProviderProfileResolver): ProviderProfileResolver {
     return async (tokens) => {
       const profile = await inner(tokens);
       if (!profile) return profile;
       try {
-        await this.claim(provider, profile);
+        await this.claim(profile);
       } catch (error) {
         logger.error("Sign-in claim failed; continuing sign-in unchanged", {
           event: "auth.claim_failed",
-          provider,
+          provider: profile.data.provider,
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -57,14 +54,9 @@ export class SignInClaim {
     };
   }
 
-  private async claim(provider: SignInProvider, profile: ProviderProfile): Promise<void> {
+  private async claim(profile: ProviderProfile): Promise<void> {
     // Account identity comes from provider-verified data, never mutable user fields.
-    const data = profile.data;
-    if (!data || typeof data !== "object") return;
-    let rawSubject: unknown;
-    if (provider === "github" && "id" in data) rawSubject = data.id;
-    if (provider === "google" && "sub" in data) rawSubject = data.sub;
-    const subject = typeof rawSubject === "string" ? rawSubject.trim() : undefined;
+    const { provider, subject } = profile.data;
     const email = normalizeEmail(profile.user.email);
     // Without a provider-verified email there is nothing to claim.
     if (!subject || !email || !profile.user.emailVerified) return;

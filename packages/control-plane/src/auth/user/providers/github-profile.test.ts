@@ -50,7 +50,7 @@ describe("GitHubSignInProfileResolver", () => {
       image: "https://github.com/images/error/octocat_happy.gif",
       emailVerified: true,
     });
-    expect(result.data).toEqual({ ...(await resolveIdentity.mock.results[0].value), id: "583231" });
+    expect(result.data).toBe(await resolveIdentity.mock.results[0].value);
     expect(result.user).not.toHaveProperty("id");
   });
 
