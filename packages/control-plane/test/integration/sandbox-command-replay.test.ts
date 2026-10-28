@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxCommand } from "../../src/session/types";
+import { SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS } from "../../src/session/websocket-manager";
 import { cleanD1Tables } from "./cleanup";
 import {
   closeWebSocket,
@@ -342,4 +343,81 @@ describe("Sandbox command replay through the live session runtime", () => {
       { status: "processing" },
     ]);
   });
+
+  it.each(["idle", "processing"] as const)(
+    "publishes reconnecting at the heartbeat deadline for an %s session without a new prompt",
+    async (mode) => {
+      const { sessionName, stub, ws } = await setup();
+      const { ws: clientWs } = await openClientWs(sessionName, { subscribe: true });
+      sockets.push(clientWs);
+      if (mode === "processing") {
+        const [{ id: authorId }] = await queryDO<{ id: string }>(
+          stub,
+          "SELECT id FROM participants WHERE user_id = 'user-1'"
+        );
+        await seedMessage(stub, {
+          id: "quiet-prompt",
+          authorId,
+          content: "A quiet running prompt",
+          source: "web",
+          status: "processing",
+          createdAt: Date.now(),
+          startedAt: Date.now(),
+        });
+      }
+      const [{ last_heartbeat: heartbeat }] = await queryDO<{ last_heartbeat: number }>(
+        stub,
+        "SELECT last_heartbeat FROM sandbox"
+      );
+      const deadline = heartbeat + SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS;
+      const beforeDeadline = collectMessages(clientWs, { timeoutMs: NO_COMMAND_WINDOW_MS });
+      await runInSessionDO(stub, async (instance, state) => {
+        const clock = vi.spyOn(Date, "now").mockReturnValue(deadline - 1);
+        try {
+          await instance.alarm();
+          expect(await state.storage.getAlarm()).toBe(deadline);
+        } finally {
+          clock.mockRestore();
+        }
+      });
+      expect(
+        (await beforeDeadline).filter(
+          (message) => message.type === "sandbox_connection" && message.status === "reconnecting"
+        )
+      ).toEqual([]);
+
+      const reconnecting = collectMessages(clientWs, {
+        until: (message) =>
+          message.type === "sandbox_connection" && message.status === "reconnecting",
+      });
+      await runInSessionDO(stub, async (instance) => {
+        const clock = vi.spyOn(Date, "now").mockReturnValue(deadline);
+        try {
+          await instance.alarm();
+        } finally {
+          clock.mockRestore();
+        }
+      });
+      expect(await reconnecting).toContainEqual({
+        type: "sandbox_connection",
+        status: "reconnecting",
+      });
+      expect(await queryDO(stub, "SELECT status FROM sandbox")).toEqual([{ status: "ready" }]);
+      expect(await queryDO(stub, "SELECT status FROM messages")).toEqual(
+        mode === "processing" ? [{ status: "processing" }] : []
+      );
+
+      const connected = collectMessages(clientWs, {
+        until: (message) => message.type === "sandbox_connection" && message.status === "connected",
+      });
+      ws.send(
+        JSON.stringify({
+          type: "heartbeat",
+          sandboxId: SANDBOX_AUTH.sandboxId,
+          timestamp: Date.now(),
+        })
+      );
+      expect(await connected).toContainEqual({ type: "sandbox_connection", status: "connected" });
+    }
+  );
 });

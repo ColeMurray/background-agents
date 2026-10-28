@@ -195,6 +195,7 @@ function recoveryHarness(
       },
     };
     const current = sandboxRepository.getSandbox()!;
+    sandboxRepository.updateSandboxHeartbeat(Date.now());
     wsManager.acceptAndSetSandboxSocket(socket, current.modal_sandbox_id!);
     await sandboxEventProcessor.processSandboxEvent({
       type: "ready",

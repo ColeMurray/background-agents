@@ -88,6 +88,7 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
         "opencodeSessionId": None,
         "harness": "opencode",
         "preservationProtocolVersion": 1,
+        "commandAckVersion": 1,
         "repositories": [
             {
                 "position": 0,

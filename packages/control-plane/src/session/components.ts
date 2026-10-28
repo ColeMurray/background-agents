@@ -666,7 +666,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     log,
     lifecycleManager,
-    commands
+    commands,
+    alarmScheduler
   );
   const pushService = new SandboxPushService(log, wsManager, commands, () =>
     lifecycleManager.pushAdmissionDecision()
@@ -1057,6 +1058,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         alarmDeadlines,
         async () => {
           await wsManager.expireAuthorizationLeases(Date.now());
+          await runtimeEventHandler.checkConnectionHealth();
           await alarmHandler.handle();
         },
         () => alarmScheduler.rearmPending()
@@ -1100,6 +1102,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             await lifecycleManager.replayPendingFatalReport();
             await lifecycleManager.redriveIdleQueue();
             await terminalMessageProjection.rearm();
+            await runtimeEventHandler.checkConnectionHealth();
           },
           {
             name: "alarm.rehydrate",

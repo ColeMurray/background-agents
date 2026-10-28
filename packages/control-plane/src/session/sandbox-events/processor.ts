@@ -129,7 +129,7 @@ export class SessionSandboxEventProcessor {
         this.shutdown.prepared(event);
         return;
       case "heartbeat":
-        this.runtime.handleHeartbeat(context);
+        await this.runtime.handleHeartbeat(context);
         return;
       case "session_title":
         this.runtime.handleSessionTitle(event);

@@ -1,17 +1,18 @@
 import { toSandboxBootPhase, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { SandboxReadiness } from "../../sandbox/lifecycle/ports";
-import type { BackgroundTasks } from "../../platform-ports";
+import type { AlarmScheduler, BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { SessionMessenger } from "../messenger";
-import type { SandboxRuntimeFacts } from "../sandbox-ports";
+import type { SandboxRuntimeFacts, SandboxStateReader } from "../sandbox-ports";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 import { sandboxBootPhaseLogFields } from "../../sandbox/boot-phase";
 import type { SandboxCommandOutbox } from "../sandbox-command-outbox";
+import { SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS } from "../websocket-manager";
 
 /**
  * Sandbox-runtime family: events about the sandbox itself rather than the
@@ -28,7 +29,7 @@ import type { SandboxCommandOutbox } from "../sandbox-command-outbox";
 export class SandboxRuntimeEventHandler {
   constructor(
     private readonly repository: SessionCoreRepository,
-    private readonly sandboxRepository: SandboxRuntimeFacts,
+    private readonly sandboxRepository: SandboxRuntimeFacts & SandboxStateReader,
     private readonly eventRepository: EventRepository,
     private readonly messenger: SessionMessenger,
     private readonly diffService: SessionDiffService,
@@ -46,10 +47,11 @@ export class SandboxRuntimeEventHandler {
     private readonly commands: Pick<
       SandboxCommandOutbox,
       "flush" | "recordProtocol" | "supportsReplay" | "hasUnacknowledgedPrompt"
-    >
+    >,
+    private readonly alarmScheduler: AlarmScheduler
   ) {}
 
-  handleHeartbeat(context: SandboxEventContext): void {
+  async handleHeartbeat(context: SandboxEventContext): Promise<void> {
     this.sandboxRepository.updateSandboxHeartbeat(context.now);
     this.messenger.broadcast({ type: "sandbox_connection", status: "connected" });
     this.backgroundTasks.submit(
@@ -74,6 +76,23 @@ export class SandboxRuntimeEventHandler {
       // clears two minutes after the last update. Refreshing it from here, and
       // not from a timer, is what keeps it from outliving the turn it claims.
       this.refreshSlackActivity(context.processingMessage.id, context.now);
+    }
+    await this.checkConnectionHealth();
+  }
+
+  async checkConnectionHealth(): Promise<void> {
+    const sandbox = this.sandboxRepository.getSandbox();
+    if (sandbox?.status !== "ready" && sandbox?.status !== "snapshotting") return;
+    const deadline =
+      sandbox.last_heartbeat === null
+        ? null
+        : sandbox.last_heartbeat + SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS;
+    if (deadline === null || deadline <= Date.now()) {
+      this.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
+    } else {
+      // Earlier alarms share the slot; re-read the heartbeat on delivery so
+      // a newer heartbeat or replacement generation cannot be marked stale.
+      await this.alarmScheduler.schedule(deadline);
     }
   }
 
@@ -113,6 +132,7 @@ export class SandboxRuntimeEventHandler {
     );
     this.commands.recordProtocol(event.commandAckVersion === 1);
     this.messenger.broadcast({ type: "sandbox_connection", status: "connected" });
+    await this.checkConnectionHealth();
     await this.commands.flush();
     if (!becameReady) return;
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {

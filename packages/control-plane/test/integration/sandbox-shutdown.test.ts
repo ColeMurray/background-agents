@@ -22,6 +22,7 @@ import {
 } from "../../src/session/sandbox-shutdown-repository";
 import { SessionAttachmentRepository } from "../../src/session/session-attachment-repository";
 import { SessionCoreRepository } from "../../src/session/session-core-repository";
+import { SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS } from "../../src/session/websocket-manager";
 import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
@@ -710,7 +711,8 @@ describe("sandbox graceful shutdown wiring", () => {
           supportsReplay: () => false,
           flush: async () => {},
           hasUnacknowledgedPrompt: () => false,
-        }
+        },
+        { schedule: async () => {}, cancel: async () => {}, current: async () => null }
       );
       await runtimeHandler.handleReady(
         {
@@ -1643,7 +1645,13 @@ describe("unconfirmed checkpoint across a Durable Object reset", () => {
         undefined
       );
       await vi.waitFor(async () =>
-        expect(await durableState.storage.getAlarm()).toBe(op.settleAtMs)
+        expect(await durableState.storage.getAlarm()).toBe(
+          Math.min(
+            op.settleAtMs,
+            componentsOf(instance).sandboxRepository.getSandbox()!.last_heartbeat! +
+              SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS
+          )
+        )
       );
       // Its settle time arrives.
       const record = new SandboxShutdownRepository(durableState.storage.sql).read()!;

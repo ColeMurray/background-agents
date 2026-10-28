@@ -157,7 +157,12 @@ export class SandboxCommandOutbox {
         "UPDATE sandbox_command_outbox SET attempted = 1 WHERE command_id = ?",
         row.command_id
       );
-      this.deps.wsManager.send(ws, payload);
+      if (!this.deps.wsManager.send(ws, payload) && !current.attempted) {
+        this.deps.sql.exec(
+          "UPDATE sandbox_command_outbox SET attempted = 0 WHERE command_id = ?",
+          row.command_id
+        );
+      }
     }
   }
 

@@ -69,6 +69,7 @@ function setup() {
       message_id: string | null;
       payload: string;
       encrypted: number;
+      attempted: number;
       expires_at: number;
     }>;
   return { db, sql, ws, sandbox, message, messageRepository, wsManager, deps, outbox, rows };
@@ -163,6 +164,64 @@ describe("SandboxCommandOutbox", () => {
       expect(h.wsManager.send).toHaveBeenCalledOnce();
     }
   );
+
+  it.each(["prompt", "push", "stop"] as const)(
+    "retries a held %s after a failed first flush and legacy reconnect",
+    async (type) => {
+      h.outbox.recordProtocol(false);
+      h.sandbox.last_heartbeat = null;
+      if (type === "push") {
+        expect(await h.outbox.sendPush(h.ws, push, "push-1", Date.now() + 1000)).toBe(true);
+      } else {
+        if (type === "stop") h.message.status = "failed";
+        expect(
+          h.outbox.send(
+            h.ws,
+            type === "prompt"
+              ? prompt
+              : {
+                  type: "stop",
+                  messageId: prompt.messageId,
+                }
+          )
+        ).toBe(true);
+      }
+      const commandId = h.rows()[0].command_id;
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      h.sandbox.last_heartbeat = Date.now();
+      h.wsManager.send.mockReturnValueOnce(false);
+      await h.outbox.flush();
+      expect(h.rows()[0]).toMatchObject({ command_id: commandId, attempted: 0 });
+
+      const replacement = { readyState: 1 } as SessionWebSocket;
+      h.sandbox.active_socket_id = "legacy-replacement";
+      h.wsManager.getSandboxCommandTarget.mockReturnValue({
+        kind: "dispatch",
+        socket: replacement,
+      });
+      const recovered = new SandboxCommandOutbox(h.deps);
+      recovered.recordProtocol(false);
+      await recovered.flush();
+      expect(h.wsManager.send).toHaveBeenCalledTimes(2);
+      const [, payload] = h.wsManager.send.mock.calls[1];
+      expect(h.wsManager.send.mock.calls[1][0]).toBe(replacement);
+      expect(JSON.parse(payload as string)).toMatchObject({ type, commandId });
+      expect(h.rows()[0].attempted).toBe(1);
+      await recovered.flush();
+      expect(h.wsManager.send).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("does not restore first-send eligibility when an already-attempted replay fails", async () => {
+    h.outbox.send(h.ws, prompt);
+    h.wsManager.send.mockReturnValueOnce(false);
+    await h.outbox.flush();
+    expect(h.rows()[0].attempted).toBe(1);
+    h.sandbox.active_socket_id = "legacy-replacement";
+    h.outbox.recordProtocol(false);
+    await h.outbox.flush();
+    expect(h.wsManager.send).toHaveBeenCalledTimes(2);
+  });
 
   it("replays in insertion order and retains rows when a replay send fails", async () => {
     h.outbox.send(h.ws, { ...prompt, commandId: "z-first" });

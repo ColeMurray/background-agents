@@ -106,6 +106,7 @@ async function reconstructedPendingVm(instance: SessionDO, state: DurableObjectS
     clientId: "observing-browser",
     authorizationExpiresAt: Date.now() + SANDBOX_TIMEOUT_MS,
   });
+  restarted.internals.sandboxRepository.updateSandboxHeartbeat(Date.now());
   wsManager.acceptAndSetSandboxSocket(bridge, generation.sandboxId);
 
   const result: ResolveSandboxResult = {
