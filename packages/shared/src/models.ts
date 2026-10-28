@@ -355,10 +355,22 @@ export const MODEL_CATALOG = [
     category: "Kimi Coding Plan",
     enabledByDefault: false,
     models: [
+      { id: "kimi-coding-plan/k3.1-pro", name: "Kimi K3.1 Pro", description: "Kimi Coding Plan" },
+      {
+        id: "kimi-coding-plan/k3.1-pro-highspeed",
+        name: "Kimi K3.1 Pro Highspeed",
+        description: "Kimi Coding Plan",
+      },
       { id: "kimi-coding-plan/k3", name: "Kimi K3", description: "Kimi Coding Plan" },
+      { id: "kimi-coding-plan/k3-256k", name: "Kimi K3 256K", description: "Kimi Coding Plan" },
       {
         id: "kimi-coding-plan/kimi-for-coding",
         name: "Kimi for Coding",
+        description: "Kimi Coding Plan",
+      },
+      {
+        id: "kimi-coding-plan/kimi-for-coding-highspeed",
+        name: "Kimi for Coding Highspeed",
         description: "Kimi Coding Plan",
       },
     ],

@@ -96,8 +96,12 @@ const GO_MODELS = [
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
 const KIMI_CODING_PLAN_MODELS = [
+  "kimi-coding-plan/k3.1-pro",
+  "kimi-coding-plan/k3.1-pro-highspeed",
   "kimi-coding-plan/k3",
+  "kimi-coding-plan/k3-256k",
   "kimi-coding-plan/kimi-for-coding",
+  "kimi-coding-plan/kimi-for-coding-highspeed",
 ] as const;
 const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5.3"] as const;
 

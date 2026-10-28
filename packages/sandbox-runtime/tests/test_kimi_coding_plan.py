@@ -45,8 +45,12 @@ async def test_opencode_kimi_coding_plan_provider(tmp_path, monkeypatch, plan_ke
                 "apiKey": "{env:KIMI_CODE_API_KEY}",
             },
             "models": {
+                "k3.1-pro": {"name": "Kimi K3.1 Pro"},
+                "k3.1-pro-highspeed": {"name": "Kimi K3.1 Pro Highspeed"},
                 "k3": {"name": "Kimi K3"},
+                "k3-256k": {"name": "Kimi K3 256K"},
                 "kimi-for-coding": {"name": "Kimi for Coding"},
+                "kimi-for-coding-highspeed": {"name": "Kimi for Coding Highspeed"},
             },
         }
         assert plan_key not in spawn.call_args.kwargs["env"]["OPENCODE_CONFIG_CONTENT"]

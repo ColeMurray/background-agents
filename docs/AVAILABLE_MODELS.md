@@ -159,10 +159,14 @@ in `KIMI_CODE_API_KEY` as a global or repository secret. They use the overseas c
 `https://api.kimi.ai/coding/v1`, through OpenCode. This is separate from Kimi models billed through
 OpenCode Zen or Go.
 
-| Model ID                           | Display name    | Description      | Reasoning efforts | Default effort |
-| ---------------------------------- | --------------- | ---------------- | ----------------- | -------------- |
-| `kimi-coding-plan/k3`              | Kimi K3         | Kimi Coding Plan | Not supported     | N/A            |
-| `kimi-coding-plan/kimi-for-coding` | Kimi for Coding | Kimi Coding Plan | Not supported     | N/A            |
+| Model ID                                     | Display name              | Description      | Reasoning efforts | Default effort |
+| -------------------------------------------- | ------------------------- | ---------------- | ----------------- | -------------- |
+| `kimi-coding-plan/k3.1-pro`                  | Kimi K3.1 Pro             | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-coding-plan/k3.1-pro-highspeed`        | Kimi K3.1 Pro Highspeed   | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-coding-plan/k3`                        | Kimi K3                   | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-coding-plan/k3-256k`                   | Kimi K3 256K              | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-coding-plan/kimi-for-coding`           | Kimi for Coding           | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-coding-plan/kimi-for-coding-highspeed` | Kimi for Coding Highspeed | Kimi Coding Plan | Not supported     | N/A            |
 
 ## Z.AI Coding Plan
 
