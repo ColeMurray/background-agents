@@ -3,6 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
 import type { AutomationListItem } from "@open-inspect/shared/types/automations";
@@ -73,6 +74,10 @@ describe("AutomationsList navigation", () => {
     ["Enabled", true, 1],
     ["Enabled", false, 0],
     ["Enabled", true, 0],
+    ["No runs", false, 1],
+    ["No runs", true, 1],
+    ["No runs", false, 0],
+    ["No runs", true, 0],
   ] as const)(
     "preserves native navigation for %s (selected=%s, click detail=%s)",
     (text, hasSelection, detail) => {
@@ -381,6 +386,135 @@ describe("AutomationsList actions", () => {
 });
 
 describe("AutomationsList execution activity", () => {
+  it.each([
+    [undefined, false],
+    [undefined, true],
+    ["team/one & two", false],
+    ["team/one & two", true],
+  ] as const)("links activity to the detail page (team=%s, history=%s)", (teamId, hasHistory) => {
+    render(
+      <AutomationsList
+        teamId={teamId}
+        canCreate
+        automations={[
+          makeAutomation({
+            id: "auto/1 ?",
+            recentExecutions: hasHistory
+              ? [
+                  { id: "inv-new", status: "failed", createdAt: 200 },
+                  { id: "inv-old", status: "completed", createdAt: 100 },
+                ]
+              : [],
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    const links = hasHistory
+      ? within(screen.getByRole("list")).getAllByRole("link")
+      : [screen.getByRole("link", { name: "No runs" })];
+    expect(links).toHaveLength(hasHistory ? 2 : 1);
+    const href = `/automations/auto%2F1%20%3F${teamId ? "?teamId=team%2Fone+%26+two" : ""}`;
+    const rowLink = screen.getByRole("link", { name: "View Nightly review" });
+    expect(rowLink).toHaveAttribute("href", href);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", href);
+      expect(link).toHaveAttribute("draggable", "false");
+      expect(link.tabIndex).toBe(0);
+      expect(link.querySelector("a, button, [tabindex]")).toBeNull();
+      expect(rowLink).not.toContainElement(link);
+    }
+    if (hasHistory) {
+      expect(links[0]).toHaveAccessibleName(/^Completed,/);
+      expect(links[1]).toHaveAccessibleName(/^Failed,/);
+      expect(screen.getByRole("list").querySelector("li[tabindex]")).toBeNull();
+    }
+  });
+
+  it.each([
+    [false, 1],
+    [true, 1],
+    [false, 0],
+    [true, 0],
+  ] as const)(
+    "preserves native marker navigation (selected=%s, click detail=%s)",
+    (hasSelection, detail) => {
+      render(
+        <AutomationsList
+          canCreate
+          automations={[
+            makeAutomation({
+              recentExecutions: [{ id: "inv-1", status: "completed", createdAt: 100 }],
+            }),
+          ]}
+          emptyState={{ kind: "no-automations" }}
+          onPause={noop}
+          onResume={noop}
+          onTrigger={noop}
+          onDelete={noop}
+        />
+      );
+      if (hasSelection) {
+        const range = document.createRange();
+        range.selectNodeContents(screen.getByText("Nightly review"));
+        window.getSelection()!.addRange(range);
+      }
+      let navigationPrevented: boolean | undefined;
+      window.addEventListener(
+        "click",
+        (event) => {
+          navigationPrevented = event.defaultPrevented;
+          event.preventDefault();
+        },
+        { once: true }
+      );
+      const link = screen.getByRole("link", { name: /^Completed,/ });
+      fireEvent.click(link.firstElementChild!, { detail, ctrlKey: true });
+      expect(navigationPrevented).toBe(hasSelection && detail > 0);
+    }
+  );
+
+  it("tabs directly between marker links and activates a focused marker with Enter", async () => {
+    const user = userEvent.setup();
+    render(
+      <AutomationsList
+        canCreate
+        automations={[
+          makeAutomation({
+            recentExecutions: [
+              { id: "inv-new", status: "failed", createdAt: 200 },
+              { id: "inv-old", status: "completed", createdAt: 100 },
+            ],
+          }),
+        ]}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+    screen.getByRole("link", { name: "Enabled" }).focus();
+    await user.tab();
+    expect(screen.getByRole("link", { name: /^Completed,/ })).toHaveFocus();
+    await user.tab();
+    const failedLink = screen.getByRole("link", { name: /^Failed,/ });
+    expect(failedLink).toHaveFocus();
+    const onNavigate = vi.fn((event: Event) => {
+      expect(event.defaultPrevented).toBe(false);
+      event.preventDefault();
+    });
+    window.addEventListener("click", onNavigate, { once: true });
+    await user.keyboard("{Enter}");
+    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(onNavigate.mock.calls[0][0].target).toBe(failedLink);
+  });
+
   it("renders an unauthorized execution as a terminal denial with an accessible label", () => {
     render(
       <AutomationsList
@@ -401,8 +535,12 @@ describe("AutomationsList execution activity", () => {
     const execution = screen.getByRole("listitem", { name: /^Unauthorized,/ });
     expect(execution).toHaveAttribute("title", expect.stringContaining("Unauthorized"));
     expect(execution).toHaveAttribute("data-status-shape", "unauthorized");
-    expect(execution.firstElementChild).toHaveAttribute("class", "h-px w-2 bg-current");
-    expect(execution).toHaveAttribute("tabindex", "0");
+    expect(within(execution).getByRole("link").firstElementChild).toHaveAttribute(
+      "class",
+      "h-px w-2 bg-current"
+    );
+    expect(execution).not.toHaveAttribute("tabindex");
+    expect(within(execution).getByRole("link")).toHaveAccessibleName(/^Unauthorized,/);
   });
 
   it("shows recent execution statuses from oldest to newest", () => {
@@ -435,7 +573,7 @@ describe("AutomationsList execution activity", () => {
     expect(activity.children[1]).toHaveAttribute("aria-label", expect.stringContaining("Failed"));
     expect(activity.children[0]).toHaveAttribute("data-status-shape", "completed");
     expect(activity.children[1]).toHaveAttribute("data-status-shape", "failed");
-    expect(activity.children[0]).toHaveAttribute("tabindex", "0");
+    expect(activity.children[0]).not.toHaveAttribute("tabindex");
   });
 
   it("shows an explicit empty history state", () => {
