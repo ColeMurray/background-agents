@@ -144,12 +144,16 @@ describe("Linear actor enrollment", () => {
     }
   );
 
-  it.each(["request", "response body"])(
+  it.each(["profile request", "profile response body", "request", "response body"])(
     "fails closed when the enrollment %s stalls",
     async (phase) => {
-      vi.stubGlobal("fetch", createLinearFetchMock({ graphql: () => Response.json({ data: {} }) }));
       const deadline = new AbortController();
-      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const defaultTimeout = AbortSignal.timeout.bind(AbortSignal);
+      const timeoutSpy = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockImplementation((timeoutMs) =>
+          timeoutMs === ACTOR_ENROLLMENT_TIMEOUT_MS ? deadline.signal : defaultTimeout(timeoutMs)
+        );
       let markStalled!: () => void;
       const stalled = new Promise<void>((resolve) => {
         markStalled = resolve;
@@ -158,6 +162,20 @@ describe("Linear actor enrollment", () => {
         new Promise<never>(() => {
           markStalled();
         });
+      let profileSignal: AbortSignal | null | undefined;
+      const profileResponse = Response.json({ data: {} });
+      if (phase === "profile response body") {
+        vi.spyOn(profileResponse, "json").mockImplementation(neverCompletes);
+      }
+      vi.stubGlobal(
+        "fetch",
+        createLinearFetchMock({
+          graphql: ({ signal }) => {
+            profileSignal = signal;
+            return phase === "profile request" ? neverCompletes() : profileResponse;
+          },
+        })
+      );
       const response = Response.json({}, { status: 403 });
       if (phase === "response body") vi.spyOn(response, "json").mockImplementation(neverCompletes);
       const request = vi.fn(async (_url: string, init: RequestInit) => {
@@ -172,7 +190,8 @@ describe("Linear actor enrollment", () => {
       deadline.abort(new DOMException("timed out", "TimeoutError"));
 
       expect(await enrollment).toContain("Cannot verify");
-      expect(request).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledTimes(phase.startsWith("profile") ? 0 : 1);
+      expect(profileSignal).toMatchObject({ aborted: true });
       expect(timeoutSpy).toHaveBeenCalledWith(ACTOR_ENROLLMENT_TIMEOUT_MS);
       expect(
         timeoutSpy.mock.calls.filter(([timeoutMs]) => timeoutMs === ACTOR_ENROLLMENT_TIMEOUT_MS)

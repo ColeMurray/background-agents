@@ -28,8 +28,8 @@ export async function enrollLinearActor(
   const context = { trace_id: traceId, actor: `linear:${actorUserId}` };
   let httpStatus: number | undefined;
   try {
-    const profile = await fetchUser(client, actorUserId);
     const signal = AbortSignal.timeout(ACTOR_ENROLLMENT_TIMEOUT_MS);
+    const profile = await abortable(fetchUser(client, actorUserId, signal), signal);
     const response = await abortable(
       signedControlPlaneFetch(
         env,

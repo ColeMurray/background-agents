@@ -385,7 +385,8 @@ export async function getRepoSuggestions(
  */
 export async function fetchUser(
   client: LinearApiClient,
-  userId: string
+  userId: string,
+  callerSignal?: AbortSignal
 ): Promise<{ id: string; name: string; email: string | null } | null> {
   try {
     const data = await linearGraphQL(
@@ -399,7 +400,8 @@ export async function fetchUser(
         }
       }
     `,
-      { id: userId }
+      { id: userId },
+      callerSignal
     );
 
     const parsed = linearUserResponseSchema.safeParse(data);
