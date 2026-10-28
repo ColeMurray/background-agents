@@ -196,11 +196,14 @@ describe.each(["slack", "linear"] as const)("%s actor admission", (provider) => 
   });
 
   it("admits known actors without reapplying admission or requiring an email", async () => {
-    await new UserStore(env.DB).resolveOrCreateUser({
-      provider,
-      providerUserId: "new-actor",
-      providerEmail: "ada@elsewhere.test",
-    });
+    await new UserStore(env.DB).resolveOrCreateUser(
+      {
+        provider,
+        providerUserId: "new-actor",
+        providerEmail: "ada@elsewhere.test",
+      },
+      () => {}
+    );
     expect((await actorRequest(provider, {})).status).toBe(204);
   });
 });
@@ -216,10 +219,13 @@ describe("GitHub actor admission", () => {
   });
 
   it("admits a known GitHub actor without requiring new admission evidence", async () => {
-    await new UserStore(env.DB).resolveOrCreateUser({
-      provider: "github",
-      providerUserId: "new-actor",
-    });
+    await new UserStore(env.DB).resolveOrCreateUser(
+      {
+        provider: "github",
+        providerUserId: "new-actor",
+      },
+      () => {}
+    );
     expect((await actorRequest("github", {})).status).toBe(204);
   });
 });

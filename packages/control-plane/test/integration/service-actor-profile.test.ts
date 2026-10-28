@@ -57,7 +57,7 @@ describe("known service actor profile claims", () => {
   });
 
   async function enrollNameless(provider: "slack" | "linear", providerUserId: string) {
-    return users.resolveOrCreateUser({ provider, providerUserId });
+    return users.resolveOrCreateUser({ provider, providerUserId }, () => {});
   }
 
   it("refuses to enroll a new Slack actor without an attested email and writes nothing", async () => {
@@ -234,13 +234,16 @@ describe("known service actor profile claims", () => {
   });
 
   it("keeps a known actor's existing name, avatar, and email", async () => {
-    const known = await users.resolveOrCreateUser({
-      provider: "linear",
-      providerUserId: "LIN-NAMED",
-      displayName: "Chosen Name",
-      providerEmail: "chosen@corp.test",
-      avatarUrl: "https://avatars.linear.test/kept.png",
-    });
+    const known = await users.resolveOrCreateUser(
+      {
+        provider: "linear",
+        providerUserId: "LIN-NAMED",
+        displayName: "Chosen Name",
+        providerEmail: "chosen@corp.test",
+        avatarUrl: "https://avatars.linear.test/kept.png",
+      },
+      () => {}
+    );
 
     const created = await createSession("linear-bot", "linear:LIN-NAMED", {
       actorDisplayName: "linear-handle",

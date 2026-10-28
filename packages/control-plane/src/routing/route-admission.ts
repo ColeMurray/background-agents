@@ -444,16 +444,21 @@ async function finalizeServiceActor(
     const admissionPolicy = new AdmissionPolicy(admissionPolicyConfigFromEnv(env));
     // Resolve existing accounts first so linking preserves role and suspension;
     // the store checks admission immediately before creating a new user.
-    const users = new UserStore(ctx.db, () =>
-      admissionPolicy.requireBotEnrollment(email ? [email] : [])
+    const user = await new UserStore(ctx.db).resolveOrCreateUser(
+      {
+        provider: actor.provider,
+        providerUserId: actor.providerUserId,
+        displayName: claims?.displayName,
+        providerEmail: email ?? undefined,
+        avatarUrl: claims?.avatarUrl,
+      },
+      (identity) => {
+        const attestedEmail = isEmailAttestingProvider(identity.provider)
+          ? normalizeEmail(identity.providerEmail)
+          : null;
+        admissionPolicy.requireBotEnrollment(attestedEmail ? [attestedEmail] : []);
+      }
     );
-    const user = await users.resolveOrCreateUser({
-      provider: actor.provider,
-      providerUserId: actor.providerUserId,
-      displayName: claims?.displayName,
-      providerEmail: email ?? undefined,
-      avatarUrl: claims?.avatarUrl,
-    });
     ctx.principal = {
       ...principal,
       actor: { ...actor, canonicalUserId: user.id },
