@@ -152,7 +152,16 @@ export interface SessionMemorySelection {
  */
 export type SessionMemoryPin =
   | { kind: "resolved"; value: SessionMemorySelection }
-  | { kind: "inherited"; parentSessionId: string; promptAuthorUserId: string | null };
+  | {
+      kind: "inherited";
+      parentSessionId: string;
+      promptAuthorUserId: string | null;
+      /**
+       * The child's token estimate when it differs from the parent's because personal records are
+       * left out (`SessionMemorySelectionStore.inheritedEstimatedTokens`); absent keeps the parent's.
+       */
+      estimatedTokens?: number | null;
+    };
 
 /** How a pinned item's record has changed since the selection was made. */
 export interface PinnedItemDrift {

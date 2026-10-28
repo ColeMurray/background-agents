@@ -358,6 +358,8 @@ describe("handlePromptChild", () => {
       scmLogin: "second-user",
       scmName: "Second User",
       scmEmail: "second@example.com",
+      // An Autofix turn: its reviewer maps to an account, but the turn was queued under none.
+      promptAccountUserId: null,
     };
     const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async (sessionId, path, init) => {
       expect(sessionId).toBe("child");
@@ -369,7 +371,9 @@ describe("handlePromptChild", () => {
           canonicalUserId: "canonical-2",
           scmLogin: "second-user",
         },
+        promptAccountUserId: null,
       });
+      expect(forwarded.author).not.toHaveProperty("promptAccountUserId");
       expect(forwarded.author).not.toHaveProperty("scmAccessTokenEncrypted");
       return Response.json({ messageId: "message-1", status: "queued" });
     });

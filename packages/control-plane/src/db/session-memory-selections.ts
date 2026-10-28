@@ -6,7 +6,7 @@ import {
   type MemoryType,
 } from "@open-inspect/shared/types/memories";
 import { partitionFromColumns, type PartitionColumns } from "../memory/partition";
-import { emptySelection } from "../memory/selection";
+import { emptySelection, estimateSelectionTokens } from "../memory/selection";
 import type {
   MemorySession,
   PinnedItemDrift,
@@ -69,7 +69,12 @@ export class SessionMemorySelectionStore {
   bindPinned(sessionId: string, pinned: SessionMemoryPin): SqlStatement[] {
     return pinned.kind === "resolved"
       ? this.bindInsert(sessionId, pinned.value)
-      : this.bindCopy(sessionId, pinned.parentSessionId, pinned.promptAuthorUserId);
+      : this.bindCopy(
+          sessionId,
+          pinned.parentSessionId,
+          pinned.promptAuthorUserId,
+          pinned.estimatedTokens ?? null
+        );
   }
 
   private bindInsert(sessionId: string, manifest: SessionMemorySelection): SqlStatement[] {
@@ -112,13 +117,14 @@ export class SessionMemorySelectionStore {
   /**
    * Copy the parent's selection into a child spawned on `promptAuthorUserId`'s prompt. The parent
    * owner's personal records and ownership carry over only when that prompt was theirs; any other
-   * author's child gets the shared records alone, and its token estimate drops their share. The
+   * author's child gets the shared records alone, with `estimatedTokens` measured for them. The
    * hash and character counts stay the parent's, describing the selection that was made.
    */
   private bindCopy(
     childId: string,
     parentId: string,
-    promptAuthorUserId: string | null
+    promptAuthorUserId: string | null,
+    estimatedTokens: number | null
   ): SqlStatement[] {
     return [
       this.db
@@ -127,15 +133,10 @@ export class SessionMemorySelectionStore {
       (session_id, selection_version, manifest_sha256, resolved_at, personal_owner_user_id, directive_chars, catalog_chars, estimated_tokens, omitted_count)
       SELECT ?, selection_version, manifest_sha256, resolved_at,
         CASE WHEN personal_owner_user_id = ? THEN personal_owner_user_id END,
-        directive_chars, catalog_chars,
-        CASE WHEN personal_owner_user_id = ? THEN estimated_tokens
-          ELSE estimated_tokens - COALESCE((SELECT SUM(i.estimated_tokens) FROM session_memory_items i
-            JOIN memories m ON m.id = i.memory_id
-            WHERE i.session_id = parent.session_id AND m.partition_type = 'personal'), 0) END,
-        omitted_count
-      FROM session_memory_manifests parent WHERE session_id = ?`
+        directive_chars, catalog_chars, COALESCE(?, estimated_tokens), omitted_count
+      FROM session_memory_manifests WHERE session_id = ?`
         )
-        .bind(childId, promptAuthorUserId, promptAuthorUserId, parentId),
+        .bind(childId, promptAuthorUserId, estimatedTokens, parentId),
       this.db
         .prepare(
           `INSERT INTO session_memory_items (session_id, position, memory_id, revision_id, scope_json, inclusion, estimated_tokens)
@@ -148,6 +149,32 @@ export class SessionMemorySelectionStore {
         )
         .bind(childId, parentId, promptAuthorUserId),
     ];
+  }
+
+  /**
+   * The token estimate for a child spawned on `promptAuthorUserId`'s prompt that leaves out the
+   * parent owner's personal records, measured like any manifest's: the records it keeps, rendered.
+   * Null when the child keeps the parent's whole selection, and with it the parent's estimate.
+   */
+  async inheritedEstimatedTokens(
+    parentId: string,
+    promptAuthorUserId: string | null
+  ): Promise<number | null> {
+    const header = await this.db
+      .prepare("SELECT personal_owner_user_id FROM session_memory_manifests WHERE session_id = ?")
+      .bind(parentId)
+      .first<{ personal_owner_user_id: string | null }>();
+    const owner = header?.personal_owner_user_id ?? null;
+    if (owner === null || owner === promptAuthorUserId) return null;
+    const parent = await this.loadSelection(parentId);
+    if (!parent) return null;
+    const items = parent.selection.items.filter(
+      (_item, index) => parent.entries[index]?.partition.type !== "personal"
+    );
+    return estimateSelectionTokens(
+      { ...parent.selection, personalOwnerUserId: null, items },
+      parent.entries
+    );
   }
 
   /**

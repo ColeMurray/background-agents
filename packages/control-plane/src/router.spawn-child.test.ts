@@ -652,6 +652,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         canonicalUserId: "canonical-user-2",
         scmLogin: "second-user",
       },
+      // The spawning prompt was queued before its author was linked to an account.
+      promptAccountUserId: null,
     };
     const store = makeStore("canonical-user-1", activeAuthorContext as never);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
@@ -677,6 +679,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     await expect(promptRequest.json()).resolves.toMatchObject({
       authorId: "slack:U2",
       canonicalUserId: "canonical-user-2",
+      promptAccountUserId: null,
       source: "agent",
     });
   });

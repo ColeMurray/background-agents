@@ -183,10 +183,16 @@ export async function selectWithinBudget(
     omittedCount,
     items,
   };
-  selection.estimatedTokens = Math.ceil(
-    renderMemorySection(selection, selected, DEFAULT_HARNESS).length / 4
-  );
+  selection.estimatedTokens = estimateSelectionTokens(selection, selected);
   return selection;
+}
+
+/** A selection's token estimate: its rendered text, the basis every pinned manifest records. */
+export function estimateSelectionTokens(
+  selection: SessionMemorySelection,
+  entries: readonly RenderableRevision[]
+): number {
+  return Math.ceil(renderMemorySection(selection, entries, DEFAULT_HARNESS).length / 4);
 }
 
 /** The selection of a session that predates memory (or has nothing to pin). */

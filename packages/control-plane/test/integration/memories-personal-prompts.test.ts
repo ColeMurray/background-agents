@@ -10,6 +10,7 @@ import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { UserStore } from "../../src/db/user-store";
+import { estimateSelectionTokens } from "../../src/memory/selection";
 import { resolvedPin } from "../../src/session/pinned";
 import { cleanD1Tables } from "./cleanup";
 import {
@@ -87,8 +88,17 @@ const AUTOFIX_FEEDBACK = {
   attemptLimit: 10,
 };
 
-/** Make the Autofix turn the one processing, as if reviewer 7's GitHub account mapped to OWNER. */
-async function processAutofixMappedToOwner(stub: DurableObjectStub) {
+/**
+ * Make the Autofix turn the one processing, as if reviewer 7's GitHub account mapped to OWNER:
+ * linked after the turn was queued, or before it with `linkedFirst`.
+ */
+async function processAutofixMappedToOwner(stub: DurableObjectStub, linkedFirst = false) {
+  if (linkedFirst)
+    await queryDO(
+      stub,
+      "INSERT INTO participants (id, user_id, canonical_user_id, role, joined_at) VALUES ('reviewer-7', 'github:7', ?, 'member', 1)",
+      OWNER
+    );
   const response = await stub.fetch("http://internal/internal/autofix", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -101,11 +111,12 @@ async function processAutofixMappedToOwner(stub: DurableObjectStub) {
        THEN 'processing' ELSE 'completed' END, started_at = COALESCE(started_at, ?)`,
     Date.now()
   );
-  await queryDO(
-    stub,
-    "UPDATE participants SET canonical_user_id = ? WHERE user_id = 'github:7'",
-    OWNER
-  );
+  if (!linkedFirst)
+    await queryDO(
+      stub,
+      "UPDATE participants SET canonical_user_id = ? WHERE user_id = 'github:7'",
+      OWNER
+    );
 }
 
 /** Make the session's sandbox ready with a terminal and an editor whose credentials it hands out. */
@@ -471,15 +482,64 @@ describe("child sessions spawned through the route", () => {
     return stub;
   }
 
-  async function spawn(parentId: string) {
+  /** Spawn a child on the parent's processing prompt, returning the child's ID. */
+  async function spawnChild(parentId: string) {
     const response = await SELF.fetch(`${BASE}/sessions/${parentId}/children`, {
       method: "POST",
       headers: { Authorization: `Bearer token-${parentId}`, "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Child", prompt: "Look into it" }),
     });
     expect(response.status).toBe(201);
-    const { sessionId } = (await response.json()) as { sessionId: string };
-    return (await new SessionMemorySelectionStore(env.DB).loadSelection(sessionId))!.selection;
+    return ((await response.json()) as { sessionId: string }).sessionId;
+  }
+
+  async function spawn(parentId: string) {
+    const childId = await spawnChild(parentId);
+    return (await new SessionMemorySelectionStore(env.DB).loadSelection(childId))!.selection;
+  }
+
+  /** The estimate a session's pinned memory renders to, the basis every manifest records. */
+  async function renderedEstimate(sessionId: string) {
+    const loaded = (await new SessionMemorySelectionStore(env.DB).loadSelection(sessionId))!;
+    return estimateSelectionTokens(loaded.selection, loaded.entries);
+  }
+
+  /** Relay a follow-up from the parent's processing prompt to its child. */
+  async function followUp(parentId: string, childId: string) {
+    const response = await SELF.fetch(`${BASE}/sessions/${parentId}/children/${childId}/prompt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer token-${parentId}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Follow up" }),
+    });
+    expect(response.status).toBe(200);
+  }
+
+  /** The account the child recorded for its prompt with this content. */
+  async function promptAccount(childId: string, content: string) {
+    const rows = await queryDO<{ author_canonical_user_id: string | null }>(
+      env.SESSION.get(env.SESSION.idFromName(childId)),
+      "SELECT author_canonical_user_id FROM messages WHERE content = ?",
+      content
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0].author_canonical_user_id;
+  }
+
+  /** Try a personal write from the child while its follow-up is the prompt processing. */
+  async function personalWriteOnFollowUp(childId: string) {
+    const stub = env.SESSION.get(env.SESSION.idFromName(childId));
+    await seedSandboxAuthHash(stub, { authToken: `token-${childId}`, sandboxId: `sb-${childId}` });
+    await queryDO(
+      stub,
+      `UPDATE messages SET status = CASE WHEN content = 'Follow up' THEN 'processing' ELSE 'completed' END,
+         started_at = COALESCE(started_at, ?)`,
+      Date.now()
+    );
+    return SELF.fetch(`${BASE}/sessions/${childId}/sandbox-memory`, {
+      method: "POST",
+      headers: { Authorization: `Bearer token-${childId}`, "Content-Type": "application/json" },
+      body: JSON.stringify(personalWrite),
+    });
   }
 
   it("copies the owner's personal memory only into a child spawned on their own prompt", async () => {
@@ -495,12 +555,69 @@ describe("child sessions spawned through the route", () => {
     expect(teammateChild.items).toEqual([]);
   });
 
+  it("measures a child's token estimate on the records it keeps", async () => {
+    await personalMemory();
+    await parent("estimate-by-owner", OWNER);
+    const ownerChild = await spawnChild("estimate-by-owner");
+    await parent("estimate-by-teammate", TEAMMATE);
+    const teammateChild = await spawnChild("estimate-by-teammate");
+
+    const selections = new SessionMemorySelectionStore(env.DB);
+    const parentEstimate = (await selections.loadSelection("estimate-by-teammate"))!.selection
+      .estimatedTokens;
+    expect((await selections.loadSelection(ownerChild))!.selection.estimatedTokens).toBe(
+      parentEstimate
+    );
+    // Leaving out the personal record also leaves out its rendered heading and formatting.
+    const teammateEstimate = (await selections.loadSelection(teammateChild))!.selection
+      .estimatedTokens;
+    expect(teammateEstimate).toBe(await renderedEstimate(teammateChild));
+    expect(teammateEstimate).toBeLessThan(parentEstimate);
+  });
+
   it("never carries personal memory into a child spawned on an Autofix turn", async () => {
     await personalMemory();
     const stub = await parent("spawned-by-autofix", OWNER);
     await processAutofixMappedToOwner(stub);
-    const autofixChild = await spawn("spawned-by-autofix");
+    const autofixChildId = await spawnChild("spawned-by-autofix");
+    const autofixChild = (await new SessionMemorySelectionStore(env.DB).loadSelection(
+      autofixChildId
+    ))!.selection;
     expect(autofixChild.personalOwnerUserId).toBeNull();
     expect(autofixChild.items).toEqual([]);
+    // Its first prompt counts as the Autofix turn did: no one's.
+    expect(await promptAccount(autofixChildId, "Look into it")).toBeNull();
+  });
+
+  it.each([
+    ["after the turn was queued", "follow-up-autofix-linked-later", false],
+    ["before the turn was queued", "follow-up-autofix-linked-first", true],
+  ])(
+    "relays a follow-up from an Autofix turn as no one's, its reviewer linked to the owner %s",
+    async (_when, parentId, linkedFirst) => {
+      await personalMemory();
+      const stub = await parent(parentId, OWNER);
+      const childId = await spawnChild(parentId);
+      await processAutofixMappedToOwner(stub, linkedFirst);
+
+      await followUp(parentId, childId);
+      expect(await promptAccount(childId, "Follow up")).toBeNull();
+      const write = await personalWriteOnFollowUp(childId);
+      expect(write.status).toBe(403);
+      expect(await write.text()).toContain("only on the session owner's own prompts");
+    }
+  );
+
+  it("relays a follow-up from the owner's own prompt as theirs", async () => {
+    await personalMemory();
+    await parent("follow-up-owner", OWNER);
+    const childId = await spawnChild("follow-up-owner");
+
+    await followUp("follow-up-owner", childId);
+    expect(await promptAccount(childId, "Follow up")).toBe(OWNER);
+    // Children never auto-save, so the write waits for the owner's review.
+    const write = await personalWriteOnFollowUp(childId);
+    expect(write.status).toBe(201);
+    expect(await write.json()).toMatchObject({ status: "proposed" });
   });
 });

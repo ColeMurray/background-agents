@@ -133,7 +133,11 @@ describe("ChildSessionsHandler", () => {
       ]);
 
       const response = await handler.parentPrompt(
-        request({ parentSessionId: "parent-1", content: "Continue with the edge cases" })
+        request({
+          parentSessionId: "parent-1",
+          content: "Continue with the edge cases",
+          promptAccountUserId: "canonical-1",
+        })
       );
 
       expect(response.status).toBe(200);
@@ -146,6 +150,7 @@ describe("ChildSessionsHandler", () => {
         content: "Continue with the edge cases",
         authorId: "owner-1",
         canonicalUserId: "canonical-1",
+        promptAccountUserId: "canonical-1",
         source: "agent",
         scmEnrichment: {
           userId: null,
@@ -154,6 +159,26 @@ describe("ChildSessionsHandler", () => {
           email: null,
         },
       });
+    });
+
+    it("counts a follow-up as no one's when its parent prompt had no account", async () => {
+      const { handler, getSession, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+
+      // The author maps to an account now, but the parent's prompt was queued under none.
+      for (const promptAccountUserId of [null, undefined]) {
+        await handler.parentPrompt(
+          request({ parentSessionId: "parent-1", content: "Keep going", promptAccountUserId })
+        );
+      }
+
+      expect(enqueuePrompt).toHaveBeenCalledTimes(2);
+      for (const call of [1, 2]) {
+        expect(enqueuePrompt).toHaveBeenNthCalledWith(
+          call,
+          expect.objectContaining({ canonicalUserId: "canonical-1", promptAccountUserId: null })
+        );
+      }
     });
 
     it("returns distinct validation reasons for blank and oversized prompts", async () => {
@@ -348,6 +373,9 @@ describe("ChildSessionsHandler", () => {
       })
     );
 
+    // Queued before the author was linked to an account.
+    repository.getProcessingPromptAccount.mockReturnValue(null);
+
     const response = handler.getActivePromptAuthor();
 
     expect(response.status).toBe(200);
@@ -357,6 +385,7 @@ describe("ChildSessionsHandler", () => {
       canonicalUserId: "canonical-2",
       scmUserId: "222",
       scmLogin: "second-user",
+      promptAccountUserId: null,
     });
     expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
     expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
