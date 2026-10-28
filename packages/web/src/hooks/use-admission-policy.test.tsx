@@ -286,6 +286,51 @@ describe("useAdmissionPolicy", () => {
     expect(browserApiFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves the new user's snapshot and edits when an old user's save completes", async () => {
+    const { result, rerender } = await loaded();
+    act(() => result.current.setDraft(edited));
+    let finishOldSave!: (response: Response) => void;
+    vi.mocked(browserApiFetch).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOldSave = resolve;
+        })
+    );
+    let saving!: Promise<void>;
+    act(() => {
+      saving = result.current.save();
+    });
+    expect(result.current.saving).toBe(true);
+
+    const nextUserId = "22222222222222222222222222222222";
+    const nextSnapshot = {
+      ...initial,
+      managed: { ...emptyAdmissionRules(), allowedEmails: ["next-admin@example.com"] },
+      revision: 2,
+      etag: '"policy-2"',
+    };
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(json(nextSnapshot));
+    authorize({ ...actor, userId: nextUserId });
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: nextUserId, name: "Next admin" } },
+      status: "authenticated",
+    });
+    rerender();
+    await waitFor(() => expect(result.current.snapshot).toEqual(nextSnapshot));
+    const nextDraft = { ...nextSnapshot.managed, allowedEmailDomains: ["example.org"] };
+    act(() => result.current.setDraft(nextDraft));
+
+    await act(async () => {
+      finishOldSave(json({ ...initial, managed: edited, revision: 1, etag: '"policy-1"' }));
+      await saving;
+    });
+    expect(result.current.snapshot).toEqual(nextSnapshot);
+    expect(result.current.draft).toEqual(nextDraft);
+    expect(result.current.saving).toBe(false);
+    expect(result.current.notice).toBeNull();
+    expect(browserApiFetch).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps validation failures editable without losing unrelated draft changes", async () => {
     const { result } = await loaded();
     act(() => result.current.setDraft(edited));
