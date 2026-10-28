@@ -83,6 +83,55 @@ describe("inactivity timeout policy", () => {
   });
 });
 
+describe("heartbeat reconnect grace", () => {
+  const now = 10_000_000;
+  const config = {
+    connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+    heartbeat: DEFAULT_HEARTBEAT_CONFIG,
+    bootBudget: DEFAULT_BOOT_BUDGET_CONFIG,
+    inactivity: DEFAULT_INACTIVITY_CONFIG,
+  };
+  const { timeoutMs, reconnectGraceMs } = DEFAULT_HEARTBEAT_CONFIG;
+  const evaluate = (status: "ready" | "connecting", ageMs: number) =>
+    evaluateAlarmPolicy(
+      { status, created_at: now - 1, last_heartbeat: now - ageMs, last_activity: now },
+      config,
+      now,
+      0
+    );
+
+  it("waits out the grace for a booted sandbox whose heartbeat just went stale", () => {
+    const ageMs = timeoutMs + 1;
+    expect(evaluate("ready", ageMs)).toEqual({
+      outcome: "heartbeat_unconfirmed",
+      ageMs,
+      graceEndsAtMs: now + reconnectGraceMs,
+    });
+    expect(evaluate("ready", timeoutMs + reconnectGraceMs)).toMatchObject({
+      outcome: "heartbeat_unconfirmed",
+      graceEndsAtMs: now + 1,
+    });
+  });
+
+  it("finds a booted sandbox stale once the grace has passed", () => {
+    const ageMs = timeoutMs + reconnectGraceMs + 1;
+    expect(evaluate("ready", ageMs)).toEqual({
+      outcome: "heartbeat_stale",
+      ageMs,
+      isBooting: false,
+    });
+  });
+
+  it("gives a booting sandbox no grace", () => {
+    const ageMs = timeoutMs + 1;
+    expect(evaluate("connecting", ageMs)).toEqual({
+      outcome: "heartbeat_stale",
+      ageMs,
+      isBooting: true,
+    });
+  });
+});
+
 describe("watchdog retry cadence", () => {
   it("lets a failed attempt retry even inside the spawn cooldown", () => {
     expect(

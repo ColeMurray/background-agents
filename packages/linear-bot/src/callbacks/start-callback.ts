@@ -6,7 +6,7 @@ import { createLogger } from "../logger";
 import { rejectInvalidCallback } from "./reject-invalid-callback";
 import { getLinearClient } from "../utils/linear-client";
 import { transitionIssueToStarted } from "../utils/issue-start-transition";
-import { abortable } from "../utils/abortable";
+import { abortable } from "@open-inspect/shared/abortable";
 
 const log = createLogger("callback");
 const START_CALLBACK_MAX_AGE_MS = 5 * 60 * 1000;

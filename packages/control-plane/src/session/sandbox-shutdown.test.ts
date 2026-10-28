@@ -664,10 +664,212 @@ describe("SandboxShutdownCoordinator", () => {
 
     resolve({ success: true, imageId: "checkpoint-image" });
     await expect(checkpoint).resolves.toMatchObject({ outcome: "saved" });
+    expect(f.store.value).toMatchObject({
+      phase: "draining",
+      receipt: { artifactId: "checkpoint-image", captureKind: "checkpoint" },
+    });
     await f.backgroundTasks.at(-1)!();
     expect(f.deps.sockets.send).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ type: "prepare_preservation" })
+    );
+  });
+
+  it("restores the newest checkpoint rather than an older receipt from the same generation", async () => {
+    const takeSnapshot = vi
+      .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+      .mockResolvedValueOnce({ success: true, imageId: "checkpoint-1" })
+      .mockResolvedValueOnce({ success: true, imageId: "checkpoint-2", sourceObjectId: "source-2" })
+      .mockRejectedValue(new Error("save failed"));
+    const stopSandbox = vi.fn(async () => ({ success: true }));
+    const f = fixture(provider({ takeSnapshot, stopSandbox }), { durable: true });
+    await readyWithoutDeadline(f);
+    f.store.write({
+      ...f.store.value!,
+      receipt: {
+        kind: "snapshot",
+        artifactId: "older-shutdown-image",
+        provider: "modal",
+        savedAtMs: 50_000,
+        runtimeVersion: "older-runtime",
+      },
+    });
+    for (const now of [100_000, 200_000]) {
+      f.setNow(now);
+      await expect(
+        f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue")
+      ).resolves.toMatchObject({ outcome: "saved" });
+      expect(f.shutdown.admissionDecision()).toBe("ready");
+    }
+    expect(f.store.value).toMatchObject({
+      phase: "running",
+      receipt: {
+        artifactId: "checkpoint-2",
+        captureKind: "checkpoint",
+        runtimeVersion: "runtime-1",
+        savedAtMs: 200_000,
+        sourceObjectId: "source-2",
+      },
+    });
+
+    f.setNow(300_000);
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    expect(f.shutdown.snapshot()).toMatchObject({
+      phase: "unknown",
+      hasRecoveryPoint: true,
+      savedAtMs: 200_000,
+      availableRecoveryActions: ["retry", "restore_saved"],
+    });
+    await f.shutdown.recover("restore_saved");
+    expect(stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerObjectId: "source-2" })
+    );
+    expect(f.shutdown.startupDecision()).toEqual({
+      kind: "restore_snapshot",
+      snapshotId: "checkpoint-2",
+      runtimeVersion: "runtime-1",
+    });
+  });
+
+  it("still retries a failed shutdown save after promoting a routine checkpoint", async () => {
+    const takeSnapshot = vi
+      .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+      .mockResolvedValueOnce({ success: true, imageId: "checkpoint" })
+      .mockRejectedValueOnce(new Error("save failed"))
+      .mockResolvedValueOnce({ success: true, imageId: "final-save", sourceStopped: true });
+    const f = fixture(provider({ takeSnapshot }), { durable: true });
+    await readyWithoutDeadline(f);
+    await f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+    await f.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    expect(recoveryActions(f.shutdown)).toContain("retry");
+
+    f.setNow(f.store.value!.captureByMs!);
+    await f.shutdown.handleAlarm();
+    expect(takeSnapshot).toHaveBeenCalledTimes(3);
+    expect(f.store.value).toMatchObject({
+      phase: "saved",
+      receipt: { artifactId: "final-save", captureKind: "shutdown" },
+    });
+  });
+
+  describe("checkpoint recovery exclusion", () => {
+    async function pendingCheckpoint() {
+      const takeSnapshot = vi
+        .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+        .mockResolvedValueOnce({ success: true, imageId: "checkpoint-a" });
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const f = fixture(provider({ takeSnapshot, stopSandbox }), { durable: true });
+      await readyWithoutDeadline(f);
+      await f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+      let resolve!: (result: { success: true; imageId: string }) => void;
+      let reject!: (error: Error) => void;
+      takeSnapshot.mockImplementationOnce(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          })
+      );
+      const pending = f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+      await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledTimes(2));
+      f.shutdown.runtimeReady();
+      return { ...f, takeSnapshot, stopSandbox, pending, resolve, reject };
+    }
+
+    it("rejects restore during a live checkpoint, then restores its newer receipt", async () => {
+      const f = await pendingCheckpoint();
+      try {
+        expect(f.store.value?.phase).toBe("failed");
+        expect(recoveryActions(f.shutdown)).not.toContain("restore_saved");
+        await expect(f.shutdown.recover("restore_saved")).rejects.toThrow();
+        expect(f.stopSandbox).not.toHaveBeenCalled();
+      } finally {
+        f.resolve({ success: true, imageId: "checkpoint-b" });
+        await f.pending;
+      }
+      expect(f.store.value).toMatchObject({
+        phase: "failed",
+        checkpointInFlight: false,
+        receipt: { artifactId: "checkpoint-b" },
+      });
+      expect(f.deps.messenger.broadcast).toHaveBeenLastCalledWith({
+        type: "sandbox_preservation",
+        preservation: expect.objectContaining({ availableRecoveryActions: ["restore_saved"] }),
+      });
+      await f.shutdown.recover("restore_saved");
+      expect(f.shutdown.startupDecision()).toMatchObject({
+        kind: "restore_snapshot",
+        snapshotId: "checkpoint-b",
+      });
+    });
+
+    it("waits for an uncertain checkpoint to settle after failure and restart", async () => {
+      const f = await pendingCheckpoint();
+      const settleAtMs = f.store.value!.captureOp!.settleAtMs;
+      f.reject(new Error("provider result unknown"));
+      await expect(f.pending).resolves.toEqual({ outcome: "unknown" });
+      expect(f.store.value?.checkpointInFlight).toBe(true);
+      const restarted = new SandboxShutdownCoordinator(f.deps as never);
+      f.deps.alarm.schedule.mockClear();
+      await restarted.rearmCaptureSettlement();
+      expect(f.deps.alarm.schedule).toHaveBeenCalledWith(settleAtMs);
+      f.setNow(settleAtMs - 1);
+      await restarted.handleAlarm();
+      expect(recoveryActions(restarted)).toEqual([]);
+      await expect(restarted.recover("restore_saved")).rejects.toThrow();
+      expect(f.stopSandbox).not.toHaveBeenCalled();
+
+      f.setNow(settleAtMs);
+      await restarted.handleAlarm();
+      expect(f.store.value).toMatchObject({ phase: "failed", checkpointInFlight: false });
+      expect(f.store.value?.captureOp).toBeUndefined();
+      await restarted.recover("restore_saved");
+      expect(restarted.startupDecision()).toMatchObject({
+        kind: "restore_snapshot",
+        snapshotId: "checkpoint-a",
+      });
+    });
+
+    it.each([
+      { phase: "retiring" as const },
+      { phase: "saved" as const },
+      { phase: "restoring" as const },
+      { phase: "failed" as const, discarding: "discard-claim" },
+      { phase: "unknown" as const, restoreInvoked: true },
+    ])("does not overwrite recovery ownership with a late checkpoint (%j)", async (claim) => {
+      const f = await pendingCheckpoint();
+      f.store.write({
+        ...f.store.value!,
+        ...claim,
+        operationId: "recovery-operation",
+        retireByMs: 130_000,
+      });
+      const claimed = f.store.value;
+      f.resolve({ success: true, imageId: "checkpoint-b" });
+      await expect(f.pending).resolves.toEqual({ outcome: "unknown" });
+      expect(f.store.value).toEqual(claimed);
+      expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledExactlyOnceWith(
+        GENERATION.sandboxId,
+        "checkpoint-a",
+        "runtime-1"
+      );
+    });
+  });
+
+  it("does not promote a checkpoint when its sandbox row cannot be updated", async () => {
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(async () => ({ success: true, imageId: "uncommitted-image" })),
+      })
+    );
+    await readyWithoutDeadline(f);
+    f.deps.sandbox.recordSandboxSnapshot.mockReturnValue(0);
+    await expect(
+      f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue")
+    ).resolves.toEqual({ outcome: "unknown" });
+    expect(f.store.value?.receipt).toBeUndefined();
+    expect(f.deps.messenger.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "snapshot_saved" })
     );
   });
 
@@ -741,6 +943,8 @@ describe("SandboxShutdownCoordinator", () => {
     resolve({ success: true, imageId: "late-image" });
     await expect(oldCapture).resolves.toEqual({ outcome: "unknown" });
     expect(f.store.value).toMatchObject({ generation: replacement });
+    expect(f.store.value?.receipt).toBeUndefined();
+    expect(f.deps.sandbox.recordSandboxSnapshot).not.toHaveBeenCalled();
   });
 
   it("settles the active message once when duplicate shutdown requests race", async () => {
@@ -1541,6 +1745,41 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.shutdown.onRefusedReconnect()).toBe("exit");
   });
 
+  it("keeps a refused runtime up while its watchdog checkpoint is captured", async () => {
+    let resolveCapture!: (value: { success: true; imageId: string }) => void;
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(
+          () =>
+            new Promise<{ success: true; imageId: string }>((resolve) => (resolveCapture = resolve))
+        ),
+      })
+    );
+    await readyWithoutDeadline(f);
+    f.sandboxRow.status = "stale";
+
+    const capture = f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+    await vi.waitFor(() => expect(resolveCapture).toBeTypeOf("function"));
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: true });
+    expect(f.shutdown.onRefusedReconnect()).toBe("retry");
+
+    resolveCapture({ success: true, imageId: "image-1" });
+    await expect(capture).resolves.toMatchObject({ outcome: "saved" });
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+  });
+
+  it("does not keep a runtime up for a checkpoint another instance lost", async () => {
+    const f = fixture(provider({ takeSnapshot: vi.fn(() => new Promise<never>(() => {})) }));
+    await readyWithoutDeadline(f);
+    f.sandboxRow.status = "stale";
+    void f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+    await vi.waitFor(() => expect(f.store.value?.checkpointInFlight).toBe(true));
+
+    // Only the instance taking the snapshot can record it.
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    expect(restarted.onRefusedReconnect()).toBe("exit");
+  });
+
   it("retries a failed save when the runtime reconnects after the capture window", async () => {
     const takeSnapshot = vi
       .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
@@ -2329,6 +2568,42 @@ describe("unconfirmed routine checkpoint settlement", () => {
       checkpointInFlight: false,
     });
   });
+
+  it.each(["failed", "unknown"] as const)(
+    "restores the prior receipt after a lost stop_source checkpoint is %s on restart",
+    async (phase) => {
+      const f = settlementFixture();
+      await readyWithoutDeadline(f);
+      await f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+      let resolve!: (result: { success: true; imageId: string }) => void;
+      f.takeSnapshot.mockImplementationOnce(() => new Promise((done) => (resolve = done)));
+      const pending = f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+      await vi.waitFor(() => expect(f.takeSnapshot).toHaveBeenCalledTimes(2));
+      if (phase === "failed") f.shutdown.runtimeReady();
+      const restarted = new SandboxShutdownCoordinator(f.deps as never);
+      try {
+        await restarted.handleAlarm();
+        expect(f.store.value).toMatchObject({ phase, checkpointInFlight: true });
+        // The original instance still owns its request and must reject recovery.
+        await expect(f.shutdown.recover("restore_saved")).rejects.toThrow();
+        expect(f.stopSandbox).not.toHaveBeenCalled();
+        expect(recoveryActions(restarted)).toEqual(["restore_saved", "discard"]);
+        await restarted.recover("restore_saved");
+        expect(f.stopSandbox).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ providerObjectId: "provider-object-1", intent: "destroy" })
+        );
+        expect(restarted.startupDecision()).toMatchObject({
+          kind: "restore_snapshot",
+          snapshotId: "next-image",
+        });
+      } finally {
+        resolve({ success: true, imageId: "late-image" });
+        await pending;
+      }
+      expect(f.store.value?.receipt?.artifactId).toBe("next-image");
+      expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("gives a flag written before operations existed one settle time, never extended", async () => {
     const f = settlementFixture();

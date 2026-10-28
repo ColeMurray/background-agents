@@ -57,7 +57,7 @@ describe("known service actor profile claims", () => {
   });
 
   async function enrollNameless(provider: "slack" | "linear", providerUserId: string) {
-    return users.resolveOrCreateUser({ provider, providerUserId });
+    return users.resolveOrCreateUser({ provider, providerUserId }, () => {});
   }
 
   it("refuses to enroll a new Slack actor without an attested email and writes nothing", async () => {
@@ -89,14 +89,15 @@ describe("known service actor profile claims", () => {
     expect(read.status).toBe(200);
   });
 
-  it("still enrolls a new Linear actor on a claim-less first contact", async () => {
+  it("refuses a new Linear actor on a claim-less first contact", async () => {
     const firstContact = await serviceFetch(SESSIONS_URL, {
       service: "linear-bot",
       actor: "linear:U-NAMELESS-FIRST",
     });
 
-    expect(firstContact.status).toBe(200);
-    await expect(users.getIdentity("linear", "U-NAMELESS-FIRST")).resolves.not.toBeNull();
+    expect(firstContact.status).toBe(403);
+    await expect(firstContact.json()).resolves.toMatchObject({ code: "actor_email_required" });
+    await expect(users.getIdentity("linear", "U-NAMELESS-FIRST")).resolves.toBeNull();
   });
 
   it("completes a legacy nameless Slack actor's profile", async () => {
@@ -233,13 +234,16 @@ describe("known service actor profile claims", () => {
   });
 
   it("keeps a known actor's existing name, avatar, and email", async () => {
-    const known = await users.resolveOrCreateUser({
-      provider: "linear",
-      providerUserId: "LIN-NAMED",
-      displayName: "Chosen Name",
-      providerEmail: "chosen@corp.test",
-      avatarUrl: "https://avatars.linear.test/kept.png",
-    });
+    const known = await users.resolveOrCreateUser(
+      {
+        provider: "linear",
+        providerUserId: "LIN-NAMED",
+        displayName: "Chosen Name",
+        providerEmail: "chosen@corp.test",
+        avatarUrl: "https://avatars.linear.test/kept.png",
+      },
+      () => {}
+    );
 
     const created = await createSession("linear-bot", "linear:LIN-NAMED", {
       actorDisplayName: "linear-handle",

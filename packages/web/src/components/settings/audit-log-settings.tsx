@@ -74,6 +74,8 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "workspace.default_role_assigned": "Default role assigned",
   "workspace.owner_bootstrapped": "Owner bootstrapped",
   "workspace.user_merged": "Users merged",
+  "workspace.admission_policy_updated": "Sign-in allowlist updated",
+  "workspace.admission_policy_maintenance": "Sign-in allowlist maintenance",
   "team.created": "Team created",
   "team.updated": "Team updated",
   "team.archived": "Team archived",

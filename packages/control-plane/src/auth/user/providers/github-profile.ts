@@ -1,4 +1,4 @@
-import type { AdmissionPolicy, GitHubAdmissionEvidence } from "../admission-policy";
+import type { AdmissionEvaluator, GitHubAdmissionEvidence } from "../admission-policy";
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
 import { OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
@@ -8,7 +8,7 @@ interface GitHubIdentityResolver {
 
 export interface GitHubSignInProfileResolverConfig {
   readonly identityResolver: GitHubIdentityResolver;
-  readonly admissionPolicy: Pick<AdmissionPolicy, "requireAdmission">;
+  readonly admissionPolicy: AdmissionEvaluator;
 }
 
 export class GitHubSignInProfileResolver {

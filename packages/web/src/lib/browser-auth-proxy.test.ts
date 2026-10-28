@@ -14,7 +14,11 @@ vi.mock("./control-plane-transport", () => ({
   getControlPlaneUrl: () => "https://control-plane.example",
 }));
 
-import { dispatchBrowserAuthRequest, proxyBrowserAuthRequest } from "./browser-auth-proxy";
+import {
+  BROWSER_AUTH_CALLBACK_TIMEOUT_MS,
+  dispatchBrowserAuthRequest,
+  proxyBrowserAuthRequest,
+} from "./browser-auth-proxy";
 
 describe("proxyBrowserAuthRequest", () => {
   const originalEnv = { ...process.env };
@@ -186,7 +190,23 @@ describe("proxyBrowserAuthRequest", () => {
     });
     expect(verification.ok).toBe(true);
     expect(response.status).toBe(200);
+    expect(mocks.dispatchControlPlaneFetch.mock.calls[0]?.[4]).toBeUndefined();
   });
+
+  it.each(["github", "google"])(
+    "gives only the %s callback the OAuth timeout budget",
+    async (provider) => {
+      mocks.dispatchControlPlaneFetch.mockResolvedValue(new Response(null, { status: 302 }));
+
+      await proxyBrowserAuthRequest(
+        new Request(`https://web.example/api/auth/callback/${provider}?code=code&state=state`)
+      );
+
+      expect(mocks.dispatchControlPlaneFetch.mock.calls[0]?.[4]).toBe(
+        BROWSER_AUTH_CALLBACK_TIMEOUT_MS
+      );
+    }
+  );
 
   it("rejects typed dispatches outside the positive proxy allowlist", async () => {
     const response = await dispatchBrowserAuthRequest({

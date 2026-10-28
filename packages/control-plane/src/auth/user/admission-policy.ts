@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
-import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./providers/constants";
 import type { VerifiedProviderIdentity } from "./providers/types";
+import type { Env } from "../../types";
+
+export const GITHUB_ORGANIZATION_EVALUATION_TIMEOUT_MS = 10_000;
+export const GITHUB_ORGANIZATION_CONCURRENCY = 4;
 
 export interface GitHubAdmissionEvidence {
   readonly identity: VerifiedProviderIdentity<"github">;
@@ -28,6 +31,10 @@ export type AdmissionDecision =
   | { readonly reason: "email_allowlist" }
   | { readonly reason: "email_domain_allowlist" }
   | { readonly reason: "github_organization"; readonly organization: string };
+
+export interface AdmissionEvaluator {
+  requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision>;
+}
 
 export interface AdmissionPolicyDependencies {
   readonly fetcher?: typeof fetch;
@@ -61,6 +68,16 @@ export function parseAdmissionAllowlist(value: string | undefined): string[] {
 
 export function parseAdmissionBoolean(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
+}
+
+export function admissionPolicyConfigFromEnv(env: Env): AdmissionPolicyConfig {
+  return {
+    allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
+    allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
+    allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
+    allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
+    unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
+  };
 }
 
 function emailDomain(email: string): string | null {
@@ -105,14 +122,7 @@ export class AdmissionPolicy {
   }
 
   async requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision> {
-    const hasConfiguredAllowlist =
-      this.config.allowedGitHubUsers.length > 0 ||
-      this.config.allowedEmails.length > 0 ||
-      this.config.allowedEmailDomains.length > 0 ||
-      this.config.allowedGitHubOrganizations.length > 0;
-    if (!hasConfiguredAllowlist && this.config.unsafeAllowAllUsers) {
-      return { reason: "unsafe_allow_all" };
-    }
+    if (this.allowsAllUsers()) return { reason: "unsafe_allow_all" };
 
     if (
       isGitHubSignIn(signIn) &&
@@ -122,7 +132,34 @@ export class AdmissionPolicy {
       return { reason: "github_user_allowlist" };
     }
 
-    const emails = normalize(signIn.identity.verifiedEmails);
+    const emailAdmission = this.emailAdmission(signIn.identity.verifiedEmails);
+    if (emailAdmission) return emailAdmission;
+
+    if (isGitHubSignIn(signIn) && this.config.allowedGitHubOrganizations.length > 0) {
+      return this.requireGitHubOrganization(signIn);
+    }
+    throw new AdmissionDeniedError();
+  }
+
+  /** Bot enrollment has attested emails, but no GitHub sign-in proof. */
+  requireBotEnrollment(verifiedEmails: readonly string[]): AdmissionDecision {
+    if (this.allowsAllUsers()) return { reason: "unsafe_allow_all" };
+    const decision = this.emailAdmission(verifiedEmails);
+    if (decision) return decision;
+    throw new AdmissionDeniedError();
+  }
+
+  private allowsAllUsers(): boolean {
+    const hasConfiguredAllowlist =
+      this.config.allowedGitHubUsers.length > 0 ||
+      this.config.allowedEmails.length > 0 ||
+      this.config.allowedEmailDomains.length > 0 ||
+      this.config.allowedGitHubOrganizations.length > 0;
+    return !hasConfiguredAllowlist && this.config.unsafeAllowAllUsers;
+  }
+
+  private emailAdmission(verifiedEmails: readonly string[]): AdmissionDecision | null {
+    const emails = normalize(verifiedEmails);
     if (emails.some((email) => this.config.allowedEmails.includes(email))) {
       return { reason: "email_allowlist" };
     }
@@ -135,55 +172,83 @@ export class AdmissionPolicy {
       return { reason: "email_domain_allowlist" };
     }
 
-    if (isGitHubSignIn(signIn) && this.config.allowedGitHubOrganizations.length > 0) {
-      return this.requireGitHubOrganization(signIn);
-    }
-    throw new AdmissionDeniedError();
+    return null;
   }
 
   private async requireGitHubOrganization(
     signIn: GitHubAdmissionEvidence
   ): Promise<AdmissionDecision> {
-    const accessToken = signIn.accessToken;
-    let unavailable = false;
-
-    for (const organization of this.config.allowedGitHubOrganizations) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS);
-      try {
-        const response = await this.fetcher(
-          `https://api.github.com/user/memberships/orgs/${encodeURIComponent(organization)}`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "Open-Inspect-Control-Plane",
-            },
-            signal: controller.signal,
+    const organizations = this.config.allowedGitHubOrganizations;
+    const controller = new AbortController();
+    let nextOrganization = 0;
+    const checkOrganizations = async (): Promise<AdmissionDecision> => {
+      let unavailable = false;
+      while (!controller.signal.aborted && nextOrganization < organizations.length) {
+        const organization = organizations[nextOrganization++];
+        try {
+          const response = await this.fetcher(
+            `https://api.github.com/user/memberships/orgs/${encodeURIComponent(organization)}`,
+            {
+              headers: {
+                Authorization: `Bearer ${signIn.accessToken}`,
+                Accept: "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "Open-Inspect-Control-Plane",
+              },
+              signal: controller.signal,
+            }
+          );
+          if (!response.ok) {
+            // Free the connection before taking another queued organization.
+            await response.body?.cancel();
+            if (response.status !== 404) unavailable = true;
+            continue;
           }
-        );
-        if (response.status === 404) continue;
-        if (!response.ok) {
+          const parsed = membershipSchema.safeParse(await response.json().catch(() => null));
+          if (!parsed.success) {
+            unavailable = true;
+            continue;
+          }
+          if (parsed.data.state === "active" && !controller.signal.aborted) {
+            controller.abort();
+            return { reason: "github_organization", organization };
+          }
+        } catch {
           unavailable = true;
-          continue;
         }
-        const parsed = membershipSchema.safeParse(await response.json().catch(() => null));
-        if (!parsed.success) {
-          unavailable = true;
-          continue;
-        }
-        if (parsed.data.state === "active") {
-          return { reason: "github_organization", organization };
-        }
-      } catch {
-        unavailable = true;
-      } finally {
-        clearTimeout(timer);
       }
-    }
+      throw unavailable ? new AdmissionUnavailableError() : new AdmissionDeniedError();
+    };
 
-    if (unavailable) throw new AdmissionUnavailableError();
-    throw new AdmissionDeniedError();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new AdmissionUnavailableError());
+        controller.abort();
+      }, GITHUB_ORGANIZATION_EVALUATION_TIMEOUT_MS);
+    });
+    try {
+      // Any active membership wins without waiting for earlier slow organizations.
+      // The shared deadline covers queued checks and response bodies, not each request.
+      return await Promise.race([
+        Promise.any(
+          Array.from(
+            { length: Math.min(GITHUB_ORGANIZATION_CONCURRENCY, organizations.length) },
+            checkOrganizations
+          )
+        ),
+        deadline,
+      ]);
+    } catch (error) {
+      if (error instanceof AggregateError) {
+        throw error.errors.some((cause) => cause instanceof AdmissionUnavailableError)
+          ? new AdmissionUnavailableError()
+          : new AdmissionDeniedError();
+      }
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      controller.abort();
+    }
   }
 }

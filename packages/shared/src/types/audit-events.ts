@@ -90,6 +90,8 @@ export const AUDIT_OPERATION_ACTIONS = [
   "session.created_private",
   "workspace.member_role_updated",
   "workspace.member_status_updated",
+  "workspace.admission_policy_updated",
+  "workspace.admission_policy_maintenance",
   "workspace.default_role_assigned",
   "workspace.owner_bootstrapped",
   "workspace.user_merged",

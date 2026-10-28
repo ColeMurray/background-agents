@@ -293,8 +293,11 @@ function DiffHunk({
       tabIndex={0}
       className="max-h-72 overflow-auto bg-muted/50 font-mono text-[10px] leading-5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
-      {lines.map((line, index) => (
-        <DiffLine key={`${index}:${line.content}`} line={line} />
+      {lines.map((line) => (
+        <DiffLine
+          key={`${line.type}:${line.oldLine ?? ""}:${line.newLine ?? ""}:${line.content}`}
+          line={line}
+        />
       ))}
       {truncated && (
         <div className="border-t border-border-muted px-3 py-1 text-muted-foreground">

@@ -1,8 +1,8 @@
 import {
   AdmissionPolicy,
-  parseAdmissionAllowlist,
-  parseAdmissionBoolean,
+  admissionPolicyConfigFromEnv,
   type AdmissionPolicyConfig,
+  type AdmissionEvaluator,
 } from "./admission-policy";
 import {
   SIGN_IN_PROVIDERS,
@@ -15,6 +15,8 @@ import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
 import { SignInClaim } from "./sign-in-claim";
 import { IdentityClaimStore } from "../../db/identity-claim-store";
+import { AdmissionPolicyStore } from "../../db/admission-policy-store";
+import { resolveEffectiveAdmissionPolicy } from "./effective-admission-policy";
 import type { SqlDatabase } from "../../db/sql-database";
 import type { Env } from "../../types";
 
@@ -117,13 +119,7 @@ function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
     publicWebOrigin: parsePublicWebOrigin(env.WEB_APP_URL),
     secret,
     appName: env.APP_NAME?.trim() || "Open-Inspect",
-    admission: {
-      allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
-      allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
-      allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
-      allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
-      unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
-    },
+    admission: admissionPolicyConfigFromEnv(env),
     providers,
   };
 }
@@ -147,10 +143,9 @@ function requireProviderAdmission(
 function createGitHubAuthConfig(
   credentials: OAuthCredentials | null,
   appName: string,
-  admissionPolicy: AdmissionPolicy
+  admissionPolicy: AdmissionEvaluator
 ): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
-  requireProviderAdmission(admissionPolicy, "github");
 
   const profile = new GitHubSignInProfileResolver({
     identityResolver: new GitHubProviderIdentityResolver({
@@ -168,10 +163,9 @@ function createGitHubAuthConfig(
 
 function createGoogleAuthConfig(
   credentials: OAuthCredentials | null,
-  admissionPolicy: AdmissionPolicy
+  admissionPolicy: AdmissionEvaluator
 ): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
-  requireProviderAdmission(admissionPolicy, "google");
 
   const profile = new GoogleSignInProfileResolver({
     clientId: credentials.clientId,
@@ -200,7 +194,17 @@ function createUserAuthRuntime(
   config: NormalizedUserAuthConfig,
   database: SqlDatabase
 ): UserAuthRuntime {
-  const admissionPolicy = new AdmissionPolicy(config.admission);
+  const baseline = new AdmissionPolicy(config.admission);
+  for (const provider of SIGN_IN_PROVIDERS) {
+    if (config.providers[provider]) requireProviderAdmission(baseline, provider);
+  }
+  const admissionStore = new AdmissionPolicyStore(database);
+  const admissionPolicy: AdmissionEvaluator = {
+    async requireAdmission(signIn) {
+      const policy = await resolveEffectiveAdmissionPolicy(config.admission, admissionStore);
+      return policy.requireAdmission(signIn);
+    },
+  };
   const claim = new SignInClaim(new IdentityClaimStore(database));
   const github = withClaim(
     "github",

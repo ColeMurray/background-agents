@@ -240,6 +240,15 @@ async function expectUnauthorizedRun(automationId: string, event: GitHubAutomati
   await expectNoSession(automationId);
 }
 
+async function invocationActorKinds(automationId: string): Promise<string[]> {
+  const rows = await env.DB.prepare(
+    "SELECT actor_kind FROM automation_invocations WHERE automation_id = ?"
+  )
+    .bind(automationId)
+    .all<{ actor_kind: string }>();
+  return rows.results.map((row) => row.actor_kind);
+}
+
 describe("GitHub automation routing (real D1 and SessionDO)", () => {
   beforeEach(async () => {
     await cleanD1Tables();
@@ -793,4 +802,28 @@ describe("GitHub automation routing (real D1 and SessionDO)", () => {
       });
     }
   );
+
+  it.each([
+    ["bot", "bot"],
+    ["person", "person"],
+    [undefined, "unknown"],
+  ] as const)("records a firing whose sender kind is %s as %s", async (actorKind, recorded) => {
+    const id = "auto-github-actor-kind";
+    await saveAutomation(id, null, WORKSPACE_EXECUTOR);
+
+    await createScheduler().event({ ...githubEvent(), actorKind });
+
+    expect(await invocationActorKinds(id)).toEqual([recorded]);
+  });
+
+  it("records a revoked-grant denial under the sender's kind", async () => {
+    await saveAutomation("auto-github-revoked-bot", TEAM_C, EXECUTOR_C);
+    await revokeGrant(TEAM_C);
+    const event = { ...githubEvent(), actorKind: "bot" as const };
+
+    await createScheduler().event(event);
+
+    await expectUnauthorizedRun("auto-github-revoked-bot", event);
+    expect(await invocationActorKinds("auto-github-revoked-bot")).toEqual(["bot"]);
+  });
 });

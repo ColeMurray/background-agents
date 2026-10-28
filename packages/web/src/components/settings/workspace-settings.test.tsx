@@ -7,6 +7,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
+import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import { WorkspaceSettings } from "./workspace-settings";
 
 expect.extend(matchers);
@@ -17,6 +18,9 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 vi.mock("@/hooks/use-workspace-administration", () => ({
   useWorkspaceAdministration: vi.fn(),
 }));
+vi.mock("./sign-in-allowlist-section", () => ({
+  SignInAllowlistSection: () => <div data-testid="sign-in-allowlist">Sign-in allowlist</div>,
+}));
 
 afterEach(() => {
   cleanup();
@@ -24,6 +28,46 @@ afterEach(() => {
 });
 
 describe("WorkspaceSettings", () => {
+  it.each([
+    ["owner", true, null, true],
+    ["administrator", true, null, true],
+    ["owner", false, null, false],
+    ["owner", true, 1, false],
+    ["member", true, null, false],
+    ["viewer", true, null, false],
+    [null, true, null, false],
+  ] as const)(
+    "gates the allowlist mount on role %s, permission %s, suspension %s",
+    (key, permission, suspendedAt, visible) => {
+      const authorization: EffectiveAuthorization = {
+        userId: "11111111111111111111111111111111",
+        role: { id: key ? `role_builtin_${key}` : "role_custom", key, name: "Owner" },
+        suspendedAt,
+        permissions: permission ? ["workspace.members.manage"] : [],
+      };
+      vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+        authorization,
+        loading: false,
+        error: null,
+        hasPermission: (id) =>
+          id === "workspace.members.read" || (permission && id === "workspace.members.manage"),
+      });
+      vi.mocked(useWorkspaceAdministration).mockReturnValue({
+        members: [],
+        roles: [],
+        loading: false,
+        error: undefined,
+        refreshError: undefined,
+        updateMember: vi.fn(),
+        previewMerge: vi.fn(),
+        mergeMembers: vi.fn(),
+      });
+      render(<WorkspaceSettings />);
+      expect(screen.queryAllByTestId("sign-in-allowlist")).toHaveLength(visible ? 1 : 0);
+      expect(screen.getByRole("heading", { name: "Members" })).toBeInTheDocument();
+    }
+  );
+
   it("offers account merging only with the merge permission", () => {
     const administration = {
       members: ["11111111111111111111111111111111", "22222222222222222222222222222222"].map(
