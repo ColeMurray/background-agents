@@ -118,14 +118,19 @@ class RecordingBackoff(ReconnectBackoff):
         return 0.0
 
 
-class LongLivedAbnormallyClosedWs:
-    """A connection that was healthy for a while, then dropped without a close frame."""
+class ClosingWs:
+    """A connection that stays up for ``uptime_seconds``, then closes.
 
-    def __init__(self, bridge: AgentBridge, uptime_seconds: float) -> None:
+    A clean close ends the receive loop normally; an abnormal one drops
+    without a close frame.
+    """
+
+    def __init__(self, bridge: AgentBridge, uptime_seconds: float, *, clean: bool) -> None:
         self._bridge = bridge
         self._uptime_seconds = uptime_seconds
+        self._clean = clean
         self.state = State.OPEN
-        self.close_code = 1006
+        self.close_code = 1000 if clean else 1006
 
     async def send(self, data: str) -> None:
         pass
@@ -142,23 +147,34 @@ class LongLivedAbnormallyClosedWs:
         assert self._bridge._connected_at_monotonic is not None
         self._bridge._connected_at_monotonic -= self._uptime_seconds
         self.state = State.CLOSED
+        if self._clean:
+            raise StopAsyncIteration
         raise websockets.ConnectionClosedError(None, None)
 
 
 class TestBridgeReconnectBackoff:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("uptime_seconds", "expected_delays", "stub_disconnect_log"),
+        ("clean", "uptime_seconds", "expected_delays", "stub_disconnect_log"),
         [
-            (STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, False),
-            (1.0, [2.0, 4.0, 8.0, 15.0, 15.0, 15.0, 15.0, 15.0], False),
+            (False, STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, False),
+            (False, 1.0, [2.0, 4.0, 8.0, 15.0, 15.0, 15.0, 15.0, 15.0], False),
             # Disconnect logging is diagnostics only; the reset must not depend on it.
-            (STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, True),
+            (False, STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, True),
+            (True, STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, False),
+            # A clean close alone must not reset the backoff of a flapping sandbox.
+            (True, 1.0, [2.0, 4.0, 8.0, 15.0, 15.0, 15.0, 15.0, 15.0], False),
         ],
-        ids=["long-lived", "short-lived", "long-lived-without-disconnect-log"],
+        ids=[
+            "abnormal-long-lived",
+            "abnormal-short-lived",
+            "abnormal-long-lived-without-disconnect-log",
+            "clean-long-lived",
+            "clean-short-lived",
+        ],
     )
-    async def test_abnormal_closes_back_off_only_while_connections_are_short(
-        self, monkeypatch, uptime_seconds, expected_delays, stub_disconnect_log
+    async def test_closes_back_off_only_while_connections_are_short(
+        self, monkeypatch, clean, uptime_seconds, expected_delays, stub_disconnect_log
     ):
         backoff = RecordingBackoff()
         bridge = AgentBridge(
@@ -179,7 +195,7 @@ class TestBridgeReconnectBackoff:
             async def __aenter__(self):
                 if bridge._connection_count == len(expected_delays):
                     bridge.shutdown_event.set()
-                return LongLivedAbnormallyClosedWs(bridge, uptime_seconds)
+                return ClosingWs(bridge, uptime_seconds, clean=clean)
 
             async def __aexit__(self, *_args):
                 return False
