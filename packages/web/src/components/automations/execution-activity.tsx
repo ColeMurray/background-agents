@@ -80,12 +80,11 @@ export function ExecutionActivity({
           <li
             key={execution.id}
             className={TONE_CLASSES[presentation.tone]}
-            title={`${presentation.label} - ${occurredAt}`}
-            aria-label={`${presentation.label}, ${occurredAt}`}
             data-status-shape={execution.status}
           >
             <Link
               href={href}
+              title={`${presentation.label} - ${occurredAt}`}
               aria-label={`${presentation.label}, ${occurredAt}`}
               draggable={false}
               onClick={onClick}

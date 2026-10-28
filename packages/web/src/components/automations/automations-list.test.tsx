@@ -532,15 +532,13 @@ describe("AutomationsList execution activity", () => {
       />
     );
 
-    const execution = screen.getByRole("listitem", { name: /^Unauthorized,/ });
-    expect(execution).toHaveAttribute("title", expect.stringContaining("Unauthorized"));
+    const execution = screen.getByRole("listitem");
+    const link = within(execution).getByRole("link", { name: /^Unauthorized,/ });
+    expect(execution).not.toHaveAccessibleName();
+    expect(link).toHaveAttribute("title", expect.stringContaining("Unauthorized"));
     expect(execution).toHaveAttribute("data-status-shape", "unauthorized");
-    expect(within(execution).getByRole("link").firstElementChild).toHaveAttribute(
-      "class",
-      "h-px w-2 bg-current"
-    );
+    expect(link.firstElementChild).toHaveAttribute("class", "h-px w-2 bg-current");
     expect(execution).not.toHaveAttribute("tabindex");
-    expect(within(execution).getByRole("link")).toHaveAccessibleName(/^Unauthorized,/);
   });
 
   it("shows recent execution statuses from oldest to newest", () => {
@@ -566,11 +564,16 @@ describe("AutomationsList execution activity", () => {
     const activity = screen.getByRole("list", {
       name: "Last 2 executions, oldest to newest",
     });
-    expect(activity.children[0]).toHaveAttribute(
-      "aria-label",
-      expect.stringContaining("Completed")
+    const executions = within(activity).getAllByRole("listitem");
+    expect(executions[0]).not.toHaveAccessibleName();
+    expect(executions[1]).not.toHaveAccessibleName();
+    const occurredAt = new Date(100).toLocaleString();
+    expect(within(executions[0]).getByRole("link")).toHaveAccessibleName(
+      `Completed, ${occurredAt}`
     );
-    expect(activity.children[1]).toHaveAttribute("aria-label", expect.stringContaining("Failed"));
+    expect(within(executions[1]).getByRole("link")).toHaveAccessibleName(
+      `Failed, ${new Date(200).toLocaleString()}`
+    );
     expect(activity.children[0]).toHaveAttribute("data-status-shape", "completed");
     expect(activity.children[1]).toHaveAttribute("data-status-shape", "failed");
     expect(activity.children[0]).not.toHaveAttribute("tabindex");
