@@ -571,7 +571,11 @@ export class SandboxShutdownCoordinator {
   }
 
   private canRestoreSaved(state: ShutdownRecord): boolean {
-    if (state.checkpointInFlight || this.checkpointOperationId !== null) return false;
+    if (
+      this.checkpointOperationId !== null ||
+      (state.checkpointInFlight && this.settles(state.captureOp))
+    )
+      return false;
     if (!state.receipt || state.receipt.provider !== this.deps.provider.name) return false;
     return (
       state.phase === "saved" ||

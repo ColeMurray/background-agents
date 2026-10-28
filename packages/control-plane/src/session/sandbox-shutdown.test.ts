@@ -2534,6 +2534,42 @@ describe("unconfirmed routine checkpoint settlement", () => {
     });
   });
 
+  it.each(["failed", "unknown"] as const)(
+    "restores the prior receipt after a lost stop_source checkpoint is %s on restart",
+    async (phase) => {
+      const f = settlementFixture();
+      await readyWithoutDeadline(f);
+      await f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+      let resolve!: (result: { success: true; imageId: string }) => void;
+      f.takeSnapshot.mockImplementationOnce(() => new Promise((done) => (resolve = done)));
+      const pending = f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+      await vi.waitFor(() => expect(f.takeSnapshot).toHaveBeenCalledTimes(2));
+      if (phase === "failed") f.shutdown.runtimeReady();
+      const restarted = new SandboxShutdownCoordinator(f.deps as never);
+      try {
+        await restarted.handleAlarm();
+        expect(f.store.value).toMatchObject({ phase, checkpointInFlight: true });
+        // The original instance still owns its request and must reject recovery.
+        await expect(f.shutdown.recover("restore_saved")).rejects.toThrow();
+        expect(f.stopSandbox).not.toHaveBeenCalled();
+        expect(recoveryActions(restarted)).toEqual(["restore_saved", "discard"]);
+        await restarted.recover("restore_saved");
+        expect(f.stopSandbox).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ providerObjectId: "provider-object-1", intent: "destroy" })
+        );
+        expect(restarted.startupDecision()).toMatchObject({
+          kind: "restore_snapshot",
+          snapshotId: "next-image",
+        });
+      } finally {
+        resolve({ success: true, imageId: "late-image" });
+        await pending;
+      }
+      expect(f.store.value?.receipt?.artifactId).toBe("next-image");
+      expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it("gives a flag written before operations existed one settle time, never extended", async () => {
     const f = settlementFixture();
     await readyWithoutDeadline(f);
