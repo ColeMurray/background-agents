@@ -329,6 +329,60 @@ describe("Sandbox command replay through the live session runtime", () => {
     ).toEqual([{ id: `user_message:${messageId}` }]);
   });
 
+  it.each(["stop", "cancel"] as const)(
+    "delivers %s through the attached lifecycle socket before boot readiness",
+    async (action) => {
+      const { stub, ws } = await setup();
+      const messageId = "booting-message";
+      const [{ id: authorId }] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants WHERE user_id = 'user-1'"
+      );
+      await seedMessage(stub, {
+        id: messageId,
+        authorId,
+        content: "Held during boot",
+        source: "web",
+        status: "processing",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+      await runInSessionDO(stub, (instance, state) => {
+        state.storage.sql.exec(
+          "UPDATE sandbox SET status = 'connecting', last_heartbeat = ?",
+          Date.now()
+        );
+        state.storage.sql.exec("DELETE FROM sandbox_command_protocol");
+        const components = componentsOf(instance);
+        expect(components.wsManager.getSandboxSocket()).not.toBeNull();
+        expect(components.wsManager.getSandboxCommandTarget().kind).toBe("booting");
+        vi.spyOn(components.lifecycleManager, "terminateUnresponsiveSandbox").mockResolvedValue();
+      });
+      const delivered = collectMessages(ws, { until: (message) => message.type === "stop" });
+      if (action === "stop") {
+        expect((await stub.fetch("http://internal/internal/stop", { method: "POST" })).status).toBe(
+          200
+        );
+      } else {
+        await runInSessionDO(stub, (instance) =>
+          componentsOf(instance).messageQueue.cancelExecution()
+        );
+      }
+      const command = (await delivered).find((message) => message.type === "stop")!;
+      expect(command).toMatchObject({ type: "stop", messageId, commandId: expect.any(String) });
+      await acknowledge(stub, ws, command.commandId as string);
+      await runInSessionDO(stub, (instance, state) => {
+        expect(
+          componentsOf(instance).lifecycleManager.terminateUnresponsiveSandbox
+        ).not.toHaveBeenCalled();
+        state.storage.sql.exec(
+          "UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?",
+          messageId
+        );
+      });
+    }
+  );
+
   it("does not replay an old generation's command even when the sandbox ID is reused", async () => {
     const { sessionName, stub } = await setup();
     const dropped = await dropFirstCommand(stub, "prompt");

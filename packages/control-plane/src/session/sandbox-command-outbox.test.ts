@@ -40,6 +40,7 @@ function setup() {
   const sandbox = {
     modal_sandbox_id: "sandbox-1",
     created_at: 1,
+    status: "ready",
     last_heartbeat: Date.now(),
   } as SandboxRow;
   const message = { id: prompt.messageId, status: "processing" } as MessageRow;
@@ -48,6 +49,7 @@ function setup() {
     getMessageAwaitingStopConfirmation: vi.fn((): { id: string; deadline: number } | null => null),
   };
   const wsManager = {
+    getSandboxSocket: vi.fn((): SessionWebSocket | null => ws),
     getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => ({ kind: "dispatch", socket: ws })),
     isActiveSandboxSocket: vi.fn(() => true),
     send: vi.fn((_ws: SessionWebSocket, _payload: string | object) => true),
@@ -125,6 +127,60 @@ describe("SandboxCommandOutbox", () => {
     expect(h.outbox.send(h.ws, prompt)).toBe(false);
     expect(h.rows()).toEqual([]);
   });
+
+  it.each([true, false])(
+    "delivers boot-time stops but not prompts or pushes (negotiated: %s)",
+    async (negotiated) => {
+      h.sandbox.status = "connecting";
+      h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting", phase: null });
+      if (!negotiated) h.sql.exec("DELETE FROM sandbox_command_protocol");
+      expect(h.outbox.send(h.ws, prompt)).toBe(false);
+      expect(await h.outbox.sendPush(h.ws, push, "push-1", Date.now() + 1000)).toBe(false);
+      h.message.status = "failed";
+      expect(h.outbox.send(h.ws, { type: "stop", messageId: prompt.messageId })).toBe(true);
+      expect(h.wsManager.send).toHaveBeenCalledOnce();
+      expect(JSON.parse(h.wsManager.send.mock.calls[0][1] as string)).toMatchObject({
+        type: "stop",
+        messageId: prompt.messageId,
+        commandId: h.rows()[0].command_id,
+      });
+      await h.outbox.flush();
+      expect(h.wsManager.send).toHaveBeenCalledTimes(negotiated ? 2 : 1);
+      expect(h.wsManager.close).not.toHaveBeenCalled();
+    }
+  );
+
+  it("holds a boot-time stop for fresh heartbeat and retries only a failed first send", async () => {
+    h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "booting", phase: null });
+    h.sql.exec("DELETE FROM sandbox_command_protocol");
+    h.sandbox.last_heartbeat = Date.now() - SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS;
+    h.message.status = "failed";
+    expect(h.outbox.send(h.ws, { type: "stop", messageId: prompt.messageId })).toBe(true);
+    await h.outbox.flush();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    h.sandbox.last_heartbeat = Date.now();
+    h.wsManager.send.mockReturnValueOnce(false);
+    await h.outbox.flush();
+    expect(h.rows()[0].attempted).toBe(0);
+    await h.outbox.flush();
+    expect(h.rows()[0].attempted).toBe(1);
+    await h.outbox.flush();
+    expect(h.wsManager.send).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["dead", "revoked", "replaced"] as const)(
+    "rejects a stop on a %s lifecycle socket",
+    async (state) => {
+      h.message.status = "failed";
+      if (state === "dead") h.wsManager.getSandboxSocket.mockReturnValue(null);
+      if (state === "revoked") h.wsManager.isActiveSandboxSocket.mockReturnValue(false);
+      if (state === "replaced")
+        h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as SessionWebSocket);
+      expect(h.outbox.send(h.ws, { type: "stop", messageId: prompt.messageId })).toBe(false);
+      expect(h.rows()).toEqual([]);
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    }
+  );
 
   it("persists protocol support only for the socket that announced it", async () => {
     h.outbox.send(h.ws, prompt);
@@ -277,6 +333,7 @@ describe("SandboxCommandOutbox", () => {
 
       const replacement = { readyState: 1 } as SessionWebSocket;
       h.sandbox.active_socket_id = "legacy-replacement";
+      h.wsManager.getSandboxSocket.mockReturnValue(replacement);
       h.wsManager.getSandboxCommandTarget.mockReturnValue({
         kind: "dispatch",
         socket: replacement,

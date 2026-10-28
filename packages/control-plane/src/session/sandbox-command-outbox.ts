@@ -179,7 +179,7 @@ export class SandboxCommandOutbox {
       .toArray() as OutboxRow[];
     for (const row of rows) {
       if (!this.retain(row)) continue;
-      const ws = this.targetSocket();
+      const ws = this.targetSocket(row.command_type);
       if (!ws || !this.canSend(row)) continue;
       let payload = row.payload;
       if (row.encrypted) {
@@ -194,11 +194,16 @@ export class SandboxCommandOutbox {
       const [current] = this.deps.sql
         .exec("SELECT * FROM sandbox_command_outbox WHERE command_id = ?", row.command_id)
         .toArray() as OutboxRow[];
-      if (!current || !this.retain(row) || this.targetSocket() !== ws || !this.canSend(row))
+      if (
+        !current ||
+        !this.retain(row) ||
+        this.targetSocket(row.command_type) !== ws ||
+        !this.canSend(row)
+      )
         continue;
       const protocol = this.protocol();
-      if (!protocol) continue;
       if (current.attempted) {
+        if (!protocol) continue;
         if (current.bridge_instance_id !== protocol.bridge_instance_id) {
           // The receiver lost its deduplication memory. Never turn uncertainty
           // into another execution, even within the same sandbox generation.
@@ -213,7 +218,7 @@ export class SandboxCommandOutbox {
       }
       this.deps.sql.exec(
         "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
-        protocol.bridge_instance_id,
+        protocol?.bridge_instance_id ?? null,
         row.command_id
       );
       if (!this.deps.wsManager.send(ws, payload) && !current.attempted) {
@@ -257,7 +262,7 @@ export class SandboxCommandOutbox {
     if (
       !this.isLive(row) ||
       (row.command_type !== "stop" && !this.deps.mayDispatch(row.command_type)) ||
-      this.targetSocket() !== ws
+      this.targetSocket(row.command_type) !== ws
     )
       return false;
     this.deps.sql.exec(
@@ -277,14 +282,14 @@ export class SandboxCommandOutbox {
   }
 
   private sendPersisted(ws: SessionWebSocket, row: OutboxRow, payload: string): boolean {
-    if (!this.isLive(row) || this.targetSocket() !== ws) return false;
+    if (!this.isLive(row) || this.targetSocket(row.command_type) !== ws) return false;
     if (!this.canSend(row)) {
       this.deps.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
       return true;
     }
     this.deps.sql.exec(
       "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
-      this.protocol()!.bridge_instance_id,
+      this.protocol()?.bridge_instance_id ?? null,
       row.command_id
     );
     if (this.deps.wsManager.send(ws, payload)) return true;
@@ -292,7 +297,11 @@ export class SandboxCommandOutbox {
     return false;
   }
 
-  private targetSocket(): SessionWebSocket | null {
+  private targetSocket(commandType?: OutboxRow["command_type"]): SessionWebSocket | null {
+    if (commandType === "stop") {
+      const socket = this.deps.wsManager.getSandboxSocket();
+      return socket && this.deps.wsManager.isActiveSandboxSocket(socket) ? socket : null;
+    }
     const target = this.deps.wsManager.getSandboxCommandTarget();
     if (target.kind !== "dispatch" && target.kind !== "reconnecting") return null;
     return this.deps.wsManager.isActiveSandboxSocket(target.socket) ? target.socket : null;
@@ -300,9 +309,13 @@ export class SandboxCommandOutbox {
 
   private canSend(row: OutboxRow): boolean {
     const heartbeat = this.deps.sandboxRepository.getSandbox()?.last_heartbeat;
+    // Early boot can receive a stop before ready negotiation. Only its first
+    // delivery is allowed without protocol identity; flush still fences replays.
     return (
       heartbeat != null &&
-      this.protocol() !== undefined &&
+      (this.protocol() !== undefined ||
+        (row.command_type === "stop" &&
+          this.deps.wsManager.getSandboxCommandTarget().kind === "booting")) &&
       Date.now() - heartbeat < SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS &&
       (row.command_type === "stop" || this.deps.mayDispatch(row.command_type))
     );
