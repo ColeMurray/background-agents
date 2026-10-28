@@ -11,10 +11,16 @@ export interface GitHubSignInProfileResolverConfig {
   readonly admissionPolicy: Pick<AdmissionPolicy, "requireAdmission">;
 }
 
+export type GitHubSignInProfileData = VerifiedProviderIdentity<"github"> & {
+  readonly id: string;
+};
+
 export class GitHubSignInProfileResolver {
   constructor(private readonly config: GitHubSignInProfileResolverConfig) {}
 
-  readonly getUserInfo = async (tokens: ProviderTokens): Promise<ProviderProfile> => {
+  readonly getUserInfo = async (
+    tokens: ProviderTokens
+  ): Promise<ProviderProfile<GitHubSignInProfileData>> => {
     if (!tokens.accessToken) {
       throw new OAuthProviderError("malformed_response", "GitHub did not return an access token");
     }
@@ -33,13 +39,12 @@ export class GitHubSignInProfileResolver {
 
     return {
       user: {
-        id: identity.subject,
         name: identity.displayName ?? identity.login ?? email,
         email,
         ...(identity.avatarUrl ? { image: identity.avatarUrl } : {}),
         emailVerified: true,
       },
-      data: identity,
+      data: { ...identity, id: identity.subject },
     };
   };
 }

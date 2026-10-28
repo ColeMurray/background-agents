@@ -37,7 +37,10 @@ const logger = createLogger("auth:sign-in-claim");
 export class SignInClaim {
   constructor(private readonly store: IdentityClaimStore) {}
 
-  wrapResolver(provider: SignInProvider, inner: ProviderProfileResolver): ProviderProfileResolver {
+  wrapResolver<Data>(
+    provider: SignInProvider,
+    inner: ProviderProfileResolver<Data>
+  ): ProviderProfileResolver<Data> {
     return async (tokens) => {
       const profile = await inner(tokens);
       if (!profile) return profile;
@@ -55,7 +58,13 @@ export class SignInClaim {
   }
 
   private async claim(provider: SignInProvider, profile: ProviderProfile): Promise<void> {
-    const subject = profile.user.id?.trim();
+    // Account identity comes from provider-verified data, never mutable user fields.
+    const data = profile.data;
+    if (!data || typeof data !== "object") return;
+    let rawSubject: unknown;
+    if (provider === "github" && "id" in data) rawSubject = data.id;
+    if (provider === "google" && "sub" in data) rawSubject = data.sub;
+    const subject = typeof rawSubject === "string" ? rawSubject.trim() : undefined;
     const email = normalizeEmail(profile.user.email);
     // Without a provider-verified email there is nothing to claim.
     if (!subject || !email || !profile.user.emailVerified) return;

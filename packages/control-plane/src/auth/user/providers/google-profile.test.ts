@@ -38,12 +38,13 @@ describe("GoogleSignInProfileResolver", () => {
       },
     });
     expect(result.user).toEqual({
-      id: "google-subject",
       name: "Person Example",
       email: "person@example.com",
       image: "https://example.com/avatar.png",
       emailVerified: true,
     });
+    expect(result.data).toEqual(await verifyIdToken.mock.results[0].value);
+    expect(result.user).not.toHaveProperty("id");
   });
 
   it("rejects an unverifiable ID token before admission", async () => {

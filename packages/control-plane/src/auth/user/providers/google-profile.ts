@@ -14,6 +14,8 @@ const googleClaimsSchema = z.object({
   picture: z.url().optional(),
 });
 
+export type GoogleSignInProfileData = z.infer<typeof googleClaimsSchema>;
+
 type VerifyGoogleIdToken = typeof verifyGoogleIdToken;
 
 export interface GoogleSignInProfileResolverConfig {
@@ -35,7 +37,9 @@ export class GoogleSignInProfileResolver {
     this.verifyIdToken = dependencies.verifyIdToken ?? verifyGoogleIdToken;
   }
 
-  readonly getUserInfo = async (tokens: ProviderTokens): Promise<ProviderProfile> => {
+  readonly getUserInfo = async (
+    tokens: ProviderTokens
+  ): Promise<ProviderProfile<GoogleSignInProfileData>> => {
     if (!tokens.idToken) {
       throw new OAuthProviderError("malformed_response", "Google did not return an ID token");
     }
@@ -65,7 +69,6 @@ export class GoogleSignInProfileResolver {
 
     return {
       user: {
-        id: signIn.identity.subject,
         name: signIn.identity.displayName ?? email,
         email,
         ...(signIn.identity.avatarUrl ? { image: signIn.identity.avatarUrl } : {}),

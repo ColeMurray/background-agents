@@ -7,15 +7,17 @@ export interface ProviderTokens {
   readonly scopes?: readonly string[];
 }
 
-export interface ProviderProfile {
+export interface ProviderProfile<Data = unknown> {
   readonly user: {
-    readonly id: string;
+    readonly id?: never;
     readonly name?: string;
     readonly email?: string | null;
     readonly image?: string;
     readonly emailVerified: boolean;
   };
-  readonly data: unknown;
+  readonly data: Data;
 }
 
-export type ProviderProfileResolver = (tokens: ProviderTokens) => Promise<ProviderProfile | null>;
+export type ProviderProfileResolver<Data = unknown> = (
+  tokens: ProviderTokens
+) => Promise<ProviderProfile<Data> | null>;

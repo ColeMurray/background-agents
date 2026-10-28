@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHmac } from "node:crypto";
 import { fileURLToPath, URL as NodeURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { applyMigrations } from "../../node/migrate";
@@ -57,6 +58,70 @@ describe("Better Auth provider execution", () => {
 });
 
 describe("Better Auth internal account lookups", () => {
+  it("reads existing 1.6.25 credentials and session cookies without rewriting identities", async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    const database = createNodeSqlDatabase(sqlite);
+    applyMigrations(
+      sqlite,
+      fileURLToPath(new NodeURL("../../../../../terraform/d1/migrations", import.meta.url))
+    );
+    const userId = "11111111111111111111111111111111";
+    const accountId = "22222222222222222222222222222222";
+    const nowMs = Date.now();
+    // Generated with better-auth@1.6.25 symmetricEncrypt using SECRET, not the
+    // version under test. This fixture must remain readable across the upgrade.
+    const encryptedToken =
+      "9b656aa06c536b7b8135704732d59ab8ce61c6c5ccd608bf701e3fb9ab1e7ec62748bfdc001873d39006361c9d81202425de29ac17554890559e47";
+    const sessionToken = "existing-browser-session";
+    const signature = createHmac("sha256", SECRET).update(sessionToken).digest("base64");
+    const headers = new Headers({
+      Cookie: `__Secure-openinspect.session_token=${encodeURIComponent(`${sessionToken}.${signature}`)}`,
+      Origin: PUBLIC_WEB_ORIGIN,
+    });
+    try {
+      await database.batch([
+        database
+          .prepare(
+            "INSERT INTO users (id, email, email_verified, created_at, updated_at) VALUES (?, ?, 1, ?, ?)"
+          )
+          .bind(userId, "octocat@example.com", nowMs, nowMs),
+        database
+          .prepare(
+            "INSERT INTO user_identities (id, user_id, provider, provider_user_id, created_at, updated_at, access_token) VALUES (?, ?, 'github', '583231', ?, ?, ?)"
+          )
+          .bind(accountId, userId, nowMs, nowMs, encryptedToken),
+        database
+          .prepare(
+            "INSERT INTO auth_sessions (id, userId, token, expiresAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)"
+          )
+          .bind("existing-session-id", userId, sessionToken, nowMs + 3_600_000, nowMs, nowMs),
+      ]);
+      const auth = createUserAuth({
+        database,
+        publicWebOrigin: PUBLIC_WEB_ORIGIN,
+        secret: SECRET,
+        github: {
+          clientId: "github-client-id",
+          clientSecret: "github-client-secret",
+          getUserInfo: UNUSED_PROFILE_RESOLVER,
+        },
+      });
+      await expect(auth.api.getSession({ headers })).resolves.toMatchObject({
+        user: { id: userId },
+      });
+      await expect(auth.api.getAccessToken({ body: { accountId, userId } })).resolves.toMatchObject(
+        { accessToken: "github-access-token" }
+      );
+      await expect(
+        auth.api.getAccessToken({ body: { accountId, userId: "another-user" } })
+      ).rejects.toMatchObject({ body: { code: "ACCOUNT_NOT_FOUND" } });
+      await auth.api.signOut({ headers });
+      await expect(auth.api.getSession({ headers })).resolves.toBeNull();
+    } finally {
+      database.close();
+    }
+  });
+
   it.each(["admission", "integrity"] as const)(
     "preserves hard %s errors after a browser callback",
     async (failure) => {
@@ -111,7 +176,11 @@ describe("Better Auth internal account lookups", () => {
         expect(callback.status).toBe(302);
         expect(callback.headers.get("Set-Cookie")).toContain("__Secure-openinspect.session_token=");
         const user = await database.prepare("SELECT id FROM users").first<{ id: string }>();
+        const account = await database
+          .prepare("SELECT id FROM user_identities WHERE provider = 'github'")
+          .first<{ id: string }>();
         expect(user).not.toBeNull();
+        expect(account).not.toBeNull();
         malformedIdentity = failure === "integrity";
         // Reuse the exact auth instance after its callback for integrity errors;
         // admission removal creates a runtime with the updated allowlist.
@@ -120,8 +189,7 @@ describe("Better Auth internal account lookups", () => {
             ? createUserAuthRuntimeFromEnv({ ...env, ALLOWED_USERS: "someone-else" }, database).auth
             : auth;
         const lookup = resolveGitHubAccountProfile(accountAuth.api, {
-          providerId: "github",
-          accountId: "583231",
+          accountId: account!.id,
           userId: user!.id,
         });
         await expect(lookup).rejects.toBeInstanceOf(

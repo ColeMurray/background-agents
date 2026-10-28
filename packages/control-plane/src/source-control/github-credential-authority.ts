@@ -5,6 +5,7 @@ import { AdmissionDeniedError } from "../auth/user/admission-policy";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 
 const providerAccountSchema = z.object({
+  id: z.string().min(1),
   providerId: z.string().min(1),
   accountId: z.string().min(1),
   userId: z.string().min(1),
@@ -51,12 +52,13 @@ export async function resolveGitHubAccountProfile(
 }
 
 export interface GitHubAccountSelection {
+  readonly id: string;
   readonly subject: string;
   readonly resolveProfile: () => Promise<unknown | null>;
 }
 
 export interface ProviderAccountSelection {
-  readonly providerId: "github";
+  /** Local user_identities row ID, not the provider subject. */
   readonly accountId: string;
   readonly userId: string;
 }
@@ -127,11 +129,11 @@ export async function resolveGitHubCredentialAuthority(
       kind: "browser_session",
       githubAccount: githubAccount
         ? {
+            id: githubAccount.id,
             subject: githubAccount.accountId,
             resolveProfile: async () => {
               const selection: ProviderAccountSelection = {
-                providerId: "github",
-                accountId: githubAccount.accountId,
+                accountId: githubAccount.id,
                 userId,
               };
               return resolveGitHubAccountProfile(accountClient, selection);

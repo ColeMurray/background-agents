@@ -60,11 +60,13 @@ describe("resolveGitHubCredentialAuthority", () => {
   it("selects a linked GitHub account only when credential authority is requested", async () => {
     const { context, listUserAccounts, accountClient } = createUserContext([
       {
+        id: "github-account-1",
         providerId: "github",
         accountId: "583231",
         userId: "user-1",
       },
       {
+        id: "google-account-1",
         providerId: "google",
         accountId: "google-subject",
         userId: "user-1",
@@ -75,6 +77,7 @@ describe("resolveGitHubCredentialAuthority", () => {
     expect(authority).toEqual({
       kind: "browser_session",
       githubAccount: {
+        id: "github-account-1",
         subject: "583231",
         resolveProfile: expect.any(Function),
       },
@@ -86,16 +89,16 @@ describe("resolveGitHubCredentialAuthority", () => {
     }
     await authority.githubAccount.resolveProfile();
     expect(accountClient.getAccessToken).toHaveBeenCalledWith({
-      body: { providerId: "github", accountId: "583231", userId: "user-1" },
+      body: { accountId: "github-account-1", userId: "user-1" },
     });
     expect(accountClient.accountInfo).toHaveBeenCalledWith({
-      query: { providerId: "github", accountId: "583231", userId: "user-1" },
+      query: { accountId: "github-account-1", userId: "user-1" },
     });
   });
 
   it("does not request a profile for a linked identity without an OAuth grant", async () => {
     const { context, getAccessToken, accountClient } = createUserContext([
-      { providerId: "github", accountId: "583231", userId: "user-1" },
+      { id: "github-account-1", providerId: "github", accountId: "583231", userId: "user-1" },
     ]);
     getAccessToken.mockResolvedValueOnce({ accessToken: "" });
 
@@ -110,6 +113,7 @@ describe("resolveGitHubCredentialAuthority", () => {
   it("allows browser users without a linked GitHub account", async () => {
     const { context } = createUserContext([
       {
+        id: "google-account-1",
         providerId: "google",
         accountId: "google-subject",
         userId: "user-1",
@@ -125,6 +129,7 @@ describe("resolveGitHubCredentialAuthority", () => {
   it("rejects cross-user GitHub account authority", async () => {
     const { context } = createUserContext([
       {
+        id: "github-account-1",
         providerId: "github",
         accountId: "583231",
         userId: "different-user",
@@ -136,10 +141,21 @@ describe("resolveGitHubCredentialAuthority", () => {
     );
   });
 
+  it.each([undefined, ""])("rejects a linked account without a local row ID: %s", async (id) => {
+    const { context, getAccessToken } = createUserContext([
+      { id, providerId: "github", accountId: "583231", userId: "user-1" },
+    ]);
+
+    await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).rejects.toThrow(
+      "GitHub account authority is corrupt"
+    );
+    expect(getAccessToken).not.toHaveBeenCalled();
+  });
+
   it("rejects multiple linked GitHub accounts", async () => {
     const { context } = createUserContext([
-      { providerId: "github", accountId: "583231", userId: "user-1" },
-      { providerId: "github", accountId: "987654", userId: "user-1" },
+      { id: "github-account-1", providerId: "github", accountId: "583231", userId: "user-1" },
+      { id: "github-account-2", providerId: "github", accountId: "987654", userId: "user-1" },
     ]);
     await expect(resolveGitHubCredentialAuthority(context, BROWSER_HEADERS)).rejects.toThrow(
       "User resolves to multiple GitHub provider accounts"

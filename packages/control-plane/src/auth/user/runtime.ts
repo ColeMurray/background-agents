@@ -10,8 +10,14 @@ import {
 } from "@open-inspect/shared/sign-in-provider";
 import { createUserAuth, type SocialProviderAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
-import { GitHubSignInProfileResolver } from "./providers/github-profile";
-import { GoogleSignInProfileResolver } from "./providers/google-profile";
+import {
+  GitHubSignInProfileResolver,
+  type GitHubSignInProfileData,
+} from "./providers/github-profile";
+import {
+  GoogleSignInProfileResolver,
+  type GoogleSignInProfileData,
+} from "./providers/google-profile";
 import { SignInClaim } from "./sign-in-claim";
 import { IdentityClaimStore } from "../../db/identity-claim-store";
 import type { SqlDatabase } from "../../db/sql-database";
@@ -141,7 +147,7 @@ function createGitHubAuthConfig(
   credentials: OAuthCredentials | null,
   appName: string,
   admissionPolicy: AdmissionPolicy
-): SocialProviderAuthConfig | undefined {
+): SocialProviderAuthConfig<GitHubSignInProfileData> | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "github");
 
@@ -162,7 +168,7 @@ function createGitHubAuthConfig(
 function createGoogleAuthConfig(
   credentials: OAuthCredentials | null,
   admissionPolicy: AdmissionPolicy
-): SocialProviderAuthConfig | undefined {
+): SocialProviderAuthConfig<GoogleSignInProfileData> | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "google");
 
@@ -177,11 +183,11 @@ function createGoogleAuthConfig(
   };
 }
 
-function withClaim(
+function withClaim<Data extends object>(
   provider: SignInProvider,
   claim: SignInClaim,
-  config: SocialProviderAuthConfig | undefined
-): SocialProviderAuthConfig | undefined {
+  config: SocialProviderAuthConfig<Data> | undefined
+): SocialProviderAuthConfig<Data> | undefined {
   if (!config) return undefined;
   return {
     ...config,

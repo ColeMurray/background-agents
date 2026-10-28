@@ -214,7 +214,8 @@ export default defineConfig({
         "statusCode" in error &&
         typeof error.statusCode === "number" &&
         ((error.statusCode >= 300 && error.statusCode < 400) ||
-          (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN")) &&
+          (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN") ||
+          (error.statusCode === 404 && betterAuthErrorCode === "ID_TOKEN_NOT_SUPPORTED")) &&
         betterAuthStack?.includes("/better-auth/dist/api/routes/")
       ) {
         return false;
