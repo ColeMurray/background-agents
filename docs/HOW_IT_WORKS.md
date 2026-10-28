@@ -199,8 +199,13 @@ incurring compute costs.
 
 Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
 does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
-in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+in case the process is actually gone. A ready sandbox whose heartbeat is overdue gets a short
+reconnect grace before that check retires it. Explicit lifecycle paths such as inactivity and stale
 heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+While the coordinator that started their checkpoint is still capturing the sandbox, a refused bridge
+is told to retry rather than exit, so the save is not aborted by the container shutting down. After
+a control-plane restart the new coordinator cannot record such a checkpoint, so the bridge exits. A
+shutdown save that is `draining`, `prepared`, or `capturing` is persisted and still answers retry.
 
 ### Data Plane (Sandbox Backends)
 

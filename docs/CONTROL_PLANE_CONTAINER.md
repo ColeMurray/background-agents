@@ -85,19 +85,26 @@ Then `npm run dev -w @open-inspect/web`. The container's `WEB_APP_URL` must be t
 
 ## Sign-in allowlist operations
 
-Browser admission combines the deployment's `ALLOWED_*` baseline with rules stored in `global.db`.
-Active built-in Owners/Administrators manage the latter in **Settings > Workspace access > Sign-in
-allowlist**. The UI cannot narrow deployment grants; changing `.env` or AWS SSM configuration cannot
-subtract managed grants. Keep a provider-compatible recovery baseline, preferably an exact verified
-administrator email in `ALLOWED_EMAILS`, with unsafe mode disabled. Google needs an email/domain
-baseline; GitHub also accepts usernames/organizations. SQL rules cannot rescue an empty/incompatible
-baseline.
+Browser sign-in and new bot-account admission combine the deployment's `ALLOWED_*` baseline with
+rules stored in `global.db`. Active built-in Owners/Administrators manage the latter in **Settings >
+Workspace access > Sign-in allowlist**. The UI cannot narrow deployment grants; changing `.env` or
+AWS SSM configuration cannot subtract managed grants. Keep a provider-compatible recovery baseline,
+preferably an exact verified administrator email in `ALLOWED_EMAILS`, with unsafe mode disabled.
+Google needs an email/domain baseline; GitHub also accepts usernames/organizations. SQL rules cannot
+rescue an empty/incompatible baseline.
 
 `UNSAFE_ALLOW_ALL_USERS=true` only admits any otherwise valid identity when both sources' effective
 lists are empty. Nonempty lists still apply, and the editor is read-only whenever the flag is true.
-Managed input is limited to 50 rules total, including 10 organizations, with 64-KiB requests.
-Removing rules does not revoke ordinary existing browser sessions; use member suspension instead.
-See [authentication](AUTH.md#sign-in-allowlist) for policy, authorization, and audit details.
+Managed input is limited to 50 rules total, including 10 organizations, with 64-KiB requests. Fresh
+Slack/Linear accounts need an attested email matching the effective email/domain union, unless
+unsafe allow-all is effective; an attested email is still required in unsafe mode. Known actors and
+attested-email links to existing accounts do not repeat admission and preserve role/suspension.
+GitHub bot profile emails are not verified evidence and cannot link an unknown actor by email;
+GitHub bot actors must already be known unless unsafe allow-all is effective. Bots cannot prove
+GitHub username/org rules. Missing or unreadable managed policy fails new-account admission closed.
+Removing rules does not revoke ordinary existing browser sessions or existing bot accounts; use
+member suspension instead. General bot invocation restrictions and resource authorization still
+apply. See [authentication](AUTH.md#sign-in-allowlist) for policy, authorization, and audit details.
 
 ### Start and bootstrap
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import type { VerifiedProviderIdentity } from "./providers/types";
+import type { Env } from "../../types";
 
 export const GITHUB_ORGANIZATION_EVALUATION_TIMEOUT_MS = 10_000;
 export const GITHUB_ORGANIZATION_CONCURRENCY = 4;
@@ -69,6 +70,16 @@ export function parseAdmissionBoolean(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
 }
 
+export function admissionPolicyConfigFromEnv(env: Env): AdmissionPolicyConfig {
+  return {
+    allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
+    allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
+    allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
+    allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
+    unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
+  };
+}
+
 function emailDomain(email: string): string | null {
   const separator = email.lastIndexOf("@");
   if (separator <= 0 || separator === email.length - 1) return null;
@@ -111,14 +122,7 @@ export class AdmissionPolicy {
   }
 
   async requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision> {
-    const hasConfiguredAllowlist =
-      this.config.allowedGitHubUsers.length > 0 ||
-      this.config.allowedEmails.length > 0 ||
-      this.config.allowedEmailDomains.length > 0 ||
-      this.config.allowedGitHubOrganizations.length > 0;
-    if (!hasConfiguredAllowlist && this.config.unsafeAllowAllUsers) {
-      return { reason: "unsafe_allow_all" };
-    }
+    if (this.allowsAllUsers()) return { reason: "unsafe_allow_all" };
 
     if (
       isGitHubSignIn(signIn) &&
@@ -128,7 +132,34 @@ export class AdmissionPolicy {
       return { reason: "github_user_allowlist" };
     }
 
-    const emails = normalize(signIn.identity.verifiedEmails);
+    const emailAdmission = this.emailAdmission(signIn.identity.verifiedEmails);
+    if (emailAdmission) return emailAdmission;
+
+    if (isGitHubSignIn(signIn) && this.config.allowedGitHubOrganizations.length > 0) {
+      return this.requireGitHubOrganization(signIn);
+    }
+    throw new AdmissionDeniedError();
+  }
+
+  /** Bot enrollment has attested emails, but no GitHub sign-in proof. */
+  requireBotEnrollment(verifiedEmails: readonly string[]): AdmissionDecision {
+    if (this.allowsAllUsers()) return { reason: "unsafe_allow_all" };
+    const decision = this.emailAdmission(verifiedEmails);
+    if (decision) return decision;
+    throw new AdmissionDeniedError();
+  }
+
+  private allowsAllUsers(): boolean {
+    const hasConfiguredAllowlist =
+      this.config.allowedGitHubUsers.length > 0 ||
+      this.config.allowedEmails.length > 0 ||
+      this.config.allowedEmailDomains.length > 0 ||
+      this.config.allowedGitHubOrganizations.length > 0;
+    return !hasConfiguredAllowlist && this.config.unsafeAllowAllUsers;
+  }
+
+  private emailAdmission(verifiedEmails: readonly string[]): AdmissionDecision | null {
+    const emails = normalize(verifiedEmails);
     if (emails.some((email) => this.config.allowedEmails.includes(email))) {
       return { reason: "email_allowlist" };
     }
@@ -141,10 +172,7 @@ export class AdmissionPolicy {
       return { reason: "email_domain_allowlist" };
     }
 
-    if (isGitHubSignIn(signIn) && this.config.allowedGitHubOrganizations.length > 0) {
-      return this.requireGitHubOrganization(signIn);
-    }
-    throw new AdmissionDeniedError();
+    return null;
   }
 
   private async requireGitHubOrganization(

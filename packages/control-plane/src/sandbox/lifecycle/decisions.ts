@@ -589,13 +589,24 @@ export function evaluateInactivityTimeout(
 export interface HeartbeatConfig {
   /** Time in ms after which missing heartbeat indicates stale sandbox (default: 90s = 3x 30s interval) */
   timeoutMs: number;
+  /**
+   * How long past `timeoutMs` a booted sandbox's bridge may still reconnect
+   * before the watchdog terminates it. A bridge whose socket dropped retries
+   * with backoff, so its reconnect can land just after the timeout; ending
+   * the sandbox then loses a healthy workspace and its in-flight prompt.
+   */
+  reconnectGraceMs: number;
 }
 
 /**
  * Default heartbeat configuration.
  */
 export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
-  timeoutMs: 90000, // 90 seconds (3x 30s heartbeat interval)
+  // 3x the 30s heartbeat interval. Must exceed the bridge's maximum reconnect
+  // delay plus that interval; mirrored as CONTROL_PLANE_HEARTBEAT_TIMEOUT_SECONDS
+  // in packages/sandbox-runtime/src/sandbox_runtime/reconnect_backoff.py.
+  timeoutMs: 90000,
+  reconnectGraceMs: 60_000,
 };
 
 /**
@@ -653,6 +664,11 @@ export function evaluateHeartbeatHealth(
 /** The earliest time at which `evaluateHeartbeatHealth` judges `lastHeartbeat` stale. */
 export function heartbeatStaleAt(lastHeartbeat: number, config: HeartbeatConfig): number {
   return lastHeartbeat + config.timeoutMs + 1;
+}
+
+/** The earliest time at which a booted sandbox stale at `lastHeartbeat` is out of reconnect grace. */
+export function heartbeatGraceEndsAt(lastHeartbeat: number, config: HeartbeatConfig): number {
+  return heartbeatStaleAt(lastHeartbeat, config) + config.reconnectGraceMs;
 }
 
 // ==================== Connecting Timeout ====================

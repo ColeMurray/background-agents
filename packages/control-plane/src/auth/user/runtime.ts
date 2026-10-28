@@ -1,12 +1,9 @@
 import {
   AdmissionPolicy,
-  AdmissionUnavailableError,
-  parseAdmissionAllowlist,
-  parseAdmissionBoolean,
+  admissionPolicyConfigFromEnv,
   type AdmissionPolicyConfig,
   type AdmissionEvaluator,
 } from "./admission-policy";
-import { mergeAdmissionRules, type AdmissionRules } from "@open-inspect/shared/admission-settings";
 import {
   SIGN_IN_PROVIDERS,
   SIGN_IN_PROVIDER_ISSUERS,
@@ -19,12 +16,11 @@ import { GoogleSignInProfileResolver } from "./providers/google-profile";
 import { SignInClaim } from "./sign-in-claim";
 import { IdentityClaimStore } from "../../db/identity-claim-store";
 import { AdmissionPolicyStore } from "../../db/admission-policy-store";
-import { createLogger } from "../../logger";
+import { resolveEffectiveAdmissionPolicy } from "./effective-admission-policy";
 import type { SqlDatabase } from "../../db/sql-database";
 import type { Env } from "../../types";
 
 const MINIMUM_SECRET_LENGTH = 32;
-const logger = createLogger("auth:admission");
 
 export class UserAuthConfigurationError extends Error {
   constructor(message: string) {
@@ -123,13 +119,7 @@ function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
     publicWebOrigin: parsePublicWebOrigin(env.WEB_APP_URL),
     secret,
     appName: env.APP_NAME?.trim() || "Open-Inspect",
-    admission: {
-      allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
-      allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
-      allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
-      allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
-      unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
-    },
+    admission: admissionPolicyConfigFromEnv(env),
     providers,
   };
 }
@@ -200,30 +190,6 @@ function withClaim(
   };
 }
 
-function createAdmissionEvaluator(
-  deployment: AdmissionPolicyConfig,
-  store: { get(): Promise<{ rules: AdmissionRules }> }
-): AdmissionEvaluator {
-  return {
-    async requireAdmission(signIn) {
-      let managed: AdmissionRules;
-      try {
-        managed = (await store.get()).rules;
-      } catch {
-        logger.error("Admission policy read failed", {
-          event: "auth.admission_policy_read_failed",
-          provider: signIn.identity.provider,
-        });
-        throw new AdmissionUnavailableError();
-      }
-      return new AdmissionPolicy({
-        ...mergeAdmissionRules(deployment, managed),
-        unsafeAllowAllUsers: deployment.unsafeAllowAllUsers,
-      }).requireAdmission(signIn);
-    },
-  };
-}
-
 function createUserAuthRuntime(
   config: NormalizedUserAuthConfig,
   database: SqlDatabase
@@ -232,10 +198,13 @@ function createUserAuthRuntime(
   for (const provider of SIGN_IN_PROVIDERS) {
     if (config.providers[provider]) requireProviderAdmission(baseline, provider);
   }
-  const admissionPolicy = createAdmissionEvaluator(
-    config.admission,
-    new AdmissionPolicyStore(database)
-  );
+  const admissionStore = new AdmissionPolicyStore(database);
+  const admissionPolicy: AdmissionEvaluator = {
+    async requireAdmission(signIn) {
+      const policy = await resolveEffectiveAdmissionPolicy(config.admission, admissionStore);
+      return policy.requireAdmission(signIn);
+    },
+  };
   const claim = new SignInClaim(new IdentityClaimStore(database));
   const github = withClaim(
     "github",

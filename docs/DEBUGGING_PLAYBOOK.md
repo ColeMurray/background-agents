@@ -254,22 +254,24 @@ Dashboards and alerts must migrate `sandbox.spawned` and `sandbox.spawn_failed` 
 outcomes, `sandbox.restored` to `sandbox.restore` outcomes, and `sandbox.timeout` to
 `sandbox.inactivity_timeout` (now emitted for every provider).
 
-| Event                          | Level       | Key Fields                                                                                                              | Description                                                             |
-| ------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `sandbox.spawn`                | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed                                                         |
-| `sandbox.restore`              | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed                                                       |
-| `sandbox.snapshot`             | info        | `reason`, `modal_object_id`                                                                                             | Snapshot attempt started                                                |
-| `sandbox.snapshot_saved`       | info        | `image_id`, `reason`                                                                                                    | Snapshot saved                                                          |
-| `sandbox.heartbeat_stale`      | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed                                                        |
-| `sandbox.inactivity_timeout`   | info        | `spawn_source`, `timeout_ms`, `idle_ms`                                                                                 | Inactivity stop decided                                                 |
-| `sandbox.connecting_timeout`   | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
-| `sandbox.boot_budget`          | warn        | `elapsed_ms`, `timeout_ms`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `warning`                   | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
-| `sandbox.fatal_runtime_error`  | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |
-| `sandbox.failed_reconnected`   | info        | `sandbox_id`                                                                                                            | Watchdog-failed boot connected late; resumed as `connecting`            |
-| `sandbox.circuit_breaker_open` | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
+| Event                           | Level       | Key Fields                                                                                                              | Description                                                             |
+| ------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `sandbox.spawn`                 | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed                                                         |
+| `sandbox.restore`               | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed                                                       |
+| `sandbox.snapshot`              | info        | `reason`, `modal_object_id`                                                                                             | Snapshot attempt started                                                |
+| `sandbox.snapshot_saved`        | info        | `image_id`, `reason`                                                                                                    | Snapshot saved                                                          |
+| `sandbox.heartbeat_unconfirmed` | warn        | `last_heartbeat_ms`, `threshold_ms`, `grace_ends_at_ms`, `sandbox_status`                                               | Heartbeat missed; a ready sandbox is kept while its bridge reconnects   |
+| `sandbox.heartbeat_stale`       | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed (past the reconnect grace if ready); sandbox retired   |
+| `sandbox.inactivity_timeout`    | info        | `spawn_source`, `timeout_ms`, `idle_ms`                                                                                 | Inactivity stop decided                                                 |
+| `sandbox.connecting_timeout`    | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
+| `sandbox.boot_budget`           | warn        | `elapsed_ms`, `timeout_ms`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `warning`                   | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
+| `sandbox.fatal_runtime_error`   | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |
+| `sandbox.failed_reconnected`    | info        | `sandbox_id`                                                                                                            | Watchdog-failed boot connected late; resumed as `connecting`            |
+| `sandbox.circuit_breaker_open`  | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
 
 Where `msg` is prose (`"Boot budget exceeded"`, `"Heartbeat stale"`), the stable identifier is in
-`event`.
+`event`. On both heartbeat events, `last_heartbeat_ms` is the heartbeat's age in milliseconds, not a
+timestamp.
 
 #### Provider Clients
 

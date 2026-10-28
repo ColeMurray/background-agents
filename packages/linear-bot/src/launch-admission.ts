@@ -10,6 +10,7 @@ import { channelBindingResponseSchema } from "@open-inspect/shared/types/team-ch
 import { z } from "zod";
 import type { Env } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { describeActorAdmissionFailure } from "./actor-enrollment";
 import { targetRequestFields, type SessionTarget } from "./target-resolution";
 
 export type LinearTeamBinding =
@@ -125,6 +126,10 @@ export function describeSessionCreateFailure(
     rawRefusal = null;
   }
   const refusal = sessionCreateRefusalSchema.safeParse(rawRefusal);
+  if (failure.status === 403 && refusal.success) {
+    const message = describeActorAdmissionFailure(refusal.data.code);
+    if (message) return `${message} No coding session was created.`;
+  }
   if (failure.status === 403 && refusal.success && refusal.data.code === "not_member") {
     return "The acting Linear user is not a member of the bound team. Add that user to the team before delegating again; automation-created requests use the installed app user. No coding session was created.";
   }

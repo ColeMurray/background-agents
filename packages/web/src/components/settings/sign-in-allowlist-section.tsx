@@ -102,8 +102,9 @@ export function SignInAllowlistSection() {
             <p className="text-sm text-muted-foreground">
               Email rules require verified provider evidence. GitHub sign-in requires a verified
               email even when a username or organization matches. New users receive the default
-              Member role; linked users retain their role. These rules do not undo suspension or
-              configure bot access.
+              Member role; linked users retain their role. These rules do not undo suspension. Email
+              rules also admit new Slack/Linear accounts; existing bot access and integration
+              trigger restrictions are unchanged.
             </p>
             {!snapshot.enabledProviders.includes("github") && (
               <p className="text-sm text-muted-foreground">

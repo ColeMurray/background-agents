@@ -18,6 +18,14 @@
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
     },
+    "./actor-enrollment": {
+      "import": "./dist/actor-enrollment.js",
+      "types": "./dist/actor-enrollment.d.ts"
+    },
+    "./abortable": {
+      "import": "./dist/abortable.js",
+      "types": "./dist/abortable.d.ts"
+    },
     "./models": {
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"

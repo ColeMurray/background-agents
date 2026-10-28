@@ -48,8 +48,10 @@ workspace role, and new users receive the Member role by default.
 
 Active built-in Owners and Administrators manage rules at **Settings > Workspace access > Sign-in
 allowlist**. Custom roles, even with member-management permission, cannot read or edit this policy.
-The member directory, bot enrollment, integration trigger restrictions, and resource authorization
-are separate controls. Adding a prospective identity sends no invitation and creates no member.
+The policy covers browser sign-in and creation of new accounts through bot enrollment using the
+evidence described below. The member directory, general bot invocation restrictions, integration
+trigger restrictions, and resource authorization remain separate controls. Adding a rule itself
+sends no invitation and creates no member.
 
 The editor shows **Deployment**, **Settings**, or **Both** for each rule. Deployment rules come from
 `ALLOWED_EMAILS`, `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_USERS` (GitHub usernames), and
@@ -131,6 +133,34 @@ default. Hosting platform/function and ingress caps still apply and can end requ
 Provider token exchange currently has no explicit bound inside the auth library; the proxy bounds
 its own wait, not guaranteed cancellation of provider work. These settings are not evidence of
 successful real-provider or hosting validation; verify them in the target deployment.
+
+### Bot enrollment
+
+Creating a new user through a bot also requires admission against the effective union of deployment
+and SQL-managed rules. Slack and Linear must provide an attested email matching an effective exact
+email or domain rule: `ALLOWED_EMAILS` / `ALLOWED_EMAIL_DOMAINS` plus their settings-managed
+counterparts. New-account admission reads the current managed policy; an unreadable or malformed
+policy fails closed, not back to deployment-only rules. Unsafe allow-all applies only when all four
+effective lists across both sources are empty. It does not waive Slack/Linear's attested-email
+requirement.
+
+Bots cannot prove GitHub username or organization rules; people admitted by those rules must sign in
+on the web first and use the matching account email in Slack or Linear. GitHub bot profile emails
+are not verified admission evidence and cannot be used to link an unknown actor by email. GitHub
+actors must already be known unless unsafe allow-all is effective; a GitHub username or organization
+rule cannot enroll an unknown GitHub bot actor.
+
+Known actors and actors linking to an existing account by attested email keep that account's role
+and suspension without repeating admission. A denied new enrollment creates no account or role.
+Newly admitted users still receive Member. New Slack and Linear actors without an attested email
+cannot enroll, including Slack Connect users whose emails the bot cannot read, even in unsafe mode.
+Removing a rule does not revoke existing bot accounts or turn each bot invocation into a new
+admission check. Suspension, role permissions, service operation limits, and integration ingress
+restrictions still apply; linking to an existing account cannot bypass them.
+
+Admission does not establish that two different emails belong to the same person. If both emails
+pass admission, separate accounts can still be created; use the member merge tool to consolidate
+them. Suspend each account when revoking access.
 
 ## Workspace Roles
 

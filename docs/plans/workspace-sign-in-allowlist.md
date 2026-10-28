@@ -16,10 +16,12 @@ complete and all old authentication runtimes have drained.
 
 ## Boundaries and Source Ownership
 
-This is browser sign-in admission, not a universal workspace access policy. Roles, suspension,
-resource authorization, bot enrollment, and integration trigger restrictions remain separate. Adding
-a rule does not create a member, send an invitation, grant an administrative role, or undo
-suspension. New canonical users receive Member; already linked users retain their role.
+The sign-in allowlist governs browser sign-in and admission of new accounts through bots using
+attested email evidence. It is not a universal workspace access policy or a general bot invocation
+restriction. Roles, suspension, resource authorization, and integration trigger restrictions remain
+separate. Adding a rule itself does not create a member, send an invitation, grant an administrative
+role, or undo suspension. New canonical users receive Member; already linked users retain their
+role.
 
 For each rule type:
 
@@ -27,19 +29,19 @@ For each rule type:
 effective[type] = unique(normalize(deployment[type]) + normalize(managed[type]))
 ```
 
-| Rule                        | Environment baseline    | Terraform input         | Providers      |
-| --------------------------- | ----------------------- | ----------------------- | -------------- |
-| Exact verified email        | `ALLOWED_EMAILS`        | `allowed_emails`        | GitHub, Google |
-| Exact verified email domain | `ALLOWED_EMAIL_DOMAINS` | `allowed_email_domains` | GitHub, Google |
-| GitHub username             | `ALLOWED_USERS`         | `allowed_users`         | GitHub         |
-| GitHub organization         | `ALLOWED_GITHUB_ORGS`   | `allowed_github_orgs`   | GitHub         |
+| Rule                        | Environment baseline    | Terraform input         | Browser providers |
+| --------------------------- | ----------------------- | ----------------------- | ----------------- |
+| Exact verified email        | `ALLOWED_EMAILS`        | `allowed_emails`        | GitHub, Google    |
+| Exact verified email domain | `ALLOWED_EMAIL_DOMAINS` | `allowed_email_domains` | GitHub, Google    |
+| GitHub username             | `ALLOWED_USERS`         | `allowed_users`         | GitHub            |
+| GitHub organization         | `ALLOWED_GITHUB_ORGS`   | `allowed_github_orgs`   | GitHub            |
 
-- Any matching rule admits the identity (OR), not an intersection of rule types.
+- Any applicable, evidence-backed rule admits the identity (OR), not an intersection of rule types.
 - Trim, lowercase, and deduplicate within each source. The API sorts display arrays; runtime
   organization scheduling retains deployment order before appended managed organizations.
-- Email evidence must be verified, including secondary GitHub emails. GitHub requires verified email
-  evidence even when a username or organization matches. The member directory's displayed email is
-  not necessarily the one that admitted the member.
+- Browser email evidence must be verified, including secondary GitHub emails. GitHub sign-in
+  requires verified email evidence even when a username or organization matches. The member
+  directory's displayed email is not necessarily the one that admitted the member.
 - Domains are exact: `example.com` does not include `sub.example.com`. Organizations require active
   membership; GitHub-only rules cannot admit Google identities.
 - A rule can belong to both sources. Removing its settings copy leaves its deployment grant intact.
@@ -61,11 +63,34 @@ and PUT route are read-only whenever the flag is true, even when it is dormant b
 leave unsafe mode, deploy a compatible recovery baseline and disable the flag together, then verify
 the recovery account before enabling editing. Settings cannot toggle this flag or providers.
 
-Removing rules affects subsequent sign-in and other operations that recheck eligibility, including
-the existing internal GitHub account-info path. Ordinary browser-session authentication does not
-rerun admission, and rule removal does not revoke sessions. Use **Members > Suspend** for account
-revocation; existing WebSocket authorization timing remains unchanged. There is no exhaustive
-member-impact or guaranteed last-administrator-reachability check based on the local member list.
+Removing rules affects subsequent sign-in, new-account bot enrollment, and other operations that
+recheck eligibility, including the existing internal GitHub account-info path. Ordinary
+browser-session authentication, known bot actors, and attested-email linking to existing accounts do
+not repeat admission; rule removal does not revoke sessions or existing bot accounts. Use
+**Members > Suspend** for account revocation; existing WebSocket authorization timing remains
+unchanged. There is no exhaustive member-impact or guaranteed last-administrator-reachability check
+based on the local member list.
+
+### Bot Enrollment
+
+Fresh Slack/Linear account creation evaluates the current deployment-plus-managed exact email/domain
+union against the provider-attested email. Deployment-only rules are not a fallback if managed
+policy cannot be read. Known actors and actors linking by attested email to existing accounts bypass
+this new-account admission check, preserving the existing account's role and suspension. This bypass
+does not bypass authorization, service operation limits, or integration trigger restrictions.
+
+Slack and Linear require an attested email even when unsafe allow-all is effective; unreadable
+emails, including those of some Slack Connect users, prevent new actor enrollment. Effective unsafe
+mode requires all four lists across both sources to be empty, not just the email/domain lists.
+GitHub bot profile emails are not verified evidence and cannot link unknown actors by email. Bots
+cannot prove GitHub username or organization rules. GitHub bot actors must already be known unless
+unsafe allow-all is effective. People admitted by GitHub username/org rules can first sign in on the
+web, then use that account's matching email in Slack or Linear.
+
+Denied new enrollment creates no account or role; admitted new users receive Member. Admission does
+not prove that different emails belong to the same person: if both pass admission, separate accounts
+can still result. Use member merge to consolidate them and suspend each account when revoking
+access.
 
 ## Implemented UI
 
@@ -190,8 +215,11 @@ automation, or new custom audit presentation is promised here.
 Better Auth construction remains cached by database identity and normalized environment fingerprint.
 The injected admission evaluator reads managed rules once for each admission evaluation, unions them
 with the runtime's deployment snapshot, and evaluates verified provider evidence before identity
-claiming. There is no managed-rule TTL cache or process-local invalidation requirement. Ordinary
-session/resource authentication does not acquire a new admission-policy read.
+claiming. Fresh bot-account enrollment likewise reads the managed policy before creating a user, but
+matches only attested email/domain evidence (or effective unsafe mode), not GitHub username/org
+proof. Known actors and attested-email links to existing accounts retain their admission bypass.
+There is no managed-rule TTL cache or process-local invalidation requirement. Ordinary
+authentication of existing users does not acquire a new admission-policy read.
 
 The policy read is the evaluation's linearization point. A read after a committed save uses the new
 revision; an already-running evaluation can finish with its earlier snapshot. The feature does not
@@ -335,7 +363,14 @@ lives alongside the shared schema, store, runtime, routes, web proxy/hook/compon
 scripts, with D1 coverage in `packages/control-plane/test/integration/admission-policy-*.test.ts`.
 
 - Verify all four OR-based rule types, both sources and duplicates, verified secondary emails,
-  exact-domain behavior, provider compatibility, and unchanged role/suspension/bot boundaries.
+  exact-domain behavior, provider compatibility, and unchanged role/suspension/authorization
+  boundaries.
+- Verify fresh Slack/Linear accounts use the current managed-plus-deployment email/domain union;
+  known actors and attested-email links to existing users bypass new-account admission while
+  preserving role and suspension. Missing attested email must deny new Slack/Linear actors even in
+  effective unsafe mode. Denied enrollment creates no account/role, and policy-read failure cannot
+  fall back to the baseline. GitHub bot profile emails and username/org rules must not enroll or
+  email-link an unknown GitHub actor; only effective unsafe mode allows that new enrollment.
 - Verify fresh SQL reads in warmed/independent auth runtimes, old in-flight evaluation semantics,
   fail-closed missing/malformed state, and no new admission check on ordinary session requests.
 - Verify four-way organization concurrency, the single 10-second deadline including bodies/queue,

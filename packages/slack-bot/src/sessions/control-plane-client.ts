@@ -5,7 +5,8 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
+import type { ActorEnrollmentOutcome } from "@open-inspect/shared/types/actors";
+import { enrollActor as enrollServiceActor } from "@open-inspect/shared/actor-enrollment";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -97,9 +98,6 @@ export async function requirePublicationAccess(
     );
 }
 
-/** Outcome of `enrollActor`. Anything but `enrolled` must stop the message. */
-export type EnrollActorResult = "enrolled" | "email_required" | "unavailable";
-
 /**
  * Present the actor's Slack profile before any other request that carries the
  * actor. The control plane links a new actor to an existing user by email
@@ -112,39 +110,28 @@ export async function enrollActor(
   env: ControlPlaneEnv,
   actor: SlackActorIdentity,
   traceId?: string
-): Promise<EnrollActorResult> {
-  const base = { trace_id: traceId, slack_user_id: actor.userId };
-  const body: ActorProfileClaims = { displayName: actor.displayName, email: actor.email };
-  try {
-    const response = await signedControlPlaneFetch(
-      env,
-      {
-        method: "POST",
-        url: "https://internal/actors/me",
-        body: JSON.stringify(body),
-        actor: `slack:${actor.userId}`,
-        traceId,
-      },
-      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
-    );
-    if (response.ok) return "enrolled";
-    const { code } = await readErrorBody(response);
-    const outcome = code === "actor_email_required" ? "email_required" : "unavailable";
+): Promise<ActorEnrollmentOutcome> {
+  const result = await enrollServiceActor(
+    "slack-bot",
+    env,
+    {
+      actor: `slack:${actor.userId}`,
+      profile: { displayName: actor.displayName, email: actor.email },
+      traceId,
+    },
+    AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS)
+  );
+  if (result.outcome !== "enrolled") {
     log.warn("control_plane.enroll_actor", {
-      ...base,
-      outcome,
-      http_status: response.status,
-      error_code: code,
+      trace_id: traceId,
+      slack_user_id: actor.userId,
+      outcome: result.outcome,
+      http_status: result.httpStatus,
+      error_code: result.errorCode,
+      error: result.error,
     });
-    return outcome;
-  } catch (e) {
-    log.warn("control_plane.enroll_actor", {
-      ...base,
-      outcome: "unavailable",
-      error: e instanceof Error ? e : new Error(String(e)),
-    });
-    return "unavailable";
   }
+  return result.outcome;
 }
 
 export async function createSession(
