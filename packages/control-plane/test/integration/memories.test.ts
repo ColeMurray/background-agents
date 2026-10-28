@@ -8,7 +8,6 @@ import type { MemoryActor } from "../../src/memory/types";
 import { cleanD1Tables } from "./cleanup";
 import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
 import { seedActiveUser } from "./helpers";
-import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { SessionScopeStore } from "../../src/db/session-scope-store";
 
 const human: MemoryActor = { kind: "user", userId: "user_a", requestId: "test" };
@@ -18,7 +17,7 @@ const agent: MemoryActor = {
   sessionId: "session_a",
   requestId: "tool",
 };
-/** session_a is a root session nobody else has acted in, so its personal facts may skip review. */
+/** session_a is a root session nobody else has prompted, so its personal facts may skip review. */
 const AUTO_SAVE = { personalAutoSaveEligible: true };
 const owner: MemoryPartition = { type: "personal", userId: "user_a" };
 const fact: MemoryContent = {
@@ -175,13 +174,14 @@ describe("memory persistence", () => {
     expect(restored.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(await store.list(owner, page)).toHaveLength(1);
   });
-  it("fences personal autosave once someone else receives the sandbox, whatever the visibility", async () => {
+  it("auto-saves personal facts whatever the visibility, only while the session is eligible", async () => {
     const store = new MemoryRecordStore(env.DB);
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "workspace");
     expect((await store.create(memory(), agent, AUTO_SAVE)).status).toBe("active");
-    await new SessionMemorySelectionStore(env.DB)
-      .bindRevokePersonalForSandboxAccess("session_a", "user_b")
-      .run();
+    // An ineligible session, such as a child, cannot auto-save even when the caller claims it may.
+    await env.DB.prepare(
+      "UPDATE session_memory_manifests SET personal_auto_save_eligible = 0 WHERE session_id = 'session_a'"
+    ).run();
     await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
     expect((await store.create(memory(), agent)).status).toBe("proposed");
   });

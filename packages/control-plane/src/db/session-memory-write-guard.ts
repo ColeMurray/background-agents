@@ -43,9 +43,9 @@ export function agentWriteGuard(actor: AgentActor, partition: MemoryPartition): 
 }
 
 /**
- * Personal auto-save eligibility, rechecked at commit: handing the session's sandbox credentials to
- * someone other than the owner revokes it. Visibility plays no part; the writing prompt must be the
- * owner's, which the service checks before the write.
+ * Personal auto-save eligibility, rechecked at commit: the writing session is a root session owned
+ * by its personal owner. Visibility plays no part; the writing prompt must be the owner's, with
+ * nobody else's yet dispatched, which the service checks before the write.
  */
 export function personalAutoSaveGuard(sessionId: string, ownerUserId: string | null): SqlFragment {
   return sql`EXISTS (SELECT 1 FROM session_memory_manifests manifest

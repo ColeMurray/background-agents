@@ -50,7 +50,6 @@ function memorySession(
     id: "session",
     harness: "opencode",
     isChildSession: false,
-    personalReadsEligible: true,
     personalAutoSaveEligible: true,
     ...rest,
     principal: { userId: "owner", ownerTeamId: null, ...principal },
@@ -275,14 +274,6 @@ describe("SessionMemoryService.read", () => {
     });
     expect(teammate.deps.audit.recordRead).not.toHaveBeenCalled();
 
-    const sandboxShared = setup({
-      records,
-      session: memorySession({ personalReadsEligible: false }),
-    });
-    await expect(sandboxShared.service.read("session", "mine")).rejects.toThrow(
-      MemoryNotFoundError
-    );
-
     const owner = setup({ records });
     await expect(owner.service.read("session", "mine")).resolves.toMatchObject({
       content: "Start the database",
@@ -328,7 +319,7 @@ describe("SessionMemoryService.read", () => {
     expect(excluded.deps.prompts.current).not.toHaveBeenCalled();
   });
 
-  it("conceals a personal record when someone else acts while it is being read", async () => {
+  it("conceals a personal record when someone else prompts while it is being read", async () => {
     const { service, deps } = setup({
       records: [record("mine")],
       prompts: [ownerPrompt, afterTeammate],
@@ -399,7 +390,7 @@ describe("SessionMemoryService.search", () => {
     });
   });
 
-  it("searches personal memory only on the owner's prompt while reads are on", async () => {
+  it("searches personal memory only on the owner's prompt", async () => {
     const { service, deps } = setup({ prompts: [teammatePrompt] });
     await service.search("session", { query: "needle", limit: 10 });
     expect(deps.factIndex.search).toHaveBeenCalledWith(
@@ -408,11 +399,6 @@ describe("SessionMemoryService.search", () => {
     await expect(
       service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
     ).rejects.toThrow("Personal memory is available only on the session owner's own prompts");
-
-    const sandboxShared = setup({ session: memorySession({ personalReadsEligible: false }) });
-    await expect(
-      sandboxShared.service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
-    ).rejects.toThrow("someone else opened its sandbox");
   });
 
   it("stops reading personal memory on the owner's prompts once anyone else has prompted", async () => {
@@ -434,19 +420,20 @@ describe("SessionMemoryService.search", () => {
     );
   });
 
-  it("withholds personal hits when the sandbox is opened while the query runs", async () => {
-    const session = memorySession();
-    const { service, deps } = setup({ session });
-    deps.factIndex.search.mockImplementation(async () => {
-      session.personalReadsEligible = false;
-      return [personalHit, repositoryHit];
-    });
+  it("withholds personal hits when the owner opts out while the query runs", async () => {
+    const { service, deps } = setup();
+    // Once the preference is off, loading the session drops its personal owner.
+    deps.selections.loadSession
+      .mockResolvedValueOnce(memorySession())
+      .mockResolvedValueOnce(memorySession({ sources: { personalOwnerUserId: null } }));
+    deps.factIndex.search.mockResolvedValue([personalHit, repositoryHit]);
     const response = await service.search("session", { query: "needle", limit: 10 });
     expect(response.results.map((result) => result.id)).toEqual(["api"]);
+    expect(deps.selections.loadSession).toHaveBeenCalledTimes(2);
     expect(deps.audit.recordRead).not.toHaveBeenCalled();
   });
 
-  it("drops personal hits when someone else acts while the query runs", async () => {
+  it("drops personal hits when someone else prompts while the query runs", async () => {
     const { service, deps } = setup({ prompts: [ownerPrompt, afterTeammate] });
     deps.factIndex.search.mockResolvedValue([personalHit, repositoryHit]);
     const response = await service.search("session", { query: "needle", limit: 10 });

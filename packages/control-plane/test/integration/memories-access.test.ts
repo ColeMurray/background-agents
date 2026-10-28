@@ -472,34 +472,20 @@ describe("memory shared-scope authorization", () => {
     }
   );
 
-  it("keeps personal autosave through audience changes until someone else gets the sandbox", async () => {
+  it("keeps personal autosave through audience changes", async () => {
     await seedMemorySession("shared", { userId: MEMBER, status: "created" });
     await new SessionCollaboratorStore(env.DB).add("shared", OUTSIDER, MEMBER);
     await new SessionScopeStore(env.DB).updateVisibility(["shared"], "workspace");
-    const eligibility = () =>
-      env.DB.prepare(
-        "SELECT personal_reads_eligible, personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = 'shared'"
-      ).first();
-    expect(await eligibility()).toEqual({
-      personal_reads_eligible: 1,
-      personal_auto_save_eligible: 1,
-    });
-
-    const selections = new SessionMemorySelectionStore(env.DB);
-    expect(await selections.sandboxAccessEndsPersonal("shared", MEMBER)).toBe(false);
-    expect(await selections.sandboxAccessEndsPersonal("shared", OUTSIDER)).toBe(true);
-    await selections.bindRevokePersonalForSandboxAccess("shared", OUTSIDER).run();
-    expect(await selections.sandboxAccessEndsPersonal("shared", OUTSIDER)).toBe(false);
-    expect(await eligibility()).toEqual({
-      personal_reads_eligible: 0,
-      personal_auto_save_eligible: 0,
-    });
-    await expect(
-      new MemoryRecordStore(env.DB).create(
-        { partition: { type: "personal", userId: MEMBER }, scope: { type: "personal" }, content },
-        { ...actor, kind: "agent", sessionId: "shared" },
-        { personalAutoSaveEligible: true }
-      )
-    ).rejects.toThrow(/session access/);
+    expect(
+      await env.DB.prepare(
+        "SELECT personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = 'shared'"
+      ).first()
+    ).toEqual({ personal_auto_save_eligible: 1 });
+    const saved = await new MemoryRecordStore(env.DB).create(
+      { partition: { type: "personal", userId: MEMBER }, scope: { type: "personal" }, content },
+      { ...actor, kind: "agent", sessionId: "shared" },
+      { personalAutoSaveEligible: true }
+    );
+    expect(saved.status).toBe("active");
   });
 });

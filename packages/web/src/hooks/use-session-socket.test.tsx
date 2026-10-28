@@ -169,39 +169,6 @@ describe("useSessionSocket", () => {
     vi.useRealTimers();
   });
 
-  it("asks for sandbox credentials without connecting until the viewer chooses to", async () => {
-    const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation(async (input) =>
-      String(input).endsWith("/sandbox-access")
-        ? Response.json({ code: "sandbox_connect_required" }, { status: 409 })
-        : String(input).endsWith("/tunnel-urls")
-          ? Response.json({ tunnelUrls: { "3000": "https://app.example" } })
-          : Response.json({ token: "ws-token" })
-    );
-    const { result, unmount } = renderSessionSocket();
-
-    await waitFor(() => expect(result.current.sandboxConnectRequired).toBe(true));
-    expect(result.current.sessionState?.tunnelUrls).toEqual({ "3000": "https://app.example" });
-    const urls = () => fetchMock.mock.calls.map(([url]) => String(url));
-    expect(urls()).not.toContain("/api/sessions/session-1/sandbox-access?connect=1");
-
-    fetchMock.mockImplementation(async (input) =>
-      String(input).endsWith("?connect=1")
-        ? Response.json({
-            codeServer: null,
-            vnc: null,
-            ttyd: { url: "https://terminal.example", token: "terminal-token" },
-          })
-        : Response.json({ token: "ws-token" })
-    );
-    await act(() => result.current.connectSandbox());
-
-    expect(result.current.sessionState?.ttydToken).toBe("terminal-token");
-    expect(result.current.sandboxConnectRequired).toBe(false);
-    expect(urls()).toContain("/api/sessions/session-1/sandbox-access?connect=1");
-    unmount();
-  });
-
   it("keeps read synchronization available without collaboration or sandbox access", async () => {
     const fetchMock = vi.mocked(fetch);
     const snapshot = createSnapshot();

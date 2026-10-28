@@ -87,15 +87,9 @@ export interface MemorySession {
   /** Agent-spawned children consume their parent's pinned selection rather than their own. */
   isChildSession: boolean;
   /**
-   * Whether the owner's prompts may still search and read their personal store. Cleared for good
-   * once someone else receives the sandbox credentials of this session or one that spawned it.
-   * Someone else's prompt ends reads too (`MemoryPromptContext.othersPrompted`).
-   */
-  personalReadsEligible: boolean;
-  /**
-   * Whether personal facts written by this session may skip review. Root sessions start
-   * eligible; sandbox credentials handed to someone else clear it, and the store rechecks at
-   * commit time. Prompts from anyone else end it too (`MemoryPromptContext.othersPrompted`).
+   * Whether personal facts written by this session may skip review: root sessions may, children
+   * may not, and the store rechecks at commit time. Prompts from anyone else end it
+   * (`MemoryPromptContext.othersPrompted`).
    */
   personalAutoSaveEligible: boolean;
 }

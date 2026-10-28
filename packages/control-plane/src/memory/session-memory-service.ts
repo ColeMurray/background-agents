@@ -48,8 +48,8 @@ function personalReadable(
  */
 export interface SessionMemoryServiceDeps {
   /**
-   * What one session sees: the session itself (principal, memory sources, harness, personal read
-   * and auto-save eligibility), its pinned selection, and whether a record is pinned in it.
+   * What one session sees: the session itself (principal, memory sources, harness, auto-save
+   * eligibility), its pinned selection, and whether a record is pinned in it.
    */
   selections: Pick<SessionMemorySelectionStore, "loadSession" | "loadSelection" | "isPinned">;
   /** The memory records themselves (content, revisions, lifecycle), independent of any session. */
@@ -155,8 +155,7 @@ export class SessionMemoryService {
   /**
    * Write relative to the session: the sole repository or the selected one, the session
    * environment, or the pinned personal owner. Personal writes need the owner's own prompt, and
-   * become proposals once anyone else has prompted the session or received its sandbox
-   * credentials; the store rechecks the credential half atomically.
+   * become proposals once anyone else has prompted the session.
    */
   async write(
     sessionId: string,
@@ -235,8 +234,8 @@ export class SessionMemoryService {
 
   /**
    * Reread the session, its owner's preference and the prompt just before personal records leave
-   * the service, since a sandbox connect, an opt-out or another prompt may have landed while the
-   * query ran. Returns that current view while personal records may still be read.
+   * the service, since an opt-out, a suspension or another prompt may have landed while the query
+   * ran. Returns that current view while personal records may still be read.
    */
   private async personalStillReadable(
     sessionId: string,

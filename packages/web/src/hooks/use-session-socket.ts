@@ -59,15 +59,6 @@ interface UseSessionSocketReturn {
   sessionGone: boolean;
   capabilities: SessionCapabilities;
   sessionState: SessionState | null;
-  /**
-   * Whether the sandbox's terminal, editor and desktop credentials wait for `connectSandbox`,
-   * because opening them would switch off the session owner's personal memory.
-   */
-  sandboxConnectRequired: boolean;
-  sandboxConnecting: boolean;
-  /** The last `connectSandbox` attempt failed; calling it again retries. */
-  sandboxConnectFailed: boolean;
-  connectSandbox: () => Promise<void>;
   /** Why the sandbox last failed, when the control plane reported a reason. */
   sandboxError: string | null;
   /** The latest sandbox boot: its last phase and completed-phase timings. */
@@ -154,10 +145,6 @@ export function useSessionSocket(
   const pendingRequestsRef = useRef(new Map<string, PendingCorrelatedRequest>());
   const {
     sandboxAccess,
-    connectRequired: sandboxConnectRequired,
-    connecting: sandboxConnecting,
-    connectFailed: sandboxConnectFailed,
-    connect: connectSandbox,
     clear: clearSandboxAccess,
     refresh: refreshSandboxAccess,
   } = useSandboxAccess(
@@ -514,10 +501,6 @@ export function useSessionSocket(
     sessionGone: transport.sessionGone,
     capabilities: transport.sessionGone ? resolveSessionCapabilities(undefined) : capabilities,
     sessionState,
-    sandboxConnectRequired,
-    sandboxConnecting,
-    sandboxConnectFailed,
-    connectSandbox,
     sandboxError: state.sandboxError,
     boot: state.boot,
     messages: NO_MESSAGES,

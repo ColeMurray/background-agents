@@ -9,7 +9,6 @@ import { FilesChangedSection } from "./sidebar/files-changed-section";
 import { MediaSection } from "./sidebar/media-section";
 import { CodeServerSection } from "./sidebar/code-server-section";
 import { VncSection } from "./sidebar/vnc-section";
-import { SandboxConnectSection } from "./sidebar/sandbox-connect-section";
 import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
@@ -55,11 +54,6 @@ interface SessionRightSidebarProps {
   artifacts: Artifact[];
   terminalOpen?: boolean;
   onToggleTerminal?: () => void;
-  /** The sandbox's credentials wait for `onConnectSandbox`; see `useSandboxAccess`. */
-  sandboxConnectRequired?: boolean;
-  sandboxConnecting?: boolean;
-  sandboxConnectFailed?: boolean;
-  onConnectSandbox?: () => void;
   onOpenMedia: (artifactId: string) => void;
   diffState?: SessionDiffState | null;
   diffLoading?: boolean;
@@ -119,10 +113,6 @@ export function SessionRightSidebarContent({
   artifacts,
   terminalOpen,
   onToggleTerminal,
-  sandboxConnectRequired = false,
-  sandboxConnecting = false,
-  sandboxConnectFailed = false,
-  onConnectSandbox,
   onOpenMedia,
   diffState,
   diffLoading,
@@ -167,13 +157,11 @@ export function SessionRightSidebarContent({
   const additions = files.reduce((total, file) => total + (file.additions ?? 0), 0);
   const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
   const completedTasks = tasks.filter((task) => task.status === "completed").length;
-  const connectSandbox =
-    capabilities.sandboxAccess && sandboxConnectRequired ? onConnectSandbox : undefined;
   const hasSandboxTools =
     capabilities.sandboxAccess &&
     Boolean(
-      connectSandbox ||
-      (!sandboxConnectRequired && (sessionState?.codeServerUrl || sessionState?.vncUrl)) ||
+      sessionState?.codeServerUrl ||
+      sessionState?.vncUrl ||
       terminalUrl ||
       Object.keys(sessionState?.tunnelUrls ?? {}).length
     );
@@ -426,16 +414,8 @@ export function SessionRightSidebarContent({
           </p>
         )}
 
-        {connectSandbox && (
-          <SandboxConnectSection
-            onConnect={connectSandbox}
-            pending={sandboxConnecting}
-            failed={sandboxConnectFailed}
-          />
-        )}
-
         {/* Code Server */}
-        {capabilities.sandboxAccess && !sandboxConnectRequired && sessionState?.codeServerUrl && (
+        {capabilities.sandboxAccess && sessionState?.codeServerUrl && (
           <CodeServerSection
             url={sessionState.codeServerUrl}
             password={sessionState.codeServerPassword ?? null}
@@ -444,7 +424,7 @@ export function SessionRightSidebarContent({
         )}
 
         {/* VNC Desktop */}
-        {capabilities.sandboxAccess && !sandboxConnectRequired && sessionState?.vncUrl && (
+        {capabilities.sandboxAccess && sessionState?.vncUrl && (
           <VncSection
             url={sessionState.vncUrl}
             password={sessionState.vncPassword ?? null}

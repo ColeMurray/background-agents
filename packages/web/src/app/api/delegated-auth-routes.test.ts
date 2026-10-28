@@ -64,7 +64,6 @@ import { PATCH as updateSessionBudget } from "./sessions/[id]/budget/route";
 import { GET as listChildSessions } from "./sessions/[id]/children/route";
 import { POST as refreshPullRequests } from "./sessions/[id]/pull-requests/refresh/route";
 import { GET as getSandboxAccess } from "./sessions/[id]/sandbox-access/route";
-import { GET as getTunnelUrls } from "./sessions/[id]/tunnel-urls/route";
 import { PATCH as updateSessionTitle } from "./sessions/[id]/title/route";
 import { POST as unarchiveSession } from "./sessions/[id]/unarchive/route";
 
@@ -312,12 +311,6 @@ const routes: RouteCase[] = [
     method: "GET",
     path: "/sessions/session-1/sandbox-access",
     call: (request) => getSandboxAccess(request, sessionParams),
-    headers: { "Cache-Control": "private, no-store", Vary: "Cookie" },
-  },
-  {
-    method: "GET",
-    path: "/sessions/session-1/tunnel-urls",
-    call: (request) => getTunnelUrls(request, sessionParams),
     headers: { "Cache-Control": "private, no-store", Vary: "Cookie" },
   },
   {

@@ -70,14 +70,6 @@ async function searchIds(sandbox: Sandbox, scopeType?: "personal") {
     : response.status;
 }
 
-async function eligibility(sessionId: string) {
-  return env.DB.prepare(
-    "SELECT personal_reads_eligible, personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = ?"
-  )
-    .bind(sessionId)
-    .first();
-}
-
 const asUser = (userId: string) => ({ as: { userId, role: "member" as const } });
 
 /** Review feedback for the session runtime's Autofix endpoint, from GitHub reviewer 7. */
@@ -127,13 +119,6 @@ async function readySandboxWithTools(stub: DurableObjectStub) {
     "https://terminal.example.test",
     await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY!),
     JSON.stringify({ "3000": "https://app.example.test" })
-  );
-}
-
-function sandboxAccess(sessionId: string, userId: string, connect = false) {
-  return serviceFetch(
-    `${BASE}/sessions/${sessionId}/sandbox-access${connect ? "?connect=1" : ""}`,
-    asUser(userId)
   );
 }
 
@@ -254,108 +239,23 @@ describe("personal memory follows the session owner's prompts", () => {
     expect((await (await child("child-of-co-prompted", coPrompted.id))()).status).toBe(404);
   });
 
-  it("hands someone else the sandbox credentials only on an explicit connect, then switches personal reads off for good", async () => {
+  it("leaves personal memory on when someone else opens the sandbox", async () => {
     const record = await personalMemory();
     const sandbox = await ownedSession("sandbox-shared");
     await seedPrompt(sandbox.stub, OWNER);
     await readySandboxWithTools(sandbox.stub);
 
-    const owner = await sandboxAccess(sandbox.id, OWNER);
-    expect(owner.status).toBe(200);
-    expect(await owner.json()).toMatchObject({ codeServer: { password: "code-secret" } });
-    expect(
-      (await serviceFetch(`${BASE}/sessions/${sandbox.id}/tunnel-urls`, asUser(TEAMMATE))).status
-    ).toBe(200);
-    const asked = await sandboxAccess(sandbox.id, TEAMMATE);
-    expect(asked.status).toBe(409);
-    const refusal = await asked.text();
-    expect(JSON.parse(refusal)).toMatchObject({ code: "sandbox_connect_required" });
-    expect(refusal).not.toContain("code-secret");
-    expect(await eligibility(sandbox.id)).toEqual({
-      personal_reads_eligible: 1,
-      personal_auto_save_eligible: 1,
-    });
+    // Sandbox access is trusted like the session's other credentials (see docs/MEMORY.md).
+    const access = await serviceFetch(
+      `${BASE}/sessions/${sandbox.id}/sandbox-access`,
+      asUser(TEAMMATE)
+    );
+    expect(access.status).toBe(200);
+    expect(await access.json()).toMatchObject({ ttyd: { token: "terminal-secret" } });
     expect((await sandbox(`/${record.id}`)).status).toBe(200);
-
-    const connected = await sandboxAccess(sandbox.id, TEAMMATE, true);
-    expect(connected.status).toBe(200);
-    expect(await connected.json()).toMatchObject({ ttyd: { token: "terminal-secret" } });
-    expect(await eligibility(sandbox.id)).toEqual({
-      personal_reads_eligible: 0,
-      personal_auto_save_eligible: 0,
-    });
-    expect(
-      await env.DB.prepare(
-        `SELECT actor_user_id_snapshot, resource_id, target_user_id_snapshot
-         FROM authorization_audit_events WHERE action = 'memory.personal_access_revoked'`
-      ).all()
-    ).toMatchObject({
-      results: [
-        {
-          actor_user_id_snapshot: TEAMMATE,
-          resource_id: sandbox.id,
-          target_user_id_snapshot: OWNER,
-        },
-      ],
-    });
-    expect((await sandbox(`/${record.id}`)).status).toBe(404);
-    expect(await searchIds(sandbox, "personal")).toBe(403);
     const write = await sandbox("", "POST", personalWrite);
     expect(write.status).toBe(201);
-    expect(await write.json()).toMatchObject({ status: "proposed" });
-
-    // Nothing is left to protect, so later requests hand the credentials out without asking.
-    expect((await sandboxAccess(sandbox.id, TEAMMATE)).status).toBe(200);
-  });
-
-  it("does not ask or switch personal reads off when no credentials are handed out", async () => {
-    const sandbox = await ownedSession("sandbox-without-tools");
-    await queryDO(sandbox.stub, "UPDATE sandbox SET status = 'stopped'");
-    expect((await sandboxAccess(sandbox.id, TEAMMATE)).status).toBe(409);
-
-    await queryDO(
-      sandbox.stub,
-      "UPDATE sandbox SET status = 'ready', tunnel_urls = ?",
-      JSON.stringify({ "3000": "https://app.example.test" })
-    );
-    const previews = await sandboxAccess(sandbox.id, TEAMMATE);
-    expect(previews.status).toBe(200);
-    expect(await previews.json()).toMatchObject({ codeServer: null, vnc: null, ttyd: null });
-    expect(await eligibility(sandbox.id)).toEqual({
-      personal_reads_eligible: 1,
-      personal_auto_save_eligible: 1,
-    });
-  });
-
-  it("keeps personal reads off in children of a session someone else opened", async () => {
-    const record = await personalMemory();
-    const parent = await ownedSession("opened-parent");
-    await seedMemorySession("earlier-child", {
-      userId: OWNER,
-      visibility: "workspace",
-      status: "created",
-      parentSessionId: parent.id,
-    });
-    await readySandboxWithTools(parent.stub);
-    expect((await sandboxAccess(parent.id, TEAMMATE, true)).status).toBe(200);
-    expect(await eligibility("earlier-child")).toEqual({
-      personal_reads_eligible: 0,
-      personal_auto_save_eligible: 0,
-    });
-
-    await seedMemorySession("later-child", {
-      userId: OWNER,
-      visibility: "workspace",
-      status: "created",
-      parentSessionId: parent.id,
-    });
-    const { stub } = await initNamedSessionDO("later-child");
-    await seedSandboxAuthHash(stub, { authToken: "token-later-child", sandboxId: "sb-later" });
-    await seedPrompt(stub, OWNER);
-    const read = await SELF.fetch(`${BASE}/sessions/later-child/sandbox-memory/${record.id}`, {
-      headers: { Authorization: "Bearer token-later-child" },
-    });
-    expect(read.status).toBe(404);
+    expect(await write.json()).toMatchObject({ status: "active" });
   });
 
   it("stops personal reads for a suspended owner's queued prompts", async () => {

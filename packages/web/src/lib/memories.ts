@@ -87,7 +87,7 @@ export function bulkActionSummary(
 }
 
 export const PERSONAL_MEMORY_DISCLOSURE =
-  "Only your own prompts can search, read or save your personal memories, and only until someone else prompts the session or opens its sandbox. Those loaded when a session starts still shape every prompt in it, and agent responses are visible to anyone who can see the session.";
+  "Only your own prompts can search, read or save your personal memories. Once someone else prompts a session, searching stops there and what your prompts save waits for your review. Those loaded when a session starts still shape every prompt in it, and agent responses are visible to anyone who can see the session.";
 
 export function memoryTypeLabel(type: MemoryType): string {
   const { label, hint } = MEMORY_TYPE_LABELS[type];

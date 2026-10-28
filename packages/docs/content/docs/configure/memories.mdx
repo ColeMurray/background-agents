@@ -81,25 +81,24 @@ Your personal memories work for you, not for whoever is using a session. Setting
 - **Which sessions include them.** New sessions you start on the web or in a Slack direct message. Automation runs, including ones you trigger yourself, never include them, and neither do sessions started from a Slack channel, from Linear, or from GitHub.
 - **Only your own prompts use them.** While the agent works on your prompt, it can search, read, and save your personal memories. While it works on someone else's prompt, or an automatic one such as Autofix, it cannot. The personal directives and catalog loaded when the session started stay in the agent's context for every prompt.
 - **Someone else's prompt ends searching.** A prompt can leave a program running in the sandbox, so once someone else has prompted the session, or a session that started it, the agent stops searching and reading your personal memories there for good. Your later prompts can still save new ones for you to review.
-- **Opening the sandbox counts.** Nothing ties a terminal to a prompt, so once someone else opens the session's terminal, editor, or desktop, the agent stops searching and reading your personal memories for the rest of the session and in its child sessions. They have to choose **Open terminal, editor and desktop** first, which says so.
 - **Turning the switch off** reaches existing sessions too: their agents stop searching, reading, and saving your personal memories at once. What a session loaded when it started stays in its context.
-- **Sessions started before these rules** keep the personal memories they loaded, automation runs and Slack channel, Linear, or GitHub sessions included. Their agents no longer search or read your personal memories, and what they save waits for your review.
+- **Sessions prompted before these rules** keep the personal memories they loaded, automation runs and Slack channel, Linear, or GitHub sessions included. Their earlier prompts count as someone else's, so their agents no longer search or read your personal memories, and what they save waits for your review.
 
 Session visibility changes none of this: a team- or workspace-visible session you prompt yourself uses your personal memories exactly as a private one does.
 
-What this does not stop: anything the agent writes from your personal memories appears in the session, where everyone who can see it can read it. The directives and catalog loaded at the start shape every prompt, and they sit in the sandbox's files, where anyone who opens its terminal can read them.
+What this does not stop: anything the agent writes from your personal memories appears in the session, where everyone who can see it can read it. The directives and catalog loaded at the start shape every prompt, and they sit in the sandbox's files, where anyone who opens its terminal can read them. Anyone who can open a session's terminal, editor, or desktop can do what its agent can, so while your prompts run they can also search and read the rest of your personal memories and save new facts, just as they can use the session's other credentials.
 
 ## How agent proposals are approved
 
 Memories you create in Settings are active immediately. What an agent writes depends on the type and scope.
 
-| Agent writes                     | Result                                                                                                                                                  |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Personal fact                    | Active immediately on your own prompt in a top-level session, until someone else prompts it or opens its sandbox. Otherwise proposed for you to review. |
-| Personal directive               | Proposed for you to review.                                                                                                                             |
-| Repository or environment memory | Proposed for someone who can manage that scope.                                                                                                         |
+| Agent writes                     | Result                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Personal fact                    | Active immediately on your own prompt in a top-level session, until someone else prompts it. Otherwise proposed for you to review. |
+| Personal directive               | Proposed for you to review.                                                                                                        |
+| Repository or environment memory | Proposed for someone who can manage that scope.                                                                                    |
 
-Once someone else prompts a session or opens its sandbox, the personal facts it saves are always proposed. Sharing the session or adding a collaborator does not change this by itself. Child sessions never save personal facts directly. An agent's personal fact that replaces a directive is always proposed, so a directive cannot be replaced without your approval. When an agent proposes a memory, it is instructed to tell you that it awaits review in Settings › Memories (personal) or Settings › Shared memories.
+Once someone else prompts a session, the personal facts it saves are always proposed. Sharing the session or adding a collaborator does not change this by itself. Child sessions never save personal facts directly. An agent's personal fact that replaces a directive is always proposed, so a directive cannot be replaced without your approval. When an agent proposes a memory, it is instructed to tell you that it awaits review in Settings › Memories (personal) or Settings › Shared memories.
 
 Each session can make at most 20 memory writes, with at most 5 proposals pending at a time.
 
@@ -229,9 +228,9 @@ The server accepts up to 8 memories per request. The page sends larger selection
 </Accordion>
   <Accordion title="The agent says personal memory is unavailable">
     Cause: the agent is working on someone else's prompt; someone else has prompted the session,
-    or one that started it; someone other than you opened its terminal, editor, or desktop; the
-    session was started by an automation or an integration other than a Slack direct message; or
-    your personal memory switch is off. Fix: start a new session and prompt it yourself.
+    or one that started it; the session was started by an automation or an integration other than
+    a Slack direct message; or your personal memory switch is off. Fix: start a new session and
+    prompt it yourself.
 
 </Accordion>
 </Accordions>

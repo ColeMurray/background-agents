@@ -616,6 +616,51 @@ describe("SessionRightSidebar", () => {
     expect(fetchSignal?.aborted).toBe(false);
   });
 
+  it("hides sandbox access controls when the capability is denied", () => {
+    const sandboxSessionState: SessionState = {
+      id: "session-1",
+      title: "Viewer session",
+      repoOwner: "acme",
+      repoName: "web",
+      baseBranch: "main",
+      branchName: "viewer",
+      status: "active",
+      sandboxStatus: "ready",
+      harness: "opencode",
+      messageCount: 0,
+      createdAt: 1,
+      codeServerUrl: "https://code.example",
+      vncUrl: "https://vnc.example",
+      ttydUrl: "https://terminal.example",
+      ttydToken: "secret",
+      tunnelUrls: { app: "https://app.example" },
+    };
+
+    render(
+      <Sidebar
+        sessionId="session-1"
+        sessionState={sandboxSessionState}
+        participants={[]}
+        presenceSynced={false}
+        events={[]}
+        artifacts={[]}
+        onOpenMedia={vi.fn()}
+        capabilities={{ ...FULL_CAPABILITIES, sandboxAccess: false }}
+      />
+    );
+
+    selectTab("Tools");
+    expect(screen.queryByText("Open Editor")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open Desktop")).not.toBeInTheDocument();
+    expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
+    expect(screen.queryByText("Port app")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Sandbox access is not available with your permissions.")
+    ).toBeVisible();
+    selectTab("Info");
+    expect(screen.getByText("main")).toBeVisible();
+  });
+
   it("keeps its ARIA target mounted when closed", () => {
     render(
       <Sidebar
@@ -874,6 +919,24 @@ describe("SessionRightSidebar", () => {
       "1"
     );
     expect(screen.getByText("Update the UI")).toBeVisible();
+  });
+
+  it("preserves authorized terminal controls and does not leak them into Info", () => {
+    const onToggleTerminal = vi.fn();
+    render(
+      inspector({
+        sessionState: { ...SESSION, ttydUrl: "https://terminal.example", ttydToken: "token" },
+        onToggleTerminal,
+      })
+    );
+    expect(screen.queryByRole("button", { name: "Show" })).not.toBeInTheDocument();
+    selectTab("Tools");
+    expect(screen.getByRole("link", { name: "Open in new tab" })).toHaveAttribute(
+      "href",
+      "https://terminal.example/?token=token"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    expect(onToggleTerminal).toHaveBeenCalledOnce();
   });
 
   it("scrolls each tab panel on its own", () => {

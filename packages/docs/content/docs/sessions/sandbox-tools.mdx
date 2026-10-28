@@ -11,8 +11,6 @@ relatedCode:
   - packages/web/src/components/sidebar/code-server-section.tsx
   - packages/web/src/components/sidebar/vnc-section.tsx
   - packages/web/src/components/sidebar/tunnel-urls-section.tsx
-  - packages/web/src/components/sidebar/sandbox-connect-section.tsx
-  - packages/web/src/hooks/use-sandbox-access.ts
   - packages/web/src/components/settings/sandbox-settings.tsx
   - packages/web/src/components/settings/integrations/code-server-integration-settings.tsx
   - packages/control-plane/src/routes/session-runtime-proxy.ts
@@ -39,9 +37,7 @@ Sandbox tools need the `sessions.sandbox_access` permission. Members, Administra
 
 The permission alone is not enough. You must have access to that session, and team-owned sessions require current owning-team membership even for Administrators and Owners. In a private session, you must also be the owning user or an explicit collaborator; Owner break-glass read access does not grant sandbox access. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing) and [Workspace access](/administration/workspace-access).
 
-### Opening tools in someone else's session
-
-When the session belongs to someone else and still uses their personal memories, the Tools tab shows **Open terminal, editor and desktop** instead of the tools, and their credentials load only when you click it. Nothing ties a terminal to a prompt, so opening them stops the agent from searching or reading the owner's personal memories for the rest of the session and in its child sessions. In your own sessions, in sessions without personal memories, and when the sandbox has none of these tools, nothing is asked. Port tunnel links work without opening anything. API clients confirm with `?connect=1` on `GET /sessions/:id/sandbox-access`; without it the request is refused with `sandbox_connect_required`. See [Memories](/configure/memories#including-personal-memories).
+The terminal, code server, and desktop can do anything the agent can in the sandbox. That includes using the session's credentials and, while the session owner's prompts run, reaching their personal memories. See [Memories](/configure/memories#including-personal-memories).
 
 ## Enabling the tools
 
