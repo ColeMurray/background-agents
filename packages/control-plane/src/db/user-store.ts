@@ -20,6 +20,8 @@ export interface ProviderIdentity {
   avatarUrl?: string;
 }
 
+export type EnrollmentAdmission = (identity: Readonly<ProviderIdentity>) => void;
+
 /**
  * Ingress providers whose attributed emails are platform-verified mailboxes
  * fetched server-side by first-party bots: Slack confirms every address at
@@ -49,11 +51,12 @@ export function isEmailAttestingProvider(provider: ProviderIdentity["provider"])
  *
  * Known limitation: a Slack user whose profile email the bot cannot read,
  * typically an external Slack Connect user, cannot be enrolled and so cannot
- * use the bot. Linear is not listed because its bot still sends claim-less
- * requests before its first claim-bearing one.
+ * use the bot. Linear's catalog reads are actorless; its session-creation
+ * request carries the enrolling actor's email.
  */
 const ENROLLMENT_EMAIL_REQUIRED_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
   "slack",
+  "linear",
 ]);
 
 export function requiresEnrollmentEmail(provider: ProviderIdentity["provider"]): boolean {
@@ -242,15 +245,20 @@ export class UserStore {
   /**
    * Core resolution entry point. Finds or creates a canonical user for the
    * given provider identity, with automatic email-based cross-provider linking.
+   * Admission receives the normalized identity before a new user is inserted;
+   * existing identities and email links retain their existing account access.
    *
    * On UNIQUE constraint violation (concurrent race), retries the lookup once.
    */
-  async resolveOrCreateUser(identity: ProviderIdentity): Promise<ResolvedUser> {
+  async resolveOrCreateUser(
+    identity: ProviderIdentity,
+    requireEnrollmentAdmission: EnrollmentAdmission
+  ): Promise<ResolvedUser> {
     try {
-      return await this.doResolveOrCreate(identity);
+      return await this.doResolveOrCreate(identity, requireEnrollmentAdmission);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
-        return await this.doResolveOrCreate(identity);
+        return await this.doResolveOrCreate(identity, requireEnrollmentAdmission);
       }
       throw err;
     }
@@ -423,7 +431,10 @@ export class UserStore {
 
   // ── Private ─────────────────────────────────────────────────────
 
-  private async doResolveOrCreate(identity: ProviderIdentity): Promise<ResolvedUser> {
+  private async doResolveOrCreate(
+    identity: ProviderIdentity,
+    requireEnrollmentAdmission: EnrollmentAdmission
+  ): Promise<ResolvedUser> {
     const normalizedEmail = normalizeEmail(identity.providerEmail);
 
     // Step 1: Look up by provider identity
@@ -512,6 +523,7 @@ export class UserStore {
     // Step 4: Brand new user — batch user + identity creation so a UNIQUE
     // failure on the identity INSERT rolls back the user INSERT, preventing
     // orphaned user rows under concurrent requests.
+    requireEnrollmentAdmission({ ...identity, providerEmail: normalizedEmail ?? undefined });
     const userId = generateId();
     const identityId = generateId();
     const now = Date.now();

@@ -29,6 +29,21 @@ async function readyImage(
 }
 
 describe("evaluateImageBuildForSpawn", () => {
+  it.each(["v77-codex-pinned-binary", "v78-tunnel-environment-recovery"])(
+    "rejects unpriced Codex image %s and accepts the current runtime",
+    async (runtimeVersion) => {
+      const oldImage = await readyImage({ runtime_version: runtimeVersion });
+      expect(await evaluateImageBuildForSpawn(oldImage, SESSION_REPOSITORIES, "codex")).toEqual({
+        outcome: "miss",
+        reason: "runtime_below_floor",
+        imageBuildId: "imgb-1",
+      });
+      expect(
+        await evaluateImageBuildForSpawn(await readyImage(), SESSION_REPOSITORIES, "codex")
+      ).toMatchObject({ outcome: "selected" });
+    }
+  );
+
   it.each(["claude", "opencode"] as const)(
     "rejects pre-memory v73 images for %s",
     async (harness) => {

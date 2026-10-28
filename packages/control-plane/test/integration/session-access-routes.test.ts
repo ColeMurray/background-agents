@@ -666,6 +666,14 @@ describe("HTTP session access by enforcement mode", () => {
 
     it("leaves other services and Slack collaborate/media routes outside this scope gate", async () => {
       await enrollSlackActor("slack:U-OUTSIDE-SCOPE");
+      await new UserStore(env.DB).resolveOrCreateUser(
+        {
+          provider: "linear",
+          providerUserId: "U-OUTSIDE-SCOPE",
+          providerEmail: "outside-scope@linear.test",
+        },
+        () => {}
+      );
       const { sessionName, stub } = await initSession({ userId: CREATOR });
       await waitForSandboxStatus(stub, "failed");
       for (const service of ["linear-bot", "github-bot"] as const) {

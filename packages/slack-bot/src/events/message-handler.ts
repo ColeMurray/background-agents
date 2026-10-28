@@ -6,6 +6,7 @@ import {
   updateMessage,
 } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
+import type { ActorEnrollmentOutcome } from "@open-inspect/shared/types/actors";
 import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
@@ -42,11 +43,7 @@ import {
 } from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
-import {
-  checkPublicationAccess,
-  enrollActor,
-  type EnrollActorResult,
-} from "../sessions/control-plane-client";
+import { checkPublicationAccess, enrollActor } from "../sessions/control-plane-client";
 import {
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
@@ -159,11 +156,13 @@ async function resolveThreadSessionAdmission(
   return { kind: "followUp", session, threadTs };
 }
 
-const ENROLLMENT_REFUSAL_MESSAGES: Record<Exclude<EnrollActorResult, "enrolled">, string> = {
+const ENROLLMENT_REFUSAL_MESSAGES: Record<Exclude<ActorEnrollmentOutcome, "enrolled">, string> = {
   // A hidden profile email (e.g. Slack Connect), a missing scope, or a failed
   // users.info lookup all look the same here, so the reply names none of them.
   email_required:
     "I couldn't read the email on your Slack profile, so I can't link you to an Open-Inspect account. Please try again, or ask an admin to check that the bot can read Slack profile emails.",
+  admission_denied:
+    "Your account is not authorized to join this Open-Inspect workspace. Sign in on the web with the email on your Slack profile, or ask an administrator to check the admission allowlists.",
   unavailable: "Sorry, I couldn't verify your account right now. Please try again in a moment.",
 };
 

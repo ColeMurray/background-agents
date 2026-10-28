@@ -8,6 +8,7 @@ import pytest
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.event_forwarder import EVICTION_WARNING_INTERVAL_SECONDS
 from sandbox_runtime.harness import TurnOutcome
+from sandbox_runtime.reconnect_backoff import ReconnectBackoff
 from tests.event_forwarder_fakes import make_forwarder, open_ws
 
 
@@ -189,7 +190,7 @@ async def test_health_is_reported_across_a_sustained_outage(bridge, monkeypatch)
     monkeypatch.setattr("sandbox_runtime.bridge.HEALTH_LOG_INTERVAL_SECONDS", 0.01)
     bridge.git_signing.initialize = AsyncMock()
     bridge._load_session_id = AsyncMock()
-    bridge.RECONNECT_MAX_DELAY_SECONDS = 0.002
+    bridge.reconnect_backoff = ReconnectBackoff(max_delay_seconds=0.002)
     await bridge.event_forwarder.send({"type": "execution_complete", "messageId": "queued"})
 
     def health_logs():

@@ -36,6 +36,24 @@ access must be revoked immediately.
 Authentication does not make someone an Owner or Administrator. Every admitted user has exactly one
 workspace role, and new users receive the Member role by default.
 
+### Bot enrollment
+
+Creating a new user through a bot also requires deployment admission. Slack and Linear must provide
+an attested email that matches `ALLOWED_EMAILS` or `ALLOWED_EMAIL_DOMAINS`. Unsafe allow-all applies
+only when no allowlists are configured. Bots cannot prove GitHub username or organization rules;
+people admitted by those rules must sign in on the web first and use the matching account email in
+Slack or Linear. GitHub bot profile emails are not admission evidence; GitHub actors must already be
+known unless unsafe allow-all is effective.
+
+Known actors and actors linking to an existing account by attested email keep that account's role
+and suspension without repeating admission. A denied new enrollment creates no account or role.
+Newly admitted users still receive Member. New Slack and Linear actors without an attested email
+cannot enroll, including Slack Connect users whose emails the bot cannot read.
+
+Admission does not establish that two different emails belong to the same person. If both emails
+pass admission, separate accounts can still be created; use the member merge tool to consolidate
+them. Suspend each account when revoking access.
+
 ## Workspace Roles
 
 Open-Inspect includes four built-in roles.

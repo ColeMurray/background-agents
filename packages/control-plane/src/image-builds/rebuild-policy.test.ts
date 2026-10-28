@@ -58,8 +58,12 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     ).toMatchObject({ type: "rebuild", reason: "missing_image" });
   });
 
-  it.each(["v76-child-output-discovery", "v77-codex-pinned-binary"])(
-    "rebuilds pre-recovery Modal image %s even when repository SHAs are unchanged",
+  it.each([
+    "v76-child-output-discovery",
+    "v77-codex-pinned-binary",
+    "v78-tunnel-environment-recovery",
+  ])(
+    "rebuilds outdated Modal image %s even when repository SHAs are unchanged",
     (runtimeVersion) => {
       expect(evaluateImageBuildRebuildPolicy(unit, [row({ runtimeVersion })], "modal")).toEqual({
         type: "rebuild",
