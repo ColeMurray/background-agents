@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, it, type TestContext } from "node:test";
 import { buildMaintenanceSql, parseArgs, run } from "./admission-policy-maintenance.ts";
 import { runSql } from "./operator-sql.ts";
+import { parseStoredAdmissionPolicy } from "../packages/shared/src/admission-settings.ts";
 
 const RULES = {
   allowedGitHubUsers: ["alice"],
@@ -192,6 +193,46 @@ describe("admission policy maintenance on SQLite", () => {
     assert.equal(audits(database)[0].operation_result, "no_op");
   });
 
+  it("uses canonical distinct-rule limits without rewriting raw stored JSON", async (t) => {
+    const { path, database } = fixture(t);
+    const rules = {
+      ...RULES,
+      allowedGitHubUsers: Array(60).fill(" Alice "),
+      allowedGitHubOrganizations: Array(12).fill(" Example-Team "),
+    };
+    const rulesJson = JSON.stringify(rules, null, 2);
+    database.prepare("UPDATE workspace_admission_policy SET rules_json = ?").run(rulesJson);
+    const report = await run({
+      sqlite: path,
+      action: "unfreeze",
+      expectedRevision: 7,
+      execute: true,
+    });
+    assert.equal(report.status, "executed");
+    assert.deepEqual(report.managed, rules);
+    assert.equal(policy(database).rules_json, rulesJson);
+  });
+
+  for (const assignment of [
+    "updated_at = -1",
+    "updated_at = 1.5",
+    "updated_at = 'broken'",
+    "updated_by_user_id_snapshot = ''",
+  ]) {
+    it(`refuses invalid persisted metadata before unfreezing: ${assignment}`, async (t) => {
+      const { path, database } = fixture(t);
+      database.exec(`UPDATE workspace_admission_policy SET ${assignment}`);
+      const before = policy(database);
+      await assert.rejects(run({ sqlite: path, action: "status", execute: false }), /refused/);
+      await assert.rejects(
+        run({ sqlite: path, action: "unfreeze", expectedRevision: 7, execute: true }),
+        /refused/
+      );
+      assert.deepEqual(policy(database), before);
+      assert.equal(audits(database).length, 0);
+    });
+  }
+
   for (const action of ["freeze", "unfreeze"] as const) {
     for (const execute of [false, true]) {
       it(`rejects stale ${action} even for an already-matching state (execute=${execute})`, async (t) => {
@@ -345,7 +386,7 @@ describe("admission policy remote transaction protocol", () => {
       expectedRevision: 7,
       auditId: "remote-audit",
       now: 100,
-      rulesJson: JSON.stringify(RULES),
+      before: parseStoredAdmissionPolicy(policy(database)),
     });
     let calls = 0;
     const report = await run(
@@ -382,7 +423,7 @@ describe("admission policy remote transaction protocol", () => {
       expectedRevision: 7,
       auditId: "fail",
       now: 100,
-      rulesJson: JSON.stringify(RULES),
+      before: parseStoredAdmissionPolicy(policy(database)),
     });
     assert.throws(
       () =>
@@ -404,7 +445,7 @@ describe("admission policy remote transaction protocol", () => {
       expectedRevision: 7,
       auditId: "lost",
       now: 100,
-      rulesJson: JSON.stringify(RULES),
+      before: parseStoredAdmissionPolicy(policy(database)),
     });
     let calls = 0;
     await assert.rejects(
@@ -431,7 +472,10 @@ describe("admission policy remote transaction protocol", () => {
   it("refuses an invalid restore between validation and the write, even at the same revision", async (t) => {
     const { path, database } = fixture(t);
     const input = { action: "unfreeze" as const, expectedRevision: 7, auditId: "race", now: 100 };
-    const sql = buildMaintenanceSql({ ...input, rulesJson: JSON.stringify(RULES) });
+    const sql = buildMaintenanceSql({
+      ...input,
+      before: parseStoredAdmissionPolicy(policy(database)),
+    });
     const invalidRules = JSON.stringify({ ...RULES, allowedEmails: ["not-an-email"] });
     let calls = 0;
     await assert.rejects(
@@ -461,6 +505,46 @@ describe("admission policy remote transaction protocol", () => {
     assert.equal(policy(database).revision, 7);
     assert.equal(audits(database).length, 0);
   });
+
+  for (const assignment of [
+    "updated_at = -1",
+    "updated_by_user_id_snapshot = ''",
+    "rules_json = ' ' || rules_json",
+  ]) {
+    it(`fences a concurrent restore of ${assignment}`, async (t) => {
+      const { path, database } = fixture(t);
+      const sql = buildMaintenanceSql({
+        action: "unfreeze",
+        expectedRevision: 7,
+        auditId: "restore",
+        now: 100,
+        before: parseStoredAdmissionPolicy(policy(database)),
+      });
+      let calls = 0;
+      await assert.rejects(
+        run(
+          { database: "production", action: "unfreeze", expectedRevision: 7, execute: true },
+          {
+            randomUUID: () => "restore",
+            now: () => 100,
+            runWrangler: (_name, operation) => {
+              calls++;
+              const statements = calls === 1 ? [sql.preflight] : sql.execution;
+              assert.deepEqual(operation, ["--command", statements.join("\n")]);
+              const output = runSql({ sqlite: path }, statements, calls > 1);
+              if (calls === 1) database.exec(`UPDATE workspace_admission_policy SET ${assignment}`);
+              return output;
+            },
+          }
+        ),
+        /refused/
+      );
+      assert.equal(calls, 2);
+      assert.equal(policy(database).writes_frozen, 1);
+      assert.equal(policy(database).revision, 7);
+      assert.equal(audits(database).length, 0);
+    });
+  }
 
   for (const output of [
     "{}",

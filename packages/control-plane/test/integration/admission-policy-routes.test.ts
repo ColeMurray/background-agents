@@ -1,10 +1,11 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   admissionPolicySnapshotSchema,
   emptyAdmissionRules,
 } from "@open-inspect/shared/admission-settings";
 import type { WorkerBindings } from "../../src/cloudflare/platform";
+import { AdmissionPolicyStore } from "../../src/db/admission-policy-store";
 import { cleanD1Tables } from "./cleanup";
 import { routeRequest, serviceRequestHeaders, type ServiceRequestInit } from "./helpers";
 
@@ -42,12 +43,51 @@ beforeEach(async () => {
   await resetPolicy(0);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await env.DB.exec("DROP TRIGGER IF EXISTS fail_admission_route_audit");
   await resetPolicy(1);
   await cleanD1Tables();
 });
 
 describe("authenticated admission policy routes (D1)", () => {
+  it("rejects and audits a future revision even when another writer commits it after the route read", async () => {
+    const overrides = {
+      ALLOWED_GITHUB_ORGS: Array.from({ length: 10 }, (_, i) => `org-${i}`).join(","),
+    };
+    const snapshot = admissionPolicySnapshotSchema.parse(
+      await (await request(undefined, overrides)).json()
+    );
+    const get = AdmissionPolicyStore.prototype.get;
+    const read = vi
+      .spyOn(AdmissionPolicyStore.prototype, "get")
+      .mockImplementationOnce(async function (this: AdmissionPolicyStore) {
+        const before = await get.call(this);
+        await env.DB.exec("UPDATE workspace_admission_policy SET revision = 1");
+        return before;
+      });
+    const response = await request(
+      {
+        method: "PUT",
+        headers: { "If-Match": snapshot.etag.replace("admission-0-", "admission-1-") },
+        body: JSON.stringify({
+          ...emptyAdmissionRules(),
+          allowedGitHubOrganizations: ["forbidden-extra"],
+        }),
+      },
+      overrides
+    );
+    expect(response.status).toBe(412);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(
+      await env.DB.prepare("SELECT revision, rules_json FROM workspace_admission_policy").first()
+    ).toEqual({ revision: 1, rules_json: JSON.stringify(emptyAdmissionRules()) });
+    expect(
+      await env.DB.prepare(
+        "SELECT operation_result, reason_code FROM authorization_audit_events WHERE action = 'workspace.admission_policy_updated'"
+      ).first()
+    ).toEqual({ operation_result: "rejected", reason_code: "conflict" });
+  });
+
   it.each(["owner", "administrator"] as const)(
     "persists and audits real %s GET/PUT requests, no-ops, and stale CAS",
     async (initialUserRole) => {

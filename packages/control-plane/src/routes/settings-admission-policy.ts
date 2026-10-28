@@ -5,6 +5,7 @@ import {
   mergeAdmissionRules,
   type AdmissionPolicySnapshot,
   type AdmissionRules,
+  type StoredAdmissionPolicy,
 } from "@open-inspect/shared/admission-settings";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { BUILT_IN_ROLE_REGISTRY, isWorkspaceAdmin } from "@open-inspect/shared/rbac";
@@ -14,7 +15,7 @@ import {
   parseAdmissionAllowlist,
   parseAdmissionBoolean,
 } from "../auth/user/admission-policy";
-import { AdmissionPolicyStore, type StoredAdmissionPolicy } from "../db/admission-policy-store";
+import { AdmissionPolicyStore } from "../db/admission-policy-store";
 import { createLogger } from "../logger";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -164,7 +165,7 @@ async function putPolicy(request: Request, env: Env, _params: object, ctx: UserR
     const newCount = mergeAdmissionRules(config.deployment, parsed.data).allowedGitHubOrganizations
       .length;
     const baselineCount = config.deployment.allowedGitHubOrganizations.length;
-    // Only validate fan-out against the revision being replaced; stale writes are audited by CAS.
+    // Mismatched revisions go through audited CAS, which also fences this exact preimage.
     if (
       Number(match[1]) === current.revision &&
       newCount > Math.max(MAX_MANAGED_ADMISSION_ORGANIZATIONS, baselineCount) &&
@@ -173,6 +174,7 @@ async function putPolicy(request: Request, env: Env, _params: object, ctx: UserR
       return failure("admission_policy_organization_limit", 409);
     }
     const result = await store.replace({
+      before: current,
       expectedRevision: Number(match[1]),
       rules: parsed.data,
       actorUserId: ctx.principal.userId,

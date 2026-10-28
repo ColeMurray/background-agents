@@ -41,11 +41,15 @@ describe("AdmissionPolicyStore (D1)", () => {
 
   it("enforces freeze, CAS and canonical no-ops with durable operation audit", async () => {
     const store = new AdmissionPolicyStore(sqlDatabase(env.DB));
-    expect((await store.replace(input)).status).toBe("maintenance");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe(
+      "maintenance"
+    );
     await env.DB.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
-    expect((await store.replace(input)).status).toBe("applied");
-    expect((await store.replace({ ...input, expectedRevision: 1 })).status).toBe("no_op");
-    expect((await store.replace(input)).status).toBe("conflict");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe("applied");
+    expect(
+      (await store.replace({ ...input, before: await store.get(), expectedRevision: 1 })).status
+    ).toBe("no_op");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe("conflict");
     expect((await store.get()).revision).toBe(1);
     const audits = await env.DB.prepare(
       "SELECT operation_result, metadata_json FROM authorization_audit_events WHERE action = 'workspace.admission_policy_updated' ORDER BY rowid"
@@ -76,7 +80,9 @@ describe("AdmissionPolicyStore (D1)", () => {
         return db.batch<T>(statements);
       },
     });
-    expect((await store.replace(input)).status).toBe("actor_authorization_changed");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe(
+      "actor_authorization_changed"
+    );
     expect((await store.get()).revision).toBe(0);
   });
 
@@ -86,9 +92,47 @@ describe("AdmissionPolicyStore (D1)", () => {
       "CREATE TRIGGER fail_admission_audit BEFORE INSERT ON authorization_audit_events BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"
     );
     const store = new AdmissionPolicyStore(sqlDatabase(env.DB));
-    await expect(store.replace(input)).rejects.toThrow();
+    await expect(store.replace({ ...input, before: await store.get() })).rejects.toThrow();
     expect((await store.get()).revision).toBe(0);
   });
+
+  it.each(["future-revision", "raw-json", "metadata"])(
+    "fences the caller's preimage against a concurrent %s change in D1",
+    async (change) => {
+      await env.DB.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
+      const db = sqlDatabase(env.DB);
+      const store = new AdmissionPolicyStore({
+        prepare: db.prepare.bind(db),
+        async batch<T>(statements: SqlStatement[]) {
+          if (change === "future-revision")
+            await env.DB.exec("UPDATE workspace_admission_policy SET revision = 1");
+          if (change === "raw-json")
+            await env.DB.exec(
+              "UPDATE workspace_admission_policy SET rules_json = ' ' || rules_json"
+            );
+          if (change === "metadata")
+            await env.DB.exec("UPDATE workspace_admission_policy SET updated_at = 99");
+          return db.batch<T>(statements);
+        },
+      });
+      const before = await store.get();
+      expect(
+        (
+          await store.replace({
+            ...input,
+            before,
+            expectedRevision: change === "future-revision" ? 1 : 0,
+          })
+        ).status
+      ).toBe("conflict");
+      expect((await store.get()).rules).toEqual(emptyAdmissionRules());
+      expect(
+        await env.DB.prepare(
+          "SELECT operation_result FROM authorization_audit_events WHERE action = 'workspace.admission_policy_updated'"
+        ).first()
+      ).toEqual({ operation_result: "rejected" });
+    }
+  );
 
   it("fails closed rather than recreating a missing singleton", async () => {
     await env.DB.exec("DELETE FROM workspace_admission_policy");

@@ -4,9 +4,9 @@ import {
   admissionPolicySnapshotSchema,
   emptyAdmissionRules,
   type AdmissionPolicySnapshot,
+  type StoredAdmissionPolicy,
 } from "@open-inspect/shared/admission-settings";
 import type * as AuthenticateModule from "../auth/authenticate";
-import type { StoredAdmissionPolicy } from "../db/admission-policy-store";
 import {
   authorizationDatabase,
   contractFor,
@@ -67,6 +67,7 @@ beforeEach(() => {
   } as Env;
   policy = {
     rules: emptyAdmissionRules(),
+    rulesJson: JSON.stringify(emptyAdmissionRules()),
     revision: 0,
     updatedAt: null,
     updatedByUserId: null,
@@ -204,7 +205,9 @@ describe("admission policy settings routes", () => {
     policy.revision = 1;
     mocks.replace.mockResolvedValue({ status: "conflict", policy });
     expect((await call("PUT", JSON.stringify(emptyAdmissionRules()), etag)).status).toBe(412);
-    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 0 }));
+    expect(mocks.replace).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 0, before: policy })
+    );
   });
 
   it("normalizes a replacement and returns the transaction's exact committed snapshot", async () => {
@@ -218,6 +221,7 @@ describe("admission policy settings routes", () => {
     expect(mocks.replace).toHaveBeenCalledWith(
       expect.objectContaining({
         actorUserId: "user-1",
+        before: policy,
         expectedRevision: 0,
         rules: { ...emptyAdmissionRules(), allowedGitHubUsers: ["alice", "zed"] },
       })

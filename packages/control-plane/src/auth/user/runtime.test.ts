@@ -209,6 +209,7 @@ describe("runtime-managed admission", () => {
     rules = emptyAdmissionRules();
     vi.spyOn(AdmissionPolicyStore.prototype, "get").mockImplementation(async () => ({
       rules,
+      rulesJson: JSON.stringify(rules),
       revision: 1,
       updatedAt: null,
       updatedByUserId: null,

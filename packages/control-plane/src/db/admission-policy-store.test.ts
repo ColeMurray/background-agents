@@ -52,22 +52,25 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   it("seeds a frozen empty singleton and does not reseed on migration rerun", async () => {
     expect(await store.get()).toEqual({
       rules: emptyAdmissionRules(),
+      rulesJson: JSON.stringify(emptyAdmissionRules()),
       revision: 0,
       updatedAt: null,
       updatedByUserId: null,
       writesFrozen: true,
     });
-    expect((await store.replace(input)).status).toBe("maintenance");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe(
+      "maintenance"
+    );
     expect(audit().operation_result).toBe("rejected");
     unfreeze();
-    await store.replace(input);
+    await store.replace({ ...input, before: await store.get() });
     expect(applyMigrations(sqlite, migrations)).toEqual([]);
     expect((await store.get()).revision).toBe(1);
   });
 
   it("atomically applies CAS, canonical no-ops, and stale rejections with audit metadata", async () => {
     unfreeze();
-    expect(await store.replace(input)).toMatchObject({
+    expect(await store.replace({ ...input, before: await store.get() })).toMatchObject({
       status: "applied",
       policy: { revision: 1, updatedAt: 100, updatedByUserId: "actor" },
     });
@@ -83,6 +86,7 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
       (
         await store.replace({
           ...input,
+          before: await store.get(),
           expectedRevision: 1,
           now: 200,
           rules: { ...input.rules, allowedEmails: [" A@EXAMPLE.COM ", "a@example.com"] },
@@ -91,7 +95,7 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
     ).toBe("no_op");
     expect((await store.get()).updatedAt).toBe(100);
     expect(audit().operation_result).toBe("no_op");
-    expect((await store.replace(input)).status).toBe("conflict");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe("conflict");
     expect(audit().operation_result).toBe("rejected");
     expect((await store.get()).revision).toBe(1);
   });
@@ -103,7 +107,7 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
       sqlite
         .prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = 'actor'")
         .run(roleId);
-      expect((await store.replace(input)).status).toBe("applied");
+      expect((await store.replace({ ...input, before: await store.get() })).status).toBe("applied");
     }
   );
 
@@ -117,8 +121,13 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
         (_, index) => `${`${prefix}${index}`.padEnd(64, "a")}@${domain}`
       ).sort(),
     });
-    await store.replace({ ...input, rules: rules("old") });
-    await store.replace({ ...input, expectedRevision: 1, rules: rules("new") });
+    await store.replace({ ...input, before: await store.get(), rules: rules("old") });
+    await store.replace({
+      ...input,
+      before: await store.get(),
+      expectedRevision: 1,
+      rules: rules("new"),
+    });
     expect(JSON.parse(audit().metadata_json)).toMatchObject({
       requested: { expectedRevision: 1 },
       before: rules("old"),
@@ -132,7 +141,9 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
     sqlite.exec(`PRAGMA ignore_check_constraints = ON;
       UPDATE roles SET is_system = 0 WHERE id = 'role_builtin_owner';
       PRAGMA ignore_check_constraints = OFF;`);
-    expect((await store.replace(input)).status).toBe("actor_authorization_changed");
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe(
+      "actor_authorization_changed"
+    );
     expect((await store.get()).revision).toBe(0);
     expect(audit().operation_result).toBe("denied");
   });
@@ -157,28 +168,33 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
           return db.batch<T>(statements);
         },
       });
-      expect((await racingStore.replace(input)).status).toBe("actor_authorization_changed");
+      expect((await racingStore.replace({ ...input, before: await store.get() })).status).toBe(
+        "actor_authorization_changed"
+      );
       expect((await store.get()).revision).toBe(0);
       expect(audit().operation_result).toBe("denied");
     }
   );
 
-  it.each(["revision", "freeze"])(
+  it.each(["revision", "freeze", "raw-json", "metadata"])(
     "rejects a concurrent %s change inside the batch",
     async (change) => {
       unfreeze();
       const racingStore = new AdmissionPolicyStore({
         prepare: db.prepare.bind(db),
         batch<T>(statements: SqlStatement[]) {
-          sqlite.exec(
-            change === "freeze"
-              ? "UPDATE workspace_admission_policy SET writes_frozen = 1"
-              : "UPDATE workspace_admission_policy SET revision = 1"
-          );
+          if (change === "freeze")
+            sqlite.exec("UPDATE workspace_admission_policy SET writes_frozen = 1");
+          if (change === "revision")
+            sqlite.exec("UPDATE workspace_admission_policy SET revision = 1");
+          if (change === "raw-json")
+            sqlite.exec("UPDATE workspace_admission_policy SET rules_json = ' ' || rules_json");
+          if (change === "metadata")
+            sqlite.exec("UPDATE workspace_admission_policy SET updated_at = 99");
           return db.batch<T>(statements);
         },
       });
-      expect((await racingStore.replace(input)).status).toBe(
+      expect((await racingStore.replace({ ...input, before: await store.get() })).status).toBe(
         change === "freeze" ? "maintenance" : "conflict"
       );
       expect((await store.get()).rules).toEqual(emptyAdmissionRules());
@@ -190,9 +206,22 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
     sqlite.exec(
       "CREATE TRIGGER fail_policy_audit BEFORE INSERT ON authorization_audit_events BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"
     );
-    await expect(store.replace(input)).rejects.toThrow("audit unavailable");
+    await expect(store.replace({ ...input, before: await store.get() })).rejects.toThrow(
+      "audit unavailable"
+    );
     expect((await store.get()).revision).toBe(0);
     expect(audit()).toBeUndefined();
+  });
+
+  it("never reconciles a future expected revision with a newer row after the caller's read", async () => {
+    unfreeze();
+    const before = await store.get();
+    sqlite.exec("UPDATE workspace_admission_policy SET revision = 1");
+    expect((await store.replace({ ...input, before, expectedRevision: 1 })).status).toBe(
+      "conflict"
+    );
+    expect((await store.get()).rules).toEqual(emptyAdmissionRules());
+    expect(audit().operation_result).toBe("rejected");
   });
 
   it("rolls back the audit if the policy update fails", async () => {
@@ -200,7 +229,9 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
     sqlite.exec(
       "CREATE TRIGGER fail_policy_write BEFORE UPDATE ON workspace_admission_policy BEGIN SELECT RAISE(ABORT, 'write unavailable'); END"
     );
-    await expect(store.replace(input)).rejects.toThrow("write unavailable");
+    await expect(store.replace({ ...input, before: await store.get() })).rejects.toThrow(
+      "write unavailable"
+    );
     expect((await store.get()).revision).toBe(0);
     expect(audit()).toBeUndefined();
   });
@@ -218,7 +249,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
           "PRAGMA ignore_check_constraints = ON; UPDATE workspace_admission_policy SET schema_version = 2"
         );
       await expect(store.get()).rejects.toThrow();
-      await expect(store.replace(input)).rejects.toThrow();
     }
   );
 });

@@ -9,9 +9,8 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  admissionRulesSchema,
-  MAX_MANAGED_ADMISSION_RULES as MAX_MANAGED_RULES,
-  MAX_MANAGED_ADMISSION_ORGANIZATIONS as MAX_MANAGED_ORGANIZATIONS,
+  parseStoredAdmissionPolicy,
+  type StoredAdmissionPolicy,
 } from "../packages/shared/src/admission-settings.ts";
 import {
   databaseTarget,
@@ -27,13 +26,6 @@ export type MaintenanceOptions = DatabaseTarget & {
   expectedRevision?: number;
   execute: boolean;
 };
-
-const RULE_KEYS = [
-  "allowedGitHubUsers",
-  "allowedEmails",
-  "allowedEmailDomains",
-  "allowedGitHubOrganizations",
-] as const;
 
 export function parseArgs(argv: string[]): MaintenanceOptions {
   const [action, ...args] = argv;
@@ -75,41 +67,18 @@ export function parseArgs(argv: string[]): MaintenanceOptions {
   return { ...target, action, expectedRevision, execute };
 }
 
-/** Validate the stored envelope without normalizing or rewriting any managed rules. */
-function validPolicySql(): string {
-  return `id = 1 AND schema_version = 1
-    AND typeof(revision) = 'integer' AND revision BETWEEN 0 AND ${Number.MAX_SAFE_INTEGER}
-    AND writes_frozen IN (0, 1)
-    AND CASE WHEN json_valid(rules_json) THEN
-      json_type(rules_json) = 'object'
-      AND (SELECT COUNT(*) FROM json_each(rules_json)) = ${RULE_KEYS.length}
-      AND ${RULE_KEYS.map((key) => `COALESCE(json_type(rules_json, '$.${key}') = 'array', 0)`).join("\n      AND ")}
-      AND NOT EXISTS (
-        SELECT 1 FROM json_each(rules_json) rule_group, json_each(rule_group.value) entry
-        WHERE entry.type <> 'text'
-      )
-      AND (${RULE_KEYS.map((key) => `json_array_length(rules_json, '$.${key}')`).join(" + ")}) <= ${MAX_MANAGED_RULES}
-      AND json_array_length(rules_json, '$.allowedGitHubOrganizations') <= ${MAX_MANAGED_ORGANIZATIONS}
-    ELSE 0 END`;
-}
-
 export function buildMaintenanceSql(input: {
   action: Action;
   expectedRevision?: number;
   auditId: string;
   now: number;
-  rulesJson?: string;
+  before?: StoredAdmissionPolicy;
 }): { preflight: string; execution: readonly string[] } {
-  if (input.rulesJson !== undefined) admissionRulesSchema.parse(JSON.parse(input.rulesJson));
-  const rulesMatch =
-    input.rulesJson === undefined ? "0" : `rules_json = ${sqlLiteral(input.rulesJson)}`;
-  const valid = `${validPolicySql()}${input.rulesJson === undefined ? "" : ` AND ${rulesMatch}`}`;
   const columns =
     "schema_version, revision, rules_json, writes_frozen, updated_at, updated_by_user_id_snapshot";
   if (input.action === "status") {
     return {
-      preflight: `SELECT 'preflight' AS report,
-        CASE WHEN ${valid} THEN 'status' ELSE 'refused' END AS status,
+      preflight: `SELECT 'preflight' AS report, 'status' AS status,
         ${columns} FROM workspace_admission_policy WHERE id = 1;`,
       execution: [],
     };
@@ -126,7 +95,20 @@ export function buildMaintenanceSql(input: {
   const auditId = sqlLiteral(input.auditId);
   const requestId = sqlLiteral(`operator-cli:${input.auditId}`);
   const now = sqlLiteral(input.now);
-  const ready = `${valid} AND ${rulesMatch} AND revision = ${revision}
+  const preflight = `SELECT 'preflight' AS report, CASE
+      WHEN revision <> ${revision} THEN 'conflict'
+      WHEN writes_frozen = ${frozen} THEN 'no-op'
+      WHEN revision = ${Number.MAX_SAFE_INTEGER} THEN 'refused'
+      ELSE 'ready' END AS status, ${columns}
+      FROM workspace_admission_policy WHERE id = 1;`;
+  // The first read is validated by the shared parser before mutation SQL can be constructed.
+  if (!input.before) return { preflight, execution: [] };
+  const before = input.before;
+  const documentMatch = `id = 1 AND schema_version = 1 AND rules_json = ${sqlLiteral(before.rulesJson)}`;
+  const metadataMatch = `updated_at IS ${before.updatedAt === null ? "NULL" : sqlLiteral(before.updatedAt)}
+    AND updated_by_user_id_snapshot IS ${before.updatedByUserId === null ? "NULL" : sqlLiteral(before.updatedByUserId)}`;
+  const ready = `${documentMatch} AND revision = ${revision} AND revision = ${sqlLiteral(before.revision)}
+    AND writes_frozen = ${before.writesFrozen ? 1 : 0} AND ${metadataMatch}
     AND (writes_frozen = ${frozen} OR revision < ${Number.MAX_SAFE_INTEGER})`;
   const exactAudit = `EXISTS (
     SELECT 1 FROM authorization_audit_events
@@ -147,16 +129,10 @@ export function buildMaintenanceSql(input: {
         AND workspace_admission_policy.updated_by_user_id_snapshot IS NULL)
         OR (operation_result = 'no_op'
           AND json_extract(metadata_json, '$.before.writesFrozen') = ${frozen}
-          AND workspace_admission_policy.revision = ${revision}))
+          AND workspace_admission_policy.revision = ${revision} AND ${metadataMatch}))
   )`;
   return {
-    preflight: `SELECT 'preflight' AS report, CASE
-      WHEN NOT (${valid}) THEN 'refused'
-      WHEN revision <> ${revision} THEN 'conflict'
-      WHEN writes_frozen = ${frozen} THEN 'no-op'
-      WHEN revision = ${Number.MAX_SAFE_INTEGER} THEN 'refused'
-      ELSE 'ready' END AS status, ${columns}
-      FROM workspace_admission_policy WHERE id = 1;`,
+    preflight,
     execution: [
       `INSERT INTO authorization_audit_events
         (id, occurred_at, request_id, principal_kind, actor_service_snapshot,
@@ -180,12 +156,12 @@ export function buildMaintenanceSql(input: {
       // A broken postcondition after an audit must abort SQL, not fail after commit.
       // SQLite/D1 both raise on malformed JSON; CASE keeps this error branch lazy.
       `SELECT 'postcondition' AS report, CASE
-        WHEN NOT (${valid}) THEN 'refused'
+        WHEN NOT (${documentMatch}) THEN 'refused'
         WHEN ${exactAudit} THEN CASE WHEN revision = ${revision} THEN 'no-op' ELSE 'executed' END
         WHEN revision <> ${revision} THEN 'conflict'
         ELSE 'refused' END AS status,
         CASE WHEN EXISTS (SELECT 1 FROM authorization_audit_events WHERE id = ${auditId})
-          THEN CASE WHEN (${valid}) AND (${exactAudit}) THEN 1
+          THEN CASE WHEN (${documentMatch}) AND (${exactAudit}) THEN 1
             ELSE json('admission policy postcondition failed') END
           ELSE 0 END AS audit_written, ${columns}
        FROM workspace_admission_policy WHERE id = 1;`,
@@ -218,19 +194,10 @@ function readReport(output: string, count: number, report: string): Record<strin
     throw new Error("Missing admission policy singleton or transaction report");
   }
   const row = rows[0];
-  if (
-    row.schema_version !== 1 ||
-    !Number.isSafeInteger(row.revision) ||
-    Number(row.revision) < 0 ||
-    (row.writes_frozen !== 0 && row.writes_frozen !== 1) ||
-    typeof row.rules_json !== "string"
-  ) {
-    throw new Error("Invalid admission policy snapshot; operation refused");
-  }
   try {
-    admissionRulesSchema.parse(JSON.parse(row.rules_json));
+    parseStoredAdmissionPolicy(row);
   } catch {
-    throw new Error("Invalid admission policy rules; operation refused");
+    throw new Error("Invalid admission policy snapshot; operation refused");
   }
   return row;
 }
@@ -260,7 +227,7 @@ export async function run(
     // let invalid rules through, even if it failed to advance the revision.
     const statements = buildMaintenanceSql({
       ...input,
-      rulesJson: row.rules_json as string,
+      before: parseStoredAdmissionPolicy(row),
     }).execution;
     // Freeze and its exported snapshot still come from the same mutation transaction.
     row = readReport(

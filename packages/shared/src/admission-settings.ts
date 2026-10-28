@@ -107,6 +107,37 @@ export const admissionRulesSchema = z
     `At most ${MAX_MANAGED_ADMISSION_RULES} managed rules are allowed`
   );
 
+const storedAdmissionPolicySchema = z.object({
+  schema_version: z.literal(1),
+  revision: z.number().int().nonnegative().safe(),
+  rules_json: z.string(),
+  updated_at: z.number().int().nonnegative().safe().nullable(),
+  updated_by_user_id_snapshot: z.string().min(1).nullable(),
+  writes_frozen: z.union([z.literal(0), z.literal(1)]),
+});
+
+export interface StoredAdmissionPolicy {
+  rules: AdmissionRules;
+  rulesJson: string;
+  revision: number;
+  updatedAt: number | null;
+  updatedByUserId: string | null;
+  writesFrozen: boolean;
+}
+
+/** Keep the original JSON for exact preimage fences, alongside normalized validated rules. */
+export function parseStoredAdmissionPolicy(value: unknown): StoredAdmissionPolicy {
+  const row = storedAdmissionPolicySchema.parse(value);
+  return {
+    rules: admissionRulesSchema.parse(JSON.parse(row.rules_json)),
+    rulesJson: row.rules_json,
+    revision: row.revision,
+    updatedAt: row.updated_at,
+    updatedByUserId: row.updated_by_user_id_snapshot,
+    writesFrozen: row.writes_frozen === 1,
+  };
+}
+
 export const admissionPolicySnapshotSchema = z.strictObject({
   deployment: looseRulesSchema,
   managed: admissionRulesSchema,

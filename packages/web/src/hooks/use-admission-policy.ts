@@ -193,15 +193,21 @@ export function useAdmissionPolicy() {
     try {
       const next = await requestPolicy();
       if (generation.current !== token) return;
-      setState((current) => ({
-        ...current,
-        snapshot: next,
-        draft: current.draft ?? next.managed,
-        needsReload: false,
-        notice: current.draft
-          ? "Rules reloaded. Your edits remain. Review them before you save."
-          : null,
-      }));
+      setState((current) => {
+        const hasEdits =
+          current.snapshot &&
+          current.draft &&
+          admissionRuleChanges(current.snapshot.managed, current.draft).length > 0;
+        return {
+          ...current,
+          snapshot: next,
+          draft: hasEdits ? current.draft : next.managed,
+          needsReload: false,
+          notice: hasEdits
+            ? "Rules reloaded. Your edits remain. Review them before you save."
+            : null,
+        };
+      });
     } catch (cause) {
       if (generation.current !== token) return;
       const denied = cause instanceof PolicyRequestError && [401, 403].includes(cause.status);

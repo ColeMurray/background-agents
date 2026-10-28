@@ -5,9 +5,55 @@ import {
   emptyAdmissionRules,
   MAX_MANAGED_ADMISSION_RULES,
   mergeAdmissionRules,
+  parseStoredAdmissionPolicy,
 } from "./admission-settings";
 
 describe("admission settings contracts", () => {
+  const stored = {
+    schema_version: 1,
+    revision: 7,
+    rules_json: JSON.stringify(emptyAdmissionRules()),
+    updated_at: 10,
+    updated_by_user_id_snapshot: "editor",
+    writes_frozen: 1,
+  };
+
+  it("parses the complete persisted envelope while preserving raw JSON for CAS", () => {
+    const rulesJson = JSON.stringify(
+      { ...emptyAdmissionRules(), allowedGitHubUsers: [" Alice ", "alice"] },
+      null,
+      2
+    );
+    expect(parseStoredAdmissionPolicy({ ...stored, rules_json: rulesJson })).toEqual({
+      rules: { ...emptyAdmissionRules(), allowedGitHubUsers: ["alice"] },
+      rulesJson,
+      revision: 7,
+      updatedAt: 10,
+      updatedByUserId: "editor",
+      writesFrozen: true,
+    });
+  });
+
+  it.each([
+    { schema_version: 2 },
+    { revision: -1 },
+    { revision: Number.MAX_SAFE_INTEGER + 1 },
+    { rules_json: "broken" },
+    { rules_json: "{}" },
+    { rules_json: JSON.stringify({ ...emptyAdmissionRules(), allowedEmails: ["bad"] }) },
+    { writes_frozen: 2 },
+    { updated_at: -1 },
+    { updated_at: 1.5 },
+    { updated_at: "10" },
+    { updated_at: undefined },
+    { updated_at: Number.MAX_SAFE_INTEGER + 1 },
+    { updated_by_user_id_snapshot: "" },
+    { updated_by_user_id_snapshot: 10 },
+    { updated_by_user_id_snapshot: undefined },
+  ])("rejects invalid persisted fields %j", (invalid) => {
+    expect(() => parseStoredAdmissionPolicy({ ...stored, ...invalid })).toThrow();
+  });
+
   it("normalizes, deduplicates, and sorts each managed list independently", () => {
     expect(
       admissionRulesSchema.parse({

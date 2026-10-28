@@ -1,35 +1,12 @@
-import { admissionRulesSchema, type AdmissionRules } from "@open-inspect/shared/admission-settings";
+import {
+  admissionRulesSchema,
+  parseStoredAdmissionPolicy,
+  type AdmissionRules,
+  type StoredAdmissionPolicy,
+} from "@open-inspect/shared/admission-settings";
 import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
 import { z } from "zod";
 import type { SqlDatabase } from "./sql-database";
-
-const rowSchema = z.object({
-  schema_version: z.literal(1),
-  revision: z.number().int().nonnegative().safe(),
-  rules_json: z.string(),
-  updated_at: z.number().int().nonnegative().safe().nullable(),
-  updated_by_user_id_snapshot: z.string().min(1).nullable(),
-  writes_frozen: z.union([z.literal(0), z.literal(1)]),
-});
-
-export interface StoredAdmissionPolicy {
-  rules: AdmissionRules;
-  revision: number;
-  updatedAt: number | null;
-  updatedByUserId: string | null;
-  writesFrozen: boolean;
-}
-
-function parseRow(value: unknown): StoredAdmissionPolicy {
-  const row = rowSchema.parse(value);
-  return {
-    rules: admissionRulesSchema.parse(JSON.parse(row.rules_json)),
-    revision: row.revision,
-    updatedAt: row.updated_at,
-    updatedByUserId: row.updated_by_user_id_snapshot,
-    writesFrozen: row.writes_frozen === 1,
-  };
-}
 
 const mutationStatusSchema = z.enum([
   "applied",
@@ -45,12 +22,13 @@ export class AdmissionPolicyStore {
   constructor(private readonly db: SqlDatabase) {}
 
   async get(): Promise<StoredAdmissionPolicy> {
-    return parseRow(
+    return parseStoredAdmissionPolicy(
       await this.db.prepare("SELECT * FROM workspace_admission_policy WHERE id = 1").first()
     );
   }
 
   async replace(input: {
+    before: StoredAdmissionPolicy;
     expectedRevision: number;
     rules: AdmissionRules;
     actorUserId: string;
@@ -59,10 +37,7 @@ export class AdmissionPolicyStore {
     deploymentHash: string;
   }): Promise<{ status: z.infer<typeof mutationStatusSchema>; policy: StoredAdmissionPolicy }> {
     const rules = admissionRulesSchema.parse(input.rules);
-    const raw = rowSchema.parse(
-      await this.db.prepare("SELECT * FROM workspace_admission_policy WHERE id = 1").first()
-    );
-    const before = parseRow(raw);
+    const before = input.before;
     const unchanged = JSON.stringify(before.rules) === JSON.stringify(rules);
     const auditId = crypto.randomUUID();
     // The decision and historical snapshot are captured before the update in the same transaction.
@@ -85,7 +60,8 @@ export class AdmissionPolicyStore {
           WHEN (SELECT writes_frozen FROM workspace_admission_policy WHERE id = 1) <> 0
             THEN 'maintenance'
           WHEN NOT EXISTS (SELECT 1 FROM workspace_admission_policy
-            WHERE id = 1 AND revision = ? AND revision = ? AND rules_json = ?)
+            WHERE id = 1 AND revision = ? AND revision = ? AND rules_json = ?
+              AND writes_frozen = ? AND updated_at IS ? AND updated_by_user_id_snapshot IS ?)
             THEN 'conflict'
           WHEN ? THEN 'no_op'
           ELSE 'applied' END)
@@ -115,7 +91,10 @@ export class AdmissionPolicyStore {
           BUILT_IN_ROLE_REGISTRY.administrator.id,
           input.expectedRevision,
           before.revision,
-          raw.rules_json,
+          before.rulesJson,
+          before.writesFrozen ? 1 : 0,
+          before.updatedAt,
+          before.updatedByUserId,
           unchanged ? 1 : 0,
           auditId,
           input.now,
@@ -139,6 +118,6 @@ export class AdmissionPolicyStore {
     const status = mutationStatusSchema.parse(
       (results[0].results[0] as { status?: unknown })?.status
     );
-    return { status, policy: parseRow(results[2].results[0]) };
+    return { status, policy: parseStoredAdmissionPolicy(results[2].results[0]) };
   }
 }

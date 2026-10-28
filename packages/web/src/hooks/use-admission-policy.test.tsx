@@ -343,4 +343,35 @@ describe("useAdmissionPolicy", () => {
     expect(result.current.needsReload).toBe(true);
     expect(result.current.canEdit).toBe(false);
   });
+
+  it.each(["lost-response", "conflict"])(
+    "adopts server rules on reload after discarding a %s draft",
+    async (failure) => {
+      const { result } = await loaded();
+      act(() => result.current.setDraft(edited));
+      if (failure === "lost-response") {
+        vi.mocked(browserApiFetch).mockRejectedValueOnce(new Error("Connection lost"));
+      } else {
+        vi.mocked(browserApiFetch).mockResolvedValueOnce(json({}, 412));
+      }
+      await act(() => result.current.save());
+      act(() => result.current.discard());
+      expect(result.current.changes).toEqual([]);
+      expect(result.current.needsReload).toBe(true);
+      const serverRules = {
+        ...emptyAdmissionRules(),
+        allowedEmails: [
+          failure === "lost-response" ? "new@example.com" : "another-admin@example.com",
+        ],
+      };
+      vi.mocked(browserApiFetch).mockResolvedValueOnce(
+        json({ ...initial, managed: serverRules, revision: 1, etag: '"policy-1"' })
+      );
+      await act(() => result.current.reload());
+      expect(result.current.draft).toEqual(serverRules);
+      expect(result.current.changes).toEqual([]);
+      expect(result.current.notice).toBeNull();
+      expect(result.current.needsReload).toBe(false);
+    }
+  );
 });
