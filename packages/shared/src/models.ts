@@ -352,6 +352,18 @@ export const MODEL_CATALOG = [
     ],
   },
   {
+    category: "Kimi Coding Plan",
+    enabledByDefault: false,
+    models: [
+      { id: "kimi-coding-plan/k3", name: "Kimi K3", description: "Kimi Coding Plan" },
+      {
+        id: "kimi-coding-plan/kimi-for-coding",
+        name: "Kimi for Coding",
+        description: "Kimi Coding Plan",
+      },
+    ],
+  },
+  {
     category: "Z.AI Coding Plan",
     enabledByDefault: false,
     models: [
