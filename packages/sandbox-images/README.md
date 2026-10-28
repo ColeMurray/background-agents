@@ -70,13 +70,10 @@ For manual deployment, use the returned reference in the provider's existing con
 assume building alone redirects sessions. Roll back using a previous known-good configuration and
 retained artifact. Do not delete artifacts still referenced by sessions or prepared images.
 
-The `filesystem` phase publishes a validated model catalog under the runtime user's
-`~/.local/share/openinspect`, which survives Boat's exclusion of `~/.cache` from snapshots.
-OpenCode, its OAuth pricing plugin, and native Codex use the same file through
-`OPENCODE_MODELS_PATH`. Base installation and offline post-deployment verification require usable
-OpenAI prices. Prepared repository and environment builds refresh the catalog, retaining valid old
-prices on failure. Session startup attempts a bounded recovery only if the file is missing or
-invalid.
+The `filesystem` phase also runs `opencode models --refresh` for the runtime user, so sessions
+without a prepared image still see models newer than the pinned OpenCode release. It is best-effort:
+a failure leaves OpenCode's built-in catalog in use. Prepared repository and environment images
+refresh the catalog on every build.
 
 **Prepared repository images do not automatically refresh when the base toolchain changes.** Use the
 existing repository/environment image-build workflow to rebuild them after dependency-only updates
