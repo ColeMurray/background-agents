@@ -11,7 +11,10 @@ import { SessionMessageQueue } from "../../src/session/message-queue";
 import { SessionMessengerImpl } from "../../src/session/messenger";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import { SessionStatusService } from "../../src/session/session-status-service";
-import { SessionWebSocketManagerImpl } from "../../src/session/websocket-manager";
+import {
+  SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS,
+  SessionWebSocketManagerImpl,
+} from "../../src/session/websocket-manager";
 import { WsClientMappingRepository } from "../../src/session/ws-client-mapping-repository";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
@@ -106,6 +109,84 @@ describe("createSessionRuntime", () => {
       }
     });
   });
+
+  it.each(["execution", "stop"] as const)(
+    "runs the %s watchdog when health-alarm scheduling fails",
+    async (watchdog) => {
+      const { stub } = await initNamedSession(`components-health-failure-${crypto.randomUUID()}`);
+      await waitForSandboxStatus(stub, "failed");
+      await runInSessionDO(stub, async (instance, state) => {
+        const now = Date.now();
+        state.storage.sql.exec("DELETE FROM session_alarm_state");
+        state.storage.sql.exec("DELETE FROM sandbox_preservation");
+        state.storage.sql.exec(
+          "UPDATE sandbox SET status = 'ready', last_heartbeat = ?, last_activity = ?",
+          now,
+          now
+        );
+        state.storage.sql.exec(
+          `INSERT INTO messages (id, author_id, content, source, status, created_at, started_at, stop_confirmation_deadline)
+         VALUES ('overdue', (SELECT id FROM participants LIMIT 1), 'Overdue work', 'web', ?, ?, ?, ?)`,
+          watchdog === "execution" ? "processing" : "failed",
+          now - 86_400_000,
+          now - 86_400_000,
+          watchdog === "stop" ? now - 1 : null
+        );
+        const platform = createDurableObjectSessionPlatform(state, env.DB);
+        let injected = false;
+        platform.alarmStore = {
+          getAlarm: async () => null,
+          setAlarm: async (deadline) => {
+            if (deadline === now + SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS && !injected) {
+              injected = true;
+              throw new Error("Injected health schedule failure");
+            }
+          },
+          deleteAlarm: async () => {},
+        };
+        const runtime = createSessionRuntime(
+          platform,
+          createCloudflareEnv((instance as unknown as { env: WorkerBindings }).env)
+        );
+        const log = vi.spyOn(runtime.log, "error").mockImplementation(() => {});
+        const lifecycleAlarm = vi
+          .spyOn(runtime.internals.lifecycleManager, "handleAlarm")
+          .mockResolvedValue("no_action");
+        const terminate = vi
+          .spyOn(runtime.internals.lifecycleManager, "terminateUnresponsiveSandbox")
+          .mockResolvedValue();
+        try {
+          await expect(runtime.server.onScheduledDeadline()).resolves.toBeUndefined();
+          expect(injected).toBe(true);
+          expect(log).toHaveBeenCalledWith("sandbox.connection_health_check_failed", {
+            error_type: "Error",
+          });
+          expect(lifecycleAlarm).toHaveBeenCalledOnce();
+          if (watchdog === "stop") {
+            expect(terminate).toHaveBeenCalledExactlyOnceWith("stop_confirmation_timeout");
+            expect(
+              state.storage.sql
+                .exec("SELECT stop_confirmation_deadline FROM messages WHERE id = 'overdue'")
+                .one()
+            ).toEqual({ stop_confirmation_deadline: null });
+          } else {
+            expect(
+              state.storage.sql
+                .exec("SELECT status, error_message FROM messages WHERE id = 'overdue'")
+                .one()
+            ).toEqual({
+              status: "failed",
+              error_message: "Execution timed out (stuck processing)",
+            });
+          }
+        } finally {
+          log.mockRestore();
+          lifecycleAlarm.mockRestore();
+          terminate.mockRestore();
+        }
+      });
+    }
+  );
 
   it("fails at graph build on an unsupported SANDBOX_PROVIDER", async () => {
     const error = await buildWithEnv({ SANDBOX_PROVIDER: "not-a-real-sandbox-provider" });

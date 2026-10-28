@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
+import type { BackgroundTasks } from "../../platform-ports";
 import type { SessionDiffService } from "../diffs/service";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessenger } from "../messenger";
@@ -38,6 +39,16 @@ function setup() {
       return true;
     }),
   };
+  const backgroundTasks = { submit: vi.fn<BackgroundTasks["submit"]>() };
+  const messageQueue = { processMessageQueue: vi.fn().mockResolvedValue(undefined) };
+  const log = { warn: vi.fn(), error: vi.fn() };
+  const commands = {
+    flush: vi.fn().mockResolvedValue(undefined),
+    recordProtocol: vi.fn(),
+    supportsReplay: vi.fn(() => false),
+    hasUnacknowledgedPrompt: vi.fn(() => false),
+  };
+  const scheduleInactivityCheck = vi.fn().mockResolvedValue(undefined);
   const handler = new SandboxRuntimeEventHandler(
     { getSession: vi.fn(() => null) } as unknown as SessionCoreRepository,
     sandboxRepository,
@@ -47,20 +58,27 @@ function setup() {
     vi.fn(),
     vi.fn(),
     vi.fn(),
-    vi.fn().mockResolvedValue(undefined),
-    { submit: vi.fn() },
-    { processMessageQueue: vi.fn().mockResolvedValue(undefined) },
-    { warn: vi.fn() } as unknown as Logger,
+    scheduleInactivityCheck,
+    backgroundTasks,
+    messageQueue,
+    log as unknown as Logger,
     lifecycle,
-    {
-      flush: vi.fn().mockResolvedValue(undefined),
-      recordProtocol: vi.fn(),
-      supportsReplay: vi.fn(() => false),
-      hasUnacknowledgedPrompt: vi.fn(() => false),
-    },
+    commands,
     alarmScheduler
   );
-  return { handler, sandbox, sandboxRepository, messenger, alarmScheduler, lifecycle };
+  return {
+    handler,
+    sandbox,
+    sandboxRepository,
+    messenger,
+    alarmScheduler,
+    lifecycle,
+    commands,
+    log,
+    backgroundTasks,
+    messageQueue,
+    scheduleInactivityCheck,
+  };
 }
 
 describe("SandboxRuntimeEventHandler connection health", () => {
@@ -243,5 +261,41 @@ describe("SandboxRuntimeEventHandler connection health", () => {
       type: "sandbox_connection",
       status: "reconnecting",
     });
+  });
+
+  describe.each([true, false])("ready follow-up failures with becameReady=%s", (becameReady) => {
+    it.each(["health", "flush"] as const)(
+      "preserves queue submission after %s fails",
+      async (failure) => {
+        const h = setup();
+        h.lifecycle.onRuntimeReady.mockReturnValue(becameReady);
+        const error = new Error("Injected follow-up failure");
+        if (failure === "health") h.alarmScheduler.schedule.mockRejectedValueOnce(error);
+        else h.commands.flush.mockRejectedValueOnce(error);
+
+        await expect(
+          h.handler.handleReady(
+            { type: "ready", sandboxId: "sandbox-1", timestamp: NOW },
+            { now: NOW, messageId: null, processingMessage: null }
+          )
+        ).resolves.toBeUndefined();
+
+        expect(h.commands.flush).toHaveBeenCalledOnce();
+        expect(h.log.error).toHaveBeenCalledExactlyOnceWith(
+          failure === "health"
+            ? "sandbox.connection_health_check_failed"
+            : "sandbox.ready.command_replay_failed",
+          { error_type: "Error" }
+        );
+        expect(h.backgroundTasks.submit).toHaveBeenCalledTimes(becameReady ? 1 : 0);
+        expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(becameReady ? 1 : 0);
+        if (becameReady) {
+          const [task, metadata] = h.backgroundTasks.submit.mock.calls[0];
+          expect(metadata).toEqual({ name: "message_queue.process" });
+          await task();
+          expect(h.messageQueue.processMessageQueue).toHaveBeenCalledOnce();
+        }
+      }
+    );
   });
 });

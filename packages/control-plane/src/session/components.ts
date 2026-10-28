@@ -1071,7 +1071,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         alarmDeadlines,
         async () => {
           await wsManager.expireAuthorizationLeases(Date.now());
-          await runtimeEventHandler.checkConnectionHealth();
+          try {
+            await runtimeEventHandler.checkConnectionHealth();
+          } catch (error) {
+            log.error("sandbox.connection_health_check_failed", {
+              error_type: error instanceof Error ? error.constructor.name : typeof error,
+            });
+          }
           await alarmHandler.handle();
         },
         () => alarmScheduler.rearmPending()

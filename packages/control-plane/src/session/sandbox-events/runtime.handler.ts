@@ -136,8 +136,20 @@ export class SandboxRuntimeEventHandler {
       event.stopConfirmationVersion
     );
     this.messenger.broadcast({ type: "sandbox_connection", status: "connected" });
-    await this.checkConnectionHealth();
-    await this.commands.flush();
+    try {
+      await this.checkConnectionHealth();
+    } catch (error) {
+      this.log.error("sandbox.connection_health_check_failed", {
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+    }
+    try {
+      await this.commands.flush();
+    } catch (error) {
+      this.log.error("sandbox.ready.command_replay_failed", {
+        error_type: error instanceof Error ? error.constructor.name : typeof error,
+      });
+    }
     if (!becameReady) return;
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",

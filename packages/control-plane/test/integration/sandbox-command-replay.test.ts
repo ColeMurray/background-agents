@@ -492,22 +492,21 @@ describe("Sandbox command replay through the live session runtime", () => {
         "SELECT last_heartbeat FROM sandbox"
       );
       const deadline = heartbeat + SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS;
-      const beforeDeadline = collectMessages(clientWs, { timeoutMs: NO_COMMAND_WINDOW_MS });
       await runInSessionDO(stub, async (instance, state) => {
         const clock = vi.spyOn(Date, "now").mockReturnValue(deadline - 1);
+        const send = vi.spyOn(componentsOf(instance).wsManager, "send");
         try {
           await instance.alarm();
           expect(await state.storage.getAlarm()).toBe(deadline);
+          expect(send).not.toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ type: "sandbox_status", connectionStatus: "reconnecting" })
+          );
         } finally {
+          send.mockRestore();
           clock.mockRestore();
         }
       });
-      expect(
-        (await beforeDeadline).filter(
-          (message) =>
-            message.type === "sandbox_status" && message.connectionStatus === "reconnecting"
-        )
-      ).toEqual([]);
 
       const reconnecting = collectMessages(clientWs, {
         until: (message) =>
