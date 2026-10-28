@@ -20,7 +20,7 @@ export interface ProviderIdentity {
   avatarUrl?: string;
 }
 
-export type EnrollmentAdmission = (identity: Readonly<ProviderIdentity>) => void;
+export type EnrollmentAdmission = (identity: Readonly<ProviderIdentity>) => void | Promise<void>;
 
 /**
  * Ingress providers whose attributed emails are platform-verified mailboxes
@@ -523,7 +523,7 @@ export class UserStore {
     // Step 4: Brand new user — batch user + identity creation so a UNIQUE
     // failure on the identity INSERT rolls back the user INSERT, preventing
     // orphaned user rows under concurrent requests.
-    requireEnrollmentAdmission({ ...identity, providerEmail: normalizedEmail ?? undefined });
+    await requireEnrollmentAdmission({ ...identity, providerEmail: normalizedEmail ?? undefined });
     const userId = generateId();
     const identityId = generateId();
     const now = Date.now();

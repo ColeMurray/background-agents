@@ -83,6 +83,156 @@ SERVICE_AUTH_SECRET=<the SERVICE_AUTH_SECRET_WEB value from .env>
 Then `npm run dev -w @open-inspect/web`. The container's `WEB_APP_URL` must be the web app's origin
 (`http://localhost:3000` by default), because browser sign-in is origin-bound.
 
+## Sign-in allowlist operations
+
+Browser sign-in and new bot-account admission combine the deployment's `ALLOWED_*` baseline with
+rules stored in `global.db`. Active built-in Owners/Administrators manage the latter in **Settings >
+Workspace access > Sign-in allowlist**. The UI cannot narrow deployment grants; changing `.env` or
+AWS SSM configuration cannot subtract managed grants. Keep a provider-compatible recovery baseline,
+preferably an exact verified administrator email in `ALLOWED_EMAILS`, with unsafe mode disabled.
+Google needs an email/domain baseline; GitHub also accepts usernames/organizations. SQL rules cannot
+rescue an empty/incompatible baseline.
+
+`UNSAFE_ALLOW_ALL_USERS=true` only admits any otherwise valid identity when both sources' effective
+lists are empty. Nonempty lists still apply, and the editor is read-only whenever the flag is true.
+Managed input is limited to 50 rules total, including 10 organizations, with 64-KiB requests. Fresh
+Slack/Linear accounts need an attested email matching the effective email/domain union, unless
+unsafe allow-all is effective; an attested email is still required in unsafe mode. Known actors and
+attested-email links to existing accounts do not repeat admission and preserve role/suspension.
+GitHub bot profile emails are not verified evidence and cannot link an unknown actor by email;
+GitHub bot actors must already be known unless unsafe allow-all is effective. Bots cannot prove
+GitHub username/org rules. Missing or unreadable managed policy fails new-account admission closed.
+Removing rules does not revoke ordinary existing browser sessions or existing bot accounts; use
+member suspension instead. General bot invocation restrictions and resource authorization still
+apply. See [authentication](AUTH.md#sign-in-allowlist) for policy, authorization, and audit details.
+
+### Start and bootstrap
+
+After configuring OAuth, the recovery baseline, and secrets in `.env`, start the stack:
+
+```bash
+docker compose up -d --build
+curl -s http://localhost:8787/healthz
+```
+
+Node startup applies the shared SQL migrations. Migration `0093` seeds the admission singleton with
+empty managed rules, revision zero, and **`writes_frozen=1`**. The independently deployed frontend
+may arrive before the backend: missing routes show unavailable, and migrated frozen state shows
+read-only maintenance. This initial freeze makes staging safe; no new CI gate or automatic unfreeze
+is provided. Leave it frozen until the new backend is complete and all old environment-only auth
+runtimes have drained.
+
+Sign in once as the intended Owner. Then run the bootstrap script with their canonical 32-character
+lowercase hexadecimal user ID. Both operator scripts need Node.js 24+, a checkout with dependencies
+installed (`npm ci --ignore-scripts`), and exactly one of `--sqlite <existing-path>` or
+`--database <D1-name>`. SQLite opens an existing file only; do not point at a backup or a new empty
+file. The runtime app image does not ship these source scripts or `node_modules`, so do not assume
+`docker compose exec app node scripts/...` works.
+
+For local Compose, this helper runs the checkout's scripts in a Node container on the **actual app
+volume**. Run it from the repository root with the app running, and confirm the selected container
+belongs to the intended deployment. Re-select it after a container replacement. The helper uses the
+same `node` user as the app so SQLite sidecar files retain the correct ownership; the checkout must
+be readable by that user.
+
+```bash
+# Install checkout dependencies first. The maintenance CLI uses the shared Zod schema.
+# This also works on a Docker-only host; no host Node.js installation is required.
+docker run --rm --user "$(id -u):$(id -g)" -e npm_config_cache=/tmp/npm-cache \
+  -v "$PWD:/workspace" -w /workspace node:24 npm ci --ignore-scripts
+
+APP_CONTAINER_ID="$(docker compose ps -q app)"
+operator_sql() {
+  docker run --rm --user node --volumes-from "$APP_CONTAINER_ID" \
+    -v "$PWD:/workspace:ro" -w /workspace node:24 node "$@"
+}
+
+operator_sql scripts/bootstrap-workspace-owner.ts --sqlite /data/global.db --user <canonical-user-id>
+operator_sql scripts/bootstrap-workspace-owner.ts --sqlite /data/global.db --user <canonical-user-id> --execute
+operator_sql scripts/bootstrap-workspace-owner.ts --sqlite /data/global.db --user <canonical-user-id>
+```
+
+Review the first dry run before executing; the final dry run should report `no-op`. Bootstrap
+requires an existing unsuspended user and refuses when another active Owner exists. It is not a
+general recovery bypass for suspended accounts. On AWS, use an operator checkout with access to the
+actual volume and select the app from the AWS Compose invocation, or use `node scripts/... --sqlite`
+with the existing database's host path. Do not modify a copied database expecting to affect the app.
+
+### Enable and inspect
+
+Only after all old auth runtimes drain, inspect status, then use the reported revision for both the
+dry run and execution:
+
+```bash
+operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
+operator_sql scripts/admission-policy-maintenance.ts unfreeze --sqlite /data/global.db --expected-revision <revision>
+operator_sql scripts/admission-policy-maintenance.ts unfreeze --sqlite /data/global.db --expected-revision <revision> --execute
+operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
+```
+
+`status` is read-only and does not accept `--execute` or `--expected-revision`. Freeze/unfreeze
+require the expected revision and do not mutate without `--execute`. State changes advance revision;
+executing an already matching state records a no-op. Writes and operator audit proof share a
+`BEGIN IMMEDIATE` transaction. The D1 alternative uses the same scripts with `--database <D1-name>`
+and Wrangler's remote result-bearing `--command` execution, not file import. No new environment flag
+controls the freeze. Reload the UI after enabling.
+
+### Freeze and roll back
+
+Stop concurrent deployments/configuration edits and operator policy changes; disable or control
+automated rollback before exporting. The maintenance tool does not lock deployment configuration.
+Freezing stops managed writes, not sign-in or enforcement of existing rules.
+
+```bash
+operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
+operator_sql scripts/admission-policy-maintenance.ts freeze --sqlite /data/global.db --expected-revision <revision>
+umask 077
+operator_sql scripts/admission-policy-maintenance.ts freeze --sqlite /data/global.db --expected-revision <revision> --execute > admission-policy-frozen.json
+operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
+```
+
+The CLI first validates the stored rules with the runtime schema. Its write checks both the revision
+and the exact validated JSON. The freeze and returned managed snapshot are transactional. Record the
+**returned revision** and verify `writesFrozen: true`. The export contains managed rules only; **the
+CLI does not fetch the actual deployment baseline**. Separately read the serving container's
+admission configuration, normalize and union each baseline list with the exported managed list, and
+put that union in `.env` (or the AWS SSM source). Set unsafe mode false. While still on current
+code, apply the reviewed configuration; local Compose recreates the app with:
+
+```bash
+docker compose up -d --build app
+```
+
+On AWS, use its normal SSM/deployment workflow and Compose overlay rather than relying on a local
+`.env` edit that a later deployment would replace. Verify the **deployed** union and intended login
+eligibility, re-select `APP_CONTAINER_ID`, and rerun maintenance `status`. Immediately before moving
+to old code, confirm the frozen revision and deployed union still match the reviewed
+export/baseline. If either changed, stop and repeat the review. Only then deploy the approved old
+image/source version with that union intact. Keep `global.db`, the policy row, frozen state, and
+audit history; do not drop policy data or unfreeze while any old auth runtime remains. A
+frontend-only rollback does not stop the new backend from enforcing managed rules.
+
+### Recover and re-enable
+
+For a valid but mistaken policy, add a known valid recovery email to the deployment baseline with
+unsafe mode false, deploy it on current code, and verify login and the account's active role. For
+missing/corrupt policy state, repair or restore the database first: even a baseline match fails
+closed when the managed policy cannot be read. The maintenance CLI does not repair rule JSON. Do not
+delete the singleton or enable unsafe allow-all to work around it.
+
+After restoring current code and draining old auth runtimes, re-select the live container and repeat
+the `status`, dry-run `unfreeze`, `unfreeze --execute`, and verification commands above using the
+newly observed revision. On timeout/unknown results inspect status and audit before retrying.
+Baseline copies added for rollback remain until a separate reviewed deployment removes them.
+
+The Next.js callback proxy allows 240 seconds, with `maxDuration = 300` on the auth route, because
+verified-email pagination can consume roughly 200 seconds before org checks/token/persistence work.
+Organization checks use at most four concurrent requests and one total 10-second deadline; ordinary
+resource/non-callback transport remains 15 seconds. Hosting and ingress caps still apply. Provider
+token exchange has no explicit auth-library timeout; the app proxy bounds its own wait, not assured
+upstream cancellation. Validate live providers and deployment limits separately; these documented
+budgets are not real-provider test results.
+
 ## Reaching the container from a sandbox
 
 A sandbox connects back to the control plane over a WebSocket at `WORKER_URL`, so that URL has to be

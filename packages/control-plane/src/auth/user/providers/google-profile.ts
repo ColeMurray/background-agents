@@ -1,7 +1,7 @@
 import { verifyGoogleIdToken } from "better-auth/social-providers";
 import { SIGN_IN_PROVIDER_ISSUERS } from "@open-inspect/shared/sign-in-provider";
 import { z } from "zod";
-import type { AdmissionPolicy, GoogleAdmissionEvidence } from "../admission-policy";
+import type { AdmissionEvaluator, GoogleAdmissionEvidence } from "../admission-policy";
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
 import { OAuthProviderError } from "./types";
 
@@ -18,7 +18,7 @@ type VerifyGoogleIdToken = typeof verifyGoogleIdToken;
 
 export interface GoogleSignInProfileResolverConfig {
   readonly clientId: string;
-  readonly admissionPolicy: Pick<AdmissionPolicy, "requireAdmission">;
+  readonly admissionPolicy: AdmissionEvaluator;
 }
 
 export interface GoogleSignInProfileResolverDependencies {

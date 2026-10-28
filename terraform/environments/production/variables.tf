@@ -919,31 +919,31 @@ variable "r2_media_bucket_name" {
 # allowlist. Leave them all empty only with unsafe_allow_all_users = true.
 
 variable "allowed_users" {
-  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist (allowed_email_domains, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of GitHub usernames allowed to sign in (not canonical user IDs). Additive with SQL-managed sign-in rules; the UI cannot narrow this baseline and Terraform does not remove managed grants. Keep a compatible deployment baseline for every enabled provider; managed rules do not satisfy Terraform safety checks. GitHub-only rules do not support Google sign-in."
   type        = string
   default     = ""
 }
 
 variable "allowed_email_domains" {
-  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Matches any provider's verified email. Leave empty only when another allowlist (allowed_users, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of exact verified email domains (e.g., 'example.com,corp.io') for GitHub or Google sign-in; subdomains are not included. Additive with SQL-managed rules and read-only in the UI. Google requires a deployment email/domain baseline unless unsafe allow-all is effective; managed rules do not satisfy the deployment safety checks."
   type        = string
   default     = ""
 }
 
 variable "allowed_emails" {
-  description = "Comma-separated list of exact email addresses allowed to sign in, matched case-insensitively against any provider's verified email. Use this for individual users on shared domains (e.g. one person@gmail.com) where allowed_email_domains would be too broad. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of exact verified emails for GitHub or Google sign-in, matched case-insensitively. Prefer an active recovery administrator's email here with unsafe mode disabled; exact emails avoid admitting an entire shared domain. Additive with SQL-managed rules and read-only in the UI. Managed rules cannot replace the required compatible deployment baseline."
   type        = string
   default     = ""
 }
 
 variable "allowed_github_orgs" {
-  description = "Comma-separated list of GitHub organization logins whose active members are allowed to sign in. The signing-in user's OAuth token is checked against GitHub's membership API at sign-in (read:org is requested only when this is set) and requires GitHub App Organization permissions: Members read-only. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of GitHub organization logins whose active members may sign in, additive with SQL-managed rules and read-only in the UI. Checks use the signing-in user's token and GitHub App Organization Members read-only permission; rules request no new OAuth scopes or read:org. Verify App permissions and approve permission changes separately. GitHub-only rules do not support Google sign-in; managed rules do not replace the required deployment baseline."
   type        = string
   default     = ""
 }
 
 variable "unsafe_allow_all_users" {
-  description = "Bypass Terraform's access-control safety check and allow any authenticated user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
+  description = "Explicit unsafe opt-in to Terraform's access-control checks. Allows any otherwise valid provider identity only when all effective deployment AND SQL-managed allowlists are empty; nonempty rules keep it dormant. The sign-in allowlist editor is read-only whenever this flag is true. Prefer false with a compatible recovery baseline; managed rules do not satisfy Terraform's baseline checks."
   type        = bool
   default     = false
 }

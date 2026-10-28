@@ -6,11 +6,9 @@ import {
 } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
-import {
-  AdmissionDeniedError,
-  AdmissionPolicy,
-  admissionPolicyConfigFromEnv,
-} from "../auth/user/admission-policy";
+import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
+import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
+import { AdmissionPolicyStore } from "../db/admission-policy-store";
 import {
   evaluateOwnedResourceAdmission,
   ownedResourceAdmissionResponse,
@@ -445,7 +443,6 @@ async function finalizeServiceActor(
         ),
       };
     }
-    const admissionPolicy = new AdmissionPolicy(admissionPolicyConfigFromEnv(env));
     // Resolve existing accounts first so linking preserves role and suspension;
     // the store checks admission immediately before creating a new user.
     const user = await new UserStore(ctx.db).resolveOrCreateUser(
@@ -456,7 +453,11 @@ async function finalizeServiceActor(
         providerEmail: email ?? undefined,
         avatarUrl: claims?.avatarUrl,
       },
-      (identity) => {
+      async (identity) => {
+        const admissionPolicy = await resolveEffectiveAdmissionPolicy(
+          admissionPolicyConfigFromEnv(env),
+          new AdmissionPolicyStore(ctx.db)
+        );
         const attestedEmail = isEmailAttestingProvider(identity.provider)
           ? normalizeEmail(identity.providerEmail)
           : null;
@@ -470,7 +471,7 @@ async function finalizeServiceActor(
     return null;
   } catch (cause) {
     if (cause instanceof AdmissionDeniedError) {
-      logger.warn("Refused to enroll a service actor outside deployment admission", {
+      logger.warn("Refused to enroll a service actor outside workspace admission", {
         event: "auth.service_actor_admission_denied",
         provider: principal.actor.provider,
         request_id: ctx.request_id,

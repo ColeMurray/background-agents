@@ -131,6 +131,9 @@ jobs:
       - name: Test Owner bootstrap CLI
         run: npm run test:rbac-bootstrap-owner
 
+      - name: Test admission policy maintenance CLI
+        run: npm run test:admission-policy-maintenance
+
       - name: Test user merge CLI
         run: npm run test:user-merge-cli
 

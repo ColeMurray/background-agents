@@ -440,12 +440,22 @@ enable_service_bindings = false
 # allowlist (GitHub username, email domain, exact email, or GitHub org
 # membership). Set at least one unless you intentionally opt into open access
 # with unsafe_allow_all_users = true.
+# These are deployment baseline rules, additive with SQL-managed rules in
+# Settings > Workspace access > Sign-in allowlist. The UI cannot narrow this
+# baseline, and Terraform changes do not remove managed grants. Keep a compatible
+# deployment baseline for every enabled provider; managed rules do not satisfy
+# Terraform safety checks. Prefer a known valid recovery admin email below.
+# Google needs email/domain rules; GitHub also supports username/org rules.
+# Migration 0093 seeds editing frozen. After ALL old auth runtimes drain, explicitly
+# enable using scripts/admission-policy-maintenance.ts unfreeze with a reviewed
+# --expected-revision and --execute. See docs/AUTH.md for exact CLI procedures.
+# Managed limits: 50 total rules, 10 orgs, 64-KiB requests (not baseline limits).
 
 # Comma-separated list of GitHub usernames allowed to sign in
 allowed_users = ""
 
 # Comma-separated list of email domains allowed to sign in (matches any
-# provider's verified email). Example: "example.com,corp.io"
+# provider's verified email; exact domains, not subdomains). Example: "example.com,corp.io"
 allowed_email_domains = ""
 
 # Comma-separated list of exact email addresses allowed to sign in. Use this for
@@ -454,12 +464,18 @@ allowed_email_domains = ""
 allowed_emails = ""
 
 # Comma-separated list of GitHub organizations whose active members can sign in.
-# Requests read:org only when set, then checks membership at sign-in with the
-# signing-in user's OAuth token. Existing sessions last until session expiry.
+# Checks membership with the signing-in user's token; rules request no new OAuth
+# scopes or read:org. Removing a rule does not revoke existing browser sessions;
+# use Members > Suspend for revocation. Verified GitHub email is still required.
 # Requires GitHub App Organization permissions: Members read-only; existing apps
 # must republish/request approval after this permission changes.
 allowed_github_orgs = ""
 
-# Explicitly bypass the Terraform access-control safety check and allow any
-# authenticated user to sign in when all allowlists are empty.
+# Explicit unsafe opt-in: any otherwise valid provider identity may sign in ONLY
+# when all effective deployment AND managed lists are empty. Nonempty rules still
+# apply. The editor is read-only whenever this flag is true, even when dormant.
+# For old-code rollback: stop deployments/control automatic rollback, freeze and
+# export managed rules with the maintenance CLI, union them with the ACTUAL
+# deployed baseline (the CLI does not fetch it), deploy that union with this flag
+# false, and verify the deployed union plus frozen revision before rollback.
 unsafe_allow_all_users = false
