@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { handleAgentSessionEvent } from "./webhook-handler";
+import { handleAgentSessionEvent, STOP_TIMEOUT_MS } from "./webhook-handler";
 import { buildFollowUpPrompt, buildPrompt, buildPromptContextPrompt, escapeHtml } from "./prompts";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { MAX_SESSION_INSTRUCTIONS_LENGTH } from "@open-inspect/shared/types/integrations";
@@ -1343,6 +1343,248 @@ describe("handleAgentSessionEvent environment targets", () => {
       expect(store.has("issue:issue-1")).toBe(status !== 200);
     }
   );
+
+  describe("stop deadline", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    function stopFixture() {
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const webhook = makeWebhook();
+      webhook.action = "stopped";
+      webhook.agentActivity = { userId: "new-author" };
+      return { env, webhook, store };
+    }
+
+    it.each([
+      "initial stop response",
+      "stop refusal body",
+      "client token request",
+      "client token body",
+      "client identity request",
+      "enrollment probe",
+      "enrollment refusal body",
+      "profile request",
+      "profile body",
+      "enrollment attestation",
+      "retry stop response",
+      "refusal activity request",
+      "refusal activity body",
+    ])("terminates when %s ignores cancellation and retains the mapping", async (phase) => {
+      const { env, webhook, store } = stopFixture();
+      if (phase.startsWith("client")) store.delete("oauth:client-credentials:org-1");
+      let markStalled!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        markStalled = resolve;
+      });
+      let release!: () => void;
+      function stall(response: Response): Promise<Response> {
+        return new Promise((resolve) => {
+          release = () => resolve(response);
+          markStalled();
+        });
+      }
+      function stallBody(value: unknown, status = 200): Response {
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const response = new Response(
+          new ReadableStream<Uint8Array>({
+            start(streamController) {
+              controller = streamController;
+            },
+          }),
+          { status }
+        );
+        const read = response.json.bind(response);
+        vi.spyOn(response, "json").mockImplementation(() => {
+          release = () => {
+            controller.enqueue(new TextEncoder().encode(JSON.stringify(value)));
+            controller.close();
+          };
+          markStalled();
+          return read();
+        });
+        return response;
+      }
+      const emailRequired = () => Response.json({ code: "actor_email_required" }, { status: 403 });
+      const profile = { data: { user: { id: "new-author", name: "Ada", email: "ada@corp.test" } } };
+      vi.stubGlobal(
+        "fetch",
+        createLinearFetchMock({
+          clientCredentials: () =>
+            phase === "client token request"
+              ? stall(linearClientCredentialsResponse())
+              : phase === "client token body"
+                ? stallBody({
+                    access_token: "late-token",
+                    token_type: "Bearer",
+                    expires_in: 2_592_000,
+                  })
+                : linearClientCredentialsResponse(),
+          identity: () =>
+            phase === "client identity request"
+              ? stall(linearIdentityResponse())
+              : linearIdentityResponse(),
+          user: () =>
+            phase === "profile request"
+              ? stall(Response.json(profile))
+              : phase === "profile body"
+                ? stallBody(profile)
+                : Response.json(profile),
+          graphql: () =>
+            phase === "refusal activity request"
+              ? stall(Response.json({ data: {} }))
+              : phase === "refusal activity body"
+                ? stallBody({ data: {} })
+                : Response.json({ data: {} }),
+        })
+      );
+      let stopCalls = 0;
+      let enrollmentCalls = 0;
+      const controlPlaneFetch = vi.fn(async (url: string, _init: RequestInit) => {
+        if (new URL(url).pathname.endsWith("/stop")) {
+          stopCalls++;
+          if (stopCalls === 1) {
+            if (phase === "initial stop response")
+              return stall(new Response(null, { status: 200 }));
+            if (phase === "stop refusal body")
+              return stallBody({ code: "actor_email_required" }, 403);
+            return emailRequired();
+          }
+          return phase === "retry stop response"
+            ? stall(new Response(null, { status: 200 }))
+            : new Response(null, { status: 200 });
+        }
+        enrollmentCalls++;
+        if (enrollmentCalls === 1) {
+          if (phase === "enrollment probe") return stall(emailRequired());
+          if (phase === "enrollment refusal body")
+            return stallBody({ code: "actor_email_required" }, 403);
+          return emailRequired();
+        }
+        if (phase === "enrollment attestation") return stall(new Response(null, { status: 204 }));
+        return phase.startsWith("refusal activity")
+          ? Response.json({ code: "actor_admission_denied" }, { status: 403 })
+          : new Response(null, { status: 204 });
+      });
+      env.CONTROL_PLANE = { fetch: controlPlaneFetch } as unknown as Fetcher;
+      let settled = false;
+      const handling = handleAgentSessionEvent(webhook, env, "trace-stop-deadline").then(() => {
+        settled = true;
+      });
+      try {
+        await stalled;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        await handling;
+        expect(vi.getTimerCount()).toBe(0);
+        expect(stopCalls).toBe(phase === "retry stop response" ? 2 : 1);
+        expect(store.has("issue:issue-1")).toBe(true);
+        expect(env.LINEAR_KV.delete).not.toHaveBeenCalledWith("issue:issue-1");
+        const signal = controlPlaneFetch.mock.calls[0][1].signal;
+        expect(signal?.aborted).toBe(true);
+        for (const [, init] of controlPlaneFetch.mock.calls) expect(init.signal).toBe(signal);
+        expect(
+          vi.mocked(console.error).mock.calls.map(([line]) => JSON.parse(String(line)))
+        ).toContainEqual(
+          expect.objectContaining({
+            msg: "agent_session.stop_failed",
+            trace_id: "trace-stop-deadline",
+            session_id: "session-xyz",
+            error_message: "Linear stop deadline exceeded",
+          })
+        );
+      } finally {
+        release();
+        await handling;
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      // Late completion cannot restart enrollment/retry or remove an uncertain mapping.
+      expect(stopCalls).toBe(phase === "retry stop response" ? 2 : 1);
+      expect(store.has("issue:issue-1")).toBe(true);
+      expect(env.LINEAR_KV.delete).not.toHaveBeenCalledWith("issue:issue-1");
+    });
+
+    it("shares the original budget across stop, enrollment and retry", async () => {
+      const { env, webhook, store } = stopFixture();
+      let enterStage!: () => void;
+      let entered = new Promise<void>((resolve) => {
+        enterStage = resolve;
+      });
+      let release!: (response: Response) => void;
+      const request = vi.fn(
+        (_url: string, _init: RequestInit) =>
+          new Promise<Response>((resolve) => {
+            release = resolve;
+            enterStage();
+          })
+      );
+      env.CONTROL_PLANE = { fetch: request } as unknown as Fetcher;
+      let settled = false;
+      const handling = handleAgentSessionEvent(webhook, env, "trace-shared-budget").then(() => {
+        settled = true;
+      });
+      try {
+        await entered;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS / 2);
+        entered = new Promise<void>((resolve) => {
+          enterStage = resolve;
+        });
+        release(Response.json({ code: "actor_email_required" }, { status: 403 }));
+        await entered;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS / 4);
+        entered = new Promise<void>((resolve) => {
+          enterStage = resolve;
+        });
+        release(new Response(null, { status: 204 }));
+        await entered;
+        expect(request.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+          "/sessions/session-xyz/stop",
+          "/actors/me",
+          "/sessions/session-xyz/stop",
+        ]);
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS / 4 - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(store.has("issue:issue-1")).toBe(true);
+        const signal = request.mock.calls[0][1].signal;
+        for (const [, init] of request.mock.calls) expect(init.signal).toBe(signal);
+        expect(signal?.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        release(new Response(null, { status: 200 }));
+        await handling;
+      }
+      expect(store.has("issue:issue-1")).toBe(true);
+    });
+
+    it.each([200, 403, 503])(
+      "clears its timer after a completed stop response of %s",
+      async (status) => {
+        const { env, webhook, store } = stopFixture();
+        const request = vi
+          .fn()
+          .mockResolvedValue(Response.json({ code: "not_member" }, { status }));
+        env.CONTROL_PLANE = { fetch: request } as unknown as Fetcher;
+        await handleAgentSessionEvent(webhook, env, "trace-completed-stop");
+        expect(vi.getTimerCount()).toBe(0);
+        expect(request.mock.calls[0][1].signal.aborted).toBe(false);
+        expect(store.has("issue:issue-1")).toBe(status !== 200);
+      }
+    );
+  });
 
   it("fails closed and retains the session mapping when a stop author is missing", async () => {
     const { kv, store } = createFakeKV({

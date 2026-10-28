@@ -3,6 +3,7 @@
  * Extracted from index.ts for modularity.
  */
 
+import { abortable } from "@open-inspect/shared/abortable";
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
 import { ACTOR_EMAIL_REQUIRED_CODE } from "@open-inspect/shared/types/actors";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
@@ -41,6 +42,9 @@ import {
 import { buildFollowUpPrompt, buildPrompt, buildPromptContextPrompt } from "./prompts";
 
 const log = createLogger("handler");
+
+// Leave headroom for completion before the Worker waitUntil budget expires.
+export const STOP_TIMEOUT_MS = 25_000;
 
 const sessionEventsSummaryResponseSchema = z.object({
   events: z.array(
@@ -88,26 +92,34 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
   const issueId = webhook.agentSession.issue?.id;
+  const deadline = new AbortController();
+  const { signal } = deadline;
+  const timeoutId = setTimeout(
+    () => deadline.abort(new DOMException("Linear stop deadline exceeded", "TimeoutError")),
+    STOP_TIMEOUT_MS
+  );
+  let sessionId: string | undefined;
 
-  if (issueId) {
-    const existingSession = await lookupIssueSession(env, issueId);
-    if (existingSession) {
-      const stopUrl = new URL(`https://internal/sessions/${existingSession.sessionId}/stop`);
-      const actorUserId =
-        webhook.agentActivity?.userId ?? webhook.agentSession.comment?.userId ?? undefined;
-      if (!actorUserId) {
-        log.warn("Linear stop rejected because its author is missing", {
-          event: "agent_session.stop_author_missing",
-          agent_session_id: agentSessionId,
-          issue_id: issueId,
-          trace_id: traceId,
-        });
-        return;
-      }
-      // Older mappings lack a team coordinate; the actor's own authorization still governs them.
-      const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
-      if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
-      try {
+  try {
+    if (issueId) {
+      const existingSession = await abortable(lookupIssueSession(env, issueId), signal);
+      if (existingSession) {
+        sessionId = existingSession.sessionId;
+        const stopUrl = new URL(`https://internal/sessions/${sessionId}/stop`);
+        const actorUserId =
+          webhook.agentActivity?.userId ?? webhook.agentSession.comment?.userId ?? undefined;
+        if (!actorUserId) {
+          log.warn("Linear stop rejected because its author is missing", {
+            event: "agent_session.stop_author_missing",
+            agent_session_id: agentSessionId,
+            issue_id: issueId,
+            trace_id: traceId,
+          });
+          return;
+        }
+        // Older mappings lack a team coordinate; the actor's own authorization still governs them.
+        const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
+        if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
         const stopRequest = {
           method: "POST",
           url: stopUrl.toString(),
@@ -115,29 +127,48 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
           traceId,
         };
         // Known actors can stop without relying on Linear's API or token issuance.
-        let stopRes = await signedControlPlaneFetch(env, stopRequest);
+        signal.throwIfAborted();
+        let stopRes = await abortable(
+          signedControlPlaneFetch(env, stopRequest, { signal }),
+          signal
+        );
         if (
           stopRes.status === 403 &&
-          z
-            .object({ code: z.literal(ACTOR_EMAIL_REQUIRED_CODE) })
-            .safeParse(await stopRes.json().catch(() => null)).success
+          z.object({ code: z.literal(ACTOR_EMAIL_REQUIRED_CODE) }).safeParse(
+            await abortable(
+              stopRes.json().catch(() => null),
+              signal
+            )
+          ).success
         ) {
-          const client = await getLinearClientOrThrow(
-            env,
-            webhook.organizationId,
-            webhook.appUserId
+          signal.throwIfAborted();
+          const client = await abortable(
+            getLinearClientOrThrow(env, webhook.organizationId, webhook.appUserId),
+            signal
           );
-          const refusal = await enrollLinearActor(env, client, actorUserId, traceId);
+          signal.throwIfAborted();
+          const refusal = await enrollLinearActor(env, client, actorUserId, traceId, signal);
+          // Enrollment reports failures as guidance, including an expired caller deadline.
+          signal.throwIfAborted();
           if (refusal) {
-            await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+            await abortable(
+              emitAgentActivity(
+                client,
+                agentSessionId,
+                { type: "error", body: refusal },
+                undefined,
+                signal
+              ),
+              signal
+            );
             return;
           }
-          stopRes = await signedControlPlaneFetch(env, stopRequest);
+          stopRes = await abortable(signedControlPlaneFetch(env, stopRequest, { signal }), signal);
         }
         if (!stopRes.ok) {
           log.error("agent_session.stop_failed", {
             trace_id: traceId,
-            session_id: existingSession.sessionId,
+            session_id: sessionId,
             stop_status: stopRes.status,
           });
           return;
@@ -145,28 +176,30 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
         log.info("agent_session.stopped", {
           trace_id: traceId,
           agent_session_id: agentSessionId,
-          session_id: existingSession.sessionId,
+          session_id: sessionId,
           issue_id: issueId,
           stop_status: stopRes.status,
         });
-      } catch (e) {
-        log.error("agent_session.stop_failed", {
-          trace_id: traceId,
-          session_id: existingSession.sessionId,
-          error: e instanceof Error ? e : new Error(String(e)),
-        });
-        return;
+        await abortable(env.LINEAR_KV.delete(`issue:${issueId}`), signal);
       }
-      await env.LINEAR_KV.delete(`issue:${issueId}`);
     }
-  }
 
-  log.info("agent_session.stop_handled", {
-    trace_id: traceId,
-    action: webhook.action,
-    agent_session_id: agentSessionId,
-    duration_ms: Date.now() - startTime,
-  });
+    log.info("agent_session.stop_handled", {
+      trace_id: traceId,
+      action: webhook.action,
+      agent_session_id: agentSessionId,
+      duration_ms: Date.now() - startTime,
+    });
+  } catch (e) {
+    // A missing response does not establish whether the control plane applied the stop.
+    log.error("agent_session.stop_failed", {
+      trace_id: traceId,
+      session_id: sessionId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /**
