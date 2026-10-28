@@ -50,14 +50,13 @@ async def test_duplicates_ack_once_per_delivery_after_dispatch(bridge, command_t
             assert "cmd-1" in bridge._accepted_command_ids
             if command_type == "prompt":
                 assert bridge.activity.current_prompt_task is not None
-                bridge._handle_prompt.assert_not_awaited()
             elif command_type == "push":
                 assert len(bridge.activity.push_tasks) == 1
-                bridge._handle_push.assert_not_awaited()
 
     bridge._send_event.side_effect = send
     await bridge._handle_command(command)
     await bridge._handle_command(command)
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
 
     dispatch.assert_awaited_once_with(command)
     acks = [
@@ -81,11 +80,12 @@ async def test_failed_ack_does_not_allow_redispatch(bridge, command_type, ack_er
             raise ack_error()
 
     bridge._send_event.side_effect = fail_ack
-    with pytest.raises(ack_error):
-        await bridge._handle_command(command)
+    await bridge._handle_command(command)
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
 
     bridge._send_event.side_effect = None
     await bridge._handle_command(command)
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
 
     bridge._dispatch_command.assert_awaited_once_with(command)
     assert bridge._send_event.await_args.args[0]["type"] == "command_ack"
@@ -115,6 +115,7 @@ async def test_lost_ack_and_reconnect_reack_without_execution(bridge, command_ty
         async def __aiter__(self):
             yield json.dumps(command)
             yield json.dumps(command)
+            await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
 
     first = WebSocket(lose_ack=True)
     second = WebSocket(lose_ack=False)
@@ -155,6 +156,7 @@ async def test_dispatch_failure_is_not_recorded_or_acked(bridge, command_type):
     assert bridge._accepted_command_ids == set()
     await bridge._handle_command(command)
     assert bridge._dispatch_command.await_count == 2
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
     assert bridge._send_event.await_args.args[0]["type"] == "command_ack"
 
 
@@ -187,6 +189,7 @@ async def test_boot_handled_push_is_deduplicated_before_boot_handler(bridge):
 
     bridge.boot_attach.handle_command.assert_awaited_once_with(command)
     bridge._handle_push.assert_not_called()
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
     assert [call.args[0]["type"] for call in bridge._send_event.await_args_list] == [
         "push_error",
         "command_ack",
@@ -266,6 +269,7 @@ async def test_targeted_stop_without_match_settles_only_requested_message(
         assert "stop-1" not in bridge._accepted_command_ids
         return
     bridge.harness.stop_execution.assert_awaited_once()
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
     confirmation = bridge._send_event.await_args_list[0].args[0]
     assert confirmation == {
         "type": "stop_confirmed",
@@ -323,6 +327,7 @@ async def test_failed_containment_is_not_confirmed_or_deduplicated(bridge, failu
     assert "stop-1" not in bridge._accepted_command_ids
     await bridge._handle_command(command)
     assert bridge.harness.stop_execution.await_count == 2
+    await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
     assert [call.args[0]["type"] for call in bridge._send_event.await_args_list] == [
         "stop_confirmed",
         "command_ack",

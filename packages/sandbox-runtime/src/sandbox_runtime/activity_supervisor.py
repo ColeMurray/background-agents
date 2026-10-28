@@ -138,7 +138,7 @@ class ActivitySupervisor:
 
         # Never resubmit a completion: its original payload and pending ACK
         # belong to the terminal selector and the event forwarder, respectively.
-        await self._send_event(
+        self.schedule_delivery(
             {
                 "type": "stop_confirmed",
                 "messageId": message_id,
@@ -195,7 +195,7 @@ class ActivitySupervisor:
             }
         activity.terminal_selected = True
         self._log_prompt_run(activity, completed, event)
-        self._schedule_delivery(event, refresh_message_id=activity.message_id)
+        self.schedule_delivery(event, refresh_message_id=activity.message_id)
 
     def _log_prompt_run(
         self, activity: _PromptActivity, completed: asyncio.Task[Event], event: Event
@@ -255,9 +255,11 @@ class ActivitySupervisor:
         else:
             event = completed.result()
         activity.terminal_selected = True
-        self._schedule_delivery(event)
+        self.schedule_delivery(event)
 
-    def _schedule_delivery(self, event: Event, *, refresh_message_id: str | None = None) -> None:
+    def schedule_delivery(self, event: Event, *, refresh_message_id: str | None = None) -> None:
+        """Own outbound delivery across reconnects, without blocking command admission."""
+
         async def deliver() -> None:
             await self._send_event(event)
             if refresh_message_id is not None:

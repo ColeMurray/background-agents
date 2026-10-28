@@ -57,16 +57,17 @@ class GatedWs:
 class TestSendWhileConnected:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])
-    async def test_early_ack_during_direct_send_is_not_reintroduced(self, finish):
+    @pytest.mark.parametrize("event_type", ["execution_complete", "stop_confirmed"])
+    async def test_early_ack_during_direct_send_is_not_reintroduced(self, finish, event_type):
         forwarder = make_forwarder()
         ws = GatedWs()
         await forwarder.bind(ws)
         send_task = asyncio.create_task(
-            forwarder.send({"type": "execution_complete", "messageId": "msg-early-ack"})
+            forwarder.send({"type": event_type, "messageId": "msg-early-ack"})
         )
         await settle()
 
-        assert forwarder.acknowledge("execution_complete:msg-early-ack") is True
+        assert forwarder.acknowledge(f"{event_type}:msg-early-ack") is True
         if finish == "success":
             ws.release(0)
             assert await send_task is True

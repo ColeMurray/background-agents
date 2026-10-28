@@ -23,13 +23,22 @@ interface OutboxRow {
   expires_at: number;
 }
 
+interface CommandProtocol {
+  supported: number;
+  bridge_instance_id: string | null;
+  stop_confirmation_version: number | null;
+}
+
 export interface SandboxCommandOutboxDeps {
   sql: SqlStorage;
   wsManager: SessionWebSocketManager;
   sandboxRepository: SandboxStateReader;
   messageRepository: Pick<
     MessageRepository,
-    "getMessageById" | "getMessageAwaitingStopConfirmation"
+    | "getMessageById"
+    | "getMessageAwaitingStopConfirmation"
+    | "setStopConfirmationRequirement"
+    | "resolveUnknownStopConfirmationPolicy"
   >;
   encryptionKey: string;
   messenger: Pick<SessionMessenger, "broadcast">;
@@ -57,6 +66,9 @@ export class SandboxCommandOutbox {
       bridgeInstanceId ?? null,
       stopConfirmationVersion ?? null
     );
+    // A boot-time stop may already have been delivered (and receipt-ACKed).
+    // Resolve its unknown fence even when no outbox entry remains to flush.
+    this.deps.messageRepository.resolveUnknownStopConfirmationPolicy(stopConfirmationVersion === 1);
   }
 
   supportsReplay(): boolean {
@@ -64,31 +76,23 @@ export class SandboxCommandOutbox {
     return protocol?.supported === 1 && protocol.bridge_instance_id !== null;
   }
 
-  requiresStopConfirmation(): boolean {
-    const sandbox = this.deps.sandboxRepository.getSandbox();
-    return (
-      this.deps.sql
-        .exec(
-          `SELECT singleton FROM sandbox_command_protocol
-      WHERE sandbox_id = ? AND sandbox_created_at = ? AND stop_confirmation_version = 1`,
-          sandbox?.modal_sandbox_id ?? "",
-          sandbox?.created_at ?? -1
-        )
-        .toArray().length > 0
-    );
+  /** Null means this socket has not negotiated; keep its stop fence conservative. */
+  requiresStopConfirmation(): boolean | null {
+    const protocol = this.protocol();
+    return protocol ? protocol.stop_confirmation_version === 1 : null;
   }
 
-  private protocol(): { supported: number; bridge_instance_id: string | null } | undefined {
+  private protocol(): CommandProtocol | undefined {
     const sandbox = this.deps.sandboxRepository.getSandbox();
     return this.deps.sql
       .exec(
-        `SELECT supported, bridge_instance_id FROM sandbox_command_protocol
+        `SELECT supported, bridge_instance_id, stop_confirmation_version FROM sandbox_command_protocol
       WHERE sandbox_id = ? AND sandbox_created_at = ? AND socket_id = ?`,
         sandbox?.modal_sandbox_id ?? "",
         sandbox?.created_at ?? -1,
         sandbox?.active_socket_id ?? ""
       )
-      .toArray()[0] as { supported: number; bridge_instance_id: string | null } | undefined;
+      .toArray()[0] as CommandProtocol | undefined;
   }
 
   send(
@@ -216,11 +220,7 @@ export class SandboxCommandOutbox {
         }
         if (!protocol.supported || !protocol.bridge_instance_id) continue;
       }
-      this.deps.sql.exec(
-        "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
-        protocol?.bridge_instance_id ?? null,
-        row.command_id
-      );
+      this.recordAttempt(row, protocol);
       if (!this.deps.wsManager.send(ws, payload) && !current.attempted) {
         this.deps.sql.exec(
           "UPDATE sandbox_command_outbox SET attempted = 0, bridge_instance_id = NULL WHERE command_id = ?",
@@ -287,14 +287,26 @@ export class SandboxCommandOutbox {
       this.deps.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
       return true;
     }
-    this.deps.sql.exec(
-      "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
-      this.protocol()?.bridge_instance_id ?? null,
-      row.command_id
-    );
+    this.recordAttempt(row, this.protocol());
     if (this.deps.wsManager.send(ws, payload)) return true;
     this.discard(row.command_id);
     return false;
+  }
+
+  private recordAttempt(row: OutboxRow, protocol: CommandProtocol | undefined): void {
+    // Unknown is not legacy: resolve a held stop's fence against the receiver
+    // used for this delivery, before any completion can arrive on its socket.
+    if (row.command_type === "stop" && row.message_id) {
+      this.deps.messageRepository.setStopConfirmationRequirement(
+        row.message_id,
+        protocol ? protocol.stop_confirmation_version === 1 : null
+      );
+    }
+    this.deps.sql.exec(
+      "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
+      protocol?.bridge_instance_id ?? null,
+      row.command_id
+    );
   }
 
   private targetSocket(commandType?: OutboxRow["command_type"]): SessionWebSocket | null {

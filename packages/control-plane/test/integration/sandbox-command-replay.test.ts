@@ -50,7 +50,8 @@ describe("Sandbox command replay through the live session runtime", () => {
   async function ready(
     stub: DurableObjectStub,
     ws: WebSocket,
-    bridgeInstanceId = "bridge-1"
+    bridgeInstanceId = "bridge-1",
+    supportsStopConfirmation = true
   ): Promise<void> {
     const [{ count }] = await queryDO<{ count: number }>(
       stub,
@@ -62,7 +63,7 @@ describe("Sandbox command replay through the live session runtime", () => {
         sandboxId: SANDBOX_AUTH.sandboxId,
         commandAckVersion: 1,
         bridgeInstanceId,
-        stopConfirmationVersion: 1,
+        stopConfirmationVersion: supportsStopConfirmation ? 1 : undefined,
         timestamp: Date.now() / 1000,
       })
     );
@@ -554,6 +555,166 @@ describe("Sandbox command replay through the live session runtime", () => {
       expect(await queryDO(stub, "SELECT status FROM messages WHERE id = ?", nextId)).toEqual([
         { status: "processing" },
       ]);
+    }
+  );
+
+  it.each(["surviving", "reconnecting", "known-v1", "legacy"] as const)(
+    "resolves a pre-ready stop against its delivery protocol (%s)",
+    async (rollout) => {
+      const { sessionName, stub, ws: original } = await setup();
+      let ws = original;
+      const firstDelivery = collectMessages(ws, { until: (message) => message.type === "prompt" });
+      const firstId = await enqueuePrompt(stub);
+      const first = (await firstDelivery).find((message) => message.type === "prompt")!;
+      await acknowledge(stub, ws, first.commandId as string);
+      const nextId = await enqueuePrompt(stub);
+      if (rollout !== "known-v1") {
+        await runInSessionDO(stub, (_instance, state) =>
+          state.storage.sql.exec("DELETE FROM sandbox_command_protocol")
+        );
+      }
+      if (rollout === "reconnecting" || rollout === "known-v1") ws = await connect(sessionName);
+      const stopDelivery = collectMessages(ws, { until: (message) => message.type === "stop" });
+      expect((await stub.fetch("http://internal/internal/stop", { method: "POST" })).status).toBe(
+        200
+      );
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_requires_ack FROM messages WHERE id = ?",
+          firstId
+        )
+      ).toEqual([{ stop_confirmation_requires_ack: 2 }]);
+      const explicit = rollout !== "legacy";
+      await ready(stub, ws, "bridge-1", explicit);
+      const stop = (await stopDelivery).find((message) => message.type === "stop")!;
+      expect(stop).toMatchObject({ type: "stop", messageId: firstId });
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_requires_ack FROM messages WHERE id = ?",
+          firstId
+        )
+      ).toEqual([{ stop_confirmation_requires_ack: explicit ? 1 : 0 }]);
+      await acknowledge(stub, ws, stop.commandId as string);
+      const completionAck = collectMessages(ws, {
+        until: (message) => message.type === "ack" && message.ackId === "rollout-completion",
+      });
+      ws.send(
+        JSON.stringify({
+          type: "execution_complete",
+          messageId: firstId,
+          success: false,
+          sandboxId: SANDBOX_AUTH.sandboxId,
+          timestamp: Date.now(),
+          ackId: "rollout-completion",
+        })
+      );
+      const frames = await completionAck;
+      if (explicit) {
+        expect(frames.filter((message) => message.type === "prompt")).toEqual([]);
+        expect(
+          await queryDO(
+            stub,
+            "SELECT stop_confirmation_deadline FROM messages WHERE id = ?",
+            firstId
+          )
+        ).toEqual([{ stop_confirmation_deadline: expect.any(Number) }]);
+        expect(await queryDO(stub, "SELECT status FROM messages WHERE id = ?", nextId)).toEqual([
+          { status: "pending" },
+        ]);
+        const resumed = collectMessages(ws, {
+          until: (message) => message.type === "prompt" && message.messageId === nextId,
+        });
+        ws.send(
+          JSON.stringify({
+            type: "stop_confirmed",
+            messageId: firstId,
+            commandId: stop.commandId,
+            timestamp: Date.now(),
+            ackId: "rollout-confirmation",
+          })
+        );
+        await resumed;
+      }
+      expect(
+        await queryDO(stub, "SELECT stop_confirmation_deadline FROM messages WHERE id = ?", firstId)
+      ).toEqual([{ stop_confirmation_deadline: null }]);
+      expect(await queryDO(stub, "SELECT status FROM messages WHERE id = ?", nextId)).toEqual([
+        { status: "processing" },
+      ]);
+    }
+  );
+
+  it.each([true, false])(
+    "resolves a receipt-ACKed boot stop when readiness identifies its policy (explicit: %s)",
+    async (explicit) => {
+      const { stub, ws } = await setup();
+      const delivery = collectMessages(ws, { until: (message) => message.type === "prompt" });
+      const messageId = await enqueuePrompt(stub);
+      const prompt = (await delivery).find((message) => message.type === "prompt")!;
+      await acknowledge(stub, ws, prompt.commandId as string);
+      await runInSessionDO(stub, (_instance, state) => {
+        state.storage.sql.exec("UPDATE sandbox SET status = 'connecting'");
+        state.storage.sql.exec("DELETE FROM sandbox_command_protocol");
+      });
+      const stopped = collectMessages(ws, { until: (message) => message.type === "stop" });
+      expect((await stub.fetch("http://internal/internal/stop", { method: "POST" })).status).toBe(
+        200
+      );
+      const stop = (await stopped).find((message) => message.type === "stop")!;
+      await acknowledge(stub, ws, stop.commandId as string);
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_requires_ack FROM messages WHERE id = ?",
+          messageId
+        )
+      ).toEqual([{ stop_confirmation_requires_ack: 2 }]);
+      await ready(stub, ws, "bridge-1", explicit);
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_requires_ack FROM messages WHERE id = ?",
+          messageId
+        )
+      ).toEqual([{ stop_confirmation_requires_ack: explicit ? 1 : 0 }]);
+      const completed = collectMessages(ws, {
+        until: (message) => message.type === "ack" && message.ackId === "boot-completion",
+      });
+      ws.send(
+        JSON.stringify({
+          type: "execution_complete",
+          sandboxId: SANDBOX_AUTH.sandboxId,
+          messageId,
+          success: false,
+          timestamp: Date.now(),
+          ackId: "boot-completion",
+        })
+      );
+      await completed;
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_deadline FROM messages WHERE id = ?",
+          messageId
+        )
+      ).toEqual([{ stop_confirmation_deadline: explicit ? expect.any(Number) : null }]);
+      if (explicit) {
+        const confirmed = collectMessages(ws, {
+          until: (message) => message.type === "ack" && message.ackId === "boot-confirmed",
+        });
+        ws.send(
+          JSON.stringify({
+            type: "stop_confirmed",
+            messageId,
+            commandId: stop.commandId,
+            timestamp: Date.now(),
+            ackId: "boot-confirmed",
+          })
+        );
+        await confirmed;
+      }
     }
   );
 

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 # are re-sent on reconnect. Everything else is delivered at most once, with
 # one exception: a write that times out may already have reached the peer, so
 # replaying it can duplicate a non-critical event across connections.
+# Stop confirmations also retry on the same socket until acknowledged.
 CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         "execution_complete",
@@ -46,6 +47,7 @@ MAX_EVENT_BUFFER_SIZE: Final = 1000
 # flushing after a rebind: send() returns within two configured budgets.
 SEND_TIMEOUT_SECONDS: Final = 30.0
 EVICTION_WARNING_INTERVAL_SECONDS: Final = 30.0
+STOP_CONFIRMATION_RETRY_INTERVAL_SECONDS: Final = 2.0
 
 
 class BufferedEventForwarder:
@@ -147,6 +149,32 @@ class BufferedEventForwarder:
     def unbind(self) -> None:
         """Detach the connection; subsequent sends buffer until the next bind."""
         self._ws = None
+
+    async def retry_stop_confirmations(self, ws: ClientConnection) -> None:
+        """Connection-owned loop; the bridge must cancel and join it on disconnect.
+
+        Only containment results need same-socket retries. Receipts and other
+        events retain their existing delivery policy. No vendor work is repeated.
+        """
+        while self._ws is ws:
+            await asyncio.sleep(STOP_CONFIRMATION_RETRY_INTERVAL_SECONDS)
+            async with self._recovery_lock:
+                if self._ws is not ws or ws.state != State.OPEN:
+                    return
+                # Failed direct writes live in the buffer, not pending ACKs.
+                # Transfer only stop results so a blocked receipt cannot delay
+                # their retries. Recovery and direct sends cannot claim them twice.
+                for event in tuple(self._event_buffer):
+                    if event.get("type") == "stop_confirmed":
+                        self._event_buffer.remove(event)
+                        self._pending_acks[event["ackId"]] = event
+                await self._resend_pending(
+                    [
+                        ack_id
+                        for ack_id, event in self._pending_acks.items()
+                        if event.get("type") == "stop_confirmed"
+                    ]
+                )
 
     async def send(self, event: dict[str, Any], *, buffered: bool = True) -> bool:
         """Send event to control plane, buffering if WS is unavailable.
@@ -410,12 +438,11 @@ class BufferedEventForwarder:
         )
 
     async def _resend_pending(self, ack_ids: list[str]) -> None:
-        """Re-send unacknowledged critical events on a new WS connection.
+        """Re-send selected unacknowledged critical events on the bound connection.
 
         Must run under ``_recovery_lock``. Only the given ackIds are
-        considered (the ones pending before the buffer flush), and only if
-        they are still pending. Events stay pending until the DO sends an
-        ACK command.
+        considered, and only if still pending with no attempt in flight.
+        Events stay pending until the DO sends an ACK command.
         """
         to_resend = [ack_id for ack_id in ack_ids if ack_id in self._pending_acks]
         if not to_resend:
@@ -425,11 +452,12 @@ class BufferedEventForwarder:
         resent = 0
         for ack_id in to_resend:
             event = self._pending_acks.get(ack_id)
-            if event is None:
+            if event is None or ack_id in self._in_flight_acks:
                 continue
             ws = self._ws
             if not ws or ws.state != State.OPEN:
                 break
+            self._in_flight_acks[ack_id] = event
             try:
                 await self._write(ws, event)
                 resent += 1
@@ -443,6 +471,8 @@ class BufferedEventForwarder:
                     **self.health_snapshot(),
                 )
                 break
+            finally:
+                self._clear_in_flight(ack_id, event)
 
         self._log.info(
             "bridge.flush_pending_acks_complete",

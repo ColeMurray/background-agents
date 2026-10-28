@@ -21,6 +21,7 @@ import type { MessageListCursor } from "./message-cursor";
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
+const UNKNOWN_STOP_CONFIRMATION_POLICY = 2;
 
 const messageIdRowSchema = messageRowSchema.pick({ id: true });
 const messageStopConfirmationRowSchema = messageRowSchema
@@ -162,13 +163,31 @@ export class MessageRepository {
   markMessageAwaitingStopConfirmation(
     messageId: string,
     deadline: number,
-    requiresAck = false
+    requiresAck: boolean | null = false
   ): void {
     this.sql.exec(
       `UPDATE messages SET stop_confirmation_deadline = ?, stop_confirmation_requires_ack = ? WHERE id = ?`,
       deadline,
-      requiresAck ? 1 : 0,
+      requiresAck === null ? UNKNOWN_STOP_CONFIRMATION_POLICY : requiresAck ? 1 : 0,
       messageId
+    );
+  }
+
+  setStopConfirmationRequirement(messageId: string, requiresAck: boolean | null): void {
+    this.sql.exec(
+      `UPDATE messages SET stop_confirmation_requires_ack = ?
+       WHERE id = ? AND stop_confirmation_deadline IS NOT NULL`,
+      requiresAck === null ? UNKNOWN_STOP_CONFIRMATION_POLICY : requiresAck ? 1 : 0,
+      messageId
+    );
+  }
+
+  resolveUnknownStopConfirmationPolicy(requiresAck: boolean): void {
+    this.sql.exec(
+      `UPDATE messages SET stop_confirmation_requires_ack = ?
+       WHERE stop_confirmation_deadline IS NOT NULL AND stop_confirmation_requires_ack = ?`,
+      requiresAck ? 1 : 0,
+      UNKNOWN_STOP_CONFIRMATION_POLICY
     );
   }
 

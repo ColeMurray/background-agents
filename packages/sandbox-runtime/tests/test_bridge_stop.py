@@ -430,6 +430,7 @@ async def test_delayed_targeted_stop_preserves_terminal_and_contains_vendor(
         command = {"type": "stop", "messageId": "msg-1", "commandId": "stop-1"}
         await bridge._handle_command(command)
         await bridge._handle_command(command)
+        await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
 
         assert sum(url.endswith("/abort") for url in http_client.post_urls) == 1
         assert http_client.idle_checks == 1

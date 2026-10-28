@@ -217,7 +217,7 @@ function buildQueue(
   let enqueuedCommand: unknown;
   const commands = {
     send: wsManager.send,
-    requiresStopConfirmation: () => false,
+    requiresStopConfirmation: vi.fn<() => boolean | null>(() => false),
     enqueue: vi.fn((_ws: unknown, command: unknown) => {
       enqueuedCommand = command;
       return "command-1";
@@ -326,6 +326,7 @@ function buildQueue(
 
   return {
     queue,
+    commands,
     executionStop,
     repository,
     attachmentRepository,
@@ -350,6 +351,21 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it.each([null, true, false])("prepares a conservative stop fence for policy %s", (policy) => {
+    const h = buildQueue();
+    h.commands.requiresStopConfirmation.mockReturnValue(policy);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "unknown-stop",
+      created_at: 1,
+    });
+    h.executionStop.prepare("Execution was stopped", Date.now());
+    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
+      "unknown-stop",
+      expect.any(Number),
+      policy
+    );
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

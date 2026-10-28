@@ -376,3 +376,34 @@ async def test_targeted_stop_preserves_done_task_before_terminal_callback(
     assert "error" not in completion
     confirmation = next(event for event in events if event["type"] == "stop_confirmed")
     assert "commandId" not in confirmation
+
+
+@pytest.mark.asyncio
+async def test_outbound_deliveries_are_owned_logged_and_cancelled_at_shutdown() -> None:
+    supervisor = make_supervisor([])
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def send(event):
+        if event["type"] == "command_ack":
+            raise RuntimeError("receipt failed")
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    supervisor._send_event = send
+    supervisor.schedule_delivery({"type": "command_ack"})
+    # Admission returns even though the confirmation cannot be written.
+    assert await supervisor.stop_prompt(
+        "message-1", command_id="stop-1", stop_execution=AsyncMock(return_value=True)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await asyncio.sleep(0)
+    supervisor._log.error.assert_called_once()
+    assert supervisor._log.error.call_args.args == ("bridge.activity_delivery_error",)
+    assert len(supervisor._deliveries) == 1
+    await supervisor.shutdown()
+    assert cancelled.is_set()
+    assert not supervisor._deliveries

@@ -47,6 +47,8 @@ function setup() {
   const messageRepository = {
     getMessageById: vi.fn((): MessageRow | null => message),
     getMessageAwaitingStopConfirmation: vi.fn((): { id: string; deadline: number } | null => null),
+    setStopConfirmationRequirement: vi.fn(),
+    resolveUnknownStopConfirmationPolicy: vi.fn(),
   };
   const wsManager = {
     getSandboxSocket: vi.fn((): SessionWebSocket | null => ws),
@@ -199,6 +201,40 @@ describe("SandboxCommandOutbox", () => {
     h.sql.exec("UPDATE sandbox_command_protocol SET bridge_instance_id = NULL, supported = 1");
     expect(h.outbox.supportsReplay()).toBe(false);
   });
+
+  it("distinguishes unknown, legacy, and explicit stop-confirmation policies", () => {
+    expect(h.outbox.requiresStopConfirmation()).toBe(true);
+    h.sandbox.active_socket_id = "awaiting-ready";
+    expect(h.outbox.requiresStopConfirmation()).toBeNull();
+    h.outbox.recordProtocol(false);
+    expect(h.outbox.requiresStopConfirmation()).toBe(false);
+    h.sql.exec("DELETE FROM sandbox_command_protocol");
+    expect(h.outbox.requiresStopConfirmation()).toBeNull();
+  });
+
+  it.each([true, false])(
+    "binds a held stop's confirmation policy before delivery (explicit: %s)",
+    async (explicit) => {
+      h.sql.exec("DELETE FROM sandbox_command_protocol");
+      h.message.status = "failed";
+      expect(h.outbox.send(h.ws, { type: "stop", messageId: prompt.messageId })).toBe(true);
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      h.outbox.recordProtocol(
+        explicit,
+        explicit ? "bridge-1" : undefined,
+        explicit ? 1 : undefined
+      );
+      h.wsManager.send.mockImplementation(() => {
+        expect(h.messageRepository.setStopConfirmationRequirement).toHaveBeenCalledExactlyOnceWith(
+          prompt.messageId,
+          explicit
+        );
+        return true;
+      });
+      await h.outbox.flush();
+      expect(h.wsManager.send).toHaveBeenCalledOnce();
+    }
+  );
 
   it("delivers never-sent commands to legacy runtimes but never replays them", async () => {
     h.outbox.recordProtocol(false);

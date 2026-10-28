@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
-  stop_confirmation_requires_ack INTEGER NOT NULL DEFAULT 0,
+  stop_confirmation_requires_ack INTEGER NOT NULL DEFAULT 0, -- 0 legacy, 1 explicit, 2 unknown
   reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began

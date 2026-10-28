@@ -345,7 +345,11 @@ encrypted at rest. Push replies echo `commandId`, and stops target a specific `m
 Prompt claims and outbox insertion commit atomically before any frame is sent. Runtimes advertising
 `stopConfirmationVersion: 1` confirm vendor containment through `stop_confirmed`, independently of
 the prompt's terminal outcome. A local task ending does not release that stop fence; the original
-completion and final cost remain intact.
+completion and final cost remain intact. Command receipts and stop confirmations are delivered by
+owned outbound tasks, so a blocked write does not prevent the bridge from reading a stop.
+Unacknowledged stop confirmations are retried on the same connection without repeating containment.
+An unnegotiated stop fence stays closed until readiness resolves its policy; each actual delivery
+binds that policy to the receiving runtime.
 
 A heartbeat older than `SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS` holds new commands and publishes
 `sandbox_status` with `connectionStatus: reconnecting`. This optional field is ignored by older web

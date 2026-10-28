@@ -180,6 +180,60 @@ describe("MessageRepository", () => {
     expect(mock.calls[2].query).toContain("stop_confirmation_deadline = NULL");
   });
 
+  it.each([true, false])(
+    "resolves only unknown stop policies in SQLite (explicit: %s)",
+    (explicit) => {
+      const db = new DatabaseSync(":memory:");
+      const { sql, transactionSync } = createNodeSqlStorage(db);
+      try {
+        initSchema(sql);
+        sql.exec(
+          "INSERT INTO participants (id, user_id, role, joined_at) VALUES ('author', 'user', 'owner', 1)"
+        );
+        const real = new MessageRepository(
+          sql,
+          transactionSync,
+          new SessionAttachmentRepository(sql),
+          new EventRepository(sql, transactionSync)
+        );
+        for (const [id, policy] of [
+          ["unknown", null],
+          ["modern", true],
+          ["legacy", false],
+        ] as const) {
+          sql.exec(
+            "INSERT INTO messages (id, author_id, content, source, status, created_at) VALUES (?, 'author', 'Stop', 'web', 'failed', 1)",
+            id
+          );
+          real.markMessageAwaitingStopConfirmation(id, 5000, policy);
+        }
+        real.clearMessageAwaitingStopConfirmation("unknown", true);
+        expect(
+          sql.exec("SELECT stop_confirmation_deadline FROM messages WHERE id = 'unknown'").one()
+        ).toEqual({ stop_confirmation_deadline: 5000 });
+        real.resolveUnknownStopConfirmationPolicy(explicit);
+        expect(
+          sql.exec("SELECT id, stop_confirmation_requires_ack FROM messages ORDER BY id").toArray()
+        ).toEqual([
+          { id: "legacy", stop_confirmation_requires_ack: 0 },
+          { id: "modern", stop_confirmation_requires_ack: 1 },
+          { id: "unknown", stop_confirmation_requires_ack: explicit ? 1 : 0 },
+        ]);
+        real.clearMessageAwaitingStopConfirmation("unknown");
+        real.setStopConfirmationRequirement("unknown", true);
+        expect(
+          sql
+            .exec(
+              "SELECT stop_confirmation_deadline, stop_confirmation_requires_ack FROM messages WHERE id = 'unknown'"
+            )
+            .one()
+        ).toEqual({ stop_confirmation_deadline: null, stop_confirmation_requires_ack: 0 });
+      } finally {
+        db.close();
+      }
+    }
+  );
+
   it("rejects malformed persisted stop-confirmation rows", () => {
     const query = `SELECT id, stop_confirmation_deadline FROM messages
        WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;

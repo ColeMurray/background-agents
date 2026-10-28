@@ -262,7 +262,7 @@ describe("POST /internal/stop", () => {
     expect(msgBStatus[0].status).toBe("pending");
   });
 
-  it("execution_complete after stop dispatches queued message when sandbox connected", async () => {
+  it("execution_complete after stop dispatches queued message for a negotiated legacy sandbox", async () => {
     const name = `ws-stop-drain-${Date.now()}`;
     const { stub } = await initNamedSession(name);
 
@@ -300,6 +300,16 @@ describe("POST /internal/stop", () => {
     // Connect sandbox WS so queue drain can dispatch
     const { ws: sandboxWs } = await openSandboxWs(name, sandboxAuth);
     if (sandboxWs) sandboxWs.accept();
+    // Missing capabilities on ready are legacy; no ready at all is still unknown.
+    await stub.fetch("http://internal/internal/sandbox-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "ready",
+        sandboxId: sandboxAuth.sandboxId,
+        timestamp: Date.now(),
+      }),
+    });
     // Stop execution - marks A as failed
     await stub.fetch("http://internal/internal/stop", { method: "POST" });
 

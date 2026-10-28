@@ -513,6 +513,7 @@ class AgentBridge:
                 self.ws = ws
                 self._mark_connected()
                 heartbeat_task: asyncio.Task[None] | None = None
+                stop_retry_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
 
                 try:
@@ -524,6 +525,9 @@ class AgentBridge:
                         reconnect_attempt_count=self._reconnect_attempt_count,
                     )
                     await self.event_forwarder.bind(ws)
+                    stop_retry_task = asyncio.create_task(
+                        self.event_forwarder.retry_stop_confirmations(ws)
+                    )
                     await self.boot_attach.on_connect()
 
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop())
@@ -557,6 +561,9 @@ class AgentBridge:
                         task.cancel()
                     self.ws = None
                     self.event_forwarder.unbind()
+                    if stop_retry_task is not None:
+                        stop_retry_task.cancel()
+                        await asyncio.gather(stop_retry_task, return_exceptions=True)
                     if self._connected_at_monotonic is not None:
                         close_code = getattr(ws, "close_code", None)
                         reason = (
@@ -675,10 +682,10 @@ class AgentBridge:
         task = None
         if command_id not in self._accepted_command_ids:
             task = await self._dispatch_command(cmd)
-            # Prompt/push task creation returns here without yielding. Record before
-            # sending the ack, which can fail or be cancelled after admission.
+            # Record admission before scheduled outbound deliveries can run.
+            # Stop containment stays serialized, but its confirmation write does not.
             self._accepted_command_ids.add(command_id)
-        await self._send_event(
+        self.activity.schedule_delivery(
             {"type": "command_ack", "commandId": command_id, "timestamp": int(time.time() * 1000)}
         )
         return task
