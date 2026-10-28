@@ -286,7 +286,8 @@ function buildQueue(
     alarmScheduler,
     alarmDeadlines,
     (): void => queue.broadcastPromptQueue(),
-    (): Promise<void> => queue.processMessageQueue()
+    (): Promise<void> => queue.processMessageQueue(),
+    { send: wsManager.send } as never
   );
   const queue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
@@ -309,7 +310,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    { send: wsManager.send } as never
   );
 
   return {
@@ -1863,7 +1865,10 @@ describe("SessionMessageQueue", () => {
       expect.any(Number)
     );
     expect(h.alarmDeadlines.setPendingEarliest).toHaveBeenCalledWith(expect.any(Number));
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+      type: "stop",
+      messageId: "msg-budget",
+    });
   });
 
   it("continues budget stop delivery when alarm scheduling fails", async () => {
@@ -1882,7 +1887,10 @@ describe("SessionMessageQueue", () => {
     await expect(h.executionStop.deliver(preparation)).resolves.toBeUndefined();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
+      type: "stop",
+      messageId: "msg-budget",
+    });
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "stop_alarm_failed"
     );
@@ -2000,7 +2008,7 @@ describe("SessionMessageQueue", () => {
       expect.any(Number)
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop", messageId: "msg-9" });
     expect(h.repository.recordMessageCompletion.mock.invocationCallOrder[0]).toBeLessThan(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     );
@@ -2051,7 +2059,10 @@ describe("SessionMessageQueue", () => {
       "msg-next",
       expect.any(Number)
     );
-    expect(h.wsManager.send).toHaveBeenCalledWith(expect.anything(), { type: "stop" });
+    expect(h.wsManager.send).toHaveBeenCalledWith(expect.anything(), {
+      type: "stop",
+      messageId: "msg-running",
+    });
     expect(h.wsManager.send).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ type: "prompt", messageId: "msg-next" })

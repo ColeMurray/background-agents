@@ -97,6 +97,67 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  describe("sandbox connection health", () => {
+    it("updates bridge health without changing browser readiness or sandbox lifecycle", () => {
+      const state = subscribedState();
+      const reconnecting = reduce(
+        state,
+        serverMessage({ type: "sandbox_connection", status: "reconnecting" })
+      );
+      expect(reconnecting.sessionState?.sandboxConnectionStatus).toBe("reconnecting");
+      expect(reconnecting.ready).toBe(true);
+      expect(reconnecting.sessionState?.sandboxStatus).toBe("ready");
+
+      const connected = reduce(
+        reconnecting,
+        serverMessage({ type: "sandbox_connection", status: "connected" })
+      );
+      expect(connected.sessionState?.sandboxConnectionStatus).toBe("connected");
+      expect(connected.ready).toBe(true);
+    });
+
+    it.each(["connected", "reconnecting", undefined] as const)(
+      "hydrates and replaces bridge health from snapshots with %s",
+      (sandboxConnectionStatus) => {
+        const session = createSessionState({ sandboxConnectionStatus });
+        const hydrated = createSessionSocketState(createSnapshot({ session }));
+        expect(hydrated.sessionState?.sandboxConnectionStatus).toBe(sandboxConnectionStatus);
+
+        const state = subscribedState({
+          session: createSessionState({ sandboxConnectionStatus: "reconnecting" }),
+        });
+        const replaced = reduce(state, serverMessage(createSubscribedMessage({ session })));
+        expect(replaced.sessionState?.sandboxConnectionStatus).toBe(sandboxConnectionStatus);
+      }
+    );
+
+    it("clears stale bridge health when the browser socket closes", () => {
+      const state = subscribedState({
+        session: createSessionState({ sandboxConnectionStatus: "reconnecting" }),
+      });
+      const closed = reduce(state, { type: "socket_closed" });
+      expect(closed.sessionState?.sandboxConnectionStatus).toBeUndefined();
+      expect(closed.ready).toBe(false);
+    });
+
+    it.each<Exclude<ServerMessage, { type: "sandbox_event" }>>([
+      { type: "sandbox_warming" },
+      { type: "sandbox_spawning" },
+      { type: "sandbox_status", status: "warming" },
+      { type: "sandbox_status", status: "spawning" },
+      { type: "sandbox_status", status: "stopped" },
+      { type: "sandbox_status", status: "stale" },
+      { type: "sandbox_status", status: "failed" },
+      { type: "sandbox_error", error: "Sandbox lost" },
+    ])("clears stale bridge health on $type ($status)", (message) => {
+      const state = subscribedState({
+        session: createSessionState({ sandboxConnectionStatus: "reconnecting" }),
+      });
+      const updated = reduce(state, serverMessage(message));
+      expect(updated.sessionState?.sandboxConnectionStatus).toBeUndefined();
+    });
+  });
+
   it("hydrates shutdown state from snapshots and replaces it with semantic updates", () => {
     const saved = {
       phase: "saved" as const,

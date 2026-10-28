@@ -73,6 +73,12 @@ const CONNECTION_PRESENTATION: Record<
   disconnected: { label: "Disconnected", dot: "bg-destructive" },
 };
 
+const SANDBOX_RECONNECTING_PRESENTATION = {
+  label: "Sandbox reconnecting",
+  dot: "bg-warning",
+  pulse: true,
+};
+
 function connectionState(
   connected: boolean,
   connecting: boolean,
@@ -224,6 +230,10 @@ export function SessionHeader({
   // decorative dot, and the full detail is always in the actions menu.
   // Desktop keeps the full header.
   const sandboxStatus = displayedSandboxStatus(sessionState);
+  const sandboxReconnecting =
+    capabilities.read &&
+    connectionState(connected, connecting, reconnecting) === "connected" &&
+    sessionState?.sandboxConnectionStatus === "reconnecting";
   const sandbox = sandboxStatus
     ? resolveSandboxStatus({
         status: sandboxStatus,
@@ -295,6 +305,13 @@ export function SessionHeader({
             onOpenMedia={onOpenMobileMedia}
           />
           <div className="hidden items-center gap-1 md:flex">
+            <span
+              role="status"
+              aria-label="Sandbox connection status"
+              className="text-xs text-warning"
+            >
+              {sandboxReconnecting && SANDBOX_RECONNECTING_PRESENTATION.label}
+            </span>
             {capabilities.read && (
               <ConnectionStatusIcon
                 connected={connected}
@@ -330,6 +347,7 @@ export function SessionHeader({
         </div>
       </div>
       <MobileStatusStrip
+        sandboxReconnecting={sandboxReconnecting}
         connection={
           capabilities.read ? connectionState(connected, connecting, reconnecting) : "connected"
         }
@@ -513,11 +531,16 @@ function SandboxStatusIcon(props: SandboxStatusProps) {
  */
 function MobileStatusStrip({
   connection,
+  sandboxReconnecting,
   ...statusProps
-}: SandboxStatusProps & { connection: ConnectionState }) {
+}: SandboxStatusProps & { connection: ConnectionState; sandboxReconnecting: boolean }) {
   const { status } = statusProps;
   const connectionPresentation =
-    connection === "connected" ? null : CONNECTION_PRESENTATION[connection];
+    connection !== "connected"
+      ? CONNECTION_PRESENTATION[connection]
+      : sandboxReconnecting
+        ? SANDBOX_RECONNECTING_PRESENTATION
+        : null;
   const resolved =
     !connectionPresentation && status && status !== STEADY_SANDBOX_STATUS
       ? resolveSandboxStatus({ ...statusProps, status })

@@ -8,6 +8,7 @@ import type { SandboxEventContext } from "./context";
 import type { SandboxExecutionEventHandler } from "./execution.handler";
 import type { SandboxRuntimeEventHandler } from "./runtime.handler";
 import type { SandboxStreamingEventHandler } from "./streaming.handler";
+import type { SandboxCommandOutbox } from "../sandbox-command-outbox";
 
 type SandboxEventWithAck = SandboxIngressEvent & { ackId?: string };
 const LOG_METADATA_MAX_CHARS = 256;
@@ -66,6 +67,7 @@ export class SessionSandboxEventProcessor {
     private readonly execution: SandboxExecutionEventHandler,
     private readonly runtime: SandboxRuntimeEventHandler,
     private readonly pushService: SandboxPushService,
+    private readonly commands: Pick<SandboxCommandOutbox, "acknowledge">,
     private readonly shutdown?: {
       generationReady(
         event: Extract<SandboxIngressEvent, { type: "sandbox_generation_ready" }>
@@ -111,6 +113,9 @@ export class SessionSandboxEventProcessor {
 
   private async dispatch(event: SandboxIngressEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
+      case "command_ack":
+        this.commands.acknowledge(event.commandId);
+        return;
       case "sandbox_generation_ready":
         if (!this.shutdown) {
           throw new Error("Sandbox graceful shutdown event handlers are not configured");

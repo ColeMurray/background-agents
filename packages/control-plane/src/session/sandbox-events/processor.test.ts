@@ -42,6 +42,7 @@ function createProcessor() {
     undefined as never,
     runtime as unknown as SandboxRuntimeEventHandler,
     undefined as never,
+    { acknowledge: vi.fn() },
     shutdown
   );
   return {

@@ -24,6 +24,7 @@ import type { MessageService } from "./services/message.service";
 import type { SessionRow, SandboxRow } from "./types";
 import type { SandboxShutdownState } from "@open-inspect/shared/types/sandbox-shutdown";
 import { DEFAULT_BASE_BRANCH } from "../repos/default-branch";
+import { SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS } from "./websocket-manager";
 
 export interface SessionSnapshotEnrichment {
   environmentId: string | null;
@@ -100,6 +101,13 @@ export class SessionSnapshotReader {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? DEFAULT_SANDBOX_STATUS,
+      sandboxConnectionStatus:
+        sandbox?.status === "ready" || sandbox?.status === "snapshotting"
+          ? sandbox.last_heartbeat === null ||
+            Date.now() - sandbox.last_heartbeat >= SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS
+            ? "reconnecting"
+            : "connected"
+          : undefined,
       sandboxPreservation: this.deps.getShutdown?.() ?? null,
       messageCount: this.deps.messageRepository.getMessageCount(),
       createdAt: session.created_at,

@@ -83,6 +83,7 @@ export type SessionSocketAction =
   | { type: "socket_closed" };
 
 const CLEARED_SANDBOX_RUNTIME_STATE = {
+  sandboxConnectionStatus: undefined,
   codeServerUrl: undefined,
   vncUrl: undefined,
   tunnelUrls: undefined,
@@ -244,6 +245,7 @@ function reduceServerMessage(
       return updateSessionState({ ...state, sandboxError: null, boot: null }, (prev) => ({
         ...prev,
         sandboxStatus: "warming",
+        sandboxConnectionStatus: undefined,
       }));
 
     case "sandbox_spawning":
@@ -275,11 +277,18 @@ function reduceServerMessage(
         (prev) => ({
           ...prev,
           sandboxStatus: message.status,
+          ...(startsAttempt && { sandboxConnectionStatus: undefined }),
           ...(shouldClearAccessState && CLEARED_SANDBOX_RUNTIME_STATE),
           ...(isReplacementStart && { sandboxDashboardUrl: undefined }),
         })
       );
     }
+
+    case "sandbox_connection":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        sandboxConnectionStatus: message.status,
+      }));
 
     case "sandbox_error":
       return updateSessionState({ ...state, sandboxError: message.error }, (prev) => ({
@@ -382,6 +391,9 @@ export function sessionSocketReducer(
     case "socket_closed":
       return {
         ...state,
+        sessionState: state.sessionState
+          ? { ...state.sessionState, sandboxConnectionStatus: undefined }
+          : null,
         ready: false,
         presenceSynced: false,
         participants: [],

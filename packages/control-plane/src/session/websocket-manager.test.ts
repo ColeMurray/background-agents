@@ -695,6 +695,7 @@ describe("SessionWebSocketManagerImpl", () => {
         const { manager, mockRepo } = createManager();
         const row = createSandboxRow("sb-1");
         row.status = status;
+        row.last_heartbeat = Date.now();
         mockRepo.setSandbox(row);
         const ws = createFakeWebSocket();
         manager.acceptAndSetSandboxSocket(ws, "sb-1");
@@ -710,6 +711,7 @@ describe("SessionWebSocketManagerImpl", () => {
         const { manager, mockRepo } = createManager();
         const row = createSandboxRow("sb-1");
         row.status = status;
+        row.last_heartbeat = Date.now();
         mockRepo.setSandbox(row);
         const ws = createFakeWebSocket();
         manager.acceptAndSetSandboxSocket(ws, "sb-1");

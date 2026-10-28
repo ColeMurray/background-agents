@@ -786,6 +786,38 @@ describe("SessionHeader mobile presentation", () => {
     expect(screen.queryByRole("button", { name: /^Show sandbox status/ })).not.toBeInTheDocument();
   });
 
+  it("shows sandbox reconnecting on desktop and mobile while the browser stays connected", () => {
+    renderMobileHeader(createSessionState({ sandboxConnectionStatus: "reconnecting" }));
+
+    const desktop = screen.getByRole("status", { name: "Sandbox connection status" });
+    expect(desktop).toHaveTextContent("Sandbox reconnecting");
+    expect(desktop.parentElement).toHaveClass("hidden", "md:flex");
+    const mobile = screen.getAllByRole("status").find((el) => !el.getAttribute("aria-label"));
+    expect(mobile).toHaveClass("md:hidden");
+    expect(mobile).toHaveTextContent("Sandbox reconnecting");
+    expect(
+      screen.getByRole("status", { name: "Connection status: Connected" })
+    ).toBeInTheDocument();
+  });
+
+  it.each(["connected", undefined] as const)(
+    "does not warn when sandbox bridge health is %s",
+    (sandboxConnectionStatus) => {
+      renderMobileHeader(createSessionState({ sandboxConnectionStatus }));
+      expect(screen.queryByText("Sandbox reconnecting")).not.toBeInTheDocument();
+    }
+  );
+
+  it("prioritizes browser reconnecting over stale sandbox bridge health", () => {
+    renderMobileHeader(createSessionState({ sandboxConnectionStatus: "reconnecting" }), {
+      connected: false,
+      reconnecting: true,
+    });
+
+    expect(screen.queryByText("Sandbox reconnecting")).not.toBeInTheDocument();
+    expect(screen.getByText("Reconnecting...")).toBeInTheDocument();
+  });
+
   it("raises a strip while a ready sandbox is saving before a graceful stop", () => {
     renderMobileHeader(
       createSessionState({

@@ -172,6 +172,7 @@ import {
 } from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
+import { SandboxCommandOutbox } from "./sandbox-command-outbox";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -514,6 +515,19 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       recordSessionWarning(eventRepository, messenger, message, eventId),
     resumeQueuedWork: () => messageQueue.processMessageQueue(),
   });
+  const commands = new SandboxCommandOutbox({
+    sql,
+    wsManager,
+    sandboxRepository,
+    messageRepository,
+    messenger,
+    encryptionKey: repoSecretsEncryptionKey,
+    mayDispatch: (type) =>
+      type === "push"
+        ? ["ready", "unmanaged"].includes(lifecycleManager.pushAdmissionDecision())
+        : lifecycleManager.mayProcessQueuedWork() &&
+          sessionCoreRepository.getSession()?.budget_exhausted !== 1,
+  });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
     sessionCoreRepository,
@@ -526,7 +540,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     alarmScheduler,
     alarmDeadlines,
     (): void => messageQueue.broadcastPromptQueue(),
-    (): Promise<void> => messageQueue.processMessageQueue()
+    (): Promise<void> => messageQueue.processMessageQueue(),
+    commands
   );
   const messageQueue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
@@ -561,7 +576,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
-    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
+    commands
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -649,9 +665,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     backgroundTasks,
     messageQueue,
     log,
-    lifecycleManager
+    lifecycleManager,
+    commands
   );
-  const pushService = new SandboxPushService(log, wsManager, () =>
+  const pushService = new SandboxPushService(log, wsManager, commands, () =>
     lifecycleManager.pushAdmissionDecision()
   );
   const sandboxEventProcessor = new SessionSandboxEventProcessor(
@@ -663,6 +680,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionEventHandler,
     runtimeEventHandler,
     pushService,
+    commands,
     {
       generationReady: (event) => lifecycleManager.onShutdownGenerationReady(event),
       prepared: (event) => lifecycleManager.onShutdownPrepared(event),

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SandboxPushAdmission } from "../sandbox/lifecycle/manager";
 import type { GitPushSpec } from "../source-control";
+import type { SandboxCommandOutbox } from "./sandbox-command-outbox";
 import { SandboxPushService } from "./sandbox-push-service";
 import type { SandboxCommandTarget, SessionWebSocketManager } from "./websocket-manager";
 
@@ -24,7 +25,7 @@ function createService(admission: () => SandboxPushAdmission = () => "unmanaged"
       kind: "dispatch",
       socket: sandboxWs,
     })),
-    send: vi.fn(() => true),
+    send: vi.fn((_ws?: unknown, _command?: unknown) => true),
   };
   const log = {
     debug: vi.fn(),
@@ -33,12 +34,19 @@ function createService(admission: () => SandboxPushAdmission = () => "unmanaged"
     error: vi.fn(),
     child: vi.fn(),
   };
+  const commands = {
+    sendPush: vi.fn<SandboxCommandOutbox["sendPush"]>(async (ws, command, commandId) =>
+      wsManager.send(ws, { ...command, commandId })
+    ),
+    discard: vi.fn(),
+  };
   const service = new SandboxPushService(
     log,
     wsManager as unknown as SessionWebSocketManager,
+    commands,
     admission
   );
-  return { service, wsManager, log };
+  return { service, wsManager, commands, log };
 }
 
 describe("SandboxPushService", () => {
@@ -104,6 +112,40 @@ describe("SandboxPushService", () => {
       expect.anything(),
       expect.objectContaining({ type: "push" })
     );
+  });
+
+  it("queues a push through the outbox while the sandbox target is reconnecting", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createService(() => "ready");
+      const socket = h.wsManager.getSandboxSocket()!;
+      h.wsManager.getSandboxCommandTarget.mockReturnValue({ kind: "reconnecting", socket });
+      h.commands.sendPush.mockResolvedValueOnce(true);
+      const pushSpec = createPushSpec("acme", "web", "feature/queued");
+      const result = vi.fn();
+      const pushing = h.service.pushBranchToRemote(pushSpec).then(result);
+      const [, , commandId, expiresAt] = h.commands.sendPush.mock.calls[0];
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.commands.sendPush).toHaveBeenCalledWith(
+        socket,
+        { type: "push", pushSpec },
+        expect.any(String),
+        expect.any(Number)
+      );
+      expect(expiresAt).toBeGreaterThan(Date.now());
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(result).not.toHaveBeenCalled();
+
+      h.service.settlePush({ type: "push_complete", commandId, timestamp: 1000 });
+      await pushing;
+      expect(result).toHaveBeenCalledWith({ success: true });
+      expect(h.commands.discard).toHaveBeenCalledWith(commandId);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -175,6 +217,153 @@ describe("SandboxPushService", () => {
   });
 
   describe("resolver keying", () => {
+    it.each(["push_complete", "push_error"] as const)(
+      "ignores stale %s command IDs instead of falling back to repo identity or the sole resolver",
+      async (type) => {
+        vi.useFakeTimers();
+        try {
+          const h = createService();
+          const pushSpec = createPushSpec("acme", "web", "feature/test");
+          const first = h.service.pushBranchToRemote(pushSpec);
+          const firstCommandId = h.commands.sendPush.mock.calls[0][2];
+          await vi.runOnlyPendingTimersAsync();
+          await expect(first).resolves.toEqual({
+            success: false,
+            error: expect.stringContaining("Push operation timed out"),
+          });
+
+          const retryResult = vi.fn();
+          const retry = h.service.pushBranchToRemote(pushSpec).then(retryResult);
+          const retryCommandId = h.commands.sendPush.mock.calls[1][2];
+          expect(retryCommandId).not.toBe(firstCommandId);
+          const staleEvent = {
+            ...(type === "push_error" ? { type, error: "stale failure" } : { type }),
+            commandId: firstCommandId,
+            timestamp: 1000,
+          };
+          h.service.settlePush({
+            ...staleEvent,
+            branchName: pushSpec.targetBranch,
+            repoOwner: pushSpec.repoOwner,
+            repoName: pushSpec.repoName,
+          });
+          h.service.settlePush(staleEvent);
+          await vi.advanceTimersByTimeAsync(0);
+
+          expect(retryResult).not.toHaveBeenCalled();
+          expect(h.log.warn).toHaveBeenCalledTimes(2);
+          expect(h.commands.discard).not.toHaveBeenCalledWith(retryCommandId);
+          expect(vi.getTimerCount()).toBe(1);
+
+          h.service.settlePush({
+            type: "push_complete",
+            commandId: retryCommandId,
+            timestamp: 1001,
+          });
+          await retry;
+          expect(retryResult).toHaveBeenCalledWith({ success: true });
+          expect(h.commands.discard).toHaveBeenCalledWith(retryCommandId);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      }
+    );
+
+    it.each(["false", "reject"] as const)(
+      "preserves a same-key retry when the timed-out sendPush later returns %s",
+      async (outcome) => {
+        vi.useFakeTimers();
+        try {
+          const h = createService();
+          const pushSpec = createPushSpec("acme", "web", "feature/test");
+          let resolveSend!: (delivered: boolean) => void;
+          let rejectSend!: (error: Error) => void;
+          h.commands.sendPush.mockImplementationOnce(
+            () =>
+              new Promise<boolean>((resolve, reject) => {
+                resolveSend = resolve;
+                rejectSend = reject;
+              })
+          );
+
+          const first = h.service.pushBranchToRemote(pushSpec);
+          const firstCommandId = h.commands.sendPush.mock.calls[0][2];
+          await vi.runOnlyPendingTimersAsync();
+          await expect(first).resolves.toEqual({
+            success: false,
+            error: expect.stringContaining("Push operation timed out"),
+          });
+          expect(h.commands.discard).toHaveBeenCalledWith(firstCommandId);
+
+          const retryResult = vi.fn();
+          const retry = h.service.pushBranchToRemote(pushSpec).then(retryResult);
+          const retryCommandId = h.commands.sendPush.mock.calls[1][2];
+          expect(retryCommandId).not.toBe(firstCommandId);
+          await vi.advanceTimersByTimeAsync(0);
+          if (outcome === "false") {
+            resolveSend(false);
+          } else {
+            rejectSend(new Error("late persistence failure"));
+          }
+          await vi.advanceTimersByTimeAsync(0);
+
+          expect(retryResult).not.toHaveBeenCalled();
+          expect(h.commands.discard).not.toHaveBeenCalledWith(retryCommandId);
+          expect(vi.getTimerCount()).toBe(1);
+          await expect(h.service.pushBranchToRemote(pushSpec)).resolves.toEqual({
+            success: false,
+            error: expect.stringContaining("Push already in flight"),
+          });
+          expect(h.commands.sendPush).toHaveBeenCalledTimes(2);
+
+          h.service.settlePush({
+            type: "push_complete",
+            commandId: retryCommandId,
+            timestamp: 1001,
+          });
+          await retry;
+          expect(retryResult).toHaveBeenCalledWith({ success: true });
+          expect(h.commands.discard).toHaveBeenCalledWith(retryCommandId);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      }
+    );
+
+    it("does not remove a same-key replacement during the previous push's cleanup", async () => {
+      vi.useFakeTimers();
+      try {
+        const h = createService();
+        const pushSpec = createPushSpec("acme", "web", "feature/test");
+        const first = h.service.pushBranchToRemote(pushSpec);
+        const firstCommandId = h.commands.sendPush.mock.calls[0][2];
+        h.service.settlePush({ type: "push_complete", commandId: firstCommandId, timestamp: 1000 });
+
+        // Start the replacement before the first push's finally block runs.
+        const retry = h.service.pushBranchToRemote(pushSpec);
+        const retryCommandId = h.commands.sendPush.mock.calls[1][2];
+        await expect(first).resolves.toEqual({ success: true });
+        expect(h.commands.discard).toHaveBeenCalledWith(firstCommandId);
+        expect(h.commands.discard).not.toHaveBeenCalledWith(retryCommandId);
+        await expect(h.service.pushBranchToRemote(pushSpec)).resolves.toEqual({
+          success: false,
+          error: expect.stringContaining("Push already in flight"),
+        });
+        expect(h.commands.sendPush).toHaveBeenCalledTimes(2);
+
+        h.service.settlePush({ type: "push_complete", commandId: retryCommandId, timestamp: 1001 });
+        await expect(retry).resolves.toEqual({ success: true });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    });
+
     it("rejects a same-key concurrent push after the sandbox disconnects", async () => {
       const h = createService();
       const pushSpec = createPushSpec("acme", "web", "feature/test");

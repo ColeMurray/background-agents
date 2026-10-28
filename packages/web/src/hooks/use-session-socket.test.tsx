@@ -169,6 +169,34 @@ describe("useSessionSocket", () => {
     vi.useRealTimers();
   });
 
+  it("processes sandbox bridge health independently of the browser connection", async () => {
+    const { result } = renderSessionSocket();
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    const subscribed = createSubscribedMessage();
+    subscribed.session.sandboxConnectionStatus = "reconnecting";
+
+    act(() => {
+      socket.open();
+      socket.receive(subscribed);
+    });
+    expect(result.current.sessionState?.sandboxConnectionStatus).toBe("reconnecting");
+    expect(result.current.connected).toBe(true);
+    expect(result.current.ready).toBe(true);
+
+    act(() => socket.receive({ type: "sandbox_connection", status: "connected" }));
+    expect(result.current.sessionState?.sandboxConnectionStatus).toBe("connected");
+
+    act(() => socket.receive({ type: "sandbox_connection", status: "reconnecting" }));
+    expect(result.current.sessionState?.sandboxConnectionStatus).toBe("reconnecting");
+    expect(result.current.connected).toBe(true);
+    expect(result.current.reconnecting).toBe(false);
+    expect(result.current.sessionState?.sandboxStatus).toBe("ready");
+
+    act(() => socket.receive(createSubscribedMessage()));
+    expect(result.current.sessionState?.sandboxConnectionStatus).toBeUndefined();
+  });
+
   it("keeps read synchronization available without collaboration or sandbox access", async () => {
     const fetchMock = vi.mocked(fetch);
     const snapshot = createSnapshot();

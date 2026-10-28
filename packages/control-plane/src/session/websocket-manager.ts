@@ -35,6 +35,9 @@ import {
   WS_CLOSE_AUTHORIZATION_REVOKED,
 } from "@open-inspect/shared/types/websocket";
 
+/** Stop trusting an open socket before the lifecycle heartbeat watchdog retires it. */
+export const SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS = 45_000;
+
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
   authTimeoutMs: number;
@@ -43,6 +46,7 @@ export interface WebSocketManagerConfig {
 /** Ephemeral classification, not a dispatch permit that can survive an await. */
 export type SandboxCommandTarget =
   | { kind: "dispatch"; socket: SessionWebSocket }
+  | { kind: "reconnecting"; socket: SessionWebSocket }
   | { kind: "booting"; phase: SandboxBootPhase | null }
   | { kind: "unavailable" };
 
@@ -307,7 +311,15 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     const ws = this.getSandboxSocketForRow(sandbox);
     if (!ws || !sandbox) return { kind: "unavailable" };
     const kind = evaluateSandboxCommandAvailability(sandbox.status);
-    if (kind === "dispatch") return { kind, socket: ws };
+    if (kind === "dispatch") {
+      if (
+        sandbox.last_heartbeat === null ||
+        Date.now() - sandbox.last_heartbeat >= SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS
+      ) {
+        return { kind: "reconnecting", socket: ws };
+      }
+      return { kind, socket: ws };
+    }
     if (kind === "booting") {
       return { kind, phase: parseStoredSandboxBootPhase(sandbox.boot_phase) };
     }

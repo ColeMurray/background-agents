@@ -38,6 +38,7 @@ import {
 } from "./session-attachment-repository";
 import type { SessionMessenger } from "./messenger";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandOutbox } from "./sandbox-command-outbox";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
@@ -176,7 +177,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly commands: Pick<SandboxCommandOutbox, "send">
   ) {}
 
   async enqueueAutofix(
@@ -464,6 +466,10 @@ export class SessionMessageQueue {
       return;
     }
     const target = this.wsManager.getSandboxCommandTarget();
+    if (target.kind === "reconnecting") {
+      this.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
+      return;
+    }
     if (target.kind === "booting") {
       // A bridge is attached ahead of its boot. Nothing to spawn and nothing
       // to send: the runtime's `ready` event pumps this queue when the
@@ -568,17 +574,20 @@ export class SessionMessageQueue {
     };
 
     if (!this.mayDispatch()) return;
-    const claimed = this.messageRepository.startMessageProcessing(
-      message.id,
-      now,
-      userMessageEvent
-    );
+    // Claim and outbox insertion share a commit: a hibernation/crash must not
+    // leave a processing message without its replay obligation.
+    const { claimed, sent } = this.repository.transaction(() => {
+      const claimed = this.messageRepository.startMessageProcessing(
+        message.id,
+        now,
+        userMessageEvent
+      );
+      return { claimed, sent: claimed && this.commands.send(sandboxWs, command) };
+    });
     if (!claimed) {
       this.log.debug("processMessageQueue: prompt claim lost", { message_id: message.id });
       return;
     }
-
-    const sent = this.wsManager.send(sandboxWs, command);
 
     if (!sent) {
       this.messageRepository.updateMessageToPending(message.id);
@@ -659,7 +668,9 @@ export class SessionMessageQueue {
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
     const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
+    if (sandboxWs && processingMessage) {
+      this.commands.send(sandboxWs, { type: "stop", messageId: processingMessage.id });
+    }
   }
 
   /**

@@ -704,7 +704,13 @@ describe("sandbox graceful shutdown wiring", () => {
           error: () => undefined,
           child: () => undefined,
         } as never,
-        harness.manager
+        harness.manager,
+        {
+          recordProtocol: () => {},
+          supportsReplay: () => false,
+          flush: async () => {},
+          hasUnacknowledgedPrompt: () => false,
+        }
       );
       await runtimeHandler.handleReady(
         {

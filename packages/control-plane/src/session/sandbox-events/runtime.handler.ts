@@ -11,6 +11,7 @@ import type { SessionCoreRepository } from "../session-core-repository";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "../title";
 import { persistSandboxEvent, type SandboxEventContext } from "./context";
 import { sandboxBootPhaseLogFields } from "../../sandbox/boot-phase";
+import type { SandboxCommandOutbox } from "../sandbox-command-outbox";
 
 /**
  * Sandbox-runtime family: events about the sandbox itself rather than the
@@ -41,15 +42,33 @@ export class SandboxRuntimeEventHandler {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
     private readonly log: Logger,
-    private readonly lifecycle: SandboxReadiness
+    private readonly lifecycle: SandboxReadiness,
+    private readonly commands: Pick<
+      SandboxCommandOutbox,
+      "flush" | "recordProtocol" | "supportsReplay" | "hasUnacknowledgedPrompt"
+    >
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
     this.sandboxRepository.updateSandboxHeartbeat(context.now);
+    this.messenger.broadcast({ type: "sandbox_connection", status: "connected" });
+    this.backgroundTasks.submit(
+      async () => {
+        await this.commands.flush();
+        await this.messageQueue.processMessageQueue();
+      },
+      { name: "sandbox.commands.flush" }
+    );
     // A quiet tool call may emit no events for longer than the inactivity
-    // timeout. While its message is processing, the bridge heartbeat proves
-    // the sandbox is still occupied and should renew its activity timestamp.
-    if (context.processingMessage !== null) {
+    // timeout. Renew activity only once the runtime has acknowledged the prompt
+    // (or lacks command ACK support), not while it is still awaiting delivery.
+    if (
+      context.processingMessage !== null &&
+      !(
+        this.commands.supportsReplay() &&
+        this.commands.hasUnacknowledgedPrompt(context.processingMessage.id)
+      )
+    ) {
       this.updateLastActivity(context.now);
       // The same proof drives Slack's assistant-thread indicator, which Slack
       // clears two minutes after the last update. Refreshing it from here, and
@@ -85,12 +104,17 @@ export class SandboxRuntimeEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
 
     // No await between the authorized event and the lifecycle-owned commit.
-    // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (
-      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
-    ) {
-      return;
-    }
+    // Repeated readiness still drains the transport outbox, whose own guards
+    // enforce generation and lifecycle admission without another ready transition.
+    const becameReady = this.lifecycle.onRuntimeReady(
+      context.now,
+      event.harness,
+      event.preservationProtocolVersion
+    );
+    this.commands.recordProtocol(event.commandAckVersion === 1);
+    this.messenger.broadcast({ type: "sandbox_connection", status: "connected" });
+    await this.commands.flush();
+    if (!becameReady) return;
     this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
       name: "message_queue.process",
     });

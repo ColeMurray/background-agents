@@ -83,11 +83,18 @@ class ActivitySupervisor:
         if activity is not None:
             activity.diagnostics = diagnostics
 
-    def interrupt_prompt(self, error: str) -> None:
-        self.set_prompt_interruption(error)
+    def interrupt_prompt(self, error: str, *, message_id: str | None = None) -> bool:
+        """Interrupt the current prompt, optionally only if its active ID matches."""
         activity = self._current_prompt
+        if message_id is not None and (
+            activity is None or activity.message_id != message_id or activity.task.done()
+        ):
+            return False
+        self.set_prompt_interruption(error)
         if activity is not None and not activity.task.done():
             activity.task.cancel()
+            return True
+        return False
 
     def set_prompt_interruption(
         self, error: str, *, all_prompts: bool = False, overwrite: bool = False

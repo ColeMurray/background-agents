@@ -76,7 +76,29 @@ const STEP_USAGE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS step_usage (
   created_at INTEGER NOT NULL
 )`;
 
+const OUTBOX_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_command_outbox (
+  command_id TEXT PRIMARY KEY,
+  sandbox_id TEXT NOT NULL,
+  sandbox_created_at INTEGER NOT NULL,
+  command_type TEXT NOT NULL,
+  message_id TEXT,
+  payload TEXT NOT NULL,
+  encrypted INTEGER NOT NULL DEFAULT 0,
+  attempted INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER NOT NULL
+)`;
+
+const COMMAND_PROTOCOL_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_command_protocol (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  sandbox_id TEXT NOT NULL,
+  sandbox_created_at INTEGER NOT NULL,
+  socket_id TEXT NOT NULL,
+  supported INTEGER NOT NULL
+)`;
+
 export const SCHEMA_SQL = `
+${OUTBOX_TABLE_SQL};
+${COMMAND_PROTOCOL_TABLE_SQL};
 CREATE TABLE IF NOT EXISTS sandbox_preservation (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   state TEXT NOT NULL
@@ -769,6 +791,14 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Persist replayable sandbox commands and protocol support",
+    run: (sql) => {
+      sql.exec(OUTBOX_TABLE_SQL);
+      sql.exec(COMMAND_PROTOCOL_TABLE_SQL);
+    },
   },
 ];
 

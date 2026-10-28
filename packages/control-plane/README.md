@@ -305,25 +305,50 @@ from an HTTP 2xx.
 
 ### Server → Client Messages
 
-| Type               | Description                   |
-| ------------------ | ----------------------------- |
-| `pong`             | Health check response         |
-| `subscribed`       | Confirm subscription          |
-| `prompt_queued`    | Confirm prompt queued         |
-| `sandbox_event`    | Event from sandbox            |
-| `presence_sync`    | Full presence state           |
-| `presence_update`  | Presence change               |
-| `presence_leave`   | Participant disconnected      |
-| `sandbox_spawning` | Sandbox is being created      |
-| `sandbox_warming`  | Sandbox warming               |
-| `sandbox_status`   | Sandbox status update         |
-| `sandbox_error`    | Sandbox error occurred        |
-| `sandbox_warning`  | Sandbox warning message       |
-| `sandbox_restored` | Restored from snapshot        |
-| `artifact_created` | New artifact (PR, screenshot) |
-| `snapshot_saved`   | Filesystem snapshot saved     |
-| `session_status`   | Session status change         |
-| `error`            | Error occurred                |
+| Type                 | Description                                                   |
+| -------------------- | ------------------------------------------------------------- |
+| `pong`               | Health check response                                         |
+| `subscribed`         | Confirm subscription                                          |
+| `prompt_queued`      | Confirm prompt queued                                         |
+| `sandbox_event`      | Event from sandbox                                            |
+| `presence_sync`      | Full presence state                                           |
+| `presence_update`    | Presence change                                               |
+| `presence_leave`     | Participant disconnected                                      |
+| `sandbox_spawning`   | Sandbox is being created                                      |
+| `sandbox_warming`    | Sandbox warming                                               |
+| `sandbox_status`     | Sandbox status update                                         |
+| `sandbox_connection` | Bridge connected/reconnecting, separate from client transport |
+| `sandbox_error`      | Sandbox error occurred                                        |
+| `sandbox_warning`    | Sandbox warning message                                       |
+| `sandbox_restored`   | Restored from snapshot                                        |
+| `artifact_created`   | New artifact (PR, screenshot)                                 |
+| `snapshot_saved`     | Filesystem snapshot saved                                     |
+| `session_status`     | Session status change                                         |
+| `error`              | Error occurred                                                |
+
+### Sandbox Command Delivery
+
+Prompts, pushes, and stops are persisted in the session's command outbox before transmission. Each
+carries a `commandId`; receipt is confirmed by a `command_ack` event, not by a successful socket
+write. The bridge advertises `commandAckVersion: 1` in `ready`, retains accepted command IDs for its
+process lifetime, and acknowledges duplicates without executing them again.
+
+On readiness or heartbeat, the control plane drains held commands and replays unacknowledged
+commands only after the current socket has advertised deduplication support. Legacy bridges can
+receive held commands once, but are never sent an already-attempted command again. Replay is fenced
+to the original sandbox ID and generation timestamp; terminal prompts and expired commands are
+discarded. Push payloads, including remote credentials, are encrypted at rest. Push replies echo
+`commandId`, and stops target a specific `messageId`.
+
+A heartbeat older than `SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS` holds new commands and publishes
+`sandbox_connection: reconnecting`. A new prompt stays pending until fresh heartbeat or reconnect
+traffic releases it. Existing execution, push, and stop-confirmation deadlines still apply; replay
+does not extend them.
+
+This provides duplicate-safe delivery across socket reconnects and control-plane reactivation, not
+exactly-once execution across bridge process crashes. Bridge deduplication and active work are
+process-local. The push caller's waiting promise is also process-local, even though the command
+outbox survives control-plane reconstruction.
 
 ## Development
 

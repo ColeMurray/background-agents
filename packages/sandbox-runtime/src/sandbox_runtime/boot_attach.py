@@ -137,6 +137,7 @@ class BootAttach:
             await self._send_event(
                 {
                     "type": "push_error",
+                    **({"commandId": cmd["commandId"]} if "commandId" in cmd else {}),
                     "error": "Push failed - the sandbox is still booting",
                     "branchName": request.branch_name if request is not None else "",
                     **(request.repo_fields() if request is not None else {}),

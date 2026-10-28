@@ -9,6 +9,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandOutbox } from "./sandbox-command-outbox";
 
 export interface ExecutionStopPreparation {
   stopConfirmationDeadline: number;
@@ -28,7 +29,8 @@ export class ExecutionStopCoordinator {
     private readonly alarmScheduler: AlarmScheduler,
     private readonly alarmDeadlines: AlarmDeadlineStore,
     private readonly broadcastPromptQueue: () => void,
-    private readonly processMessageQueue: () => Promise<void>
+    private readonly processMessageQueue: () => Promise<void>,
+    private readonly commands: Pick<SandboxCommandOutbox, "send">
   ) {}
 
   async stop(reason = "Execution was stopped"): Promise<void> {
@@ -65,7 +67,12 @@ export class ExecutionStopCoordinator {
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 
     const sandboxWs = this.wsManager.getSandboxSocket();
-    const stopSent = sandboxWs !== null && this.wsManager.send(sandboxWs, { type: "stop" });
+    const stopSent =
+      sandboxWs !== null &&
+      this.commands.send(sandboxWs, {
+        type: "stop",
+        messageId: preparation.failure.completion.messageId,
+      });
     const [alarm, status] = await Promise.allSettled([
       this.alarmScheduler.schedule(preparation.stopConfirmationDeadline),
       this.sessionStatus.reconcileAfterExecution(false),

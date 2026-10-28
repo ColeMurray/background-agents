@@ -3,8 +3,9 @@ import type { Logger } from "../logger";
 import type { SandboxPushAdmission } from "../sandbox/lifecycle/manager";
 import type { GitPushSpec } from "../source-control";
 import type { SessionWebSocketManager } from "./websocket-manager";
+import type { SandboxCommandOutbox } from "./sandbox-command-outbox";
 
-type PushResolver = { resolve: () => void; reject: (err: Error) => void };
+type PushResolver = { commandId: string; resolve: () => void; reject: (err: Error) => void };
 export type PushTerminalEvent = Extract<SandboxEvent, { type: "push_complete" | "push_error" }>;
 
 /** How long a pending push waits for its terminal event before rejecting. */
@@ -29,6 +30,7 @@ export class SandboxPushService {
   constructor(
     private readonly log: Logger,
     private readonly wsManager: SessionWebSocketManager,
+    private readonly commands: Pick<SandboxCommandOutbox, "sendPush" | "discard">,
     private readonly pushAdmission: () => SandboxPushAdmission = () => "unmanaged"
   ) {}
 
@@ -73,7 +75,7 @@ export class SandboxPushService {
     // by hand, and a PR opened on that assumption would point at nothing.
     const target = this.wsManager.getSandboxCommandTarget();
 
-    if (target.kind !== "dispatch") {
+    if (target.kind !== "dispatch" && target.kind !== "reconnecting") {
       if (target.kind === "booting") {
         this.log.info("Sandbox attached but not ready, refusing push", {
           branch_name: pushSpec.targetBranch,
@@ -91,13 +93,16 @@ export class SandboxPushService {
     }
 
     const sandboxWs = target.socket;
+    const commandId = crypto.randomUUID();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let rejectPush!: (error: Error) => void;
 
     const pushPromise = new Promise<void>((resolve, reject) => {
-      this.pendingPushResolvers.set(resolverKey, { resolve, reject });
+      rejectPush = reject;
+      this.pendingPushResolvers.set(resolverKey, { commandId, resolve, reject });
 
       timeoutId = setTimeout(() => {
-        if (this.pendingPushResolvers.has(resolverKey)) {
+        if (this.pendingPushResolvers.get(resolverKey)?.commandId === commandId) {
           this.pendingPushResolvers.delete(resolverKey);
           reject(new Error(`Push operation timed out after ${PUSH_TIMEOUT_MS / 1000} seconds`));
         }
@@ -109,19 +114,18 @@ export class SandboxPushService {
       repo_owner: pushSpec.repoOwner,
       repo_name: pushSpec.repoName,
     });
-    const delivered = this.wsManager.send(sandboxWs, {
-      type: "push",
-      pushSpec,
-    });
-    if (!delivered) {
-      const resolver = this.pendingPushResolvers.get(resolverKey);
-      this.pendingPushResolvers.delete(resolverKey);
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-      resolver?.reject(new Error("Failed to deliver push command to sandbox"));
-    }
+    void this.commands
+      .sendPush(sandboxWs, { type: "push", pushSpec }, commandId, Date.now() + PUSH_TIMEOUT_MS)
+      .then(
+        (delivered) => {
+          if (!delivered) {
+            rejectPush(new Error("Failed to deliver push command to sandbox"));
+          }
+        },
+        (error: unknown) => {
+          rejectPush(error instanceof Error ? error : new Error("Failed to persist push command"));
+        }
+      );
 
     try {
       await pushPromise;
@@ -134,6 +138,10 @@ export class SandboxPushService {
       });
       return { success: false, error: `Failed to push branch: ${pushError}` };
     } finally {
+      if (this.pendingPushResolvers.get(resolverKey)?.commandId === commandId) {
+        this.pendingPushResolvers.delete(resolverKey);
+      }
+      this.commands.discard(commandId);
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
@@ -183,6 +191,13 @@ export class SandboxPushService {
    * identity is missing.
    */
   private findPushResolver(event: PushTerminalEvent): [string, PushResolver] | null {
+    if (event.commandId) {
+      return (
+        Array.from(this.pendingPushResolvers.entries()).find(
+          ([, resolver]) => resolver.commandId === event.commandId
+        ) ?? null
+      );
+    }
     if (event.repoOwner && event.repoName && event.branchName) {
       const resolverKey = this.pushResolverKey(event.repoOwner, event.repoName, event.branchName);
       const resolver = this.pendingPushResolvers.get(resolverKey);

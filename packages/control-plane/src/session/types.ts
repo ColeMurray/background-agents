@@ -230,6 +230,7 @@ export type SandboxAccessKind = "codeServer" | "vnc" | "ttyd";
 
 interface PromptCommand {
   type: "prompt";
+  commandId?: string;
   messageId: string;
   content: string;
   model?: string; // LLM model for per-message override
@@ -243,6 +244,8 @@ interface PromptCommand {
 
 interface StopCommand {
   type: "stop";
+  commandId?: string;
+  messageId?: string;
 }
 
 interface SnapshotCommand {
@@ -260,6 +263,7 @@ interface AckCommand {
 
 interface PushCommand {
   type: "push";
+  commandId?: string;
   pushSpec: GitPushSpec;
 }
 

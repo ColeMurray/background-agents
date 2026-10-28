@@ -176,6 +176,9 @@ class AgentBridge:
         self.ws: ClientConnection | None = None
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
+        # Retain every admitted command for this bridge's lifetime, across reconnects.
+        # Eviction would let a delayed replay execute again; process restarts reset this.
+        self._accepted_command_ids: set[str] = set()
 
         # Vendor session id persistence, in the runtime state directory so a
         # resume that lands on a fresh machine still finds it. The legacy file
@@ -298,6 +301,7 @@ class AgentBridge:
             "opencodeSessionId": harness.session_id,
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
+            "commandAckVersion": 1,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -659,6 +663,23 @@ class AgentBridge:
         return await self.event_forwarder.send(event)
 
     async def _handle_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
+        """Acknowledge admission, re-acking replays without dispatching them again."""
+        command_id = cmd.get("commandId")
+        if cmd.get("type") not in ("prompt", "push", "stop") or not isinstance(command_id, str):
+            return await self._dispatch_command(cmd)
+
+        task = None
+        if command_id not in self._accepted_command_ids:
+            task = await self._dispatch_command(cmd)
+            # Prompt/push task creation returns here without yielding. Record before
+            # sending the ack, which can fail or be cancelled after admission.
+            self._accepted_command_ids.add(command_id)
+        await self._send_event(
+            {"type": "command_ack", "commandId": command_id, "timestamp": int(time.time() * 1000)}
+        )
+        return task
+
+    async def _dispatch_command(self, cmd: dict[str, Any]) -> asyncio.Task[None] | None:
         """Handle command from control plane.
 
         Long-running commands (like prompt) are run as background tasks to keep
@@ -700,7 +721,7 @@ class AgentBridge:
             # in the _connect_and_run finally block on WS close.
             return None
         elif cmd_type == "stop":
-            await self._handle_stop()
+            await self._handle_stop(cmd.get("messageId"))
         elif cmd_type == "snapshot":
             await self._handle_snapshot()
         elif cmd_type == "sandbox_generation":
@@ -952,10 +973,24 @@ class AgentBridge:
         await harness.create_session()
         await self._save_session_id(harness)
 
-    async def _handle_stop(self) -> None:
+    async def _handle_stop(self, message_id: str | None = None) -> None:
         """Handle stop command - cancel prompt task and ask the harness to abort."""
         self.log.info("bridge.stop")
-        self.activity.interrupt_prompt("Task was cancelled")
+        interrupted = self.activity.interrupt_prompt(
+            "stopped" if message_id is not None else "Task was cancelled", message_id=message_id
+        )
+        if message_id is not None and not interrupted:
+            # The prompt may never have arrived. Settle its stop fence without
+            # aborting an unrelated turn currently running in the harness.
+            await self._send_event(
+                {
+                    "type": "execution_complete",
+                    "messageId": message_id,
+                    "success": False,
+                    "error": "stopped",
+                }
+            )
+            return
         # Best-effort: also tell the agent to stop (saves LLM compute cost)
         if self.harness is not None:
             await self.harness.abort()
@@ -1075,6 +1110,7 @@ class AgentBridge:
         return {
             "type": "push_error",
             "error": "Push failed — the sandbox is shutting down.",
+            **({"commandId": cmd["commandId"]} if "commandId" in cmd else {}),
             "branchName": request.branch_name if request is not None else "",
             **(request.repo_fields() if request is not None else {}),
             "timestamp": time.time(),
@@ -1097,6 +1133,7 @@ class AgentBridge:
         ).execute(cmd.get("pushSpec"))
         return {
             "type": "push_error" if result.error is not None else "push_complete",
+            **({"commandId": cmd["commandId"]} if "commandId" in cmd else {}),
             **({"error": result.error} if result.error is not None else {}),
             # Even an empty branch resolves the control plane's pending push.
             "branchName": result.request.branch_name,

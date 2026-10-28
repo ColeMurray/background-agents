@@ -104,6 +104,7 @@ const nonArtifactSandboxEventSchemas = [
     // Emitted after the runtime attaches its harness. This is the readiness
     // signal that moves the sandbox row to `ready`.
     type: z.literal("ready"),
+    commandAckVersion: z.literal(1).optional(),
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
     harness: harnessIdSchema.optional(),
@@ -198,6 +199,7 @@ const nonArtifactSandboxEventSchemas = [
   // parse layer and leak the pending push resolver.
   z.object({
     type: z.literal("push_complete"),
+    commandId: z.string().optional(),
     branchName: z.string().optional(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
@@ -207,6 +209,7 @@ const nonArtifactSandboxEventSchemas = [
   }),
   z.object({
     type: z.literal("push_error"),
+    commandId: z.string().optional(),
     branchName: z.string().optional(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),
@@ -292,6 +295,7 @@ const sandboxArtifactEventSchema = sandboxEventBaseSchema.extend({
 /** Files are registered by the server after upload validation. */
 export const sandboxAdmissibleArtifactTypeSchema = artifactTypeSchema.exclude(["file"]);
 export const sandboxIngressEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("command_ack"), commandId: z.string().min(1), timestamp: z.number() }),
   ...nonArtifactSandboxEventSchemas,
   sandboxArtifactEventSchema.extend({ artifactType: sandboxAdmissibleArtifactTypeSchema }),
 ]);

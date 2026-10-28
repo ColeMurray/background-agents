@@ -20,6 +20,8 @@ export const promptQueueItemSchema = z.object({
 });
 export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 
+const sandboxConnectionStatusSchema = z.enum(["connected", "reconnecting"]);
+
 const sessionStateSchema = z.object({
   id: z.string(),
   ownerUserId: z.string().nullable().optional(),
@@ -34,6 +36,8 @@ const sessionStateSchema = z.object({
   branchName: z.string().nullable(),
   status: sessionStatusSchema,
   sandboxStatus: sandboxStatusSchema,
+  /** Sandbox bridge health, independent of browser transport; absent means unknown. */
+  sandboxConnectionStatus: sandboxConnectionStatusSchema.optional(),
   sandboxPreservation: sandboxShutdownSchema.nullable().optional(),
   messageCount: z.number(),
   createdAt: z.number(),
@@ -184,6 +188,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sandbox_warming") }),
   z.object({ type: z.literal("sandbox_spawning") }),
   z.object({ type: z.literal("sandbox_status"), status: sandboxStatusSchema }),
+  z.object({ type: z.literal("sandbox_connection"), status: sandboxConnectionStatusSchema }),
   z.object({ type: z.literal("sandbox_error"), error: z.string() }),
   z.object({ type: z.literal("artifact_created"), artifact: sessionArtifactSchema }),
   // Existing artifact changed (e.g. PR lifecycle update). Consumers upsert by
