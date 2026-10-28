@@ -1418,116 +1418,233 @@ describe("handleAgentSessionEvent environment targets", () => {
       expect(fetch).not.toHaveBeenCalled();
     });
 
-    it.each([
-      "initial stop response",
-      "stop refusal body",
-      "client token request",
-      "client token body",
-      "client identity request",
-      "enrollment probe",
-      "enrollment refusal body",
-      "profile request",
-      "profile body",
-      "enrollment attestation",
-      "retry stop response",
-      "refusal activity request",
-      "refusal activity body",
-    ])("terminates when %s ignores cancellation and retains the mapping", async (phase) => {
+    type StopOperation =
+      | "initial-stop"
+      | "client-token"
+      | "client-identity"
+      | "enrollment-probe"
+      | "profile"
+      | "enrollment-attestation"
+      | "retry-stop"
+      | "refusal-activity";
+    type StopScenario = "initial-success" | "enrollment-success" | "enrollment-denied";
+    interface StopStallCase {
+      name: string;
+      operation: StopOperation;
+      boundary: "request" | "body";
+      cachedCredentials: boolean;
+      scenario: StopScenario;
+      expectedStopCount: number;
+    }
+    interface StopResponseStep {
+      operation: StopOperation;
+      path: string;
+      response: () => Response;
+    }
+
+    const stopPath = "/sessions/session-xyz/stop";
+    const emailRequired = () => Response.json({ code: "actor_email_required" }, { status: 403 });
+    const controlPlaneScripts: Record<StopScenario, StopResponseStep[]> = {
+      "initial-success": [
+        {
+          operation: "initial-stop",
+          path: stopPath,
+          response: () => new Response(null, { status: 200 }),
+        },
+      ],
+      "enrollment-success": [
+        { operation: "initial-stop", path: stopPath, response: emailRequired },
+        { operation: "enrollment-probe", path: "/actors/me", response: emailRequired },
+        {
+          operation: "enrollment-attestation",
+          path: "/actors/me",
+          response: () => new Response(null, { status: 204 }),
+        },
+        {
+          operation: "retry-stop",
+          path: stopPath,
+          response: () => new Response(null, { status: 200 }),
+        },
+      ],
+      "enrollment-denied": [
+        { operation: "initial-stop", path: stopPath, response: emailRequired },
+        { operation: "enrollment-probe", path: "/actors/me", response: emailRequired },
+        {
+          operation: "enrollment-attestation",
+          path: "/actors/me",
+          response: () => Response.json({ code: "actor_admission_denied" }, { status: 403 }),
+        },
+      ],
+    };
+
+    it.each<StopStallCase>([
+      {
+        name: "initial stop response",
+        operation: "initial-stop",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "initial-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "stop refusal body",
+        operation: "initial-stop",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "client token request",
+        operation: "client-token",
+        boundary: "request",
+        cachedCredentials: false,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "client token body",
+        operation: "client-token",
+        boundary: "body",
+        cachedCredentials: false,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "client identity request",
+        operation: "client-identity",
+        boundary: "request",
+        cachedCredentials: false,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "enrollment probe",
+        operation: "enrollment-probe",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "enrollment refusal body",
+        operation: "enrollment-probe",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "profile request",
+        operation: "profile",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "profile body",
+        operation: "profile",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "enrollment attestation",
+        operation: "enrollment-attestation",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "retry stop response",
+        operation: "retry-stop",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 2,
+      },
+      {
+        name: "refusal activity request",
+        operation: "refusal-activity",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-denied",
+        expectedStopCount: 1,
+      },
+      {
+        name: "refusal activity body",
+        operation: "refusal-activity",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-denied",
+        expectedStopCount: 1,
+      },
+    ])("terminates when $name ignores cancellation and retains the mapping", async (testCase) => {
       const { env, webhook, store } = stopFixture();
-      if (phase.startsWith("client")) store.delete("oauth:client-credentials:org-1");
+      if (!testCase.cachedCredentials) store.delete("oauth:client-credentials:org-1");
       let markStalled!: () => void;
       const stalled = new Promise<void>((resolve) => {
         markStalled = resolve;
       });
       let release!: () => void;
-      function stall(response: Response): Promise<Response> {
-        return new Promise((resolve) => {
-          release = () => resolve(response);
-          markStalled();
-        });
-      }
-      function stallBody(value: unknown, status = 200): Response {
+      async function materialize(operation: StopOperation, response: Response): Promise<Response> {
+        if (operation !== testCase.operation) return response;
+        if (testCase.boundary === "request") {
+          return new Promise((resolve) => {
+            release = () => resolve(response);
+            markStalled();
+          });
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer());
         let controller!: ReadableStreamDefaultController<Uint8Array>;
-        const response = new Response(
+        const streamingResponse = new Response(
           new ReadableStream<Uint8Array>({
             start(streamController) {
               controller = streamController;
             },
           }),
-          { status }
+          { status: response.status, headers: response.headers }
         );
-        const read = response.json.bind(response);
-        vi.spyOn(response, "json").mockImplementation(() => {
+        const read = streamingResponse.json.bind(streamingResponse);
+        vi.spyOn(streamingResponse, "json").mockImplementation(() => {
           release = () => {
-            controller.enqueue(new TextEncoder().encode(JSON.stringify(value)));
+            controller.enqueue(bytes);
             controller.close();
           };
           markStalled();
           return read();
         });
-        return response;
+        return streamingResponse;
       }
-      const emailRequired = () => Response.json({ code: "actor_email_required" }, { status: 403 });
-      const profile = { data: { user: { id: "new-author", name: "Ada", email: "ada@corp.test" } } };
       vi.stubGlobal(
         "fetch",
         createLinearFetchMock({
-          clientCredentials: () =>
-            phase === "client token request"
-              ? stall(linearClientCredentialsResponse())
-              : phase === "client token body"
-                ? stallBody({
-                    access_token: "late-token",
-                    token_type: "Bearer",
-                    expires_in: 2_592_000,
-                  })
-                : linearClientCredentialsResponse(),
-          identity: () =>
-            phase === "client identity request"
-              ? stall(linearIdentityResponse())
-              : linearIdentityResponse(),
+          clientCredentials: () => materialize("client-token", linearClientCredentialsResponse()),
+          identity: () => materialize("client-identity", linearIdentityResponse()),
           user: () =>
-            phase === "profile request"
-              ? stall(Response.json(profile))
-              : phase === "profile body"
-                ? stallBody(profile)
-                : Response.json(profile),
-          graphql: () =>
-            phase === "refusal activity request"
-              ? stall(Response.json({ data: {} }))
-              : phase === "refusal activity body"
-                ? stallBody({ data: {} })
-                : Response.json({ data: {} }),
+            materialize(
+              "profile",
+              Response.json({
+                data: { user: { id: "new-author", name: "Ada", email: "ada@corp.test" } },
+              })
+            ),
+          graphql: () => materialize("refusal-activity", Response.json({ data: {} })),
         })
       );
-      let stopCalls = 0;
-      let enrollmentCalls = 0;
-      const controlPlaneFetch = vi.fn(async (url: string, _init: RequestInit) => {
-        if (new URL(url).pathname.endsWith("/stop")) {
-          stopCalls++;
-          if (stopCalls === 1) {
-            if (phase === "initial stop response")
-              return stall(new Response(null, { status: 200 }));
-            if (phase === "stop refusal body")
-              return stallBody({ code: "actor_email_required" }, 403);
-            return emailRequired();
-          }
-          return phase === "retry stop response"
-            ? stall(new Response(null, { status: 200 }))
-            : new Response(null, { status: 200 });
-        }
-        enrollmentCalls++;
-        if (enrollmentCalls === 1) {
-          if (phase === "enrollment probe") return stall(emailRequired());
-          if (phase === "enrollment refusal body")
-            return stallBody({ code: "actor_email_required" }, 403);
-          return emailRequired();
-        }
-        if (phase === "enrollment attestation") return stall(new Response(null, { status: 204 }));
-        return phase.startsWith("refusal activity")
-          ? Response.json({ code: "actor_admission_denied" }, { status: 403 })
-          : new Response(null, { status: 204 });
-      });
+      const controlPlaneFetch = vi
+        .fn<(url: string, init: RequestInit) => Promise<Response>>()
+        .mockRejectedValue(new Error("Unexpected control-plane request"));
+      for (const step of controlPlaneScripts[testCase.scenario]) {
+        controlPlaneFetch.mockImplementationOnce(async (url) => {
+          expect(new URL(url).pathname).toBe(step.path);
+          return materialize(step.operation, step.response());
+        });
+      }
+      const stopRequests = () =>
+        controlPlaneFetch.mock.calls.filter(([url]) => new URL(url).pathname === stopPath);
       env.CONTROL_PLANE = { fetch: controlPlaneFetch } as unknown as Fetcher;
       let settled = false;
       const handling = handleAgentSessionEvent(webhook, env, "trace-stop-deadline").then(() => {
@@ -1541,7 +1658,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         expect(settled).toBe(true);
         await handling;
         expect(vi.getTimerCount()).toBe(0);
-        expect(stopCalls).toBe(phase === "retry stop response" ? 2 : 1);
+        expect(stopRequests()).toHaveLength(testCase.expectedStopCount);
         expect(store.has("issue:issue-1")).toBe(true);
         expect(env.LINEAR_KV.delete).not.toHaveBeenCalledWith("issue:issue-1");
         const signal = controlPlaneFetch.mock.calls[0][1].signal;
@@ -1563,7 +1680,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         await vi.advanceTimersByTimeAsync(0);
       }
       // Late completion cannot restart enrollment/retry or remove an uncertain mapping.
-      expect(stopCalls).toBe(phase === "retry stop response" ? 2 : 1);
+      expect(stopRequests()).toHaveLength(testCase.expectedStopCount);
       expect(store.has("issue:issue-1")).toBe(true);
       expect(env.LINEAR_KV.delete).not.toHaveBeenCalledWith("issue:issue-1");
     });
