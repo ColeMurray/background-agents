@@ -231,9 +231,7 @@ Organization checks use at most four concurrent requests and one total 10-second
 resource/non-callback transport remains 15 seconds. Hosting and ingress caps still apply. Provider
 token exchange has no explicit auth-library timeout; the app proxy bounds its own wait, not assured
 upstream cancellation. Validate live providers and deployment limits separately; these documented
-budgets are not real-provider test results. See the
-[implementation runbook](plans/workspace-sign-in-allowlist.md) for acceptance criteria and rollback
-invariants.
+budgets are not real-provider test results.
 
 ## Reaching the container from a sandbox
 

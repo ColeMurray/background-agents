@@ -653,11 +653,9 @@ or enable allow-all as recovery. After restoring current code and draining old r
 as above, then verify status and reload the editor. Baseline copies added for rollback remain until
 deliberately removed by a later reviewed deployment.
 
-See the [implementation and operator runbook](plans/workspace-sign-in-allowlist.md) for detailed
-limits and verification acceptance criteria, and
-[container operations](CONTROL_PLANE_CONTAINER.md#sign-in-allowlist-operations) for access to the
-actual SQLite volume. These procedures are not claims that rollout or live-provider verification has
-already been completed.
+See [container operations](CONTROL_PLANE_CONTAINER.md#sign-in-allowlist-operations) for access to
+the actual SQLite volume. These procedures are not claims that rollout or live-provider verification
+has already been completed.
 
 ## Related Guides
 
