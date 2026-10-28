@@ -54,7 +54,7 @@ function json(body: unknown, status = 200): Response {
 async function renderPolicy(snapshot = initial) {
   vi.mocked(browserApiFetch).mockResolvedValueOnce(json(snapshot));
   render(<SignInAllowlistSection />);
-  await screen.findByText("Configured sign-in providers:");
+  await screen.findByText("Sign-in:");
 }
 function addEmail(value: string) {
   fireEvent.change(screen.getByRole("textbox", { name: "Email address" }), { target: { value } });
@@ -71,14 +71,13 @@ afterEach(() => {
 });
 
 describe("SignInAllowlistSection", () => {
-  it("explains OR semantics, verified evidence, providers, and deployment ownership", async () => {
+  it("keeps default copy short while stating matching and source rules", async () => {
     await renderPolicy();
-    expect(screen.getByText(/any rule matches \(OR\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Email rules require verified provider evidence/)).toBeInTheDocument();
-    expect(screen.getByText(/GitHub sign-in is not configured/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/No rules added in settings; deployment rules still apply/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Any matching rule allows access/)).toBeInTheDocument();
+    expect(screen.getByText(/Deployment rules are read-only/)).toBeInTheDocument();
+    expect(screen.getByText(/Use a verified email address/)).toBeInTheDocument();
+    expect(screen.getByText(/GitHub sign-in is not enabled/)).toBeInTheDocument();
+    expect(document.body.textContent!.split(/\s+/).length).toBeLessThan(120);
     expect(screen.getByText("Deployment", { exact: true })).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Remove settings email address recovery/ })
@@ -117,12 +116,8 @@ describe("SignInAllowlistSection", () => {
     expect(screen.getByText("Deployment", { exact: true })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = screen.getByRole("alertdialog");
-    expect(
-      within(dialog).getByText(/still allow sign-in through deployment configuration/)
-    ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/do not suspend members or revoke existing sessions/)
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Deployment still allows this entry/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Existing sessions stay active/)).toBeInTheDocument();
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -144,11 +139,9 @@ describe("SignInAllowlistSection", () => {
       expect(screen.getByText(normalized, { exact: true })).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
       const dialog = screen.getByRole("alertdialog");
-      expect(
-        within(dialog).queryAllByText(
-          /Adding a domain admits all matching verified email identities/
-        )
-      ).toHaveLength(broad ? 1 : 0);
+      expect(within(dialog).queryAllByText(/(?:Domain|Organization) rules allow all/)).toHaveLength(
+        broad ? 1 : 0
+      );
       expect(browserApiFetch).toHaveBeenCalledTimes(1);
     }
   );
@@ -167,17 +160,17 @@ describe("SignInAllowlistSection", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     expect(
-      within(screen.getByRole("alertdialog")).getByText(/allowed email domain still covers/)
+      within(screen.getByRole("alertdialog")).getByText(/A domain rule still allows this email/)
     ).toBeInTheDocument();
   });
 
-  it("requires confirmation before saving and announces no invitation or member creation", async () => {
+  it("requires confirmation before saving and announces success", async () => {
     await renderPolicy();
     addEmail("new@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
     expect(
-      within(screen.getByRole("alertdialog")).getByText(/No invitation is sent/)
+      within(screen.getByRole("alertdialog")).getByText(/Deployment rules will not change/)
     ).toBeInTheDocument();
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       json({
@@ -187,12 +180,9 @@ describe("SignInAllowlistSection", () => {
         etag: '"policy-1"',
       })
     );
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
-    await screen.findByText(/Sign-in allowlist saved/);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText("Rules saved.");
     expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
-    expect(
-      screen.getByText(/No invitation was sent and no member was created/)
-    ).toBeInTheDocument();
   });
 
   it("confirms cancel before discarding unsaved changes", async () => {
@@ -200,7 +190,7 @@ describe("SignInAllowlistSection", () => {
     await renderPolicy();
     addEmail("new@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(confirm).toHaveBeenCalledWith("Discard unsaved sign-in allowlist changes?");
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
     expect(screen.getByText("new@example.com")).toBeInTheDocument();
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -220,7 +210,7 @@ describe("SignInAllowlistSection", () => {
       expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
       expect(
         screen.getByText(
-          reason === "maintenance" ? /operator-managed maintenance/ : /Disable unsafe allow-all/
+          reason === "maintenance" ? /Editing is locked/ : /disable unsafe allow-all/
         )
       ).toBeInTheDocument();
     }
@@ -232,7 +222,7 @@ describe("SignInAllowlistSection", () => {
     await screen.findByRole("button", { name: "Retry" });
     expect(screen.getByRole("alert")).toHaveTextContent("unavailable");
     expect(screen.queryByRole("button", { name: "Add rule" })).not.toBeInTheDocument();
-    expect(screen.queryByText(/No rules added in settings/)).not.toBeInTheDocument();
+    expect(screen.queryByText("None")).not.toBeInTheDocument();
     vi.mocked(browserApiFetch).mockResolvedValueOnce(json(initial));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
@@ -245,8 +235,8 @@ describe("SignInAllowlistSection", () => {
     addEmail("new@example.com");
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     vi.mocked(browserApiFetch).mockResolvedValueOnce(json({}, 412));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
-    await screen.findByRole("button", { name: "Reload current rules for review" });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("button", { name: "Reload rules" });
     expect(screen.getByText("new@example.com")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
     expect(browserApiFetch).toHaveBeenCalledTimes(2);

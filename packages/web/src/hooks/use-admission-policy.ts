@@ -38,13 +38,11 @@ async function requestPolicy(init?: RequestInit): Promise<AdmissionPolicySnapsho
         : undefined;
     const policyMessages: Record<string, string> = {
       admission_policy_unsafe_allow_all:
-        "Editing is disabled while unsafe allow-all is configured. An operator must disable it in deployment configuration.",
-      admission_policy_maintenance:
-        "Editing is disabled for operator-managed maintenance. An operator must enable editing after deployment is complete.",
-      admission_policy_configuration:
-        "Deployment needs a compatible recovery sign-in rule and configured provider. Contact your operator.",
+        "Ask your operator to disable unsafe allow-all before you edit rules.",
+      admission_policy_maintenance: "Editing is locked. Ask your operator to unlock it.",
+      admission_policy_configuration: "Sign-in setup is incomplete. Contact your operator.",
       admission_policy_organization_limit:
-        "Too many effective GitHub organizations. Remove a settings organization before adding another; deployment rules also count.",
+        "Organization limit reached. Remove a settings rule before you add another. Deployment rules also count.",
     };
     const message =
       (code && policyMessages[code]) ||
@@ -159,9 +157,7 @@ export function useAdmissionPolicy() {
           ...current,
           loading: false,
           denied,
-          error: denied
-            ? "You no longer have access to the sign-in allowlist."
-            : "Sign-in allowlist unavailable. Retry to load current rules.",
+          error: denied ? "You cannot edit these rules." : "Rules are unavailable. Try again.",
         }));
         if (denied) {
           void mutate(currentUserAuthorizationKey(scope), undefined, { revalidate: false }).catch(
@@ -203,7 +199,7 @@ export function useAdmissionPolicy() {
         draft: current.draft ?? next.managed,
         needsReload: false,
         notice: current.draft
-          ? "Current rules loaded. Your draft is preserved; review its changes against these rules before saving."
+          ? "Rules reloaded. Your edits remain. Review them before you save."
           : null,
       }));
     } catch (cause) {
@@ -213,9 +209,7 @@ export function useAdmissionPolicy() {
         ...current,
         denied,
         needsReload: true,
-        error: denied
-          ? "You no longer have access to the sign-in allowlist."
-          : "Could not reload current rules. Your draft has been preserved.",
+        error: denied ? "You cannot edit these rules." : "Cannot reload rules. Your edits remain.",
       }));
       if (denied) void withdrawAccess(cause.status, scope);
     } finally {
@@ -250,7 +244,7 @@ export function useAdmissionPolicy() {
         ...current,
         snapshot: next,
         draft: next.managed,
-        notice: "Sign-in allowlist saved. No invitation was sent and no member was created.",
+        notice: "Rules saved.",
       }));
     } catch (cause) {
       if (generation.current !== token) return;
@@ -265,14 +259,14 @@ export function useAdmissionPolicy() {
           cause.code !== "admission_policy_organization_limit") ||
         httpStatus === 428;
       const error = denied
-        ? "You no longer have access to the sign-in allowlist."
+        ? "You cannot edit these rules."
         : uncertain
-          ? "Save outcome unknown. Reload current rules to verify before trying again. Your draft is preserved."
+          ? "Cannot confirm the save. Reload rules to check. Your edits remain."
           : httpStatus === 412
-            ? "Rules changed since you loaded them. Your draft is preserved. Reload current rules and review before saving again."
+            ? "Rules changed. Reload them before you save. Your edits remain."
             : cause instanceof Error
               ? cause.message
-              : "Could not save sign-in allowlist.";
+              : "Cannot save rules.";
       setState((current) => ({ ...current, denied, needsReload, error }));
       if (denied) void withdrawAccess(httpStatus, scope);
     } finally {

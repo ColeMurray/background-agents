@@ -61,7 +61,7 @@ export function SignInAllowlistSection() {
   return (
     <SettingsCardSection
       title="Sign-in allowlist"
-      description="Allow sign-in when any rule matches (OR). Deployment and settings rules are combined. These rules do not assign roles or suspend existing members."
+      description="Any matching rule allows access. Deployment rules are read-only."
     >
       <div ref={panel} tabIndex={-1} className="space-y-5">
         {policy.error && <ErrorBanner role="alert">{policy.error}</ErrorBanner>}
@@ -72,23 +72,23 @@ export function SignInAllowlistSection() {
         )}
         {policy.loading && (
           <p role="status" className="text-sm text-muted-foreground">
-            Loading sign-in allowlist...
+            Loading rules...
           </p>
         )}
         {policy.denied && (
           <p role="status" className="text-sm text-muted-foreground">
-            An active Owner or Administrator role is required to manage sign-in rules.
+            Only Owners and Administrators can edit these rules.
           </p>
         )}
         {!policy.denied && !policy.loading && (!snapshot || policy.needsReload) && (
           <Button variant="outline" onClick={() => void policy.reload()}>
-            {snapshot ? "Reload current rules for review" : "Retry"}
+            {snapshot ? "Reload rules" : "Retry"}
           </Button>
         )}
         {snapshot && draft && (
           <>
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-muted-foreground">Configured sign-in providers:</span>
+              <span className="text-muted-foreground">Sign-in:</span>
               {snapshot.enabledProviders.map((provider) => (
                 <span
                   key={provider}
@@ -99,18 +99,8 @@ export function SignInAllowlistSection() {
               ))}
               {!snapshot.enabledProviders.length && <span>None configured</span>}
             </div>
-            <p className="text-sm text-muted-foreground">
-              Email rules require verified provider evidence. GitHub sign-in requires a verified
-              email even when a username or organization matches. New users receive the default
-              Member role; linked users retain their role. These rules do not undo suspension. Email
-              rules also admit new Slack/Linear accounts; existing bot access and integration
-              trigger restrictions are unchanged.
-            </p>
             {!snapshot.enabledProviders.includes("github") && (
-              <p className="text-sm text-muted-foreground">
-                GitHub sign-in is not configured. GitHub username and organization rules do not
-                admit Google identities.
-              </p>
+              <p className="text-sm text-muted-foreground">GitHub sign-in is not enabled.</p>
             )}
             {snapshot.unsafeAllowAllUsers && (
               <div
@@ -118,15 +108,12 @@ export function SignInAllowlistSection() {
                 className="rounded-md border border-border p-3 text-sm text-muted-foreground"
               >
                 <p>
-                  Unsafe allow-all is{" "}
                   {snapshot.unsafeAllowAllEffective
-                    ? "effective: any otherwise valid provider identity can sign in"
-                    : "configured but dormant behind nonempty rules"}
-                  .
+                    ? "All authenticated users can sign in."
+                    : "Unsafe allow-all is set. Current rules still apply."}
                 </p>
                 <p className="mt-2">
-                  Disable unsafe allow-all and configure a recovery sign-in rule in your deployment
-                  before editing the allowlist here.
+                  Ask your operator to disable unsafe allow-all before you edit rules.
                 </p>
               </div>
             )}
@@ -135,18 +122,7 @@ export function SignInAllowlistSection() {
                 role="status"
                 className="rounded-md border border-border p-3 text-sm text-muted-foreground"
               >
-                Editing is disabled for operator-managed maintenance. An operator must enable
-                editing after deployment is complete; reloading cannot enable it.
-              </p>
-            )}
-            {Object.values(draft).every((values) => values.length === 0) && (
-              <p className="text-sm text-muted-foreground">
-                No rules added in settings; deployment rules still apply.
-              </p>
-            )}
-            {changes.length > 0 && (
-              <p className="text-sm font-medium text-foreground">
-                Previewing deployment and draft settings rules. Changes do not apply until saved.
+                Editing is locked. Ask your operator to unlock it.
               </p>
             )}
             <AdmissionRuleGroups
@@ -163,7 +139,6 @@ export function SignInAllowlistSection() {
                 }}
                 className="space-y-3 rounded-md border border-border p-4"
               >
-                <h4 className="text-sm font-medium text-foreground">Add a settings rule</h4>
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-end">
                   <div className="min-w-0 space-y-1.5">
                     <label htmlFor={`${inputId}-type`} className="text-xs text-muted-foreground">
@@ -218,8 +193,7 @@ export function SignInAllowlistSection() {
                   </Button>
                 </div>
                 <p id={`${inputId}-help`} className="text-xs text-muted-foreground">
-                  {group.help} Use ASCII values (punycode for international domains), without
-                  wildcards. Up to {MAX_MANAGED_ADMISSION_RULES} settings rules total.
+                  {group.help} Limit: {MAX_MANAGED_ADMISSION_RULES} settings rules.
                 </p>
                 {validationError && (
                   <p role="alert" className="text-sm text-destructive">
@@ -240,7 +214,7 @@ export function SignInAllowlistSection() {
                 variant="outline"
                 disabled={!dirty || policy.saving || policy.loading}
                 onClick={() => {
-                  if (!window.confirm("Discard unsaved sign-in allowlist changes?")) return;
+                  if (!window.confirm("Discard unsaved changes?")) return;
                   policy.discard();
                   setValue("");
                   setValidationError(null);
@@ -250,28 +224,24 @@ export function SignInAllowlistSection() {
               </Button>
               <span role="status" className="text-xs text-muted-foreground">
                 {dirty
-                  ? `Unsaved changes: ${changes.filter(({ action }) => action === "Add").length} added, ${changes.filter(({ action }) => action === "Remove").length} removed${value ? "; add or clear the entered value before saving" : ""}.`
-                  : "No unsaved changes"}
+                  ? `Unsaved: ${changes.filter(({ action }) => action === "Add").length} added, ${changes.filter(({ action }) => action === "Remove").length} removed.${value ? " Add or clear the value before you save." : ""}`
+                  : ""}
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Applies to future sign-in and other operations that recheck sign-in eligibility.
-              Removing a rule does not revoke existing sessions. Use{" "}
+              To block a member, use{" "}
               <a href="#workspace-members" className="underline">
                 Members &gt; Suspend
-              </a>{" "}
-              to revoke a member&apos;s access.
+              </a>
+              .
               {hasPermission("workspace.audit.read") && (
                 <>
                   {" "}
-                  Changes are recorded in the{" "}
                   <a href="/settings?tab=audit-log" className="underline">
                     Audit log
                   </a>
-                  .
                 </>
-              )}{" "}
-              After a deployment rollout, reload this page to verify the settled deployment rules.
+              )}
             </p>
             <SignInAllowlistReview
               open={reviewOpen && policy.canEdit}

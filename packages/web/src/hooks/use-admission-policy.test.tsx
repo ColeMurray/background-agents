@@ -192,7 +192,7 @@ describe("useAdmissionPolicy", () => {
       value: "another-admin@example.com",
       action: "Remove",
     });
-    expect(result.current.notice).toContain("review");
+    expect(result.current.notice).toContain("Review");
     expect(browserApiFetch).toHaveBeenCalledTimes(3);
     vi.mocked(browserApiFetch).mockResolvedValueOnce(json({ ...fresh, managed: edited }));
     await act(() => result.current.save());
@@ -209,7 +209,7 @@ describe("useAdmissionPolicy", () => {
     act(() => result.current.setDraft(edited));
     vi.mocked(browserApiFetch).mockRejectedValueOnce(new TypeError("Network lost"));
     await act(() => result.current.save());
-    expect(result.current.error).toContain("outcome unknown");
+    expect(result.current.error).toContain("Cannot confirm the save");
     expect(result.current.draft).toEqual(edited);
     expect(result.current.canEdit).toBe(false);
     await act(() => result.current.save());
@@ -315,7 +315,7 @@ describe("useAdmissionPolicy", () => {
       )
     );
     await act(() => result.current.save());
-    expect(result.current.error).toContain("deployment rules also count");
+    expect(result.current.error).toContain("Deployment rules also count");
     expect(result.current.needsReload).toBe(false);
     expect(result.current.canEdit).toBe(true);
   });

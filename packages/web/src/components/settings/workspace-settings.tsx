@@ -61,9 +61,7 @@ export function WorkspaceSettings() {
     <div className="space-y-10">
       <div>
         <h2 className="text-xl font-semibold text-foreground">Workspace access</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Assign one role to each canonical user. Backend authorization remains authoritative.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Manage members and access.</p>
       </div>
 
       {mutationError && <ErrorBanner>{mutationError}</ErrorBanner>}

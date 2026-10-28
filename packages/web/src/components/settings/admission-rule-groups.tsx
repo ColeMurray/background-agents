@@ -6,7 +6,7 @@ export const ADMISSION_RULE_GROUPS = [
     key: "allowedEmails",
     label: "Email address",
     title: "Email addresses",
-    help: "Exact verified emails, including verified secondary GitHub emails. GitHub and Google.",
+    help: "Use a verified email address.",
     placeholder: "person@example.com",
     environment: "ALLOWED_EMAILS",
     terraform: "allowed_emails",
@@ -15,7 +15,7 @@ export const ADMISSION_RULE_GROUPS = [
     key: "allowedEmailDomains",
     label: "Email domain",
     title: "Email domains",
-    help: "Any verified email at this exact domain. Subdomains are not included. GitHub and Google.",
+    help: "Use an exact domain. Subdomains are not included.",
     placeholder: "example.com",
     environment: "ALLOWED_EMAIL_DOMAINS",
     terraform: "allowed_email_domains",
@@ -24,7 +24,7 @@ export const ADMISSION_RULE_GROUPS = [
     key: "allowedGitHubUsers",
     label: "GitHub username",
     title: "GitHub usernames",
-    help: "Bare GitHub usernames, without @ or a URL. GitHub sign-in only.",
+    help: "Enter a GitHub username without @.",
     placeholder: "octocat",
     environment: "ALLOWED_USERS",
     terraform: "allowed_users",
@@ -33,7 +33,7 @@ export const ADMISSION_RULE_GROUPS = [
     key: "allowedGitHubOrganizations",
     label: "GitHub organization",
     title: "GitHub organizations",
-    help: "Active organization members. GitHub sign-in only. Saving does not verify membership.",
+    help: "Active members with a verified email can sign in.",
     placeholder: "my-organization",
     environment: "ALLOWED_GITHUB_ORGS",
     terraform: "allowed_github_orgs",
@@ -66,11 +66,6 @@ export function AdmissionRuleGroups({
         return (
           <section key={group.key} aria-label={group.title} className="min-w-0">
             <h4 className="text-sm font-medium text-foreground">{group.title}</h4>
-            <p className="mt-1 text-xs text-muted-foreground">{group.help}</p>
-            <p className="mt-1 break-words text-xs text-muted-foreground">
-              Deployment: <code>{group.environment}</code> / <code>{group.terraform}</code>{" "}
-              (read-only)
-            </p>
             <ul className="mt-2 divide-y divide-border rounded-md border border-border">
               {values.map((entry) => {
                 const fromDeployment = deployment[group.key].includes(entry);
@@ -80,7 +75,12 @@ export function AdmissionRuleGroups({
                     <span className="min-w-0 basis-full break-all font-mono text-sm text-foreground sm:basis-0 sm:flex-1">
                       {entry}
                     </span>
-                    <span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    <span
+                      className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground"
+                      title={
+                        fromDeployment ? `${group.environment} / ${group.terraform}` : undefined
+                      }
+                    >
                       {fromDeployment && fromSettings
                         ? "Both"
                         : fromDeployment
@@ -103,18 +103,10 @@ export function AdmissionRuleGroups({
                         {fromDeployment ? "Remove settings copy" : "Remove"}
                       </Button>
                     )}
-                    {fromDeployment && fromSettings && (
-                      <p className="basis-full text-xs text-muted-foreground">
-                        Both sources allow this entry. Removing its settings copy leaves deployment
-                        access unchanged.
-                      </p>
-                    )}
                   </li>
                 );
               })}
-              {!values.length && (
-                <li className="p-3 text-sm text-muted-foreground">No rules of this type.</li>
-              )}
+              {!values.length && <li className="p-3 text-sm text-muted-foreground">None</li>}
             </ul>
           </section>
         );

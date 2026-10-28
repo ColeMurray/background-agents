@@ -98,9 +98,9 @@ The section sits before the member directory at `/settings?tab=workspace`. Only 
 administrators mount/fetch it; custom roles with member permissions retain their existing member
 view without admission-policy access. Existing settings navigation and permission enums are reused.
 
-Four rule groups show Deployment, Settings, or Both provenance, variable names, and provider
-applicability. An add form validates one value at a time. Draft changes remain previews until
-**Review and save** and **Confirm and save**. The review shows additions/removals, broad domain/org
+Four rule groups show Deployment, Settings, or Both source labels. Deployment badges expose variable
+names on hover. Help text appears for the selected rule type. Draft changes apply only after
+**Review and save** and **Save changes**. The review shows additions/removals, broad domain/org
 grant warnings, exact deployment duplicates, and remaining exact-domain coverage of removed emails.
 These warnings are not a complete analysis of affected identities.
 
