@@ -752,6 +752,110 @@ describe("SandboxShutdownCoordinator", () => {
     });
   });
 
+  describe("checkpoint recovery exclusion", () => {
+    async function pendingCheckpoint() {
+      const takeSnapshot = vi
+        .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()
+        .mockResolvedValueOnce({ success: true, imageId: "checkpoint-a" });
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const f = fixture(provider({ takeSnapshot, stopSandbox }), { durable: true });
+      await readyWithoutDeadline(f);
+      await f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+      let resolve!: (result: { success: true; imageId: string }) => void;
+      let reject!: (error: Error) => void;
+      takeSnapshot.mockImplementationOnce(
+        () =>
+          new Promise((done, fail) => {
+            resolve = done;
+            reject = fail;
+          })
+      );
+      const pending = f.shutdown.captureCheckpoint(GENERATION, "execution_complete", "continue");
+      await vi.waitFor(() => expect(takeSnapshot).toHaveBeenCalledTimes(2));
+      f.shutdown.runtimeReady();
+      return { ...f, takeSnapshot, stopSandbox, pending, resolve, reject };
+    }
+
+    it("rejects restore during a live checkpoint, then restores its newer receipt", async () => {
+      const f = await pendingCheckpoint();
+      try {
+        expect(f.store.value?.phase).toBe("failed");
+        expect(recoveryActions(f.shutdown)).not.toContain("restore_saved");
+        await expect(f.shutdown.recover("restore_saved")).rejects.toThrow();
+        expect(f.stopSandbox).not.toHaveBeenCalled();
+      } finally {
+        f.resolve({ success: true, imageId: "checkpoint-b" });
+        await f.pending;
+      }
+      expect(f.store.value).toMatchObject({
+        phase: "failed",
+        checkpointInFlight: false,
+        receipt: { artifactId: "checkpoint-b" },
+      });
+      expect(f.deps.messenger.broadcast).toHaveBeenLastCalledWith({
+        type: "sandbox_preservation",
+        preservation: expect.objectContaining({ availableRecoveryActions: ["restore_saved"] }),
+      });
+      await f.shutdown.recover("restore_saved");
+      expect(f.shutdown.startupDecision()).toMatchObject({
+        kind: "restore_snapshot",
+        snapshotId: "checkpoint-b",
+      });
+    });
+
+    it("waits for an uncertain checkpoint to settle after failure and restart", async () => {
+      const f = await pendingCheckpoint();
+      const settleAtMs = f.store.value!.captureOp!.settleAtMs;
+      f.reject(new Error("provider result unknown"));
+      await expect(f.pending).resolves.toEqual({ outcome: "unknown" });
+      expect(f.store.value?.checkpointInFlight).toBe(true);
+      const restarted = new SandboxShutdownCoordinator(f.deps as never);
+      f.deps.alarm.schedule.mockClear();
+      await restarted.rearmCaptureSettlement();
+      expect(f.deps.alarm.schedule).toHaveBeenCalledWith(settleAtMs);
+      f.setNow(settleAtMs - 1);
+      await restarted.handleAlarm();
+      expect(recoveryActions(restarted)).toEqual([]);
+      await expect(restarted.recover("restore_saved")).rejects.toThrow();
+      expect(f.stopSandbox).not.toHaveBeenCalled();
+
+      f.setNow(settleAtMs);
+      await restarted.handleAlarm();
+      expect(f.store.value).toMatchObject({ phase: "failed", checkpointInFlight: false });
+      expect(f.store.value?.captureOp).toBeUndefined();
+      await restarted.recover("restore_saved");
+      expect(restarted.startupDecision()).toMatchObject({
+        kind: "restore_snapshot",
+        snapshotId: "checkpoint-a",
+      });
+    });
+
+    it.each([
+      { phase: "retiring" as const },
+      { phase: "saved" as const },
+      { phase: "restoring" as const },
+      { phase: "failed" as const, discarding: "discard-claim" },
+      { phase: "unknown" as const, restoreInvoked: true },
+    ])("does not overwrite recovery ownership with a late checkpoint (%j)", async (claim) => {
+      const f = await pendingCheckpoint();
+      f.store.write({
+        ...f.store.value!,
+        ...claim,
+        operationId: "recovery-operation",
+        retireByMs: 130_000,
+      });
+      const claimed = f.store.value;
+      f.resolve({ success: true, imageId: "checkpoint-b" });
+      await expect(f.pending).resolves.toEqual({ outcome: "unknown" });
+      expect(f.store.value).toEqual(claimed);
+      expect(f.deps.sandbox.recordSandboxSnapshot).toHaveBeenCalledExactlyOnceWith(
+        GENERATION.sandboxId,
+        "checkpoint-a",
+        "runtime-1"
+      );
+    });
+  });
+
   it("does not promote a checkpoint when its sandbox row cannot be updated", async () => {
     const f = fixture(
       provider({
