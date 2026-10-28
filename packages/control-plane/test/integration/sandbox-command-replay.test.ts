@@ -47,7 +47,11 @@ describe("Sandbox command replay through the live session runtime", () => {
     return ws;
   }
 
-  async function ready(stub: DurableObjectStub, ws: WebSocket): Promise<void> {
+  async function ready(
+    stub: DurableObjectStub,
+    ws: WebSocket,
+    bridgeInstanceId = "bridge-1"
+  ): Promise<void> {
     const [{ count }] = await queryDO<{ count: number }>(
       stub,
       "SELECT COUNT(*) AS count FROM events WHERE type = 'ready'"
@@ -57,6 +61,8 @@ describe("Sandbox command replay through the live session runtime", () => {
         type: "ready",
         sandboxId: SANDBOX_AUTH.sandboxId,
         commandAckVersion: 1,
+        bridgeInstanceId,
+        stopConfirmationVersion: 1,
         timestamp: Date.now() / 1000,
       })
     );
@@ -349,6 +355,116 @@ describe("Sandbox command replay through the live session runtime", () => {
       { status: "processing" },
     ]);
   });
+
+  it("fails uncertain delivery instead of replaying into a restarted bridge in the same sandbox", async () => {
+    const { sessionName, stub } = await setup();
+    const dropped = await dropFirstCommand(stub, "prompt");
+    const messageId = await enqueuePrompt(stub);
+    await vi.waitFor(() => expect(dropped).toHaveLength(1));
+    await runInSessionDO(stub, (instance) => {
+      const components = componentsOf(instance);
+      vi.spyOn(components.lifecycleManager, "terminateFailedSandbox").mockImplementation(
+        async () => {
+          components.sandboxRepository.updateSandboxStatus("failed");
+          return "sandbox_failed";
+        }
+      );
+    });
+    const replacement = await connect(sessionName);
+    const frames = collectMessages(replacement, { timeoutMs: NO_COMMAND_WINDOW_MS });
+    await ready(stub, replacement, "restarted-bridge-2");
+    await vi.waitFor(async () =>
+      expect(
+        await queryDO(stub, "SELECT status, error_message FROM messages WHERE id = ?", messageId)
+      ).toEqual([
+        {
+          status: "failed",
+          error_message: expect.stringContaining("execution state is uncertain"),
+        },
+      ])
+    );
+    expect((await frames).filter((event) => event.type === "prompt")).toEqual([]);
+    expect(await queryDO(stub, "SELECT command_id FROM sandbox_command_outbox")).toEqual([]);
+    await runInSessionDO(stub, (instance) =>
+      expect(
+        componentsOf(instance).lifecycleManager.terminateFailedSandbox
+      ).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Sandbox bridge restarted"))
+    );
+  });
+
+  it.each([true, false])(
+    "keeps the stop fence and final cost until containment confirmation (receipt ACK: %s)",
+    async (receiptAck) => {
+      const { stub, ws } = await setup();
+      const firstDelivery = collectMessages(ws, { until: (message) => message.type === "prompt" });
+      const firstId = await enqueuePrompt(stub);
+      const first = (await firstDelivery).find((message) => message.type === "prompt")!;
+      await acknowledge(stub, ws, first.commandId as string);
+      const nextId = await enqueuePrompt(stub);
+      const stopDelivery = collectMessages(ws, { until: (message) => message.type === "stop" });
+      expect((await stub.fetch("http://internal/internal/stop", { method: "POST" })).status).toBe(
+        200
+      );
+      const stop = (await stopDelivery).find((message) => message.type === "stop")!;
+      if (receiptAck) await acknowledge(stub, ws, stop.commandId as string);
+      const terminalAck = collectMessages(ws, {
+        until: (message) => message.type === "ack" && message.ackId === "terminal-ack",
+      });
+      ws.send(
+        JSON.stringify({
+          type: "execution_complete",
+          messageId: firstId,
+          sandboxId: SANDBOX_AUTH.sandboxId,
+          success: true,
+          messageCostUsd: 1.25,
+          timestamp: Date.now(),
+          ackId: "terminal-ack",
+        })
+      );
+      await terminalAck;
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_deadline, reported_cost_usd FROM messages WHERE id = ?",
+          firstId
+        )
+      ).toEqual([{ stop_confirmation_deadline: expect.any(Number), reported_cost_usd: 1.25 }]);
+      expect(await queryDO(stub, "SELECT status FROM messages WHERE id = ?", nextId)).toEqual([
+        { status: "pending" },
+      ]);
+      const resumed = collectMessages(ws, {
+        until: (message) => message.type === "prompt" && message.messageId === nextId,
+      });
+      const confirmation = {
+        type: "stop_confirmed",
+        messageId: firstId,
+        commandId: stop.commandId,
+        timestamp: Date.now(),
+        ackId: "stop-confirmed-ack",
+      };
+      ws.send(JSON.stringify(confirmation));
+      expect(await resumed).toContainEqual(
+        expect.objectContaining({ type: "prompt", messageId: nextId })
+      );
+      expect(
+        await queryDO(
+          stub,
+          "SELECT stop_confirmation_deadline, reported_cost_usd FROM messages WHERE id = ?",
+          firstId
+        )
+      ).toEqual([{ stop_confirmation_deadline: null, reported_cost_usd: 1.25 }]);
+      expect(
+        await queryDO(
+          stub,
+          "SELECT command_id FROM sandbox_command_outbox WHERE command_type = 'stop'"
+        )
+      ).toEqual([]);
+      ws.send(JSON.stringify(confirmation));
+      expect(await queryDO(stub, "SELECT status FROM messages WHERE id = ?", nextId)).toEqual([
+        { status: "processing" },
+      ]);
+    }
+  );
 
   it.each(["idle", "processing"] as const)(
     "publishes reconnecting at the heartbeat deadline for an %s session without a new prompt",

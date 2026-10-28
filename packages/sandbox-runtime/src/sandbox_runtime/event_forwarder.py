@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 CRITICAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         "execution_complete",
+        "stop_confirmed",
         "error",
         "snapshot_ready",
         "push_complete",
@@ -509,6 +510,8 @@ class BufferedEventForwarder:
         so the later one overwrites the earlier pending entry.
         """
         event_type = event.get("type", "unknown")
+        if event_type == "stop_confirmed" and event.get("commandId"):
+            return f"{event_type}:{event['commandId']}"
         operation_id = event.get("operationId")
         if operation_id:
             return f"{event_type}:{operation_id}"

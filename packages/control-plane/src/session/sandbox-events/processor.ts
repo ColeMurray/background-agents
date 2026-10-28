@@ -41,6 +41,7 @@ function eventLogContext(event: SandboxEventWithAck, messageId: string | null) {
 
 /** Event types that require delivery acknowledgement. */
 const CRITICAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "stop_confirmed",
   "execution_complete",
   "error",
   "snapshot_ready",
@@ -113,6 +114,9 @@ export class SessionSandboxEventProcessor {
 
   private async dispatch(event: SandboxIngressEvent, context: SandboxEventContext): Promise<void> {
     switch (event.type) {
+      case "stop_confirmed":
+        await this.execution.handleStopConfirmed(event);
+        return;
       case "command_ack":
         this.commands.acknowledge(event.commandId);
         return;

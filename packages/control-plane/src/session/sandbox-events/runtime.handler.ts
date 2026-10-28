@@ -130,7 +130,11 @@ export class SandboxRuntimeEventHandler {
       event.harness,
       event.preservationProtocolVersion
     );
-    this.commands.recordProtocol(event.commandAckVersion === 1);
+    this.commands.recordProtocol(
+      event.commandAckVersion === 1,
+      event.bridgeInstanceId,
+      event.stopConfirmationVersion
+    );
     this.messenger.broadcast({ type: "sandbox_connection", status: "connected" });
     await this.checkConnectionHealth();
     await this.commands.flush();

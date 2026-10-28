@@ -33,6 +33,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import websockets
 from websockets import ClientConnection, State
@@ -179,6 +180,7 @@ class AgentBridge:
         # Retain every admitted command for this bridge's lifetime, across reconnects.
         # Eviction would let a delayed replay execute again; process restarts reset this.
         self._accepted_command_ids: set[str] = set()
+        self.bridge_instance_id = str(uuid4())
 
         # Vendor session id persistence, in the runtime state directory so a
         # resume that lands on a fresh machine still finds it. The legacy file
@@ -302,6 +304,8 @@ class AgentBridge:
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
             "commandAckVersion": 1,
+            "bridgeInstanceId": self.bridge_instance_id,
+            "stopConfirmationVersion": 1,
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -721,7 +725,7 @@ class AgentBridge:
             # in the _connect_and_run finally block on WS close.
             return None
         elif cmd_type == "stop":
-            await self._handle_stop(cmd.get("messageId"))
+            await self._handle_stop(cmd.get("messageId"), command_id=cmd.get("commandId"))
         elif cmd_type == "snapshot":
             await self._handle_snapshot()
         elif cmd_type == "sandbox_generation":
@@ -973,24 +977,25 @@ class AgentBridge:
         await harness.create_session()
         await self._save_session_id(harness)
 
-    async def _handle_stop(self, message_id: str | None = None) -> None:
+    async def _handle_stop(
+        self, message_id: str | None = None, *, command_id: str | None = None
+    ) -> None:
         """Handle stop command - cancel prompt task and ask the harness to abort."""
         self.log.info("bridge.stop")
-        interrupted = self.activity.interrupt_prompt(
-            "stopped" if message_id is not None else "Task was cancelled", message_id=message_id
-        )
-        if message_id is not None and not interrupted:
-            # The prompt may never have arrived. Settle its stop fence without
-            # aborting an unrelated turn currently running in the harness.
-            await self._send_event(
-                {
-                    "type": "execution_complete",
-                    "messageId": message_id,
-                    "success": False,
-                    "error": "stopped",
-                }
-            )
+        if message_id is not None:
+
+            async def stop_execution(timeout_seconds: float) -> bool:
+                harness = self.harness
+                return harness is not None and await harness.stop_execution(timeout_seconds)
+
+            if not await self.activity.stop_prompt(
+                message_id, command_id=command_id, stop_execution=stop_execution
+            ):
+                # Failed containment must not enter the receipt/dedup set. The
+                # command may retry; the control-plane deadline remains armed.
+                raise RuntimeError(f"Stop containment not confirmed for {message_id}")
             return
+        self.activity.interrupt_prompt("Task was cancelled")
         # Best-effort: also tell the agent to stop (saves LLM compute cost)
         if self.harness is not None:
             await self.harness.abort()

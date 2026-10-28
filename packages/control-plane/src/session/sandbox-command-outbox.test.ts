@@ -51,6 +51,7 @@ function setup() {
     getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => ({ kind: "dispatch", socket: ws })),
     isActiveSandboxSocket: vi.fn(() => true),
     send: vi.fn((_ws: SessionWebSocket, _payload: string | object) => true),
+    close: vi.fn(),
   };
   const deps = {
     sql,
@@ -60,9 +61,10 @@ function setup() {
     encryptionKey: crypto.generateEncryptionKey(),
     messenger: { broadcast: vi.fn() },
     mayDispatch: vi.fn(() => true),
+    onUncertainDelivery: vi.fn(async () => {}),
   };
   const outbox = new SandboxCommandOutbox(deps);
-  outbox.recordProtocol(true);
+  outbox.recordProtocol(true, "bridge-1", 1);
   const rows = () =>
     sql.exec("SELECT * FROM sandbox_command_outbox ORDER BY rowid").toArray() as Array<{
       command_id: string;
@@ -131,9 +133,14 @@ describe("SandboxCommandOutbox", () => {
     expect(recovered.supportsReplay()).toBe(false);
     await recovered.flush();
     expect(h.wsManager.send).toHaveBeenCalledOnce();
-    recovered.recordProtocol(true);
+    recovered.recordProtocol(true, "bridge-1", 1);
     await recovered.flush();
     expect(h.wsManager.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not grant replay to migrated capability records without a receiver incarnation", () => {
+    h.sql.exec("UPDATE sandbox_command_protocol SET bridge_instance_id = NULL, supported = 1");
+    expect(h.outbox.supportsReplay()).toBe(false);
   });
 
   it("delivers never-sent commands to legacy runtimes but never replays them", async () => {
@@ -148,6 +155,81 @@ describe("SandboxCommandOutbox", () => {
     h.message.status = "completed";
     await h.outbox.flush();
     expect(h.rows()).toEqual([]);
+  });
+
+  it.each(["prompt", "push", "stop"] as const)(
+    "contains uncertain %s delivery after a receiver-process restart",
+    async (type) => {
+      if (type === "push") await h.outbox.sendPush(h.ws, push, "push-1", Date.now() + 1000);
+      else {
+        if (type === "stop") h.message.status = "failed";
+        h.outbox.send(
+          h.ws,
+          type === "prompt" ? prompt : { type: "stop", messageId: prompt.messageId }
+        );
+      }
+      const commandId = h.rows()[0].command_id;
+      h.sandbox.active_socket_id = "restarted-socket";
+      const restarted = new SandboxCommandOutbox(h.deps);
+      restarted.recordProtocol(true, "bridge-2", 1);
+      await restarted.flush();
+      expect(h.wsManager.send).toHaveBeenCalledOnce();
+      expect(h.deps.onUncertainDelivery).toHaveBeenCalledExactlyOnceWith({ commandId, type });
+      expect(h.rows()).toEqual([]);
+    }
+  );
+
+  it("waits for receiver identity before first delivery, including after reconstruction", async () => {
+    h.sql.exec("DELETE FROM sandbox_command_protocol");
+    expect(h.outbox.send(h.ws, prompt)).toBe(true);
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    const restarted = new SandboxCommandOutbox(h.deps);
+    restarted.recordProtocol(true, "bridge-2", 1);
+    await restarted.flush();
+    expect(h.wsManager.send).toHaveBeenCalledOnce();
+    expect(h.deps.onUncertainDelivery).not.toHaveBeenCalled();
+    expect(h.sql.exec("SELECT bridge_instance_id FROM sandbox_command_outbox").toArray()).toEqual([
+      { bridge_instance_id: "bridge-2" },
+    ]);
+  });
+
+  it("refreshes negotiation for an existing ready socket with no persisted protocol", async () => {
+    h.sql.exec("DELETE FROM sandbox_command_protocol");
+    await h.outbox.flush();
+    expect(h.wsManager.close).toHaveBeenCalledExactlyOnceWith(
+      h.ws,
+      1012,
+      "Sandbox command negotiation required"
+    );
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
+  it("retires a confirmed stop even when its receipt ACK was lost, matching command and message", async () => {
+    h.message.status = "failed";
+    h.outbox.send(h.ws, { type: "stop", messageId: prompt.messageId, commandId: "stop-1" });
+    h.outbox.confirmStop("stop-1", "another-message");
+    expect(h.rows()).toHaveLength(1);
+    h.outbox.confirmStop("stop-1", prompt.messageId);
+    h.outbox.confirmStop("stop-1", prompt.messageId);
+    h.outbox.recordProtocol(true, "bridge-2", 1);
+    await h.outbox.flush();
+    expect(h.rows()).toEqual([]);
+    expect(h.deps.onUncertainDelivery).not.toHaveBeenCalled();
+  });
+
+  it("rechecks receiver incarnation after push decryption", async () => {
+    await h.outbox.sendPush(h.ws, push, "push-1", Date.now() + 1000);
+    const decrypt = crypto.decryptToken;
+    vi.spyOn(crypto, "decryptToken").mockImplementationOnce(async (...args) => {
+      h.outbox.recordProtocol(true, "bridge-2", 1);
+      return decrypt(...args);
+    });
+    await h.outbox.flush();
+    expect(h.wsManager.send).toHaveBeenCalledOnce();
+    expect(h.deps.onUncertainDelivery).toHaveBeenCalledExactlyOnceWith({
+      commandId: "push-1",
+      type: "push",
+    });
   });
 
   it.each([null, 100_000 - SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS])(

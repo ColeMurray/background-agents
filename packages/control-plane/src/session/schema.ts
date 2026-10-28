@@ -85,6 +85,7 @@ const OUTBOX_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_command_outbox (
   payload TEXT NOT NULL,
   encrypted INTEGER NOT NULL DEFAULT 0,
   attempted INTEGER NOT NULL DEFAULT 0,
+  bridge_instance_id TEXT,
   expires_at INTEGER NOT NULL
 )`;
 
@@ -93,7 +94,9 @@ const COMMAND_PROTOCOL_TABLE_SQL = `CREATE TABLE IF NOT EXISTS sandbox_command_p
   sandbox_id TEXT NOT NULL,
   sandbox_created_at INTEGER NOT NULL,
   socket_id TEXT NOT NULL,
-  supported INTEGER NOT NULL
+  supported INTEGER NOT NULL,
+  bridge_instance_id TEXT,
+  stop_confirmation_version INTEGER
 )`;
 
 export const SCHEMA_SQL = `
@@ -181,6 +184,7 @@ CREATE TABLE IF NOT EXISTS messages (
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
+  stop_confirmation_requires_ack INTEGER NOT NULL DEFAULT 0,
   reported_cost_usd REAL NOT NULL DEFAULT 0,        -- Highest cumulative cost the runtime reported for this turn
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
@@ -798,6 +802,22 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     run: (sql) => {
       sql.exec(OUTBOX_TABLE_SQL);
       sql.exec(COMMAND_PROTOCOL_TABLE_SQL);
+    },
+  },
+  {
+    id: 58,
+    description: "Fence replay to bridge incarnations and separate stop confirmation",
+    run: (sql) => {
+      runMigration(sql, "ALTER TABLE sandbox_command_outbox ADD COLUMN bridge_instance_id TEXT");
+      runMigration(sql, "ALTER TABLE sandbox_command_protocol ADD COLUMN bridge_instance_id TEXT");
+      runMigration(
+        sql,
+        "ALTER TABLE sandbox_command_protocol ADD COLUMN stop_confirmation_version INTEGER"
+      );
+      runMigration(
+        sql,
+        "ALTER TABLE messages ADD COLUMN stop_confirmation_requires_ack INTEGER NOT NULL DEFAULT 0"
+      );
     },
   },
 ];

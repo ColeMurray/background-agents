@@ -235,6 +235,9 @@ describe("POST /internal/prompt", () => {
     sandboxWs!.accept();
 
     const sandboxMessages = collectMessages(sandboxWs!, { timeoutMs: 500 });
+    sandboxWs!.send(
+      JSON.stringify({ type: "ready", sandboxId: SANDBOX_ID, timestamp: Date.now() })
+    );
     const enqueue = (content: string) =>
       stub.fetch("http://internal/internal/prompt", {
         method: "POST",

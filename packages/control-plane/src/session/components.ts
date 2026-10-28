@@ -522,6 +522,18 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageRepository,
     messenger,
     encryptionKey: repoSecretsEncryptionKey,
+    onUncertainDelivery: async ({ commandId, type }) => {
+      const reason =
+        "Sandbox bridge restarted before command receipt was confirmed; execution state is uncertain.";
+      if (type === "push")
+        pushService.settlePush({
+          type: "push_error",
+          commandId,
+          error: reason,
+          timestamp: Date.now(),
+        });
+      await messageQueue.handleFatalSandboxFailure(reason);
+    },
     mayDispatch: (type) =>
       type === "push"
         ? ["ready", "unmanaged"].includes(lifecycleManager.pushAdmissionDecision())
@@ -646,7 +658,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-    }
+    },
+    commands
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,

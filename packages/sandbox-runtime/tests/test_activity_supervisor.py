@@ -1,7 +1,7 @@
 """Behavioral interleavings owned by the runtime activity supervisor."""
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -225,3 +225,154 @@ async def test_ordinary_stop_does_not_replace_shutdown_override() -> None:
 
     await asyncio.wait_for(wait_for_terminal(), timeout=0.1)
     assert events[0]["error"] == "sandbox_lifetime_expiring"
+
+
+@pytest.mark.asyncio
+async def test_targeted_stop_drains_cleanup_then_confirms_vendor_containment() -> None:
+    events: list[dict] = []
+    supervisor = make_supervisor(events)
+    entered = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    vendor_stop_started = asyncio.Event()
+    vendor_stopped = asyncio.Event()
+
+    async def prompt() -> dict:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            return {
+                "type": "execution_complete",
+                "messageId": "message-1",
+                "success": True,
+                "messageCostUsd": 1.25,
+            }
+
+    async def stop_execution(remaining: float) -> bool:
+        assert 0 < remaining <= 1
+        assert task.done()
+        vendor_stop_started.set()
+        await vendor_stopped.wait()
+        return True
+
+    supervisor.start_prompt("message-1", prompt)
+    task = supervisor.current_prompt_task
+    await entered.wait()
+    stopping = asyncio.create_task(
+        supervisor.stop_prompt(
+            "message-1", command_id="stop-1", stop_execution=stop_execution, timeout_seconds=1
+        )
+    )
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        assert not vendor_stop_started.is_set()
+        assert not events
+        release_cleanup.set()
+        await asyncio.wait_for(vendor_stop_started.wait(), timeout=1)
+        assert not any(event["type"] == "stop_confirmed" for event in events)
+        vendor_stopped.set()
+        assert await stopping is True
+        await supervisor._join_deliveries(asyncio.get_running_loop().time() + 1)
+        assert [event for event in events if event["type"] == "execution_complete"] == [
+            {
+                "type": "execution_complete",
+                "messageId": "message-1",
+                "success": False,
+                "error": "stopped",
+                "messageCostUsd": 1.25,
+            }
+        ]
+        assert len([event for event in events if event["type"] == "stop_confirmed"]) == 1
+    finally:
+        release_cleanup.set()
+        vendor_stopped.set()
+        await stopping
+        await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_targeted_stop_does_not_confirm_cleanup_that_outlives_deadline() -> None:
+    events: list[dict] = []
+    supervisor = make_supervisor(events)
+    entered = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    stop_execution = AsyncMock(return_value=True)
+
+    async def prompt() -> dict:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release_cleanup.wait()
+            return {"type": "execution_complete", "messageId": "message-1", "success": True}
+
+    supervisor.start_prompt("message-1", prompt)
+    await entered.wait()
+    try:
+        assert not await supervisor.stop_prompt(
+            "message-1",
+            command_id="stop-1",
+            stop_execution=stop_execution,
+            timeout_seconds=0.01,
+        )
+        stop_execution.assert_not_awaited()
+        assert not events
+    finally:
+        release_cleanup.set()
+        await supervisor.current_prompt_task
+        await supervisor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_targeted_stop_bounds_vendor_containment() -> None:
+    events: list[dict] = []
+    supervisor = make_supervisor(events)
+
+    async def stop_execution(_remaining: float) -> bool:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    assert not await asyncio.wait_for(
+        supervisor.stop_prompt(
+            "message-1",
+            command_id="stop-1",
+            stop_execution=stop_execution,
+            timeout_seconds=0.01,
+        ),
+        timeout=1,
+    )
+    assert not events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed_message_id", ["message-1", "other-message"])
+async def test_targeted_stop_preserves_done_task_before_terminal_callback(
+    completed_message_id: str,
+) -> None:
+    events: list[dict] = []
+    supervisor = make_supervisor(events)
+    completion = {
+        "type": "execution_complete",
+        "messageId": completed_message_id,
+        "success": True,
+        "messageCostUsd": 1.25,
+    }
+    task = asyncio.create_task(asyncio.sleep(0, result=completion))
+    await task
+    supervisor.track_prompt(completed_message_id, task)
+    stop_execution = AsyncMock(return_value=True)
+
+    assert await supervisor.stop_prompt("message-1", command_id=None, stop_execution=stop_execution)
+    await asyncio.sleep(0)
+    await supervisor._join_deliveries(asyncio.get_running_loop().time() + 1)
+
+    stop_execution.assert_awaited_once()
+    terminals = [event for event in events if event["type"] == "execution_complete"]
+    assert terminals == [completion]
+    assert terminals[0] is completion
+    assert "error" not in completion
+    confirmation = next(event for event in events if event["type"] == "stop_confirmed")
+    assert "commandId" not in confirmation

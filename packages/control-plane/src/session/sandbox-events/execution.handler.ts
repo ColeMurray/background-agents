@@ -1,4 +1,4 @@
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxEvent, SandboxIngressEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { Logger } from "../../logger";
 import type { BackgroundTasks } from "../../platform-ports";
 import type { CallbackNotificationService } from "../callback-notification-service";
@@ -8,6 +8,7 @@ import type { SessionStatusService } from "../session-status-service";
 import type { SandboxEventContext } from "./context";
 import type { SessionBudgetService } from "../budget-service";
 import { deriveFallbackSessionTitle } from "../title";
+import type { SandboxCommandOutbox } from "../sandbox-command-outbox";
 
 /**
  * Execution-lifecycle family: settle a finished turn. `execution_complete`
@@ -42,7 +43,8 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly offerFallbackTitle: (title: string) => void
+    private readonly offerFallbackTitle: (title: string) => void,
+    private readonly commands: Pick<SandboxCommandOutbox, "confirmStop">
   ) {}
 
   /**
@@ -69,7 +71,8 @@ export class SandboxExecutionEventHandler {
         context.processingMessage?.id === event.messageId
           ? this.messageRepository.recordMessageCompletion(event, context.now, "processing")
           : null;
-      if (!completion) this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
+      if (!completion)
+        this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId, true);
       return {
         completion,
         budgetTransition: this.budget.observeExecutionCost(event, context.now),
@@ -128,5 +131,18 @@ export class SandboxExecutionEventHandler {
     this.updateLastActivity(context.now);
     await this.scheduleInactivityCheck();
     await this.processMessageQueue();
+  }
+
+  async handleStopConfirmed(
+    event: Extract<SandboxIngressEvent, { type: "stop_confirmed" }>
+  ): Promise<void> {
+    const released = this.transaction(() => {
+      if (event.commandId) this.commands.confirmStop(event.commandId, event.messageId);
+      if (this.messageRepository.getMessageAwaitingStopConfirmation()?.id !== event.messageId)
+        return false;
+      this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
+      return true;
+    });
+    if (released) await this.processMessageQueue();
   }
 }

@@ -16,6 +16,7 @@ from tests.conftest import ScriptedHarness
 async def bridge():
     harness = ScriptedHarness()
     harness.abort = AsyncMock(return_value=True)
+    harness.stop_execution = AsyncMock(return_value=True)
     bridge = AgentBridge(
         sandbox_id="test-sandbox",
         session_id="test-session",
@@ -233,7 +234,12 @@ async def test_duplicate_stop_does_not_abort_the_next_prompt(bridge, targeted):
     await bridge._handle_command(command)
 
     assert not new_task.cancelling()
-    bridge.harness.abort.assert_awaited_once()
+    if targeted:
+        bridge.harness.abort.assert_not_awaited()
+        bridge.harness.stop_execution.assert_awaited_once()
+    else:
+        bridge.harness.abort.assert_awaited_once()
+        bridge.harness.stop_execution.assert_not_awaited()
 
 
 @pytest.mark.parametrize("active_message_id", [None, "other-message"])
@@ -241,38 +247,33 @@ async def test_targeted_stop_without_match_settles_only_requested_message(
     bridge, active_message_id
 ):
     if active_message_id is not None:
-        bridge._handle_prompt.side_effect = None
-        bridge._handle_prompt.return_value = {
-            "type": "execution_complete",
-            "messageId": active_message_id,
-            "success": True,
-        }
         await bridge._handle_command({"type": "prompt", "messageId": active_message_id})
+        await asyncio.sleep(0)
     task = bridge.activity.current_prompt_task
-
-    await bridge._handle_command(
-        {"type": "stop", "commandId": "stop-1", "messageId": "never-delivered"}
-    )
+    command = {"type": "stop", "commandId": "stop-1", "messageId": "never-delivered"}
+    if task is not None:
+        with pytest.raises(RuntimeError, match="Stop containment not confirmed"):
+            await bridge._handle_command(command)
+    else:
+        await bridge._handle_command(command)
 
     bridge.harness.abort.assert_not_awaited()
     assert bridge.activity.current_prompt_task is task
     if task is not None:
         assert not task.cancelling()
-    assert bridge._send_event.await_args_list[0].args[0] == {
-        "type": "execution_complete",
+        bridge.harness.stop_execution.assert_not_awaited()
+        bridge._send_event.assert_not_awaited()
+        assert "stop-1" not in bridge._accepted_command_ids
+        return
+    bridge.harness.stop_execution.assert_awaited_once()
+    confirmation = bridge._send_event.await_args_list[0].args[0]
+    assert confirmation == {
+        "type": "stop_confirmed",
         "messageId": "never-delivered",
-        "success": False,
-        "error": "stopped",
+        "commandId": "stop-1",
+        "timestamp": confirmation["timestamp"],
     }
     assert bridge._send_event.await_args_list[1].args[0]["type"] == "command_ack"
-    if task is not None:
-        await task
-        await asyncio.sleep(0)
-        assert bridge._send_event.await_args.args[0] == {
-            "type": "execution_complete",
-            "messageId": active_message_id,
-            "success": True,
-        }
 
 
 @pytest.mark.parametrize("booting", [False, True])
@@ -284,7 +285,12 @@ async def test_targeted_stop_cancels_matching_prompt_once(bridge, booting):
     await bridge._handle_command({"type": "prompt", "commandId": "prompt-1", "messageId": "msg-1"})
     task = bridge.activity.current_prompt_task
     await asyncio.sleep(0)
-    await bridge._handle_command({"type": "stop", "commandId": "stop-1", "messageId": "msg-1"})
+    command = {"type": "stop", "commandId": "stop-1", "messageId": "msg-1"}
+    if booting:
+        with pytest.raises(RuntimeError, match="Stop containment not confirmed"):
+            await bridge._handle_command(command)
+    else:
+        await bridge._handle_command(command)
     await asyncio.gather(task, return_exceptions=True)
     await asyncio.sleep(0)
 
@@ -297,4 +303,27 @@ async def test_targeted_stop_cancels_matching_prompt_once(bridge, booting):
         {"type": "execution_complete", "messageId": "msg-1", "success": False, "error": "stopped"}
     ]
     if not booting:
-        bridge.harness.abort.assert_awaited_once()
+        bridge.harness.stop_execution.assert_awaited_once()
+    else:
+        assert "stop-1" not in bridge._accepted_command_ids
+        assert not any(
+            call.args[0]["type"] == "stop_confirmed" for call in bridge._send_event.await_args_list
+        )
+
+
+@pytest.mark.parametrize("failure", [False, RuntimeError("vendor unavailable"), TimeoutError()])
+async def test_failed_containment_is_not_confirmed_or_deduplicated(bridge, failure):
+    bridge.harness.stop_execution.side_effect = [failure, True]
+    command = {"type": "stop", "commandId": "stop-1", "messageId": "msg-1"}
+
+    with pytest.raises(RuntimeError, match="Stop containment not confirmed"):
+        await bridge._handle_command(command)
+
+    bridge._send_event.assert_not_awaited()
+    assert "stop-1" not in bridge._accepted_command_ids
+    await bridge._handle_command(command)
+    assert bridge.harness.stop_execution.await_count == 2
+    assert [call.args[0]["type"] for call in bridge._send_event.await_args_list] == [
+        "stop_confirmed",
+        "command_ack",
+    ]

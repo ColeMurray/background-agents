@@ -178,7 +178,7 @@ export class SessionMessageQueue {
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
     private readonly getSandboxPromptBlockReason: () => string | null,
-    private readonly commands: Pick<SandboxCommandOutbox, "send">
+    private readonly commands: Pick<SandboxCommandOutbox, "send" | "enqueue" | "deliver">
   ) {}
 
   async enqueueAutofix(
@@ -576,18 +576,22 @@ export class SessionMessageQueue {
     if (!this.mayDispatch()) return;
     // Claim and outbox insertion share a commit: a hibernation/crash must not
     // leave a processing message without its replay obligation.
-    const { claimed, sent } = this.repository.transaction(() => {
+    const { claimed, commandId } = this.repository.transaction(() => {
       const claimed = this.messageRepository.startMessageProcessing(
         message.id,
         now,
         userMessageEvent
       );
-      return { claimed, sent: claimed && this.commands.send(sandboxWs, command) };
+      const commandId = claimed ? this.commands.enqueue(sandboxWs, command) : null;
+      if (claimed && commandId === null) this.messageRepository.updateMessageToPending(message.id);
+      return { claimed, commandId };
     });
     if (!claimed) {
       this.log.debug("processMessageQueue: prompt claim lost", { message_id: message.id });
       return;
     }
+
+    const sent = commandId !== null && this.commands.deliver(sandboxWs, commandId);
 
     if (!sent) {
       this.messageRepository.updateMessageToPending(message.id);

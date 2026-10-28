@@ -330,14 +330,22 @@ from an HTTP 2xx.
 Prompts, pushes, and stops are persisted in the session's command outbox before transmission. Each
 carries a `commandId`; receipt is confirmed by a `command_ack` event, not by a successful socket
 write. The bridge advertises `commandAckVersion: 1` in `ready`, retains accepted command IDs for its
-process lifetime, and acknowledges duplicates without executing them again.
+process lifetime, and acknowledges duplicates without executing them again. Its `bridgeInstanceId`
+stays fixed across socket reconnects and changes on each bridge process start.
 
 On readiness or heartbeat, the control plane drains held commands and replays unacknowledged
 commands only after the current socket has advertised deduplication support. Legacy bridges can
 receive held commands once, but are never sent an already-attempted command again. Replay is fenced
 to the original sandbox ID and generation timestamp; terminal prompts and expired commands are
-discarded. Push payloads, including remote credentials, are encrypted at rest. Push replies echo
-`commandId`, and stops target a specific `messageId`.
+discarded. Attempted commands are also bound to the receiving bridge instance. If that instance
+changes, uncertain work fails visibly and enters sandbox containment instead of being replayed into
+a process with an empty deduplication set. Push payloads, including remote credentials, are
+encrypted at rest. Push replies echo `commandId`, and stops target a specific `messageId`.
+
+Prompt claims and outbox insertion commit atomically before any frame is sent. Runtimes advertising
+`stopConfirmationVersion: 1` confirm vendor containment through `stop_confirmed`, independently of
+the prompt's terminal outcome. A local task ending does not release that stop fence; the original
+completion and final cost remain intact.
 
 A heartbeat older than `SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS` holds new commands and publishes
 `sandbox_status` with `connectionStatus: reconnecting`. This optional field is ignored by older web
@@ -346,9 +354,9 @@ heartbeat or reconnect traffic releases it. Existing execution, push, and stop-c
 deadlines still apply; replay does not extend them.
 
 This provides duplicate-safe delivery across socket reconnects and control-plane reactivation, not
-exactly-once execution across bridge process crashes. Bridge deduplication and active work are
-process-local. The push caller's waiting promise is also process-local, even though the command
-outbox survives control-plane reconstruction.
+exactly-once execution across bridge process crashes. A changed bridge instance fails uncertain
+delivery rather than retrying it. The push caller's waiting promise is also process-local, even
+though the command outbox survives control-plane reconstruction.
 
 ## Development
 

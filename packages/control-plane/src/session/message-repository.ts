@@ -159,10 +159,15 @@ export class MessageRepository {
     return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
   }
 
-  markMessageAwaitingStopConfirmation(messageId: string, deadline: number): void {
+  markMessageAwaitingStopConfirmation(
+    messageId: string,
+    deadline: number,
+    requiresAck = false
+  ): void {
     this.sql.exec(
-      `UPDATE messages SET stop_confirmation_deadline = ? WHERE id = ?`,
+      `UPDATE messages SET stop_confirmation_deadline = ?, stop_confirmation_requires_ack = ? WHERE id = ?`,
       deadline,
+      requiresAck ? 1 : 0,
       messageId
     );
   }
@@ -192,8 +197,13 @@ export class MessageRepository {
     return reportedCostUsd - previous;
   }
 
-  clearMessageAwaitingStopConfirmation(messageId: string): void {
-    this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
+  clearMessageAwaitingStopConfirmation(messageId: string, onlyLegacy = false): void {
+    this.sql.exec(
+      `UPDATE messages SET stop_confirmation_deadline = NULL, stop_confirmation_requires_ack = 0
+      WHERE id = ? AND (? = 0 OR stop_confirmation_requires_ack = 0)`,
+      messageId,
+      onlyLegacy ? 1 : 0
+    );
   }
 
   getProcessingMessageWithCreatedAt(): { id: string; created_at: number } | null {

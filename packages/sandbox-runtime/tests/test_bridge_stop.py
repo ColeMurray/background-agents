@@ -9,8 +9,11 @@ import asyncio
 import contextlib
 import json
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from websockets import State
 
 from sandbox_runtime.bridge import AgentBridge
 from tests.conftest import MockResponse, wire_opencode_transport
@@ -296,6 +299,167 @@ class TestHandleStop:
         assert len(exec_complete) == 1
         assert exec_complete[0]["messageId"] == "msg-cancel-test"
         assert exec_complete[0]["success"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sse_disconnect", [False, True], ids=["completed", "sse-loss"])
+@pytest.mark.parametrize("stop_disconnected", [False, True], ids=["online-stop", "offline-stop"])
+async def test_delayed_targeted_stop_preserves_terminal_and_contains_vendor(
+    bridge: AgentBridge, sse_disconnect: bool, stop_disconnected: bool
+) -> None:
+    """Exercise the real client, translator, harness, owner and ACK forwarder."""
+
+    class VendorHttpClient(MockHttpClient):
+        def __init__(self):
+            super().__init__()
+            self.busy = False
+            self.user_message_id = None
+            self.idle_checks = 0
+
+        async def post(self, url, json=None, timeout=30.0):
+            if url.endswith("/prompt_async"):
+                self.busy = True
+                self.user_message_id = json["messageID"]
+            elif url.endswith("/abort"):
+                self.busy = False
+            return await super().post(url, json=json, timeout=timeout)
+
+        async def get(self, url, timeout=10.0):
+            if url.endswith("/session/status"):
+                self.idle_checks += 1
+                return MockResponse(
+                    200, {"oc-session-123": {"type": "busy" if self.busy else "idle"}}
+                )
+            assert url.endswith("/message")
+            return MockResponse(
+                200,
+                [
+                    {
+                        "info": {
+                            "id": "assistant-1",
+                            "role": "assistant",
+                            "parentID": self.user_message_id,
+                        },
+                        "parts": [{"type": "text", "id": "text-1", "text": "Preserved output"}],
+                    }
+                ],
+            )
+
+        def stream(self, method, url, timeout=None):
+            vendor = self
+
+            class Response(MockSSEResponse):
+                async def aiter_text(self):
+                    yield create_sse_event(
+                        "message.updated",
+                        {
+                            "info": {
+                                "id": "assistant-1",
+                                "role": "assistant",
+                                "parentID": vendor.user_message_id,
+                                "sessionID": "oc-session-123",
+                            }
+                        },
+                    )
+                    yield create_sse_event(
+                        "message.part.updated",
+                        {
+                            "part": {
+                                "id": "step-1",
+                                "messageID": "assistant-1",
+                                "sessionID": "oc-session-123",
+                                "type": "step-finish",
+                                "cost": 1.25,
+                            }
+                        },
+                    )
+                    if sse_disconnect:
+                        raise httpx.RemoteProtocolError("SSE connection lost while vendor busy")
+                    vendor.busy = False
+                    yield create_sse_event("session.idle", {"sessionID": "oc-session-123"})
+
+            return Response([])
+
+    class WebSocket:
+        state = State.OPEN
+
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, data):
+            event = json.loads(data)
+            if event["type"] == "stop_confirmed":
+                assert not http_client.busy
+                assert http_client.idle_checks > 0
+            self.sent.append(event)
+
+    http_client = wire_opencode_transport(bridge, VendorHttpClient())
+    bridge._configure_git_identity = AsyncMock()
+    bridge._persist_rotated_session_id = AsyncMock()
+    bridge.diff_refresh = MagicMock()
+    first = WebSocket()
+    await bridge.event_forwarder.bind(first)
+    try:
+        async with asyncio.timeout(1):
+            await bridge._handle_command(
+                {
+                    "type": "prompt",
+                    "messageId": "msg-1",
+                    "content": "hello",
+                    "author": {"gitIdentity": {"mode": "agent-only"}},
+                }
+            )
+            await bridge.activity.current_prompt_task
+            await asyncio.sleep(0)
+            await bridge.activity._join_deliveries(asyncio.get_running_loop().time() + 1)
+
+        assert bridge.activity.current_prompt_task is None
+        assert http_client.busy is sse_disconnect
+        assert not any(url.endswith("/abort") for url in http_client.post_urls)
+        pending = bridge.event_forwarder._pending_acks
+        selected = pending["execution_complete:msg-1"]
+        original = dict(selected)
+        assert selected["messageCostUsd"] == 1.25
+        assert selected["success"] is not sse_disconnect
+        if sse_disconnect:
+            assert "stream disconnected" in selected["error"]
+        assert any(event.get("content") == "Preserved output" for event in first.sent)
+
+        if stop_disconnected:
+            bridge.event_forwarder.unbind()
+        command = {"type": "stop", "messageId": "msg-1", "commandId": "stop-1"}
+        await bridge._handle_command(command)
+        await bridge._handle_command(command)
+
+        assert sum(url.endswith("/abort") for url in http_client.post_urls) == 1
+        assert http_client.idle_checks == 1
+        assert not http_client.busy
+        assert pending["execution_complete:msg-1"] is selected
+        assert selected == original
+        assert [event for event in first.sent if event["type"] == "execution_complete"] == [
+            original
+        ]
+
+        bridge.event_forwarder.unbind()
+        second = WebSocket()
+        await bridge.event_forwarder.bind(second)
+        assert [event for event in second.sent if event["type"] == "execution_complete"] == [
+            original
+        ]
+        confirmations = [event for event in second.sent if event["type"] == "stop_confirmed"]
+        assert len(confirmations) == 1
+        confirmation = confirmations[0]
+        assert confirmation["messageId"] == "msg-1"
+        assert confirmation["commandId"] == "stop-1"
+        assert confirmation["ackId"] == "stop_confirmed:stop-1"
+        assert isinstance(confirmation["timestamp"], float)
+        assert "success" not in confirmation
+        assert pending[confirmation["ackId"]] == confirmation
+        assert bridge.event_forwarder.acknowledge(confirmation["ackId"])
+        assert pending["execution_complete:msg-1"] is selected
+        assert bridge.event_forwarder.acknowledge(original["ackId"])
+    finally:
+        await bridge.activity.shutdown()
 
 
 if __name__ == "__main__":

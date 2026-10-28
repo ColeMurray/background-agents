@@ -214,6 +214,16 @@ function buildQueue(
     }),
     send: vi.fn((_ws: WebSocket, _message: ServerMessage) => true),
   };
+  let enqueuedCommand: unknown;
+  const commands = {
+    send: wsManager.send,
+    requiresStopConfirmation: () => false,
+    enqueue: vi.fn((_ws: unknown, command: unknown) => {
+      enqueuedCommand = command;
+      return "command-1";
+    }),
+    deliver: vi.fn((ws: WebSocket) => wsManager.send(ws, enqueuedCommand as ServerMessage)),
+  };
 
   const participantService = {
     getByUserId: vi.fn(() => createParticipant()),
@@ -287,7 +297,7 @@ function buildQueue(
     alarmDeadlines,
     (): void => queue.broadcastPromptQueue(),
     (): Promise<void> => queue.processMessageQueue(),
-    { send: wsManager.send } as never
+    commands as never
   );
   const queue: SessionMessageQueue = new SessionMessageQueue(
     backgroundTasks,
@@ -311,7 +321,7 @@ function buildQueue(
     () => executionTimeoutMs,
     mayDispatch,
     getSandboxPromptBlockReason,
-    { send: wsManager.send } as never
+    commands as never
   );
 
   return {
@@ -453,7 +463,8 @@ describe("SessionMessageQueue", () => {
       () => h.queue.broadcastPromptQueue(),
       budget,
       (closure) => closure(),
-      () => {}
+      () => {},
+      { confirmStop: vi.fn() }
     );
     const finishing = handler.handleExecutionComplete(
       {
@@ -1862,7 +1873,8 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
       "msg-budget",
-      expect.any(Number)
+      expect.any(Number),
+      false
     );
     expect(h.alarmDeadlines.setPendingEarliest).toHaveBeenCalledWith(expect.any(Number));
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, {
@@ -2005,7 +2017,8 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
       "msg-9",
-      expect.any(Number)
+      expect.any(Number),
+      false
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop", messageId: "msg-9" });

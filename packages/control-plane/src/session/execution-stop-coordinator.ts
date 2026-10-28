@@ -30,7 +30,7 @@ export class ExecutionStopCoordinator {
     private readonly alarmDeadlines: AlarmDeadlineStore,
     private readonly broadcastPromptQueue: () => void,
     private readonly processMessageQueue: () => Promise<void>,
-    private readonly commands: Pick<SandboxCommandOutbox, "send">
+    private readonly commands: Pick<SandboxCommandOutbox, "send" | "requiresStopConfirmation">
   ) {}
 
   async stop(reason = "Execution was stopped"): Promise<void> {
@@ -51,7 +51,8 @@ export class ExecutionStopCoordinator {
     if (!failure) return null;
     this.messageRepository.markMessageAwaitingStopConfirmation(
       failure.completion.messageId,
-      stopConfirmationDeadline
+      stopConfirmationDeadline,
+      this.commands.requiresStopConfirmation()
     );
     this.alarmDeadlines.setPendingEarliest(stopConfirmationDeadline);
     return { stopConfirmationDeadline, failure };

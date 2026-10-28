@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 Event = dict[str, Any]
 EventSender = Callable[[Event], Awaitable[object]]
+TARGETED_STOP_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass
@@ -83,18 +84,69 @@ class ActivitySupervisor:
         if activity is not None:
             activity.diagnostics = diagnostics
 
-    def interrupt_prompt(self, error: str, *, message_id: str | None = None) -> bool:
-        """Interrupt the current prompt, optionally only if its active ID matches."""
+    def interrupt_prompt(self, error: str) -> None:
+        """Interrupt the current local prompt for a legacy untargeted stop."""
         activity = self._current_prompt
-        if message_id is not None and (
-            activity is None or activity.message_id != message_id or activity.task.done()
-        ):
-            return False
         self.set_prompt_interruption(error)
         if activity is not None and not activity.task.done():
             activity.task.cancel()
-            return True
-        return False
+
+    async def stop_prompt(
+        self,
+        message_id: str,
+        *,
+        command_id: str | None,
+        stop_execution: Callable[[float], Awaitable[bool]],
+        timeout_seconds: float = TARGETED_STOP_TIMEOUT_SECONDS,
+    ) -> bool:
+        """Confirm containment separately from the prompt's selected terminal outcome.
+
+        The bridge serializes command admission while this runs. A missing local
+        task is not proof of vendor idle: an SSE failure can outlive observation.
+        """
+        active = [activity for activity in self._prompts.values() if not activity.task.done()]
+        if any(activity.message_id != message_id for activity in active):
+            # A domain-wide stop could kill unrelated work. Without a targeted
+            # vendor containment API we cannot safely confirm this stop either.
+            self._log.warn("bridge.stop_unrelated_active", message_id=message_id)
+            return False
+
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+        for activity in active:
+            if activity.interruption_error is None:
+                activity.interruption_error = "stopped"
+            activity.task.cancel()
+        try:
+            if active:
+                # Do not cancel cleanup again at the deadline. No confirmation
+                # is safe until every local starter has finished unwinding.
+                _done, pending = await asyncio.wait(
+                    [activity.task for activity in active],
+                    timeout=max(deadline - asyncio.get_running_loop().time(), 0.0),
+                )
+                if pending:
+                    return False
+            async with asyncio.timeout_at(deadline):
+                stopped = await stop_execution(
+                    max(deadline - asyncio.get_running_loop().time(), 0.0)
+                )
+        except Exception as error:
+            self._log.warn("bridge.stop_containment_failed", message_id=message_id, exc=error)
+            return False
+        if not stopped:
+            return False
+
+        # Never resubmit a completion: its original payload and pending ACK
+        # belong to the terminal selector and the event forwarder, respectively.
+        await self._send_event(
+            {
+                "type": "stop_confirmed",
+                "messageId": message_id,
+                **({"commandId": command_id} if command_id is not None else {}),
+                "timestamp": time.time(),
+            }
+        )
+        return True
 
     def set_prompt_interruption(
         self, error: str, *, all_prompts: bool = False, overwrite: bool = False

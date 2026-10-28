@@ -19,6 +19,7 @@ interface OutboxRow {
   payload: string;
   encrypted: number;
   attempted: number;
+  bridge_instance_id: string | null;
   expires_at: number;
 }
 
@@ -33,68 +34,107 @@ export interface SandboxCommandOutboxDeps {
   encryptionKey: string;
   messenger: Pick<SessionMessenger, "broadcast">;
   mayDispatch: (type: "prompt" | "push") => boolean;
+  onUncertainDelivery: (command: {
+    commandId: string;
+    type: OutboxRow["command_type"];
+  }) => Promise<void>;
 }
 
 /** Persist before delivery; only replay attempted commands to a deduplicating runtime. */
 export class SandboxCommandOutbox {
   constructor(private readonly deps: SandboxCommandOutboxDeps) {}
 
-  recordProtocol(supported: boolean): void {
+  recordProtocol(supported: boolean, bridgeInstanceId?: string, stopConfirmationVersion?: 1): void {
     const sandbox = this.deps.sandboxRepository.getSandbox();
     if (!sandbox?.modal_sandbox_id) return;
     this.deps.sql.exec(
       `INSERT OR REPLACE INTO sandbox_command_protocol
-       (singleton, sandbox_id, sandbox_created_at, socket_id, supported) VALUES (1, ?, ?, ?, ?)`,
+       (singleton, sandbox_id, sandbox_created_at, socket_id, supported, bridge_instance_id, stop_confirmation_version) VALUES (1, ?, ?, ?, ?, ?, ?)`,
       sandbox.modal_sandbox_id,
       sandbox.created_at,
       sandbox.active_socket_id ?? "",
-      supported ? 1 : 0
+      supported && bridgeInstanceId ? 1 : 0,
+      bridgeInstanceId ?? null,
+      stopConfirmationVersion ?? null
     );
   }
 
   supportsReplay(): boolean {
+    const protocol = this.protocol();
+    return protocol?.supported === 1 && protocol.bridge_instance_id !== null;
+  }
+
+  requiresStopConfirmation(): boolean {
     const sandbox = this.deps.sandboxRepository.getSandbox();
     return (
       this.deps.sql
         .exec(
           `SELECT singleton FROM sandbox_command_protocol
-       WHERE sandbox_id = ? AND sandbox_created_at = ? AND socket_id = ? AND supported = 1`,
+      WHERE sandbox_id = ? AND sandbox_created_at = ? AND stop_confirmation_version = 1`,
           sandbox?.modal_sandbox_id ?? "",
-          sandbox?.created_at ?? -1,
-          sandbox?.active_socket_id ?? ""
+          sandbox?.created_at ?? -1
         )
         .toArray().length > 0
     );
+  }
+
+  private protocol(): { supported: number; bridge_instance_id: string | null } | undefined {
+    const sandbox = this.deps.sandboxRepository.getSandbox();
+    return this.deps.sql
+      .exec(
+        `SELECT supported, bridge_instance_id FROM sandbox_command_protocol
+      WHERE sandbox_id = ? AND sandbox_created_at = ? AND socket_id = ?`,
+        sandbox?.modal_sandbox_id ?? "",
+        sandbox?.created_at ?? -1,
+        sandbox?.active_socket_id ?? ""
+      )
+      .toArray()[0] as { supported: number; bridge_instance_id: string | null } | undefined;
   }
 
   send(
     ws: SessionWebSocket,
     command: Extract<SandboxCommand, { type: "prompt" | "stop" }>
   ): boolean {
+    const commandId = this.enqueue(ws, command);
+    return commandId !== null && this.deliver(ws, commandId);
+  }
+
+  /** Persistence only, safe to include in the message-claim transaction. */
+  enqueue(
+    ws: SessionWebSocket,
+    command: Extract<SandboxCommand, { type: "prompt" | "stop" }>
+  ): string | null {
     const sandbox = this.deps.sandboxRepository.getSandbox();
-    if (!sandbox?.modal_sandbox_id) return false;
+    if (!sandbox?.modal_sandbox_id) return null;
     const commandId = command.commandId ?? crypto.randomUUID();
     const messageId =
       command.messageId ?? this.deps.messageRepository.getMessageAwaitingStopConfirmation()?.id;
     const payload = JSON.stringify({ ...command, commandId, ...(messageId ? { messageId } : {}) });
-    return this.persistAndSend(
-      ws,
-      {
-        command_id: commandId,
-        sandbox_id: sandbox.modal_sandbox_id,
-        sandbox_created_at: sandbox.created_at,
-        command_type: command.type,
-        message_id: messageId ?? null,
-        payload,
-        encrypted: 0,
-        attempted: 0,
-        expires_at:
-          command.type === "stop"
-            ? Date.now() + STOP_CONFIRMATION_TIMEOUT_MS
-            : Number.MAX_SAFE_INTEGER,
-      },
-      payload
-    );
+    const persisted = this.persist(ws, {
+      command_id: commandId,
+      sandbox_id: sandbox.modal_sandbox_id,
+      sandbox_created_at: sandbox.created_at,
+      command_type: command.type,
+      message_id: messageId ?? null,
+      payload,
+      encrypted: 0,
+      attempted: 0,
+      bridge_instance_id: null,
+      expires_at:
+        command.type === "stop"
+          ? Date.now() + STOP_CONFIRMATION_TIMEOUT_MS
+          : Number.MAX_SAFE_INTEGER,
+    });
+    return persisted ? commandId : null;
+  }
+
+  /** Called only after the enclosing enqueue transaction has committed. */
+  deliver(ws: SessionWebSocket, commandId: string): boolean {
+    const row = this.deps.sql
+      .exec("SELECT * FROM sandbox_command_outbox WHERE command_id = ?", commandId)
+      .toArray()[0] as OutboxRow | undefined;
+    if (!row || row.encrypted || row.attempted) return false;
+    return this.sendPersisted(ws, row, row.payload);
   }
 
   async sendPush(
@@ -111,30 +151,34 @@ export class SandboxCommandOutbox {
     const payload = JSON.stringify({ ...command, commandId });
     const encrypted = await encryptToken(payload, this.deps.encryptionKey);
     // Encryption yields: persist only if this generation and its dispatch authority survived.
-    return this.persistAndSend(
-      ws,
-      {
-        command_id: commandId,
-        sandbox_id: sandboxId,
-        sandbox_created_at: createdAt,
-        command_type: "push",
-        message_id: null,
-        payload: encrypted,
-        encrypted: 1,
-        attempted: 0,
-        expires_at: expiresAt,
-      },
-      payload
-    );
+    const row: OutboxRow = {
+      command_id: commandId,
+      sandbox_id: sandboxId,
+      sandbox_created_at: createdAt,
+      command_type: "push",
+      message_id: null,
+      payload: encrypted,
+      encrypted: 1,
+      attempted: 0,
+      bridge_instance_id: null,
+      expires_at: expiresAt,
+    };
+    return this.persist(ws, row) && this.sendPersisted(ws, row, payload);
   }
 
   async flush(): Promise<void> {
+    const socket = this.targetSocket();
+    if (socket && !this.protocol()) {
+      // A socket surviving a control-plane rollout may predate negotiation.
+      // Its next connection will announce readiness; heartbeats alone cannot.
+      this.deps.wsManager.close(socket, 1012, "Sandbox command negotiation required");
+      this.deps.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
+    }
     const rows = this.deps.sql
       .exec("SELECT * FROM sandbox_command_outbox ORDER BY rowid")
       .toArray() as OutboxRow[];
     for (const row of rows) {
       if (!this.retain(row)) continue;
-      if (row.attempted && !this.supportsReplay()) continue;
       const ws = this.targetSocket();
       if (!ws || !this.canSend(row)) continue;
       let payload = row.payload;
@@ -148,18 +192,33 @@ export class SandboxCommandOutbox {
       }
       // ACK, cancellation, expiry, revocation and socket replacement may race decryption.
       const [current] = this.deps.sql
-        .exec("SELECT attempted FROM sandbox_command_outbox WHERE command_id = ?", row.command_id)
-        .toArray() as Array<{ attempted: number }>;
+        .exec("SELECT * FROM sandbox_command_outbox WHERE command_id = ?", row.command_id)
+        .toArray() as OutboxRow[];
       if (!current || !this.retain(row) || this.targetSocket() !== ws || !this.canSend(row))
         continue;
-      if (current.attempted && !this.supportsReplay()) continue;
+      const protocol = this.protocol();
+      if (!protocol) continue;
+      if (current.attempted) {
+        if (current.bridge_instance_id !== protocol.bridge_instance_id) {
+          // The receiver lost its deduplication memory. Never turn uncertainty
+          // into another execution, even within the same sandbox generation.
+          await this.deps.onUncertainDelivery({
+            commandId: row.command_id,
+            type: row.command_type,
+          });
+          this.discard(row.command_id);
+          return;
+        }
+        if (!protocol.supported || !protocol.bridge_instance_id) continue;
+      }
       this.deps.sql.exec(
-        "UPDATE sandbox_command_outbox SET attempted = 1 WHERE command_id = ?",
+        "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
+        protocol.bridge_instance_id,
         row.command_id
       );
       if (!this.deps.wsManager.send(ws, payload) && !current.attempted) {
         this.deps.sql.exec(
-          "UPDATE sandbox_command_outbox SET attempted = 0 WHERE command_id = ?",
+          "UPDATE sandbox_command_outbox SET attempted = 0, bridge_instance_id = NULL WHERE command_id = ?",
           row.command_id
         );
       }
@@ -168,6 +227,15 @@ export class SandboxCommandOutbox {
 
   acknowledge(commandId: string): void {
     this.discard(commandId);
+  }
+
+  confirmStop(commandId: string, messageId: string): void {
+    this.deps.sql.exec(
+      `DELETE FROM sandbox_command_outbox
+      WHERE command_id = ? AND message_id = ? AND command_type = 'stop'`,
+      commandId,
+      messageId
+    );
   }
 
   hasUnacknowledgedPrompt(messageId: string): boolean {
@@ -185,7 +253,7 @@ export class SandboxCommandOutbox {
     this.deps.sql.exec("DELETE FROM sandbox_command_outbox WHERE command_id = ?", commandId);
   }
 
-  private persistAndSend(ws: SessionWebSocket, row: OutboxRow, payload: string): boolean {
+  private persist(ws: SessionWebSocket, row: OutboxRow): boolean {
     if (
       !this.isLive(row) ||
       (row.command_type !== "stop" && !this.deps.mayDispatch(row.command_type)) ||
@@ -205,12 +273,18 @@ export class SandboxCommandOutbox {
       row.encrypted,
       row.expires_at
     );
+    return true;
+  }
+
+  private sendPersisted(ws: SessionWebSocket, row: OutboxRow, payload: string): boolean {
+    if (!this.isLive(row) || this.targetSocket() !== ws) return false;
     if (!this.canSend(row)) {
       this.deps.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
       return true;
     }
     this.deps.sql.exec(
-      "UPDATE sandbox_command_outbox SET attempted = 1 WHERE command_id = ?",
+      "UPDATE sandbox_command_outbox SET attempted = 1, bridge_instance_id = ? WHERE command_id = ?",
+      this.protocol()!.bridge_instance_id,
       row.command_id
     );
     if (this.deps.wsManager.send(ws, payload)) return true;
@@ -228,6 +302,7 @@ export class SandboxCommandOutbox {
     const heartbeat = this.deps.sandboxRepository.getSandbox()?.last_heartbeat;
     return (
       heartbeat != null &&
+      this.protocol() !== undefined &&
       Date.now() - heartbeat < SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS &&
       (row.command_type === "stop" || this.deps.mayDispatch(row.command_type))
     );

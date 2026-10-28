@@ -89,6 +89,8 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
         "harness": "opencode",
         "preservationProtocolVersion": 1,
         "commandAckVersion": 1,
+        "bridgeInstanceId": bridge.bridge_instance_id,
+        "stopConfirmationVersion": 1,
         "repositories": [
             {
                 "position": 0,
@@ -109,6 +111,22 @@ def test_ready_event_reports_the_image_runtime_version(tmp_path: Path) -> None:
         event = bridge._build_ready_event()
 
     assert event["runtimeVersion"] == "v59-opencode-1-18-18"
+
+
+def test_bridge_incarnation_survives_reconnect_but_changes_on_process_restart(
+    tmp_path: Path,
+) -> None:
+    first = _bridge()
+    first.repo_manifest_path = _manifest(tmp_path)
+    first._accepted_command_ids.add("lost-command-ack")
+    ready = first._build_ready_event()
+    assert first._build_ready_event()["bridgeInstanceId"] == ready["bridgeInstanceId"]
+
+    restarted = _bridge()
+    restarted.repo_manifest_path = first.repo_manifest_path
+    assert restarted.sandbox_id == first.sandbox_id
+    assert restarted._accepted_command_ids == set()
+    assert restarted._build_ready_event()["bridgeInstanceId"] != ready["bridgeInstanceId"]
 
 
 @pytest.mark.asyncio
